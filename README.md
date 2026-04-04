@@ -228,44 +228,6 @@ Place `java.scm` and/or `typescript.scm` in your custom directory. Missing files
 
 ---
 
-## 📦 Project Structure
-
-```
-knot/
-├── Cargo.toml                          # Rust dependencies
-├── docker-compose.yml                  # Local infrastructure (Qdrant + Neo4j)
-├── .env.example                        # Configuration template
-├── README.md                           # This file
-├── queries/
-│   ├── java.scm                        # Java AST extraction rules
-│   └── typescript.scm                  # TypeScript AST extraction rules
-├── testing_files/                      # Test scripts and fixtures
-├── src/
-│   ├── lib.rs                          # Shared library root
-│   ├── models.rs                       # Core data structures
-│   ├── config.rs                       # Configuration management
-│   ├── mcp_handler.rs                  # MCP protocol handler
-│   ├── mcp_tools/                      # Three MCP tools
-│   │   ├── search_hybrid_context.rs
-│   │   ├── find_callers.rs
-│   │   └── explore_file.rs
-│   ├── db/                             # Database clients
-│   │   ├── vector.rs                   # Qdrant wrapper
-│   │   └── graph.rs                    # Neo4j wrapper
-│   ├── pipeline/                       # 5-stage indexing pipeline
-│   │   ├── input.rs                    # Stage 1: file discovery
-│   │   ├── parse.rs                    # Stage 2: AST extraction
-│   │   ├── prepare.rs                  # Stage 3: UUID + embedding text
-│   │   ├── embed.rs                    # Stage 4: vector generation
-│   │   └── ingest.rs                   # Stage 5: dual-write
-│   ├── utils/                          # Logging and utilities
-│   └── bin/
-│       ├── knot-indexer.rs             # Batch indexer binary
-│       └── knot-mcp.rs                 # MCP server binary
-```
-
----
-
 ## 🔄 Workflow Example
 
 **Step 1: Index a Java project**

@@ -3,3 +3,6 @@
 
 # Local Database Persistent Storage
 /data/
+
+# fastembed cache (downloaded models)
+.fastembed_cache/
