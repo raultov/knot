@@ -52,27 +52,65 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 | qdrant       | 1.x     | Vector database (docker)          |
 | neo4j        | 5.x     | Graph database (docker)           |
 
-### Option A: Pre-compiled Binaries (Recommended)
+### Option A: Pre-compiled Binaries (macOS & Modern Linux)
 
-Go to the [Releases](https://github.com/raultov/knot/releases) page and download the native executable for your platform (macOS, Windows, Linux). We provide `.msi` installers for Windows and shell scripts for UNIX systems.
+Go to the [Releases](https://github.com/raultov/knot/releases) page and download the native executable for your platform.
 
-**Install via Shell Script (Unix):**
+**Install via Shell Script (macOS & Linux):**
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
 ```
 
-**Install via PowerShell (Windows):**
-```powershell
-irm https://github.com/raultov/knot/releases/latest/download/knot-installer.ps1 | iex
+**Linux Requirements:**
+- **Minimum glibc version**: 2.38+
+- **Compatible distributions**:
+  - Ubuntu 24.04 LTS or later
+  - Debian 13 (Trixie) or later
+  - Fedora 39+ / RHEL 10+
+  - Arch Linux (rolling release)
+
+**For older Linux distributions or Windows**, use Docker (see Option B) or build from source (see Option C).
+
+### Option B: Docker (Universal Compatibility)
+
+Docker images provide universal compatibility for **any Linux distribution** (including older versions with glibc < 2.38) and **Windows**.
+
+**Build the image locally:**
+```bash
+docker build -t knot:latest .
 ```
 
-### Option B: Install via Cargo
+**Run the indexer:**
+```bash
+# Use --network host to connect to databases running on your host machine
+docker run --rm \
+  -v /path/to/your/repo:/workspace \
+  -e KNOT_REPO_PATH=/workspace \
+  -e KNOT_NEO4J_PASSWORD=your-password \
+  --network host \
+  knot:latest \
+  knot-indexer
+```
+
+**Run the MCP server:**
+```bash
+docker run --rm \
+  -e KNOT_REPO_PATH=/workspace \
+  -e KNOT_NEO4J_PASSWORD=your-password \
+  --network host \
+  knot:latest \
+  knot-mcp
+```
+
+**Note:** The `Dockerfile` uses a multi-stage build (`builder` stage with Rust, `runtime` stage with Debian Trixie) to ensure a minimal, high-performance image. Use `--network host` to allow the container to access Qdrant and Neo4j running on your host machine.
+
+### Option C: Install via Cargo
 
 ```bash
 cargo install --git https://github.com/raultov/knot
 ```
 
-### Option C: Build from Source
+### Option D: Build from Source
 
 **1. Start infrastructure with Docker:**
 ```bash
@@ -287,17 +325,31 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.0 (Current Release)
+### v0.2.1 (Current Release)
+**Released:** 2026-04-04
+
+**Continuous Delivery & Compatibility:**
+- **Docker Support**: Added official Docker images (`ghcr.io/raultov/knot`) for universal compatibility:
+  - Multi-stage build (`rust:1.90` builder + `debian:trixie` runtime)
+  - Works on **any Linux distribution** (including older versions with glibc < 2.38)
+  - Solves linking issues with glibc requirement (2.38+) found in native binaries.
+- **Release Targets**:
+  - Removed Windows native build due to unresolved MSVC linker compatibility issues with ONNX Runtime.
+  - Linux builds now use `ubuntu-24.04` runner (glibc 2.39).
+- **README Updates**: Clarified requirements, added Docker installation steps, and documented usage of `--network host` for database connectivity.
+
+---
+
+### v0.2.0
 **Released:** 2026-04-04
 
 **Continuous Delivery:**
-- Integrated `cargo-dist` to automatically generate pre-compiled native binaries for macOS, Linux, and Windows on every GitHub release.
+- Integrated `cargo-dist` to automatically generate pre-compiled native binaries for macOS and modern Linux distributions on every GitHub release.
 - Pre-built binaries for:
   - **macOS**: Apple Silicon (`aarch64-apple-darwin`)
   - **Linux**: x86_64 (`x86_64-unknown-linux-gnu`) and ARM64 (`aarch64-unknown-linux-gnu`)
-  - **Windows**: x86_64 MSVC (`x86_64-pc-windows-msvc`)
-- Added 1-click installer scripts (`.sh` and `.ps1`) to simplify distribution without requiring a local Rust toolchain.
-- Users can now download and run native binaries directly from the [Releases](https://github.com/raultov/knot/releases) page.
+- Added 1-click shell installer script for quick installation on compatible systems.
+
 
 ---
 
