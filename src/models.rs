@@ -68,9 +68,9 @@ pub struct ParsedEntity {
     pub kind: EntityKind,
 
     /// Fully qualified name for disambiguation.
-    /// - For Java: `com.shelob.connector.AlternativeConnectorService.proxyManager`
+    /// - For Java: `com.example.connector.AlternativeConnectorService.proxyManager`
     /// - For TypeScript: `ClassName.methodName` or just `functionName` for top-level functions
-    /// - For classes/interfaces: `com.shelob.connector.AlternativeConnectorService`
+    /// - For classes/interfaces: `com.example.connector.AlternativeConnectorService`
     pub fqn: String,
 
     /// Full signature string for methods/functions (e.g. `public void foo(int x)`).
@@ -108,7 +108,7 @@ pub struct ParsedEntity {
 
     /// Logical repository name for multi-repository isolation.
     /// Used to separate entities from different codebases in shared databases.
-    /// Example: "shelob-java", "shelob-typescript", "my-microservice"
+    /// Example: "my-java-repo", "my-typescript-repo", "my-microservice"
     pub repo_name: String,
 
     /// Raw call intents extracted from this entity's body.

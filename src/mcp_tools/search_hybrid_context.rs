@@ -49,7 +49,7 @@ impl SearchHybridContextTool {
             "repo_name".to_string(),
             serde_json::from_value(json!({
                 "type": "string",
-                "description": "Optional repository name to filter results to a specific codebase (e.g., 'shelob-java'). Omit to search across all repositories.",
+                "description": "Optional repository name to filter results to a specific codebase (e.g., 'my-java-repo'). Omit to search across all repositories.",
                 "minLength": 1,
                 "maxLength": 255
             }))

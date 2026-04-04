@@ -20,7 +20,7 @@ pub struct Cli {
 
     /// Logical repository name for multi-repository isolation.
     /// If not provided, defaults to the last component of repo_path.
-    /// Example: 'shelob-java', 'my-microservice'
+    /// Example: 'my-java-repo', 'my-microservice'
     #[arg(long, env = "KNOT_REPO_NAME")]
     pub repo_name: Option<String>,
 

@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use qdrant_client::{
     Payload, Qdrant,
     qdrant::{
-        Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct,
-        UpsertPointsBuilder, VectorParamsBuilder,
+        Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, DeletePointsBuilder,
+        Distance, FieldType, Filter, PointStruct, UpsertPointsBuilder, VectorParamsBuilder,
     },
 };
 use tracing::{info, warn};
@@ -41,6 +41,7 @@ impl VectorDb {
     }
 
     /// Ensure the collection exists; create it with cosine distance if not.
+    /// Also ensures a Keyword payload index on 'repo_name' for optimized multi-repo queries.
     pub async fn ensure_collection(&self) -> Result<()> {
         let exists = self
             .client
@@ -48,23 +49,36 @@ impl VectorDb {
             .await
             .context("Failed to check collection existence")?;
 
-        if exists {
+        if !exists {
+            info!(
+                "Creating Qdrant collection '{}' (dim={}, distance=Cosine)",
+                self.collection, self.embed_dim
+            );
+
+            self.client
+                .create_collection(
+                    CreateCollectionBuilder::new(&self.collection)
+                        .vectors_config(VectorParamsBuilder::new(self.embed_dim, Distance::Cosine)),
+                )
+                .await
+                .context("Failed to create Qdrant collection")?;
+        } else {
             info!("Qdrant collection '{}' already exists", self.collection);
-            return Ok(());
         }
 
+        // Ensure Keyword payload index on 'repo_name' for fast multi-repo filtering
         info!(
-            "Creating Qdrant collection '{}' (dim={}, distance=Cosine)",
-            self.collection, self.embed_dim
+            "Ensuring Keyword payload index on 'repo_name' for collection '{}'",
+            self.collection
         );
-
         self.client
-            .create_collection(
-                CreateCollectionBuilder::new(&self.collection)
-                    .vectors_config(VectorParamsBuilder::new(self.embed_dim, Distance::Cosine)),
-            )
+            .create_field_index(CreateFieldIndexCollectionBuilder::new(
+                &self.collection,
+                "repo_name",
+                FieldType::Keyword,
+            ))
             .await
-            .context("Failed to create Qdrant collection")?;
+            .context("Failed to create payload index on 'repo_name'")?;
 
         Ok(())
     }

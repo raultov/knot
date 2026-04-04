@@ -268,12 +268,26 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.1.2 (Current Release)
+### v0.1.3 (Current Release)
+**Released:** 2026-04-04
+
+**Performance Improvements:**
+- **Qdrant Payload Index**: Added Keyword index on `repo_name` field for dramatically faster multi-repository filtering
+  - Reduces search latency for repository-specific queries from O(n) to effectively O(1)
+  - Maintains single collection architecture (`knot_entities`) for optimal RAM usage at scale
+  - Enables efficient handling of hundreds of repositories with millions of vectors
+
+**Code Quality:**
+- Cleaned up internal references, replacing project-specific examples with generic `com.example` namespace
+
+---
+
+### v0.1.2
 **Released:** 2026-04-04
 
 **Major Features:**
 - **Multi-Repository Isolation**: New `repo_name` field enables logical separation of multiple repositories in shared Qdrant + Neo4j infrastructure
-  - Auto-detection: Extracts repository name from the last path component (e.g., `/path/to/shelob-java` → `shelob-java`)
+  - Auto-detection: Extracts repository name from the last path component (e.g., `/path/to/my-java-repo` → `my-java-repo`)
   - Manual override: Use `--repo-name` CLI flag or `KNOT_REPO_NAME` environment variable
   - Database-level filtering: All queries (vector + graph) filter by repository when specified
 
