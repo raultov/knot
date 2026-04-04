@@ -263,13 +263,57 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ---
 
+---
+
+## 📝 Changelog
+
+### v0.1.1 (Current Release)
+**Released:** 2026-04-04
+
+**Major Features:**
+- **New Entity Types**: Added `Constant` and `Enum` as first-class entity kinds
+- **Decorator Extraction**: Automatic detection and indexing of framework decorators/annotations
+  - TypeScript: `@decorator` syntax (e.g., `@Post()`, `@OnEvent()`, `@Controller()`)
+  - Java: `@Annotation` syntax (e.g., `@Override`, `@GetMapping()`)
+- **Enhanced Callback Detection**: Improved TypeScript call graph to detect:
+  - `.bind(this)` patterns (e.g., `this.method.bind(this)`)
+  - Callback arguments passed to functions (e.g., `app.use(this.handler)`)
+
+**Improvements:**
+- Decorators are now indexed in embeddings for framework-aware search
+- Better framework integration discovery for NestJS, Spring, etc.
+- Zero clippy warnings, production-ready code quality
+- Tested on real codebases (171 TypeScript entities, 67 Java entities)
+
+**Testing:**
+- TypeScript project: 171 entities indexed with framework decorators
+- Java project: 67 entities indexed
+- 228 CALLS relationships detected across both projects
+- Neo4j persistence verified
+
+### v0.1.0
+- Initial release with dual-database architecture (Qdrant + Neo4j)
+- Three MCP tools: `search_hybrid_context`, `find_callers`, `explore_file`
+- Support for Java and TypeScript/TSX
+- Comment extraction (docstrings and inline comments)
+- Call graph analysis
+
+---
+
 ## 🚀 Roadmap
 
+### v0.1.2 (Planned)
+- [ ] Multi-repository isolation with logical separation (`repo_name`)
+- [ ] Optional repository filtering in MCP tools
+- [ ] Better performance for large mono-repos
+
+### Future Versions
 - [ ] Python support
 - [ ] Go support
 - [ ] Incremental indexing (skip unchanged files)
 - [ ] Custom code analysis rules
 - [ ] IDE plugins (VS Code, IntelliJ)
+- [ ] Cross-repository dependency analysis
 
 ---
 
