@@ -12,9 +12,9 @@ installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
 # Note: x86_64-apple-darwin removed - ort crate doesn't provide prebuilt binaries for legacy Intel Macs
 # Note: x86_64-pc-windows-msvc removed - ort crate has MSVC linker compatibility issues
+# Note: aarch64-unknown-linux-gnu removed - complex C++ linker dependencies causing cross-compilation errors
 targets = [
     "aarch64-apple-darwin",
-    "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
 ]
 
@@ -22,4 +22,3 @@ targets = [
 # Note: ubuntu-24.04 provides glibc 2.39 - binaries require Ubuntu 24.04+, Debian 13+, or equivalent
 [dist.github-custom-runners]
 x86_64-unknown-linux-gnu = "ubuntu-24.04"
-aarch64-unknown-linux-gnu = "ubuntu-24.04"
