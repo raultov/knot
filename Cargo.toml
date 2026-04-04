@@ -30,7 +30,8 @@ tree-sitter-java = "0.23"
 tree-sitter-typescript = "0.23"
 
 # --- Local Embeddings ---
-fastembed = "5"
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub", "image-models"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "copy-dylibs", "ndarray"] }
 
 # --- Vector Database ---
 qdrant-client = "1"
