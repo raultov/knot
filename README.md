@@ -325,7 +325,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.1 (Current Release)
+### v0.2.2 (Current Release)
+**Released:** 2026-04-04
+
+**Continuous Delivery & Stability Improvements:**
+- **Release Targets**: Removed `aarch64-unknown-linux-gnu` target from automated native builds to resolve critical C++ linker errors caused by cross-compilation.
+- **Docker**: Reverted accidental Dockerfile command change and ensured multi-stage build uses `debian:trixie-slim` for proper glibc compatibility.
+- **Dockerfile**: Optimized `.dockerignore` to prevent permission issues during build.
+
+---
+
+### v0.2.1
 **Released:** 2026-04-04
 
 **Continuous Delivery & Compatibility:**
