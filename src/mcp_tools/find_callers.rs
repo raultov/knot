@@ -31,13 +31,24 @@ impl FindCallersTool {
             }))
             .unwrap(),
         );
+        properties.insert(
+            "repo_name".to_string(),
+            serde_json::from_value(json!({
+                "type": "string",
+                "description": "Optional repository name to filter results to a specific codebase (e.g., 'shelob-java'). Omit to search across all repositories.",
+                "minLength": 1,
+                "maxLength": 255
+            }))
+            .unwrap(),
+        );
 
         Tool {
             name: "find_callers".to_string(),
             description: Some(
                 "Reverse dependency lookup: finds all code that calls a specific function, method, or class. \
                  Use this to: detect dead code (zero callers), understand impact analysis ('What breaks if I modify this?'), \
-                 refactor safely by finding all references, or traverse the call graph. Works with Java and TypeScript."
+                 refactor safely by finding all references, or traverse the call graph. Works with Java and TypeScript. \
+                 Supports optional repository filtering."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
@@ -69,10 +80,12 @@ impl FindCallersTool {
                 CallToolError::from_message("Missing 'entity_name' parameter".to_string())
             })?;
 
+        let repo_name = args.get("repo_name").and_then(|v| v.as_str());
+
         // Query Neo4j for callers
         let callers = handler
             .graph_db
-            .find_callers(entity_name)
+            .find_callers(entity_name, repo_name)
             .await
             .map_err(|e| CallToolError::from_message(format!("Graph query failed: {}", e)))?;
 

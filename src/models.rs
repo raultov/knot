@@ -106,6 +106,11 @@ pub struct ParsedEntity {
     /// `None` for class/interface entities and top-level functions.
     pub enclosing_class: Option<String>,
 
+    /// Logical repository name for multi-repository isolation.
+    /// Used to separate entities from different codebases in shared databases.
+    /// Example: "shelob-java", "shelob-typescript", "my-microservice"
+    pub repo_name: String,
+
     /// Raw call intents extracted from this entity's body.
     /// Populated during the parse stage; may be empty if no calls were found.
     /// These are resolved to UUIDs during the ingest stage.
@@ -133,6 +138,7 @@ impl ParsedEntity {
         file_path: impl Into<String>,
         start_line: usize,
         enclosing_class: Option<String>,
+        repo_name: impl Into<String>,
     ) -> Self {
         Self {
             uuid: Uuid::new_v4(),
@@ -145,6 +151,7 @@ impl ParsedEntity {
             file_path: file_path.into(),
             start_line,
             enclosing_class,
+            repo_name: repo_name.into(),
             call_intents: Vec::new(),
             calls: Vec::new(),
             inline_comments: Vec::new(),

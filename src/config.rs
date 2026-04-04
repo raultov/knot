@@ -18,6 +18,12 @@ pub struct Cli {
     #[arg(long, env = "KNOT_REPO_PATH")]
     pub repo_path: String,
 
+    /// Logical repository name for multi-repository isolation.
+    /// If not provided, defaults to the last component of repo_path.
+    /// Example: 'shelob-java', 'my-microservice'
+    #[arg(long, env = "KNOT_REPO_NAME")]
+    pub repo_name: Option<String>,
+
     /// Qdrant server URL (e.g. http://localhost:6334).
     #[arg(long, env = "KNOT_QDRANT_URL", default_value = "http://localhost:6334")]
     pub qdrant_url: String,
@@ -57,6 +63,7 @@ pub struct Cli {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub repo_path: String,
+    pub repo_name: String,
     pub qdrant_url: String,
     pub qdrant_collection: String,
     pub neo4j_uri: String,
@@ -85,8 +92,21 @@ impl Config {
 
         let cli = Cli::parse();
 
+        // Auto-detect repo_name from repo_path if not provided
+        let repo_name = if let Some(name) = cli.repo_name {
+            name
+        } else {
+            // Extract last component of repo_path as default
+            std::path::Path::new(&cli.repo_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| "unnamed-repo".to_string())
+        };
+
         Ok(Self {
             repo_path: cli.repo_path,
+            repo_name,
             qdrant_url: cli.qdrant_url,
             qdrant_collection: cli.qdrant_collection,
             neo4j_uri: cli.neo4j_uri,

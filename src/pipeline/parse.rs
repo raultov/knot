@@ -30,6 +30,8 @@ const DEFAULT_TS_QUERY: &str = include_str!("../../queries/typescript.scm");
 pub struct ParseConfig {
     /// Optional filesystem path to a directory containing custom `.scm` query files.
     pub custom_queries_path: Option<String>,
+    /// Logical repository name for multi-repository isolation.
+    pub repo_name: String,
 }
 
 /// Parse a collection of source files in parallel and return all extracted entities.
@@ -37,10 +39,10 @@ pub struct ParseConfig {
 /// This function blocks until all files have been processed. It is intended to be
 /// called from a `tokio::task::spawn_blocking` context so the async executor is
 /// not starved.
-pub fn parse_files(files: &[PathBuf], cfg: &ParseConfig) -> Vec<ParsedEntity> {
+pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEntity> {
     files
         .par_iter()
-        .flat_map(|path| match parse_single_file(path, cfg) {
+        .flat_map(|path| match parse_single_file(path, parse_cfg) {
             Ok(entities) => entities,
             Err(e) => {
                 warn!("Failed to parse {}: {e:#}", path.display());
@@ -51,7 +53,7 @@ pub fn parse_files(files: &[PathBuf], cfg: &ParseConfig) -> Vec<ParsedEntity> {
 }
 
 /// Parse a single source file and return its extracted entities.
-fn parse_single_file(path: &Path, cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
+fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("Cannot read file: {}", path.display()))?;
 
@@ -64,23 +66,31 @@ fn parse_single_file(path: &Path, cfg: &ParseConfig) -> Result<Vec<ParsedEntity>
 
     let entities = match ext {
         "java" => {
-            let query_src = load_query_source("java.scm", DEFAULT_JAVA_QUERY, cfg);
+            let query_src = load_query_source("java.scm", DEFAULT_JAVA_QUERY, parse_cfg);
             extract_entities(
                 &source,
                 tree_sitter_java::LANGUAGE.into(),
                 &query_src,
                 "java",
                 &file_path,
+                &parse_cfg.repo_name,
             )?
         }
         "ts" | "tsx" => {
-            let query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, cfg);
+            let query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, parse_cfg);
             let lang: Language = if ext == "tsx" {
                 tree_sitter_typescript::LANGUAGE_TSX.into()
             } else {
                 tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
             };
-            extract_entities(&source, lang, &query_src, "typescript", &file_path)?
+            extract_entities(
+                &source,
+                lang,
+                &query_src,
+                "typescript",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
         }
         other => {
             warn!("Unsupported extension '{other}', skipping");
@@ -119,6 +129,7 @@ fn extract_entities(
     query_src: &str,
     lang_name: &str,
     file_path: &str,
+    repo_name: &str,
 ) -> Result<Vec<ParsedEntity>> {
     let mut parser = Parser::new();
     parser
@@ -258,6 +269,7 @@ fn extract_entities(
                 file_path,
                 start_line,
                 enclosing_class,
+                repo_name,
             );
             entity.call_intents = call_intents;
             entity.inline_comments = inline_comments;

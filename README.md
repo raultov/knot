@@ -204,6 +204,7 @@ All options can be set via environment variables (`.env`) or CLI flags. Environm
 | `.env` Variable            | CLI Flag                   | Default                     | Description                                              |
 |----------------------------|----------------------------|-----------------------------|----------------------------------------------------------|
 | `KNOT_REPO_PATH`           | `--repo-path`              | *(required)*                | Root directory of the repository to index                |
+| `KNOT_REPO_NAME`           | `--repo-name`              | *(auto-detected)*           | Repository name for multi-repo isolation (auto-detected from last path component) |
 | `KNOT_QDRANT_URL`          | `--qdrant-url`             | `http://localhost:6334`     | Qdrant server URL                                        |
 | `KNOT_QDRANT_COLLECTION`   | `--qdrant-collection`      | `knot_entities`             | Qdrant collection name                                   |
 | `KNOT_NEO4J_URI`           | `--neo4j-uri`              | `bolt://localhost:7687`     | Neo4j Bolt URI                                           |
@@ -267,7 +268,34 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.1.1 (Current Release)
+### v0.1.2 (Current Release)
+**Released:** 2026-04-04
+
+**Major Features:**
+- **Multi-Repository Isolation**: New `repo_name` field enables logical separation of multiple repositories in shared Qdrant + Neo4j infrastructure
+  - Auto-detection: Extracts repository name from the last path component (e.g., `/path/to/shelob-java` → `shelob-java`)
+  - Manual override: Use `--repo-name` CLI flag or `KNOT_REPO_NAME` environment variable
+  - Database-level filtering: All queries (vector + graph) filter by repository when specified
+
+**MCP Tools Enhancement:**
+- All three tools now support optional `repo_name` parameter for filtered searches:
+  - `search_hybrid_context`: Search within a specific repository or across all
+  - `find_callers`: Find callers in a specific repository context
+  - `explore_file`: Explore files in a specific repository
+- Backward compatible: Omit `repo_name` to search across all indexed repositories
+
+**Improvements:**
+- Qdrant: Uses keyword filter on `repo_name` payload field for efficient vector filtering
+- Neo4j: Uses parameterized Cypher queries with optional `repo_name` WHERE conditions
+- Zero clippy warnings, production-ready code quality
+- Fully backward compatible with v0.1.1 indexing
+
+**Testing:**
+- Compilation: Zero warnings with `cargo build --release`
+- Linting: Zero clippy warnings with `cargo clippy --all-targets`
+- Code quality: All code formatted with `cargo fmt`
+
+### v0.1.1
 **Released:** 2026-04-04
 
 **Major Features:**
@@ -302,18 +330,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### v0.1.2 (Planned)
-- [ ] Multi-repository isolation with logical separation (`repo_name`)
-- [ ] Optional repository filtering in MCP tools
+### v0.1.3 (Planned)
+- [ ] Incremental indexing (skip unchanged files)
 - [ ] Better performance for large mono-repos
+- [ ] Cross-repository dependency analysis
 
 ### Future Versions
 - [ ] Python support
 - [ ] Go support
-- [ ] Incremental indexing (skip unchanged files)
 - [ ] Custom code analysis rules
 - [ ] IDE plugins (VS Code, IntelliJ)
-- [ ] Cross-repository dependency analysis
+- [ ] Web UI for graph visualization
 
 ---
 

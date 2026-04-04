@@ -45,6 +45,16 @@ impl SearchHybridContextTool {
             }))
             .unwrap(),
         );
+        properties.insert(
+            "repo_name".to_string(),
+            serde_json::from_value(json!({
+                "type": "string",
+                "description": "Optional repository name to filter results to a specific codebase (e.g., 'shelob-java'). Omit to search across all repositories.",
+                "minLength": 1,
+                "maxLength": 255
+            }))
+            .unwrap(),
+        );
 
         Tool {
             name: "search_hybrid_context".to_string(),
@@ -52,7 +62,7 @@ impl SearchHybridContextTool {
                 "Hybrid semantic + structural search combining AI understanding with code architecture. \
                  Search by meaning ('user authentication'), class/method names, docstrings, comments, or architectural patterns. \
                  Returns full context including signatures, documentation, inline comments, and dependencies. \
-                 Works with Java and TypeScript codebases."
+                 Works with Java and TypeScript codebases. Supports optional repository filtering."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(vec!["query".to_string()], Some(properties), None),
@@ -83,6 +93,8 @@ impl SearchHybridContextTool {
             .and_then(|v| v.as_i64())
             .unwrap_or(5) as usize;
 
+        let repo_name = args.get("repo_name").and_then(|v| v.as_str());
+
         // Step 1: Embed the query using fastembed
         let vector = handler
             .embedder
@@ -94,7 +106,7 @@ impl SearchHybridContextTool {
         // Step 2: Search Qdrant for similar vectors
         let search_results = handler
             .vector_db
-            .search(&vector, max_results)
+            .search(&vector, max_results, repo_name)
             .await
             .map_err(|e| CallToolError::from_message(format!("Vector search failed: {}", e)))?;
 
@@ -125,7 +137,7 @@ impl SearchHybridContextTool {
         // Step 3: Query Neo4j for detailed context and dependencies
         let context = handler
             .graph_db
-            .get_entities_with_dependencies(&uuids)
+            .get_entities_with_dependencies(&uuids, repo_name)
             .await
             .map_err(|e| CallToolError::from_message(format!("Graph query failed: {}", e)))?;
 

@@ -57,10 +57,10 @@ async fn main() -> Result<()> {
     // Synchronization: clear stale data for this repository               //
     // ------------------------------------------------------------------ //
 
-    info!("Clearing stale data for repo '{}'…", cfg.repo_path);
+    info!("Clearing stale data for repo '{}'…", cfg.repo_name);
     tokio::try_join!(
-        vector_db.delete_by_repo(&cfg.repo_path),
-        graph_db.delete_by_repo(&cfg.repo_path),
+        vector_db.delete_by_repo(&cfg.repo_name),
+        graph_db.delete_by_repo(&cfg.repo_name),
     )?;
 
     // ------------------------------------------------------------------ //
@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
 
     let parse_cfg = ParseConfig {
         custom_queries_path: cfg.custom_queries_path.clone(),
+        repo_name: cfg.repo_name.clone(),
     };
 
     // Offload blocking Rayon work to a dedicated OS thread so the Tokio

@@ -69,18 +69,18 @@ impl VectorDb {
         Ok(())
     }
 
-    /// Delete all points in the collection whose `file_path` payload field
-    /// contains `repo_path`. Called before a full re-index to avoid orphans.
-    pub async fn delete_by_repo(&self, repo_path: &str) -> Result<()> {
+    /// Delete all points in the collection whose `repo_name` payload field
+    /// exactly matches the provided name. Called before a full re-index to avoid orphans.
+    pub async fn delete_by_repo(&self, repo_name: &str) -> Result<()> {
         warn!(
             "Deleting existing vectors for repo '{}' from collection '{}'",
-            repo_path, self.collection
+            repo_name, self.collection
         );
 
         self.client
             .delete_points(
                 DeletePointsBuilder::new(&self.collection).points(Filter::must([
-                    Condition::matches_text("file_path", repo_path),
+                    Condition::matches_text("repo_name", repo_name),
                 ])),
             )
             .await
@@ -103,6 +103,7 @@ impl VectorDb {
                 payload.insert("name", e.entity.name.clone());
                 payload.insert("kind", e.entity.kind.to_string());
                 payload.insert("language", e.entity.language.clone());
+                payload.insert("repo_name", e.entity.repo_name.clone());
                 payload.insert("file_path", e.entity.file_path.clone());
                 payload.insert("start_line", e.entity.start_line as i64);
                 if let Some(sig) = &e.entity.signature {
@@ -130,8 +131,37 @@ impl VectorDb {
     /// Search for similar vectors in Qdrant.
     ///
     /// Returns the top N matching points with their payloads (metadata).
-    pub async fn search(&self, vector: &[f32], limit: usize) -> Result<Vec<serde_json::Value>> {
-        // Build search request directly
+    pub async fn search(
+        &self,
+        vector: &[f32],
+        limit: usize,
+        repo_name: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>> {
+        // Build search request with optional repo_name filter
+        let mut filter = None;
+        if let Some(repo) = repo_name {
+            filter = Some(qdrant_client::qdrant::Filter {
+                must: vec![qdrant_client::qdrant::Condition {
+                    condition_one_of: Some(
+                        qdrant_client::qdrant::condition::ConditionOneOf::Field(
+                            qdrant_client::qdrant::FieldCondition {
+                                key: "repo_name".to_string(),
+                                r#match: Some(qdrant_client::qdrant::Match {
+                                    match_value: Some(
+                                        qdrant_client::qdrant::r#match::MatchValue::Keyword(
+                                            repo.to_string(),
+                                        ),
+                                    ),
+                                }),
+                                ..Default::default()
+                            },
+                        ),
+                    ),
+                }],
+                ..Default::default()
+            });
+        }
+
         let search_request = qdrant_client::qdrant::SearchPoints {
             collection_name: self.collection.clone(),
             vector: vector.to_vec(),
@@ -141,6 +171,7 @@ impl VectorDb {
                     qdrant_client::qdrant::with_payload_selector::SelectorOptions::Enable(true),
                 ),
             }),
+            filter,
             ..Default::default()
         };
 

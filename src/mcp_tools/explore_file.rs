@@ -31,13 +31,24 @@ impl ExploreFileTool {
             }))
             .unwrap(),
         );
+        properties.insert(
+            "repo_name".to_string(),
+            serde_json::from_value(json!({
+                "type": "string",
+                "description": "Optional repository name to filter results to a specific codebase (e.g., 'shelob-java'). Omit to search across all repositories.",
+                "minLength": 1,
+                "maxLength": 255
+            }))
+            .unwrap(),
+        );
 
         Tool {
             name: "explore_file".to_string(),
             description: Some(
                 "Explore the complete anatomy of a source file: all classes, interfaces, methods, and functions \
                  organized by type with signatures and documentation. Use this to understand file structure, \
-                 navigate large modules, or get a quick overview before diving into details. Works with Java and TypeScript."
+                 navigate large modules, or get a quick overview before diving into details. Works with Java and TypeScript. \
+                 Supports optional repository filtering."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
@@ -69,10 +80,12 @@ impl ExploreFileTool {
                 CallToolError::from_message("Missing 'file_path' parameter".to_string())
             })?;
 
+        let repo_name = args.get("repo_name").and_then(|v| v.as_str());
+
         // Query Neo4j for all entities in the file
         let entities = handler
             .graph_db
-            .get_file_entities(file_path)
+            .get_file_entities(file_path, repo_name)
             .await
             .map_err(|e| CallToolError::from_message(format!("Graph query failed: {}", e)))?;
 

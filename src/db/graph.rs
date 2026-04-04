@@ -27,13 +27,16 @@ impl GraphDb {
         Ok(Self { graph })
     }
 
-    /// Ensure necessary indexes exist for fast lookups by UUID and file_path.
+    /// Ensure necessary indexes exist for fast lookups by UUID, repo_name, and file_path.
     pub async fn ensure_indexes(&self) -> Result<()> {
         let stmts = [
             // UUID uniqueness constraint (covers Method, Class, Interface, Function)
             "CREATE CONSTRAINT entity_uuid_unique IF NOT EXISTS \
              FOR (e:Entity) REQUIRE e.uuid IS UNIQUE",
-            // Index on file_path for repo-level deletions
+            // Index on repo_name for multi-repository isolation and fast filtering
+            "CREATE INDEX entity_repo_name IF NOT EXISTS \
+             FOR (e:Entity) ON (e.repo_name)",
+            // Index on file_path for quick path-based lookups
             "CREATE INDEX entity_file_path IF NOT EXISTS \
              FOR (e:Entity) ON (e.file_path)",
         ];
@@ -49,22 +52,22 @@ impl GraphDb {
         Ok(())
     }
 
-    /// Delete all entity nodes (and their relationships) whose `file_path`
-    /// starts with `repo_path`. Called before a full re-index.
-    pub async fn delete_by_repo(&self, repo_path: &str) -> Result<()> {
+    /// Delete all entity nodes (and their relationships) whose `repo_name`
+    /// exactly matches the provided name. Called before a full re-index.
+    pub async fn delete_by_repo(&self, repo_name: &str) -> Result<()> {
         warn!(
             "Deleting existing graph nodes for repo '{}' from Neo4j",
-            repo_path
+            repo_name
         );
 
         self.graph
             .run(
                 query(
                     "MATCH (e:Entity)
-                     WHERE e.file_path STARTS WITH $repo_path
+                     WHERE e.repo_name = $repo_name
                      DETACH DELETE e",
                 )
-                .param("repo_path", repo_path),
+                .param("repo_name", repo_name),
             )
             .await
             .context("Failed to delete existing Neo4j nodes")?;
@@ -90,6 +93,7 @@ impl GraphDb {
                  SET n.name        = $name,
                      n.kind        = $kind,
                      n.language    = $language,
+                     n.repo_name   = $repo_name,
                      n.file_path   = $file_path,
                      n.start_line  = $start_line,
                      n.signature   = $signature,
@@ -106,6 +110,7 @@ impl GraphDb {
                         .param("name", e.entity.name.clone())
                         .param("kind", e.entity.kind.to_string())
                         .param("language", e.entity.language.clone())
+                        .param("repo_name", e.entity.repo_name.clone())
                         .param("file_path", e.entity.file_path.clone())
                         .param("start_line", e.entity.start_line as i64)
                         .param("signature", e.entity.signature.clone().unwrap_or_default())
@@ -156,6 +161,7 @@ impl GraphDb {
     pub async fn get_entities_with_dependencies(
         &self,
         uuids: &[String],
+        repo_name: Option<&str>,
     ) -> Result<serde_json::Value> {
         if uuids.is_empty() {
             return Ok(serde_json::json!([]));
@@ -164,17 +170,28 @@ impl GraphDb {
         let mut results = Vec::new();
 
         for uuid in uuids {
+            let query_str = if repo_name.is_some() {
+                "MATCH (m:Entity) WHERE m.uuid = $uuid AND m.repo_name = $repo_name
+                 OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
+                 RETURN m.name, m.kind, m.signature, m.docstring, m.file_path, 
+                        m.start_line, collect(dep.name) as dependencies"
+                    .to_string()
+            } else {
+                "MATCH (m:Entity) WHERE m.uuid = $uuid
+                 OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
+                 RETURN m.name, m.kind, m.signature, m.docstring, m.file_path, 
+                        m.start_line, collect(dep.name) as dependencies"
+                    .to_string()
+            };
+
+            let mut q = query(&query_str).param("uuid", uuid.as_str());
+            if let Some(repo) = repo_name {
+                q = q.param("repo_name", repo);
+            }
+
             let mut row = self
                 .graph
-                .execute(
-                    query(
-                        "MATCH (m:Entity) WHERE m.uuid = $uuid
-                         OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-                         RETURN m.name, m.kind, m.signature, m.docstring, m.file_path, 
-                                m.start_line, collect(dep.name) as dependencies",
-                    )
-                    .param("uuid", uuid.as_str()),
-                )
+                .execute(q)
                 .await
                 .context("Failed to query Neo4j for entity dependencies")?;
 
@@ -208,18 +225,31 @@ impl GraphDb {
     }
 
     /// Find all entities that call a given entity (reverse dependency lookup).
-    pub async fn find_callers(&self, entity_name: &str) -> Result<serde_json::Value> {
+    pub async fn find_callers(
+        &self,
+        entity_name: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let mut results = Vec::new();
+
+        let query_str = if repo_name.is_some() {
+            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity {name: $name, repo_name: $repo_name})
+             RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
+                .to_string()
+        } else {
+            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity {name: $name})
+             RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
+                .to_string()
+        };
+
+        let mut q = query(&query_str).param("name", entity_name);
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
 
         let mut rows = self
             .graph
-            .execute(
-                query(
-                    "MATCH (caller:Entity)-[:CALLS]->(callee:Entity {name: $name})
-                     RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature",
-                )
-                .param("name", entity_name),
-            )
+            .execute(q)
             .await
             .context("Failed to query Neo4j for callers")?;
 
@@ -238,19 +268,33 @@ impl GraphDb {
     }
 
     /// Get all entities within a specific file.
-    pub async fn get_file_entities(&self, file_path: &str) -> Result<serde_json::Value> {
+    pub async fn get_file_entities(
+        &self,
+        file_path: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let mut results = Vec::new();
+
+        let query_str = if repo_name.is_some() {
+            "MATCH (e:Entity {file_path: $file_path, repo_name: $repo_name})
+             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line
+             ORDER BY e.start_line"
+                .to_string()
+        } else {
+            "MATCH (e:Entity {file_path: $file_path})
+             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line
+             ORDER BY e.start_line"
+                .to_string()
+        };
+
+        let mut q = query(&query_str).param("file_path", file_path);
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
 
         let mut rows = self
             .graph
-            .execute(
-                query(
-                    "MATCH (e:Entity {file_path: $file_path})
-                     RETURN e.name, e.kind, e.signature, e.docstring, e.start_line
-                     ORDER BY e.start_line",
-                )
-                .param("file_path", file_path),
-            )
+            .execute(q)
             .await
             .context("Failed to query Neo4j for file entities")?;
 
