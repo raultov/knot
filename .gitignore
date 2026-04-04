@@ -6,3 +6,6 @@
 
 # fastembed cache (downloaded models)
 .fastembed_cache/
+
+# Environment variables (local configuration)
+.env
