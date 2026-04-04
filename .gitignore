@@ -1,0 +1,5 @@
+/target
+/data/
+
+# Local Database Persistent Storage
+/data/

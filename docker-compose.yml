@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # Neo4j Graph Database
+  # Stores code entities as nodes with relationships (e.g. method calls)
+  neo4j:
+    image: neo4j:5
+    container_name: knot_neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # Web interface (Neo4j Browser)
+      - "7687:7687"   # Bolt protocol (used by knot via neo4rs)
+    environment:
+      # Authentication: username=neo4j, password=knot_secret_password
+      NEO4J_AUTH: neo4j/knot_secret_password
+      # Increase memory for better performance on large codebases
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 2G
+      # Allow unrestricted access from any IP (safe for local development)
+      NEO4J_server_default__listen__address: 0.0.0.0
+    volumes:
+      # Persist database files on the host machine
+      - ./data/neo4j/data:/data
+      - ./data/neo4j/logs:/logs
+      - ./data/neo4j/import:/var/lib/neo4j/import
+      - ./data/neo4j/plugins:/plugins
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "knot_secret_password", "CALL db.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Qdrant Vector Database
+  # Stores high-dimensional embeddings of code entities for semantic search
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: knot_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST API (for inspection/debugging)
+      - "6334:6334"   # gRPC API (used by knot via qdrant-client)
+    volumes:
+      # Persist vector storage on the host machine
+      - ./data/qdrant:/qdrant/storage
+    environment:
+      # Optional: configure Qdrant settings
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  default:
+    name: knot_network
