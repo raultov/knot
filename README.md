@@ -77,7 +77,7 @@ Docker images provide universal compatibility for **any Linux distribution** (in
 
 **Build the image locally:**
 ```bash
-docker build -t knot:latest .
+docker build -t knot:latest . --network=host
 ```
 
 **Run the indexer:**
