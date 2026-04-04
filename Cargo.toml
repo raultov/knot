@@ -1,10 +1,17 @@
 [package]
 name = "knot"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java and TypeScript codebases"
-authors = []
+authors = ["Raul Tovar <angel.raul.tovar.martin@gmail.com>"]
 license = "MIT"
+repository = "https://github.com/raultov/knot"
+
+[package.metadata.wix]
+upgrade-guid = "92E1E683-D44D-4270-A4E6-4332677DC7B1"
+path-guid = "577497D8-48AD-474A-B0C7-FF85F4EB383E"
+license = false
+eula = false
 
 [dependencies]
 # --- Async Runtime ---
@@ -60,3 +67,8 @@ async-trait = "0.1"
 lto = true
 codegen-units = 1
 opt-level = 3
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

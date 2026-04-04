@@ -48,21 +48,40 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 
 | Component    | Version | Notes                              |
 |--------------|---------|-----------------------------------|
-| Rust         | 1.85+   | Edition 2024                       |
 | Docker       | 20.10+  | For running Qdrant and Neo4j      |
 | qdrant       | 1.x     | Vector database (docker)          |
 | neo4j        | 5.x     | Graph database (docker)           |
 
-### Quick Start
+### Option A: Pre-compiled Binaries (Recommended)
+
+Go to the [Releases](https://github.com/raultov/knot/releases) page and download the native executable for your platform (macOS, Windows, Linux). We provide `.msi` installers for Windows and shell scripts for UNIX systems.
+
+**Install via Shell Script (Unix):**
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
+```
+
+**Install via PowerShell (Windows):**
+```powershell
+irm https://github.com/raultov/knot/releases/latest/download/knot-installer.ps1 | iex
+```
+
+### Option B: Install via Cargo
+
+```bash
+cargo install --git https://github.com/raultov/knot
+```
+
+### Option C: Build from Source
 
 **1. Start infrastructure with Docker:**
 ```bash
 docker compose up -d
 ```
 
-**2. Build the project:**
+**2. Clone and build:**
 ```bash
-git clone https://github.com/your-org/knot
+git clone https://github.com/raultov/knot
 cd knot
 cargo build --release
 ```
@@ -91,10 +110,10 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 
 ```bash
 # Using .env file (recommended)
-./target/release/knot-indexer
+knot-indexer
 
 # Or specify repository directly
-./target/release/knot-indexer --repo-path /path/to/your/repo --neo4j-password secret
+knot-indexer --repo-path /path/to/your/repo --neo4j-password secret
 ```
 
 The indexer will:
@@ -268,7 +287,16 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.1.3 (Current Release)
+### v0.2.0 (Current Release)
+**Released:** 2026-04-04
+
+**Continuous Delivery:**
+- Integrated `cargo-dist` to automatically generate pre-compiled native binaries for macOS (Apple Silicon/Intel), Linux, and Windows on every GitHub release.
+- Added 1-click installer scripts (`.sh` and `.ps1`) to simplify distribution without requiring a local Rust toolchain.
+
+---
+
+### v0.1.3
 **Released:** 2026-04-04
 
 **Performance Improvements:**
