@@ -291,8 +291,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 **Released:** 2026-04-04
 
 **Continuous Delivery:**
-- Integrated `cargo-dist` to automatically generate pre-compiled native binaries for macOS (Apple Silicon/Intel), Linux, and Windows on every GitHub release.
+- Integrated `cargo-dist` to automatically generate pre-compiled native binaries for macOS, Linux, and Windows on every GitHub release.
+- Pre-built binaries for:
+  - **macOS**: Apple Silicon (`aarch64-apple-darwin`)
+  - **Linux**: x86_64 (`x86_64-unknown-linux-gnu`) and ARM64 (`aarch64-unknown-linux-gnu`)
+  - **Windows**: x86_64 MSVC (`x86_64-pc-windows-msvc`)
 - Added 1-click installer scripts (`.sh` and `.ps1`) to simplify distribution without requiring a local Rust toolchain.
+- Users can now download and run native binaries directly from the [Releases](https://github.com/raultov/knot/releases) page.
 
 ---
 

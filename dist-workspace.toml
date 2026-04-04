@@ -10,15 +10,16 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell", "msi"]
 # Target platforms to build apps for (Rust target-triple syntax)
+# Note: x86_64-apple-darwin removed - ort crate doesn't provide prebuilt binaries for legacy Intel Macs
 targets = [
     "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
 ]
 
-# Custom runners for Linux to support newer GLIBC required by ort (ONNX Runtime)
+# Custom runners for Linux to support glibc 2.35+ required by ort (ONNX Runtime)
+# Note: ubuntu-22.04 provides glibc 2.35, which maintains compatibility with current Linux distributions
 [dist.github-custom-runners]
-x86_64-unknown-linux-gnu = "ubuntu-24.04"
-aarch64-unknown-linux-gnu = "ubuntu-24.04"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+aarch64-unknown-linux-gnu = "ubuntu-22.04"
