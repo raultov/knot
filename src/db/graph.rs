@@ -95,6 +95,7 @@ impl GraphDb {
                      n.signature   = $signature,
                      n.docstring   = $docstring,
                      n.inline_comments = $inline_comments,
+                     n.decorators  = $decorators,
                      n.embed_text  = $embed_text"
             );
 
@@ -110,6 +111,7 @@ impl GraphDb {
                         .param("signature", e.entity.signature.clone().unwrap_or_default())
                         .param("docstring", e.entity.docstring.clone().unwrap_or_default())
                         .param("inline_comments", e.entity.inline_comments.clone())
+                        .param("decorators", e.entity.decorators.clone())
                         .param("embed_text", e.entity.embed_text.clone()),
                 )
                 .await
@@ -274,5 +276,7 @@ fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::Interface => "Interface",
         EntityKind::Method => "Method",
         EntityKind::Function => "Function",
+        EntityKind::Constant => "Constant",
+        EntityKind::Enum => "Enum",
     }
 }

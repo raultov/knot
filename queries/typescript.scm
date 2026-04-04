@@ -6,6 +6,8 @@
 ;   @interface.name  — name node of an interface declaration
 ;   @method.name     — name node of a method definition
 ;   @function.name   — name node of a function declaration
+;   @constant.name   — name node of a top-level const or static readonly property
+;   @enum.name       — name node of an enum declaration
 ;   @signature       — parameter list node (type params included)
 ;   @doc             — comment node immediately preceding the declaration
 ;
@@ -39,12 +41,26 @@
     value: (arrow_function
       parameters: (formal_parameters) @signature)))
 
+; --- Top-level const declarations (const MY_CONST = ...) ---
+; These become Constant entities
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @constant.name))
+
 ; --- Default export arrow function (export default () => {...}) ---
 ; We'll capture the "default" keyword as a synthetic name for the function
 (export_statement
   "default" @function.name
   (arrow_function
     parameters: (formal_parameters) @signature))
+
+; --- Enum declarations ---
+(enum_declaration
+  name: (identifier) @enum.name)
+
+; --- Static readonly class properties (static readonly CONST_VAL = ...) ---
+(public_field_definition
+  name: (property_identifier) @constant.name)
 
 ; --- Method and function invocations (call expressions) ---
 ; Matches: this.method(), object.method(), Class.method(), localCall()

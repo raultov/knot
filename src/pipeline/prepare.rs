@@ -29,10 +29,25 @@ pub fn prepare_entities(entities: &mut [ParsedEntity]) {
 
 /// Construct the embedding text for a single entity.
 fn build_embed_text(entity: &ParsedEntity) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(6);
+    let mut parts: Vec<String> = Vec::with_capacity(8);
 
     // Header: kind + name
     parts.push(format!("[{}] {}", entity.kind, entity.name));
+
+    // Optional decorators/annotations (framework metadata)
+    if !entity.decorators.is_empty() {
+        let decorators_text = entity
+            .decorators
+            .iter()
+            .filter(|d| !d.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        if !decorators_text.is_empty() {
+            parts.push(format!("Decorators: {}", decorators_text));
+        }
+    }
 
     // Optional signature
     if let Some(sig) = &entity.signature {

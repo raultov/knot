@@ -209,6 +209,21 @@ fn extract_entities(
                         extract_call_intents_typescript(func_node, source_bytes, &mut call_intents);
                     }
                 }
+                "constant.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::Constant);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "lexical_declaration")
+                        .or_else(|| find_parent_by_kind(node, "variable_declarator"))
+                        .or_else(|| find_parent_by_kind(node, "field_declaration"))
+                        .or_else(|| find_parent_by_kind(node, "public_field_definition"));
+                }
+                "enum.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::Enum);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "enum_declaration");
+                }
                 "signature" => signature = Some(text.clone()),
                 _ => {}
             }
@@ -220,6 +235,13 @@ fn extract_entities(
                 extract_comments(node, source_bytes, lang_name, &kind, &class_contexts)
             } else {
                 (None, Vec::new())
+            };
+
+            // Extract decorators/annotations from the entity node
+            let decorators = if let Some(node) = entity_node {
+                extract_decorators(node, source_bytes, lang_name)
+            } else {
+                Vec::new()
             };
 
             // Determine FQN and enclosing class based on context
@@ -239,6 +261,7 @@ fn extract_entities(
             );
             entity.call_intents = call_intents;
             entity.inline_comments = inline_comments;
+            entity.decorators = decorators;
             entities.push(entity);
         }
     }
@@ -382,6 +405,13 @@ fn extract_call_intents_java(node: Node<'_>, source: &[u8], intents: &mut Vec<Ca
 }
 
 /// Extract call expression call intents from a TypeScript function/method body.
+///
+/// Handles:
+/// - Direct calls: `method()`, `this.method()`
+/// - Member calls: `obj.method()`, `this.service.method()`
+/// - New expressions: `new MyClass()`
+/// - Callbacks passed as arguments: `app.use(this.handler)` -> records call to handler
+/// - Bind calls: `this.method.bind(this)` -> records call to method
 fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
     if node.kind() == "call_expression" {
         let line = node.start_position().row + 1;
@@ -396,12 +426,19 @@ fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut 
 
         // Look for the function field in the call_expression
         let mut child = node.child(0);
+        let mut is_bind_call = false;
+
         while let Some(c) = child {
             if c.kind() == "member_expression" {
                 // Use Tree-sitter API to extract fields cleanly
                 // member_expression has: object . property
                 if let Some(property_node) = c.child_by_field_name("property") {
-                    method_name = Some(node_text(property_node, source));
+                    let prop_text = node_text(property_node, source);
+                    // Check if this is a .bind() call
+                    if prop_text == "bind" {
+                        is_bind_call = true;
+                    }
+                    method_name = Some(prop_text);
                 }
 
                 // For the object, we need to extract it as text to handle nested members like "this.browserService"
@@ -416,12 +453,35 @@ fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut 
         }
 
         if let Some(method) = method_name {
-            intents.push(CallIntent {
-                method,
-                receiver,
-                line,
-            });
+            // Special handling for .bind(this) and similar patterns
+            if is_bind_call {
+                // For .bind() calls, the actual target is in the receiver
+                // e.g., this.requestPausedHandler.bind(this) -> we want to record call to requestPausedHandler
+                if let Some(receiver) = receiver {
+                    // Extract the method name from receiver (last component if it's a member expression)
+                    if let Some(last_part) = receiver.split('.').next_back() {
+                        intents.push(CallIntent {
+                            method: last_part.to_string(),
+                            receiver: if receiver.contains('.') {
+                                receiver.split('.').next().map(|s| s.to_string())
+                            } else {
+                                Some("this".to_string())
+                            },
+                            line,
+                        });
+                    }
+                }
+            } else {
+                intents.push(CallIntent {
+                    method,
+                    receiver,
+                    line,
+                });
+            }
         }
+
+        // Also scan arguments for callback references (e.g., app.use(this.handler))
+        extract_callback_arguments(node, source, intents, line);
     } else if node.kind() == "new_expression" {
         let line = node.start_position().row + 1;
         let mut child = node.child(0);
@@ -444,6 +504,182 @@ fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut 
         extract_call_intents_typescript(c, source, intents);
         child = c.next_sibling();
     }
+}
+
+/// Extract callback arguments from a call expression.
+///
+/// Detects method references passed as arguments, e.g.:
+/// - `app.use(this.authHandler)` -> records call to authHandler
+/// - `emitter.on('event', this.handler)` -> records call to handler
+/// - `addEventListener('click', this.onClick)` -> records call to onClick
+fn extract_callback_arguments(
+    call_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<CallIntent>,
+    line: usize,
+) {
+    // Find the arguments node
+    if let Some(args_node) = call_node.child_by_field_name("arguments") {
+        let mut arg = args_node.child(0);
+        while let Some(a) = arg {
+            // Look for member_expression arguments (e.g., this.handler, obj.method)
+            if a.kind() == "member_expression" {
+                if let Some(property_node) = a.child_by_field_name("property") {
+                    let method_name = node_text(property_node, source);
+                    if let Some(object_node) = a.child_by_field_name("object") {
+                        let receiver = node_text(object_node, source);
+                        intents.push(CallIntent {
+                            method: method_name,
+                            receiver: Some(receiver),
+                            line,
+                        });
+                    }
+                }
+            } else if a.kind() == "identifier" {
+                // Sometimes callbacks are just identifiers: app.use(authHandler)
+                let name = node_text(a, source);
+                // Only treat as callback if it looks like a method name (not a keyword or literal)
+                if !is_reserved_keyword(&name)
+                    && name.chars().next().is_some_and(|c| c.is_alphabetic())
+                {
+                    intents.push(CallIntent {
+                        method: name,
+                        receiver: None,
+                        line,
+                    });
+                }
+            }
+            arg = a.next_sibling();
+        }
+    }
+}
+
+/// Check if a string is a TypeScript/JavaScript reserved keyword.
+fn is_reserved_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "true"
+            | "false"
+            | "null"
+            | "undefined"
+            | "this"
+            | "super"
+            | "import"
+            | "export"
+            | "from"
+            | "as"
+            | "async"
+            | "await"
+            | "yield"
+            | "return"
+            | "throw"
+            | "try"
+            | "catch"
+            | "finally"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "break"
+            | "continue"
+            | "switch"
+            | "case"
+            | "default"
+            | "const"
+            | "let"
+            | "var"
+            | "class"
+            | "interface"
+            | "enum"
+            | "type"
+            | "function"
+            | "new"
+            | "delete"
+            | "typeof"
+            | "instanceof"
+            | "in"
+            | "of"
+            | "public"
+            | "private"
+            | "protected"
+            | "static"
+            | "readonly"
+            | "abstract"
+            | "extends"
+            | "implements"
+            | "declare"
+    )
+}
+
+/// Extract decorators/annotations from an entity node.
+///
+/// **TypeScript:** Looks for `decorator` nodes preceding the entity.
+/// Example: `@OnEvent('foo')` or `@Override`
+///
+/// **Java:** Looks for `annotation` nodes in the modifiers.
+/// Examples: `@Override`, `@GetMapping("/path")`, `@OnEvent('foo')`
+///
+/// Returns a vector of decorator strings (e.g., `["@Override", "@OnEvent('foo')"]`).
+fn extract_decorators(entity_node: Node<'_>, source: &[u8], lang_name: &str) -> Vec<String> {
+    let mut decorators: Vec<String> = Vec::new();
+
+    if lang_name == "typescript" {
+        // For TypeScript: decorators are separate nodes that precede the declaration
+        // Look for decorator nodes that come before this entity
+        if let Some(parent) = entity_node.parent() {
+            let mut child = parent.child(0);
+            let entity_line = entity_node.start_position().row;
+            let mut found_decorator_section = false;
+
+            while let Some(c) = child {
+                let child_line = c.start_position().row;
+
+                // Stop once we've passed the entity
+                if child_line >= entity_line {
+                    break;
+                }
+
+                if c.kind() == "decorator" {
+                    let decorator_text = node_text(c, source);
+                    if !decorator_text.is_empty() {
+                        decorators.push(decorator_text);
+                        found_decorator_section = true;
+                    }
+                } else if found_decorator_section
+                    && !c.utf8_text(source).unwrap_or("").trim().is_empty()
+                {
+                    // Stop collecting decorators if we hit a non-decorator, non-whitespace node
+                    if !matches!(c.kind(), "comment" | "line_comment" | "block_comment") {
+                        break;
+                    }
+                }
+
+                child = c.next_sibling();
+            }
+        }
+    } else if lang_name == "java" {
+        // For Java: annotations are in the modifiers section
+        let mut child = entity_node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "modifiers" {
+                // Extract annotations from the modifiers node
+                let mut modifier_child = c.child(0);
+                while let Some(mc) = modifier_child {
+                    if matches!(mc.kind(), "annotation" | "marker_annotation") {
+                        let annotation_text = node_text(mc, source);
+                        if !annotation_text.is_empty() {
+                            decorators.push(annotation_text);
+                        }
+                    }
+                    modifier_child = mc.next_sibling();
+                }
+            }
+            child = c.next_sibling();
+        }
+    }
+
+    decorators
 }
 
 /// Extract docstring (preceding comments) and inline_comments from an entity node.
@@ -622,6 +858,22 @@ fn compute_fqn_and_context(
         EntityKind::Function => {
             // Top-level function - just the function name
             name.to_string()
+        }
+        EntityKind::Constant => {
+            // Constant FQN: ClassName.CONST_NAME or just CONST_NAME for top-level
+            if let Some(class_name) = &enclosing_class {
+                format!("{}.{}", class_name, name)
+            } else {
+                name.to_string()
+            }
+        }
+        EntityKind::Enum => {
+            // Enum FQN: EnumName or ClassName.EnumName if nested
+            if let Some(class_name) = &enclosing_class {
+                format!("{}.{}", class_name, name)
+            } else {
+                name.to_string()
+            }
         }
     };
 

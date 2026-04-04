@@ -14,6 +14,8 @@ pub enum EntityKind {
     Interface,
     Method,
     Function,
+    Constant,
+    Enum,
 }
 
 impl std::fmt::Display for EntityKind {
@@ -23,6 +25,8 @@ impl std::fmt::Display for EntityKind {
             EntityKind::Interface => "interface",
             EntityKind::Method => "method",
             EntityKind::Function => "function",
+            EntityKind::Constant => "constant",
+            EntityKind::Enum => "enum",
         };
         write!(f, "{s}")
     }
@@ -84,6 +88,11 @@ pub struct ParsedEntity {
     /// These provide implementation context and are associated with the containing entity.
     pub inline_comments: Vec<String>,
 
+    /// Decorators and annotations applied to this entity.
+    /// Examples: `@Override`, `@OnEvent('foo')`, `@GetMapping("/path")`, etc.
+    /// Populated during the parse stage for methods, functions, classes, and constants.
+    pub decorators: Vec<String>,
+
     /// Source language (`"java"` or `"typescript"`).
     pub language: String,
 
@@ -139,6 +148,7 @@ impl ParsedEntity {
             call_intents: Vec::new(),
             calls: Vec::new(),
             inline_comments: Vec::new(),
+            decorators: Vec::new(),
             embed_text: String::new(),
         }
     }

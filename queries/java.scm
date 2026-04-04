@@ -5,6 +5,8 @@
 ;   @class.name      — name node of a class declaration
 ;   @interface.name  — name node of an interface declaration
 ;   @method.name     — name node of a method declaration
+;   @constant.name   — name node of a field declaration with static and final modifiers
+;   @enum.name       — name node of an enum declaration
 ;   @signature       — full method declarator text (name + params)
 ;   @doc             — block_comment immediately preceding the node
 ;
@@ -26,6 +28,15 @@
 (method_declaration
   name: (identifier) @method.name
   parameters: (formal_parameters) @signature)
+
+; --- Java constants (static final fields) ---
+; Note: Capturing by structure alone is complex in Java Tree-sitter
+; Constants are typically named ALL_CAPS and will be detected via semantic
+; analysis. For now, we skip auto-capture and focus on other entity types.
+
+; --- Enum declarations ---
+(enum_declaration
+  name: (identifier) @enum.name)
 
 ; --- Method invocations ---
 ; Captures method calls with optional receiver (object or class name).
