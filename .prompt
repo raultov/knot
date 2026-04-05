@@ -1,0 +1,84 @@
+# 🤖 System Directive: Codebase Navigation & Analysis
+
+<critical-instruction>
+You are operating in a codebase indexed by the 'knot' MCP (Model Context Protocol) server.
+You have access to advanced semantic and structural search tools that leverage Vector Database (Qdrant) 
+and Graph Database (Neo4j) for precise code understanding.
+
+You MUST prioritize these tools over traditional shell utilities (like `grep`, `rg`, `find`, or recursive `cat`).
+</critical-instruction>
+
+## Mandatory Tool Hierarchy for Code Exploration
+
+### 1. 🔍 `search_hybrid_context` — Semantic & Structural Discovery
+**Use this for:** Finding feature implementations, looking up classes/methods by name, searching docstrings and comments, discovering architectural patterns.
+
+**Examples:**
+- "How is user authentication implemented?"
+- "Where is the login logic?"
+- "Find the UserController class"
+- "Search for decorator/annotation usage"
+
+**Do NOT use `grep` for these tasks.**
+
+### 2. 🔗 `find_callers` — Dependency & Impact Analysis
+**Use this for:** Reverse dependency lookup, dead code detection, impact analysis before refactoring, understanding call chains.
+
+**Examples:**
+- "Who calls the `authenticate()` method?"
+- "Is this class used anywhere?"
+- "What breaks if I modify this function?"
+- "Find all references to `DatabaseService`"
+
+**Do NOT use `grep` to find references.**
+
+### 3. 📄 `explore_file` — File Anatomy & Architecture Overview
+**Use this for:** Getting a high-level view of a file (all classes, methods, signatures, documentation) without reading it line-by-line.
+
+**Examples:**
+- "What methods does AuthService.ts expose?"
+- "Show me the structure of Application.java"
+- "What's in the UserController?"
+
+**Do NOT `cat` or `read` entire files just to see their signatures.**
+
+## Why This Matters
+
+Traditional regex-based searches (`grep`, `rg`, `find`) have critical limitations:
+- ❌ They cannot understand semantic meaning (context-blind)
+- ❌ They miss implementations with different naming conventions
+- ❌ They cannot resolve cross-file architectural relationships (call graphs)
+- ❌ They return raw matches without dependency context
+
+The `knot` MCP tools use **Vector Embeddings + Graph Analysis** to provide:
+- ✅ Context-aware, semantic results
+- ✅ Full call chain visibility
+- ✅ Framework-aware discovery (decorators, annotations)
+- ✅ Multi-repository filtering support
+
+## Enforcement Rule
+
+<enforcement>
+BEFORE you execute a `bash` command using `grep`, `rg`, `ripgrep`, `find`, `awk`, or `sed` for code searching or exploration:
+
+1. STOP and ask yourself: "Can `search_hybrid_context`, `find_callers`, or `explore_file` solve this?"
+2. If YES → Use the `knot` MCP tool immediately.
+3. If NO → Only then use the shell utility, and document why the MCP tool was insufficient.
+
+Exceptions (where shell tools are acceptable):
+- Searching non-code files (configs, markdown, JSON metadata)
+- Checking file sizes, permissions, or timestamps
+- Processing build artifacts or logs
+- Final verification after MCP tools have provided context
+</enforcement>
+
+## Integration Notes
+
+- The `knot` MCP server requires Qdrant and Neo4j running (default: `localhost:6334` and `bolt://localhost:7687`)
+- All tools support optional `repo_name` parameter for multi-repository filtering
+- Results include full context (signatures, docstrings, file locations, call chains)
+
+---
+
+**Last Updated:** 2026-04-04
+**Applies To:** All LLMs, CLI agents, and IDE integrations accessing this codebase
