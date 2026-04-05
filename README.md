@@ -340,7 +340,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.3.0 (Current Release)
+### v0.3.1 (Current Release)
+**Released:** 2026-04-06
+
+**Fix:**
+- Separated JSX rules into `tsx.scm` to eliminate Tree-sitter compilation warnings for `.ts` files, maintaining full React support in `.tsx` files.
+
+---
+
+### v0.3.0
 **Released:** 2026-04-06
 
 **React/JSX Component Invocation Tracking:**
