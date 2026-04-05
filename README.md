@@ -304,6 +304,17 @@ Place `java.scm` and/or `typescript.scm` in your custom directory. Missing files
 - Ask: "Find who calls the login method"
 - Ask: "Explore the structure of UserService.java"
 
+### 🤖 Auto-Configuring AI Agents
+
+**knot** includes a universal **`.prompt`** file in its root directory that automatically configures modern AI coding agents (Cursor, Cline, opencode, Claude, etc.) to use the `knot-mcp` tools correctly.
+
+The directive explicitly instructs AI agents to prioritize:
+- **`search_hybrid_context`** — for semantic code discovery (instead of `grep`)
+- **`find_callers`** — for reverse dependency analysis (instead of finding references manually)
+- **`explore_file`** — for file structure inspection (instead of reading line-by-line)
+
+This ensures that when you ask an AI agent to analyze, refactor, or understand your code, it leverages the full power of the vector and graph databases rather than falling back to context-blind regex searches. The `.prompt` file is **universal and tool-agnostic**, working with any LLM client that reads codebase directives.
+
 ---
 
 ## 🤝 Contributing
@@ -332,6 +343,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - **Release Targets**: Removed `aarch64-unknown-linux-gnu` target from automated native builds to resolve critical C++ linker errors caused by cross-compilation.
 - **Docker**: Reverted accidental Dockerfile command change and ensured multi-stage build uses `debian:trixie-slim` for proper glibc compatibility.
 - **Dockerfile**: Optimized `.dockerignore` to prevent permission issues during build.
+
+**LLM Agent Optimization:**
+- **`.prompt` Directive**: Added universal system instructions for all AI agents (Cursor, Cline, Claude, opencode, etc.)
+  - Mandates use of `search_hybrid_context`, `find_callers`, `explore_file` over traditional grep/rg/find
+  - Works with any LLM client that reads codebase directives (tool-agnostic)
+  - Dramatically improves code understanding by leveraging Vector + Graph databases instead of regex searches
 
 ---
 
