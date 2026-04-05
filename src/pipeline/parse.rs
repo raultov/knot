@@ -302,11 +302,6 @@ fn extract_entities(
                 extract_class_inheritance(class_node, source_bytes, &mut reference_intents);
             }
 
-            // Track byte range of this entity for orphan detection
-            if let Some(node) = entity_node {
-                covered_ranges.push((node.start_byte(), node.end_byte()));
-            }
-
             let mut entity = ParsedEntity::new(
                 name,
                 kind,
@@ -322,6 +317,16 @@ fn extract_entities(
             entity.reference_intents = reference_intents;
             entity.inline_comments = inline_comments;
             entity.decorators = decorators;
+            
+            // Track byte range of this entity for orphan detection
+            // Must be done for ALL entities to keep indices aligned with the entities vector
+            if let Some(node) = entity_node {
+                covered_ranges.push((node.start_byte(), node.end_byte()));
+            } else {
+                // If we don't have a node, use a dummy range that won't match any orphans
+                covered_ranges.push((usize::MAX, usize::MAX));
+            }
+            
             entities.push(entity);
         }
     }
