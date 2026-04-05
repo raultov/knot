@@ -540,6 +540,7 @@ fn extract_reference_intents_typescript(
 /// - Direct calls: `method()`, `this.method()`
 /// - Member calls: `obj.method()`, `this.service.method()`
 /// - New expressions: `new MyClass()`
+/// - JSX components: `<ChartToolbar />`, `<Sheet.Content />`
 /// - Callbacks passed as arguments: `app.use(this.handler)` -> records call to handler
 /// - Bind calls: `this.method.bind(this)` -> records call to method
 fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
@@ -626,6 +627,9 @@ fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut 
             }
             child = c.next_sibling();
         }
+    } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
+        // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
+        extract_jsx_component_invocation(node, source, intents);
     }
 
     // Recursively process children
@@ -633,6 +637,50 @@ fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut 
     while let Some(c) = child {
         extract_call_intents_typescript(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+/// Extract JSX component invocation as a call intent.
+///
+/// Handles React components rendered via JSX syntax:
+/// - `<ChartToolbar />` → CallIntent { method: "ChartToolbar", receiver: None }
+/// - `<Sheet.Content />` → CallIntent { method: "Content", receiver: Some("Sheet") }
+/// - `<Icons.Search />` → CallIntent { method: "Search", receiver: Some("Icons") }
+///
+/// Native HTML tags (lowercase) are ignored:
+/// - `<div />` → skipped
+/// - `<span />` → skipped
+fn extract_jsx_component_invocation(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
+    let line = node.start_position().row + 1;
+
+    // Get the name node (can be identifier, member_expression, or namespace_name)
+    if let Some(name_node) = node.child_by_field_name("name") {
+        let comp_name = node_text(name_node, source);
+
+        // React convention: Components start with uppercase, HTML tags are lowercase
+        if comp_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            // Handle namespaced components (e.g., Sheet.Content, Icons.Search)
+            if comp_name.contains('.') {
+                let mut parts = comp_name.split('.');
+                let receiver = parts.next().map(|s| s.to_string());
+                // Collect remaining parts as method name (handles deeply nested components)
+                let method = parts.collect::<Vec<_>>().join(".");
+
+                intents.push(CallIntent {
+                    method,
+                    receiver,
+                    line,
+                });
+            } else {
+                // Simple component name
+                intents.push(CallIntent {
+                    method: comp_name,
+                    receiver: None,
+                    line,
+                });
+            }
+        }
+        // HTML tags (lowercase first letter) are intentionally skipped
     }
 }
 

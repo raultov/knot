@@ -340,7 +340,20 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.6 (Current Release)
+### v0.3.0 (Current Release)
+**Released:** 2026-04-06
+
+**React/JSX Component Invocation Tracking:**
+- **JSX Support**: Full AST extraction and indexing of React component invocations via JSX syntax (e.g., `<ChartToolbar />`).
+- **Component Discovery**: `find_callers` now correctly identifies all locations where a component is rendered, resolving the critical blind spot for React/frontend projects.
+- **Namespaced Components**: Support for component hierarchies (e.g., `<Sheet.Content />`, `<Icons.Search />`), properly tracking receiver and method relationships.
+- **HTML Tag Filtering**: Automatic filtering of native HTML tags (lowercase: `<div>`, `<span>`) to avoid false positives, using React naming convention (uppercase = component).
+- **Dual Syntax Tracking**: Both traditional function calls (`ChartToolbar()`) and JSX invocations (`<ChartToolbar />`) are now unified under the same `CALLS` relationship in Neo4j.
+- **Specification**: See [JSX/React Support Specification](docs/specs/jsx_react_support.md) for technical details and implementation notes.
+
+---
+
+### v0.2.6
 **Released:** 2026-04-05
 
 **Enum and Static Member Access Tracking:**
