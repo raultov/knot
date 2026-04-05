@@ -38,19 +38,21 @@ pub async fn ingest_batch(
     Ok(())
 }
 
-/// Resolve call intents to actual entity UUIDs.
+/// Resolve reference intents to actual entity UUIDs.
 ///
-/// This function takes raw `call_intents` (method name + receiver context) and
-/// resolves them to actual method/function UUIDs based on the available entities.
-/// It must be called on the FULL set of entities before ingestion.
-pub fn resolve_call_intents(entities: &mut [EmbeddedEntity]) {
+/// This function takes raw `reference_intents` and resolves them to actual
+/// entity UUIDs based on the available entities. It must be called on the FULL
+/// set of entities before ingestion.
+pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
+    use crate::models::RelationshipType;
+
     // Build lookup maps for efficient resolution
     let fqn_to_uuid: HashMap<String, Uuid> = entities
         .iter()
         .map(|e| (e.entity.fqn.clone(), e.entity.uuid))
         .collect();
 
-    let method_name_to_uuids: HashMap<String, Vec<Uuid>> = {
+    let name_to_uuids: HashMap<String, Vec<Uuid>> = {
         let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
         for e in entities.iter() {
             map.entry(e.entity.name.clone())
@@ -60,22 +62,66 @@ pub fn resolve_call_intents(entities: &mut [EmbeddedEntity]) {
         map
     };
 
-    // For each entity, resolve its call_intents to UUIDs
+    // For each entity, resolve its reference_intents to UUIDs with typed relationships
     for entity in entities.iter_mut() {
-        let call_intents = entity.entity.call_intents.clone();
-        for intent in call_intents {
-            let resolved_uuid = resolve_single_call_intent(
-                &intent,
-                &entity.entity,
-                &fqn_to_uuid,
-                &method_name_to_uuids,
-            );
+        let reference_intents = entity.entity.reference_intents.clone();
+        for intent in reference_intents {
+            use crate::models::ReferenceIntent;
+            match intent {
+                ReferenceIntent::Call { method, receiver, .. } => {
+                    let call_intent = crate::models::CallIntent {
+                        method,
+                        receiver,
+                        line: 0, // Not used in resolution
+                    };
+                    let resolved_uuid = resolve_single_call_intent(
+                        &call_intent,
+                        &entity.entity,
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                    );
 
-            if let Some(uuid) = resolved_uuid {
-                entity.entity.calls.push(uuid);
+                    if let Some(uuid) = resolved_uuid {
+                        entity.entity.calls.push(uuid);
+                        entity.entity.relationships.push((uuid, RelationshipType::Calls));
+                    }
+                }
+                ReferenceIntent::Extends { parent, .. } => {
+                    // Resolve parent class by name
+                    if let Some(uuids) = name_to_uuids.get(&parent) {
+                        if let Some(&uuid) = uuids.first() {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push((uuid, RelationshipType::Extends));
+                        }
+                    }
+                }
+                ReferenceIntent::Implements { interface, .. } => {
+                    // Resolve interface by name
+                    if let Some(uuids) = name_to_uuids.get(&interface) {
+                        if let Some(&uuid) = uuids.first() {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push((uuid, RelationshipType::Implements));
+                        }
+                    }
+                }
+                ReferenceIntent::TypeReference { type_name, .. } => {
+                    // Resolve type reference by name (class or interface)
+                    if let Some(uuids) = name_to_uuids.get(&type_name) {
+                        if let Some(&uuid) = uuids.first() {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push((uuid, RelationshipType::References));
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// Legacy alias for backward compatibility.
+#[deprecated = "Use resolve_reference_intents instead"]
+pub fn resolve_call_intents(entities: &mut [EmbeddedEntity]) {
+    resolve_reference_intents(entities);
 }
 
 /// Resolve a single CallIntent to a UUID using available context.
@@ -83,7 +129,7 @@ fn resolve_single_call_intent(
     intent: &crate::models::CallIntent,
     caller: &crate::models::ParsedEntity,
     fqn_to_uuid: &HashMap<String, Uuid>,
-    method_name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    name_to_uuids: &HashMap<String, Vec<Uuid>>,
 ) -> Option<Uuid> {
     // Strategy 1: Local call (no receiver or receiver is "this")
     // Look for a method in the same class
@@ -156,14 +202,14 @@ fn resolve_single_call_intent(
         }
 
         // Final fallback: just match on method name
-        if let Some(uuids) = method_name_to_uuids.get(&intent.method) {
+        if let Some(uuids) = name_to_uuids.get(&intent.method) {
             return uuids.first().copied();
         }
     }
 
     // Strategy 4: Fallback for local calls without enclosing class (top-level functions)
     if intent.receiver.is_none()
-        && let Some(uuids) = method_name_to_uuids.get(&intent.method)
+        && let Some(uuids) = name_to_uuids.get(&intent.method)
     {
         return uuids.first().copied();
     }

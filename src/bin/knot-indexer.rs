@@ -121,17 +121,17 @@ async fn main() -> Result<()> {
     // Stage 5 — Ingest: dual-write in chunks to avoid OOM on huge repos  //
     // ------------------------------------------------------------------ //
 
-    // Resolve call intents globally before chunking
-    knot::pipeline::ingest::resolve_call_intents(&mut embedded);
+    // Resolve reference intents globally before chunking
+    knot::pipeline::ingest::resolve_reference_intents(&mut embedded);
 
     let chunk_size = cfg.batch_size;
     for chunk in embedded.chunks(chunk_size) {
         ingest_batch(chunk, &vector_db, &graph_db).await?;
     }
 
-    // After all nodes are in Neo4j, create the relationships
-    info!("Creating CALLS relationships globally...");
-    graph_db.upsert_calls(&embedded).await?;
+    // After all nodes are in Neo4j, create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
+    info!("Creating typed relationships globally...");
+    graph_db.upsert_relationships(&embedded).await?;
 
     info!("Indexing complete. {} entities ingested.", embedded.len());
     Ok(())

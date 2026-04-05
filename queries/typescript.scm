@@ -10,6 +10,9 @@
 ;   @enum.name       — name node of an enum declaration
 ;   @signature       — parameter list node (type params included)
 ;   @doc             — comment node immediately preceding the declaration
+;   @class.extends   — parent class in extends clause
+;   @class.implements — interface in implements clause
+;   @type.reference  — type reference in annotations (variable declarations, method signatures)
 ;
 ; Override this file by placing a custom typescript.scm in the directory
 ; pointed to by --custom-queries-path / KNOT_CUSTOM_QUERIES_PATH.
@@ -22,6 +25,22 @@
 
 (abstract_class_declaration
   name: (type_identifier) @class.name)
+
+; --- Class inheritance (extends clause) ---
+(class_declaration
+  superclass: (type_identifier) @class.extends)
+
+(abstract_class_declaration
+  superclass: (type_identifier) @class.extends)
+
+; --- Class interface implementation (implements clause) ---
+(class_declaration
+  implements: (implements_clause
+    (type_identifier) @class.implements))
+
+(abstract_class_declaration
+  implements: (implements_clause
+    (type_identifier) @class.implements))
 
 ; --- Interface declarations ---
 (interface_declaration
@@ -97,3 +116,44 @@
 ; Matches patterns like: new MyClass()
 (new_expression
   constructor: (identifier) @call.method)
+
+; --- Type references in variable declarations ---
+; Matches: const prompt: DeviceRequestPrompt = ...
+; or: private prop: SomeType;
+(variable_declarator
+  type: (type_annotation
+    (type_identifier) @type.reference))
+
+(property_signature
+  type: (type_annotation
+    (type_identifier) @type.reference))
+
+(public_field_definition
+  type: (type_annotation
+    (type_identifier) @type.reference))
+
+; --- Type references in function/method return types ---
+; Matches: function foo(): ReturnType { ... }
+; or: method(): PromiseType { ... }
+(function_declaration
+  return_type: (type_annotation
+    (type_identifier) @type.reference))
+
+(method_definition
+  return_type: (type_annotation
+    (type_identifier) @type.reference))
+
+(method_signature
+  return_type: (type_annotation
+    (type_identifier) @type.reference))
+
+(arrow_function
+  return_type: (type_annotation
+    (type_identifier) @type.reference))
+
+; --- Type references in formal parameters ---
+; Matches: function foo(param: SomeType) { ... }
+; Nested capture to extract type from parameter annotation
+(formal_parameter
+  type: (type_annotation
+    (type_identifier) @type.reference))

@@ -1,12 +1,15 @@
-//! Find Callers Tool
+//! Find References Tool
 //!
-//! Performs a reverse dependency lookup: given an entity name,
-//! finds all other entities that call it.
+//! Performs comprehensive reverse dependency lookup: given an entity name,
+//! finds all other entities that reference it through any relationship type
+//! (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
 //!
 //! **Key Capabilities:**
-//! - **Dead Code Detection**: Identify truly unused methods/functions (zero incoming calls)
-//! - **Impact Analysis**: Understand "If I modify this function, what else breaks?"
+//! - **Dead Code Detection**: Identify truly unused methods/functions (zero incoming references)
+//! - **Impact Analysis**: Understand "If I modify this class/interface, what breaks?"
 //! - **Refactoring Safety**: Find all references before renaming or removing code
+//! - **Inheritance Chain**: Discover all subclasses (EXTENDS) and implementers (IMPLEMENTS)
+//! - **Type Usage**: Track all type annotations and usages (REFERENCES)
 //! - **Call Graph Traversal**: Explore the full dependency chain of a method
 //! - **Multi-language Support**: Works with Java and TypeScript codebases
 
@@ -45,10 +48,11 @@ impl FindCallersTool {
         Tool {
             name: "find_callers".to_string(),
             description: Some(
-                "Reverse dependency lookup: finds all code that calls a specific function, method, or class. \
-                 Use this to: detect dead code (zero callers), understand impact analysis ('What breaks if I modify this?'), \
-                 refactor safely by finding all references, or traverse the call graph. Works with Java and TypeScript. \
-                 Supports optional repository filtering."
+                "Comprehensive reverse dependency lookup: finds all code that references a specific entity through \
+                 any relationship type (calls, inheritance, implementation, type usage). \
+                 Use this to: detect dead code, understand impact analysis, refactor safely, discover inheritance chains, \
+                 or track type usage. Returns results grouped by relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES). \
+                 Works with Java and TypeScript. Supports optional repository filtering."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
@@ -82,14 +86,14 @@ impl FindCallersTool {
 
         let repo_name = args.get("repo_name").and_then(|v| v.as_str());
 
-        // Query Neo4j for callers
-        let callers = handler
+        // Query Neo4j for all reference types
+        let references = handler
             .graph_db
-            .find_callers(entity_name, repo_name)
+            .find_references(entity_name, repo_name)
             .await
             .map_err(|e| CallToolError::from_message(format!("Graph query failed: {}", e)))?;
 
-        let formatted = format_callers_result(entity_name, &callers);
+        let formatted = format_references_result(entity_name, &references);
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(
@@ -102,56 +106,78 @@ impl FindCallersTool {
     }
 }
 
-fn format_callers_result(entity_name: &str, callers: &serde_json::Value) -> String {
-    let mut output = format!("# Callers of `{}`\n\n", entity_name);
+fn format_references_result(entity_name: &str, references: &serde_json::Value) -> String {
+    let mut output = format!("# References to `{}`\n\n", entity_name);
 
-    if let Some(callers_array) = callers.as_array() {
-        if callers_array.is_empty() {
-            output.push_str(&format!(
-                "No callers found for `{}`. This entity may be unused.\n",
-                entity_name
-            ));
-            return output;
+    // Count total references across all types
+    let mut total_refs = 0;
+    let rel_types = vec![
+        ("calls", "Calls (function/method invocations)"),
+        ("extends", "Extends (class inheritance)"),
+        ("implements", "Implements (interface implementation)"),
+        ("references", "References (type annotations/usages)"),
+    ];
+
+    for (key, _) in &rel_types {
+        if let Some(arr) = references.get(key).and_then(|v| v.as_array()) {
+            total_refs += arr.len();
         }
+    }
 
-        output.push_str(&format!("Found {} caller(s):\n\n", callers_array.len()));
+    if total_refs == 0 {
+        output.push_str(&format!(
+            "No references found for `{}`. This entity may be unused.\n",
+            entity_name
+        ));
+        return output;
+    }
 
-        for caller in callers_array {
-            output.push_str(&format_caller_entry(caller));
+    output.push_str(&format!("Found {} reference(s) across all relationship types:\n\n", total_refs));
+
+    // Format each relationship type
+    for (key, label) in rel_types {
+        if let Some(arr) = references.get(key).and_then(|v| v.as_array()) {
+            if !arr.is_empty() {
+                output.push_str(&format!("## {} ({})\n\n", label, arr.len()));
+                for entity in arr {
+                    output.push_str(&format_reference_entry(entity));
+                }
+            }
         }
-    } else {
-        output.push_str("No callers found.\n");
     }
 
     output
 }
 
-fn format_caller_entry(caller: &serde_json::Value) -> String {
+fn format_reference_entry(entity: &serde_json::Value) -> String {
     let mut output = String::new();
 
-    if let Some(name) = caller.get("name").and_then(|v| v.as_str()) {
-        if let Some(kind) = caller.get("kind").and_then(|v| v.as_str()) {
-            output.push_str(&format!("### `{}` ({})\n\n", name, kind));
+    if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
+        if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
+            output.push_str(&format!("- **`{}`** ({})", name, kind));
         } else {
-            output.push_str(&format!("### `{}`\n\n", name));
+            output.push_str(&format!("- **`{}`**", name));
         }
     }
 
-    if let Some(file_path) = caller.get("file_path").and_then(|v| v.as_str()) {
-        if let Some(start_line) = caller.get("start_line").and_then(|v| v.as_i64()) {
-            output.push_str(&format!("**Location:** `{}:{}`\n\n", file_path, start_line));
+    if let Some(file_path) = entity.get("file_path").and_then(|v| v.as_str()) {
+        if let Some(start_line) = entity.get("start_line").and_then(|v| v.as_i64()) {
+            output.push_str(&format!(" at `{}:{}`", file_path, start_line));
         } else {
-            output.push_str(&format!("**Location:** `{}`\n\n", file_path));
+            output.push_str(&format!(" at `{}`", file_path));
         }
     }
 
-    if let Some(signature) = caller
+    output.push('\n');
+
+    if let Some(signature) = entity
         .get("signature")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
     {
-        output.push_str(&format!("**Signature:**\n```\n{}\n```\n\n", signature));
+        output.push_str(&format!("  - Signature: `{}`\n", signature));
     }
 
+    output.push('\n');
     output
 }

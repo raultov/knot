@@ -336,7 +336,43 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.4 (Current Release)
+### v0.2.5 (Current Release)
+**Released:** 2026-04-05
+
+**Comprehensive Relationship Tracking for Static Typing:**
+- **Typed Relationships in Neo4j**: Added four relationship types to replace generic CALLS edges:
+  - **CALLS**: Method/function invocations and constructor instantiations
+  - **EXTENDS**: Class inheritance relationships
+  - **IMPLEMENTS**: Interface implementation relationships
+  - **REFERENCES**: Type annotations and signatures (variable types, return types, parameters)
+  - This resolves the fundamental blind spot where abstract classes and interfaces were missing inheritance and usage information
+
+**Enhanced MCP Tools:**
+- **`find_callers` Redesigned as `find_references`**: Now returns comprehensive results grouped by relationship type
+  - Shows all subclasses via EXTENDS relationships
+  - Shows all implementers via IMPLEMENTS relationships  
+  - Shows all type usages via REFERENCES relationships
+  - Shows all method callers via CALLS relationships
+  - Dramatically improves impact analysis for abstract classes, interfaces, and type-heavy code
+  
+- **`search_hybrid_context` Enriched**: Automatically includes related entities in search results
+  - Augments results with subclasses, implementers, and usage samples
+  - Provides call counts with sample locations
+  - Enables "what depends on this?" context exploration
+
+**Parser & Ingest Improvements:**
+- **ReferenceIntent Enum**: Refactored call tracking to support all four relationship types uniformly
+- **RelationshipType Enum**: Explicit representation of graph relationship semantics in code
+- **Two-Phase Resolution**: Separate raw intent extraction from UUID resolution for cleaner architecture
+
+**Fixes:**
+- **Complete Inheritance Resolution**: Abstract classes now properly tracked as base classes in inheritance chains
+- **Type Reference Tracking**: Variables, parameters, and return types now contribute to usage metrics
+- **Impact Analysis**: Interface changes now correctly identify all implementing classes
+
+---
+
+### v0.2.4
 **Released:** 2026-04-04
 
 **Parser Enhancements:**

@@ -127,7 +127,43 @@ impl GraphDb {
         Ok(())
     }
 
-    /// Create `(caller)-[:CALLS]->(callee)` relationships for all resolved call edges.
+    /// Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES) for all resolved edges.
+    pub async fn upsert_relationships(&self, entities: &[EmbeddedEntity]) -> Result<()> {
+        let mut edge_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        for e in entities {
+            for (callee_uuid, rel_type) in &e.entity.relationships {
+                let rel_label = rel_type.to_string();
+                let cypher = format!(
+                    "MATCH (caller:Entity {{uuid: $caller_uuid}})
+                     MATCH (callee:Entity {{uuid: $callee_uuid}})
+                     MERGE (caller)-[:{rel_label}]->(callee)"
+                );
+
+                self.graph
+                    .run(
+                        query(&cypher)
+                            .param("caller_uuid", e.entity.uuid.to_string())
+                            .param("callee_uuid", callee_uuid.to_string()),
+                    )
+                    .await
+                    .context(format!("Failed to create {rel_label} relationship in Neo4j"))?;
+
+                *edge_counts.entry(rel_label.clone()).or_insert(0) += 1;
+            }
+        }
+
+        if !edge_counts.is_empty() {
+            for (rel_type, count) in edge_counts {
+                info!("Created {count} {rel_type} relationships in Neo4j");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Legacy method for backward compatibility. Creates only CALLS relationships.
+    /// New code should use `upsert_relationships()` instead.
     pub async fn upsert_calls(&self, entities: &[EmbeddedEntity]) -> Result<()> {
         let mut edge_count = 0usize;
 
@@ -224,7 +260,74 @@ impl GraphDb {
         Ok(serde_json::json!(results))
     }
 
+    /// Find all entities that reference a given entity via any relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
+    /// Returns results grouped by relationship type.
+    pub async fn find_references(
+        &self,
+        entity_name: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut results = serde_json::json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+
+        // Query for each relationship type
+        let rel_types = vec![
+            ("CALLS", "calls"),
+            ("EXTENDS", "extends"),
+            ("IMPLEMENTS", "implements"),
+            ("REFERENCES", "references"),
+        ];
+
+        for (rel_label, result_key) in rel_types {
+            let query_str = if repo_name.is_some() {
+                format!(
+                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity {{name: $name, repo_name: $repo_name}})
+                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature"
+                )
+            } else {
+                format!(
+                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity {{name: $name}})
+                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature"
+                )
+            };
+
+            let mut q = query(&query_str).param("name", entity_name);
+            if let Some(repo) = repo_name {
+                q = q.param("repo_name", repo);
+            }
+
+            let mut rows = self
+                .graph
+                .execute(q)
+                .await
+                .context(format!("Failed to query Neo4j for {rel_label} relationships"))?;
+
+            let mut type_results = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                let entity_json = serde_json::json!({
+                    "name": row.get::<String>("entity.name").ok(),
+                    "kind": row.get::<String>("entity.kind").ok(),
+                    "file_path": row.get::<String>("entity.file_path").ok(),
+                    "start_line": row.get::<i64>("entity.start_line").ok(),
+                    "signature": row.get::<String>("entity.signature").ok(),
+                });
+                type_results.push(entity_json);
+            }
+
+            if let Some(arr) = results.get_mut(result_key) {
+                *arr = serde_json::json!(type_results);
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Find all entities that call a given entity (reverse dependency lookup).
+    /// **Deprecated:** Use `find_references()` instead for comprehensive relationship tracking.
     pub async fn find_callers(
         &self,
         entity_name: &str,

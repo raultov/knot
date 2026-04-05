@@ -20,7 +20,7 @@ use streaming_iterator::StreamingIterator;
 use tracing::{debug, warn};
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
-use crate::models::{CallIntent, EntityKind, ParsedEntity};
+use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
 
 // Built-in query files compiled into the binary.
 const DEFAULT_JAVA_QUERY: &str = include_str!("../../queries/java.scm");
@@ -169,7 +169,7 @@ fn extract_entities(
         let mut signature: Option<String> = None;
         let mut start_line: usize = 0;
         let mut entity_node: Option<Node> = None;
-        let mut call_intents: Vec<CallIntent> = Vec::new();
+        let mut reference_intents: Vec<ReferenceIntent> = Vec::new();
 
         for cap in m.captures {
             let cap_name = &capture_names[cap.index as usize];
@@ -198,15 +198,15 @@ fn extract_entities(
                         .or_else(|| find_parent_by_kind(node, "method_definition"))
                         .or_else(|| find_parent_by_kind(node, "method_signature"))
                         .or_else(|| find_parent_by_kind(node, "abstract_method_signature"));
-                    // For methods, extract call intents from the method body
+                    // For methods, extract reference intents from the method body
                     if let Some(method_node) = entity_node {
                         if lang_name == "java" {
-                            extract_call_intents_java(method_node, source_bytes, &mut call_intents);
+                            extract_reference_intents_java(method_node, source_bytes, &mut reference_intents);
                         } else {
-                            extract_call_intents_typescript(
+                            extract_reference_intents_typescript(
                                 method_node,
                                 source_bytes,
-                                &mut call_intents,
+                                &mut reference_intents,
                             );
                         }
                     }
@@ -218,9 +218,9 @@ fn extract_entities(
                     entity_node = find_parent_by_kind(node, "function_declaration")
                         .or_else(|| find_parent_by_kind(node, "lexical_declaration"))
                         .or_else(|| find_parent_by_kind(node, "export_statement"));
-                    // For functions, extract call intents from the function body
+                    // For functions, extract reference intents from the function body
                     if let Some(func_node) = entity_node {
-                        extract_call_intents_typescript(func_node, source_bytes, &mut call_intents);
+                        extract_reference_intents_typescript(func_node, source_bytes, &mut reference_intents);
                     }
                 }
                 "constant.name" => {
@@ -239,6 +239,31 @@ fn extract_entities(
                     entity_node = find_parent_by_kind(node, "enum_declaration");
                 }
                 "signature" => signature = Some(text.clone()),
+                "class.extends" => {
+                    // Class inheritance: extends clause
+                    if let Some(node) = entity_node {
+                        reference_intents.push(ReferenceIntent::Extends {
+                            parent: text.clone(),
+                            line: node.start_position().row + 1,
+                        });
+                    }
+                }
+                "class.implements" => {
+                    // Interface implementation: implements clause
+                    if let Some(node) = entity_node {
+                        reference_intents.push(ReferenceIntent::Implements {
+                            interface: text.clone(),
+                            line: node.start_position().row + 1,
+                        });
+                    }
+                }
+                "type.reference" => {
+                    // Type annotations in signatures, variables, etc.
+                    reference_intents.push(ReferenceIntent::TypeReference {
+                        type_name: text.clone(),
+                        line: node.start_position().row + 1,
+                    });
+                }
                 _ => {}
             }
         }
@@ -274,7 +299,7 @@ fn extract_entities(
                 enclosing_class,
                 repo_name,
             );
-            entity.call_intents = call_intents;
+            entity.reference_intents = reference_intents;
             entity.inline_comments = inline_comments;
             entity.decorators = decorators;
             entities.push(entity);
@@ -335,6 +360,19 @@ fn find_parent_by_kind<'a>(mut node: Node<'a>, kind: &str) -> Option<Node<'a>> {
         node = parent;
     }
     None
+}
+
+/// Extract reference intents from a Java method body (wrapper for backward compatibility).
+fn extract_reference_intents_java(node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+    let mut call_intents = Vec::new();
+    extract_call_intents_java(node, source, &mut call_intents);
+    for call in call_intents {
+        intents.push(ReferenceIntent::Call {
+            method: call.method,
+            receiver: call.receiver,
+            line: call.line,
+        });
+    }
 }
 
 /// Extract method invocation call intents from a Java method body.
@@ -419,6 +457,19 @@ fn extract_call_intents_java(node: Node<'_>, source: &[u8], intents: &mut Vec<Ca
     while let Some(c) = child {
         extract_call_intents_java(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+/// Extract reference intents from a TypeScript function/method body (wrapper for backward compatibility).
+fn extract_reference_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+    let mut call_intents = Vec::new();
+    extract_call_intents_typescript(node, source, &mut call_intents);
+    for call in call_intents {
+        intents.push(ReferenceIntent::Call {
+            method: call.method,
+            receiver: call.receiver,
+            line: call.line,
+        });
     }
 }
 
