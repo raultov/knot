@@ -151,8 +151,6 @@
     (type_identifier) @type.reference))
 
 ; --- Type references in formal parameters ---
-; Matches: function foo(param: SomeType) { ... }
-; Nested capture to extract type from parameter annotation
-(formal_parameter
-  type: (type_annotation
-    (type_identifier) @type.reference))
+; NOTE: Tree-sitter's TypeScript grammar doesn't expose parameter types as named fields
+; in a way that's easily queryable. These are extracted via other mechanisms.
+; Removed: problematic query for parameter type annotations
