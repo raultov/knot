@@ -27,20 +27,19 @@
   name: (type_identifier) @class.name)
 
 ; --- Class inheritance (extends clause) ---
-(class_declaration
-  superclass: (type_identifier) @class.extends)
-
-(abstract_class_declaration
-  superclass: (type_identifier) @class.extends)
+; NOTE: Tree-sitter's TypeScript grammar does not expose extends/implements as named fields
+; They are captured as part of the class_declaration node, but we need to handle them
+; differently via AST traversal in the parser. This is handled in src/pipeline/parse.rs
+; by examining child nodes of class declarations directly.
+; (class_declaration
+;   superclass: (type_identifier) @class.extends)
 
 ; --- Class interface implementation (implements clause) ---
-(class_declaration
-  implements: (implements_clause
-    (type_identifier) @class.implements))
-
-(abstract_class_declaration
-  implements: (implements_clause
-    (type_identifier) @class.implements))
+; NOTE: Similar to extends, implements are not exposed as named fields
+; They will be extracted via AST traversal in the parser
+; (class_declaration
+;   implements: (implements_clause
+;     (type_identifier) @class.implements))
 
 ; --- Interface declarations ---
 (interface_declaration

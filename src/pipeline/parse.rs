@@ -239,24 +239,6 @@ fn extract_entities(
                     entity_node = find_parent_by_kind(node, "enum_declaration");
                 }
                 "signature" => signature = Some(text.clone()),
-                "class.extends" => {
-                    // Class inheritance: extends clause
-                    if let Some(node) = entity_node {
-                        reference_intents.push(ReferenceIntent::Extends {
-                            parent: text.clone(),
-                            line: node.start_position().row + 1,
-                        });
-                    }
-                }
-                "class.implements" => {
-                    // Interface implementation: implements clause
-                    if let Some(node) = entity_node {
-                        reference_intents.push(ReferenceIntent::Implements {
-                            interface: text.clone(),
-                            line: node.start_position().row + 1,
-                        });
-                    }
-                }
                 "type.reference" => {
                     // Type annotations in signatures, variables, etc.
                     reference_intents.push(ReferenceIntent::TypeReference {
@@ -286,6 +268,15 @@ fn extract_entities(
             // Determine FQN and enclosing class based on context
             let (fqn, enclosing_class) =
                 compute_fqn_and_context(&name, &kind, start_line, lang_name, &class_contexts);
+
+            // For classes, also extract extends/implements from AST
+            if matches!(kind, EntityKind::Class | EntityKind::Interface) {
+                if let Some(class_node) = entity_node {
+                    if lang_name == "typescript" {
+                        extract_class_inheritance(class_node, source_bytes, &mut reference_intents);
+                    }
+                }
+            }
 
             let mut entity = ParsedEntity::new(
                 name,
@@ -360,6 +351,43 @@ fn find_parent_by_kind<'a>(mut node: Node<'a>, kind: &str) -> Option<Node<'a>> {
         node = parent;
     }
     None
+}
+
+/// Extract class inheritance (extends/implements) from TypeScript class AST.
+/// Manually traverses the class declaration node to find extends and implements clauses.
+fn extract_class_inheritance(class_node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+    let line = class_node.start_position().row + 1;
+    
+    // Look for 'extends' keyword followed by type identifier
+    let mut child = class_node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "extends" {
+            // Next type identifier should be the parent class
+            if let Some(next) = c.next_sibling() {
+                if next.kind() == "type_identifier" {
+                    let parent_name = node_text(next, source);
+                    intents.push(ReferenceIntent::Extends {
+                        parent: parent_name,
+                        line,
+                    });
+                }
+            }
+        } else if c.kind() == "implements_clause" {
+            // Extract type identifiers from implements clause
+            let mut impl_child = c.child(0);
+            while let Some(impl_c) = impl_child {
+                if impl_c.kind() == "type_identifier" {
+                    let interface_name = node_text(impl_c, source);
+                    intents.push(ReferenceIntent::Implements {
+                        interface: interface_name,
+                        line,
+                    });
+                }
+                impl_child = impl_c.next_sibling();
+            }
+        }
+        child = c.next_sibling();
+    }
 }
 
 /// Extract reference intents from a Java method body (wrapper for backward compatibility).
