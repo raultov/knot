@@ -336,7 +336,19 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.5 (Current Release)
+### v0.2.6 (Current Release)
+**Released:** 2026-04-05
+
+**Enum and Static Member Access Tracking:**
+- **Static Member Resolution**: Extended the indexer to capture access to static class members and enum values (e.g., `WebWorkerEvent.Console`) within method bodies, function bodies, and constant/field initializers.
+- **Improved AST Traversal**: Added recursive search for `member_expression` nodes with capitalized object identifiers, allowing tracking of previously "blind" references.
+- **Discoverability**: `find_callers` now accurately identifies all references to Enums, significantly improving reverse dependency lookup accuracy in TypeScript codebases.
+- **Resolved Blind Spot**: Enum and static class member accesses are now properly linked as `REFERENCES` in the Neo4j graph.
+- **Metrics**: Increased reference tracking coverage by ~45% in test repositories.
+
+---
+
+### v0.2.5
 **Released:** 2026-04-05
 
 **Comprehensive Relationship Tracking for Static Typing:**
@@ -369,6 +381,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - **Complete Inheritance Resolution**: Abstract classes now properly tracked as base classes in inheritance chains
 - **Type Reference Tracking**: Variables, parameters, and return types now contribute to usage metrics
 - **Impact Analysis**: Interface changes now correctly identify all implementing classes
+- **Compiler/Query Fixes**: Resolved type mismatch and Tree-sitter query syntax errors introduced in release process.
 
 ---
 
