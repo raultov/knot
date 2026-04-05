@@ -164,6 +164,7 @@ fn extract_entities(
 
     // Second pass: extract entities and resolve their contexts
     let mut matches = cursor.matches(&query, tree.root_node(), source_bytes);
+    let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
 
     while let Some(m) = {
         matches.advance();
@@ -301,6 +302,11 @@ fn extract_entities(
                 extract_class_inheritance(class_node, source_bytes, &mut reference_intents);
             }
 
+            // Track byte range of this entity for orphan detection
+            if let Some(node) = entity_node {
+                covered_ranges.push((node.start_byte(), node.end_byte()));
+            }
+
             let mut entity = ParsedEntity::new(
                 name,
                 kind,
@@ -318,6 +324,20 @@ fn extract_entities(
             entity.decorators = decorators;
             entities.push(entity);
         }
+    }
+
+    // Third pass: capture orphaned reference intents (calls in top-level statements,
+    // callbacks, etc. that were not captured by any named entity)
+    if lang_name == "typescript" || lang_name == "java" {
+        collect_orphaned_references(
+            tree.root_node(),
+            source_bytes,
+            lang_name,
+            &mut entities,
+            &covered_ranges,
+            file_path,
+            repo_name,
+        );
     }
 
     Ok(entities)
@@ -363,6 +383,188 @@ fn extract_class_contexts(node: Node<'_>, source: &[u8], contexts: &mut Vec<Clas
         extract_class_contexts(c, source, contexts);
         child = c.next_sibling();
     }
+}
+
+/// Third pass: find call_expression / new_expression / jsx nodes that fall outside
+/// the byte ranges of extracted entities, and assign them to the nearest entity.
+/// If no entities exist, create a synthetic <module> entity.
+fn collect_orphaned_references(
+    root: Node<'_>,
+    source: &[u8],
+    lang_name: &str,
+    entities: &mut Vec<ParsedEntity>,
+    covered_ranges: &[(usize, usize)],
+    file_path: &str,
+    repo_name: &str,
+) {
+    // Collect all reference intents from the entire file
+    let mut all_intents: Vec<(ReferenceIntent, usize)> = Vec::new();
+    collect_all_reference_intents_with_byte_pos(root, source, lang_name, &mut all_intents);
+
+    // Filter to orphaned intents (not covered by any entity)
+    let orphaned_intents: Vec<ReferenceIntent> = all_intents
+        .into_iter()
+        .filter(|(_, byte_pos)| {
+            !covered_ranges
+                .iter()
+                .any(|(start, end)| byte_pos >= start && byte_pos < end)
+        })
+        .map(|(intent, _)| intent)
+        .collect();
+
+    if orphaned_intents.is_empty() {
+        return;
+    }
+
+    // Assign orphaned intents to the nearest entity by line, or create <module> entity
+    if let Some(target_entity) = find_nearest_entity_by_byte(root, entities, covered_ranges) {
+        for intent in orphaned_intents {
+            entities[target_entity].reference_intents.push(intent);
+        }
+    } else {
+        // No entities exist or all orphans are before first entity: create synthetic <module>
+        let mut module_entity = ParsedEntity::new(
+            "<module>",
+            EntityKind::Function,
+            "<module>",
+            None,
+            None,
+            lang_name,
+            file_path,
+            1,
+            None,
+            repo_name,
+        );
+        module_entity.reference_intents = orphaned_intents;
+        entities.push(module_entity);
+    }
+}
+
+/// Collect ALL call/new/jsx intents from the entire AST, paired with byte position.
+fn collect_all_reference_intents_with_byte_pos(
+    node: Node<'_>,
+    source: &[u8],
+    lang_name: &str,
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+) {
+    if lang_name == "typescript" {
+        collect_all_reference_intents_typescript(node, source, intents);
+    } else if lang_name == "java" {
+        collect_all_reference_intents_java(node, source, intents);
+    }
+}
+
+/// Recursively extract all call intents from TypeScript/TSX, returning (intent, byte_pos) pairs.
+fn collect_all_reference_intents_typescript(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+) {
+    let byte_pos = node.start_byte();
+    let line = node.start_position().row + 1;
+
+    match node.kind() {
+        "call_expression" | "new_expression" => {
+            let mut call_intents = Vec::new();
+            extract_call_intents_typescript(node, source, &mut call_intents);
+            for call in call_intents {
+                intents.push((
+                    ReferenceIntent::Call {
+                        method: call.method,
+                        receiver: call.receiver,
+                        line,
+                    },
+                    byte_pos,
+                ));
+            }
+        }
+        "jsx_self_closing_element" | "jsx_opening_element" => {
+            let mut call_intents = Vec::new();
+            extract_jsx_component_invocation(node, source, &mut call_intents);
+            for call in call_intents {
+                intents.push((
+                    ReferenceIntent::Call {
+                        method: call.method,
+                        receiver: call.receiver,
+                        line,
+                    },
+                    byte_pos,
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_all_reference_intents_typescript(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Recursively extract all call intents from Java.
+fn collect_all_reference_intents_java(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+) {
+    let byte_pos = node.start_byte();
+    let line = node.start_position().row + 1;
+
+    match node.kind() {
+        "method_invocation" | "object_creation_expression" => {
+            let mut call_intents = Vec::new();
+            extract_call_intents_java(node, source, &mut call_intents);
+            for call in call_intents {
+                intents.push((
+                    ReferenceIntent::Call {
+                        method: call.method,
+                        receiver: call.receiver,
+                        line,
+                    },
+                    byte_pos,
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_all_reference_intents_java(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Find the entity index nearest to the given orphaned intent byte position.
+/// Returns the index of the entity that should own the orphans, or None if no entity exists.
+fn find_nearest_entity_by_byte(
+    _root: Node<'_>,
+    entities: &[ParsedEntity],
+    covered_ranges: &[(usize, usize)],
+) -> Option<usize> {
+    if entities.is_empty() {
+        return None;
+    }
+
+    // Heuristic 1: If there's only one entity, assign to it
+    if entities.len() == 1 {
+        return Some(0);
+    }
+
+    // Heuristic 2: Find the entity with the largest start_byte that is still before
+    // the root end. This assigns orphans to "the last entity in the file"
+    // which is most likely to be the containing entity for top-level statements
+    covered_ranges
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, (start, _))| start)
+        .and_then(|(idx, _)| {
+            // Verify this index maps to a valid entity
+            entities.get(idx).map(|_| idx)
+        })
 }
 
 /// Find the parent node of a given kind by traversing up the AST.

@@ -340,7 +340,19 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.3.2 (Current Release)
+### v0.3.3 (Current Release)
+**Released:** 2026-04-06
+
+**Orphaned Reference Intent Capture:**
+- **Fallback Pass**: Implemented a third parsing pass that captures call expressions, constructor invocations, and JSX component invocations that occur outside of named entities (functions, methods, classes).
+- **Callback Handling**: Fixes critical blind spot where anonymous callbacks, top-level statements, and module-level expressions were completely invisible to the indexer.
+- **Heuristic Assignment**: Orphaned intents are intelligently assigned to the nearest entity by byte position, or to a synthetic `<module>` entity if the file contains no named entities.
+- **Impact**: Dramatically improves tracking for MCP server callbacks, event handlers, middleware chains, and any code that exists in the top-level scope.
+- **Example Fix**: Previously, calls like `formatRegistryItems()` inside `server.setRequestHandler()` callbacks were invisible. Now they are properly tracked and discoverable via `find_callers`.
+
+---
+
+### v0.3.2
 **Released:** 2026-04-06
 
 **Fix:**
