@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from Java and TypeScript codebases, enabling AI agents to understand, analyze, and navigate large code repositories.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java and TypeScript, with planned support for JavaScript, HTML, CSS/SCSS, and Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -23,6 +23,10 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
+- **JavaScript** (Planned): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
+- **HTML** (Planned): Document structure, Web Components, embedded scripts
+- **CSS/SCSS** (Planned): Stylesheet indexing with variable and mixin tracking
+- **Rust** (Planned): Struct, trait, and macro analysis
 
 **📚 Rich Comment Extraction**
 - Captures docstrings (JavaDoc, JSDoc) preceding declarations
@@ -155,7 +159,7 @@ knot-indexer --repo-path /path/to/your/repo --neo4j-password secret
 ```
 
 The indexer will:
-1. Discover all `.java`, `.ts`, `.tsx` files
+1. Discover all supported source files (`.java`, `.ts`, `.tsx`, `.cts`, and future languages)
 2. Extract entities via Tree-sitter AST parsing
 3. Generate vector embeddings
 4. Store in both Qdrant and Neo4j
@@ -527,17 +531,54 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### v0.1.3 (Planned)
-- [ ] Incremental indexing (skip unchanged files)
-- [ ] Better performance for large mono-repos
-- [ ] Cross-repository dependency analysis
+### Near-Term (v0.3.x — Multi-Language Foundation)
 
-### Future Versions
+#### Phase 1: JavaScript (Vanilla & Modules) Support
+- [ ] Support `.js`, `.mjs`, `.cjs`, `.jsx` files
+- [ ] Parallel indexing of hybrid JS/TS projects
+- [ ] Call graph analysis for JavaScript functions and classes
+- [ ] JSDoc comment extraction
+
+#### Phase 2: HTML Indexing
+- [ ] Support `.html` and `.htm` files
+- [ ] Extract HTML elements, IDs, and classes
+- [ ] Web Components recognition
+- [ ] Embedded script/style block extraction
+
+#### Phase 3: CSS & SCSS Support
+- [ ] Support `.css`, `.scss`, `.sass` files
+- [ ] Index CSS/SCSS selectors, variables, and mixins
+- [ ] Track selector usage and definitions
+- [ ] SCSS function and mixin extraction
+
+#### Phase 4: Hybrid Web Ecosystem
+- [ ] Cross-language dependency resolution (JS ↔ HTML ↔ CSS)
+- [ ] Link JavaScript DOM operations to HTML elements
+- [ ] Connect CSS class usage in JavaScript to stylesheets
+- [ ] Enable full-stack SPA indexing
+
+**See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
+
+### Medium-Term (v0.4.x — Performance & Polish)
+- [ ] Incremental indexing (skip unchanged files)
+- [ ] Parallel processing optimizations for large mono-repos
+- [ ] Cross-repository dependency analysis
+- [ ] Custom code analysis rules
+
+### Future (v0.5.x+)
+
+#### Phase 5: Rust Support
+- [ ] Support `.rs` files
+- [ ] Struct, trait, and impl tracking
+- [ ] Macro invocation analysis
+- [ ] Ownership-aware call graph analysis
+
+#### Long-Term Vision
 - [ ] Python support
 - [ ] Go support
-- [ ] Custom code analysis rules
-- [ ] IDE plugins (VS Code, IntelliJ)
+- [ ] IDE plugins (VS Code, IntelliJ, Vim)
 - [ ] Web UI for graph visualization
+- [ ] Language Server Protocol (LSP) integration
 
 ---
 
