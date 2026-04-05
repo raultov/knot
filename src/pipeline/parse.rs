@@ -25,6 +25,7 @@ use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
 // Built-in query files compiled into the binary.
 const DEFAULT_JAVA_QUERY: &str = include_str!("../../queries/java.scm");
 const DEFAULT_TS_QUERY: &str = include_str!("../../queries/typescript.scm");
+const DEFAULT_TSX_QUERY: &str = include_str!("../../queries/tsx.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -77,8 +78,12 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
             )?
         }
         "ts" | "tsx" | "cts" => {
-            let query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, parse_cfg);
+            let mut query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, parse_cfg);
             let lang: Language = if ext == "tsx" {
+                // For TSX files, append TSX-specific rules (JSX component invocations)
+                let tsx_rules = load_query_source("tsx.scm", DEFAULT_TSX_QUERY, parse_cfg);
+                query_src.push('\n');
+                query_src.push_str(&tsx_rules);
                 tree_sitter_typescript::LANGUAGE_TSX.into()
             } else {
                 tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()

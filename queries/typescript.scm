@@ -155,13 +155,3 @@
 ; in a way that's easily queryable. These are extracted via other mechanisms.
 ; Removed: problematic query for parameter type annotations
 
-; --- JSX Component Invocation (React/TSX) ---
-; Captures component invocations via JSX syntax
-; Matches: <ChartToolbar />
-(jsx_self_closing_element
-  name: (_) @call.method)
-
-; Matches: <ChartToolbar>...</ChartToolbar>
-(jsx_opening_element
-  name: (_) @call.method)
-
