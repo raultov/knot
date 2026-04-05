@@ -340,7 +340,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.3.3 (Current Release)
+### v0.3.3.1 (Current Release - Patch)
+**Released:** 2026-04-06
+
+**Bug Fix:**
+- Fixed index misalignment in fallback pass where `covered_ranges` vector was not aligned with `entities` vector, causing orphaned reference intents to be assigned to wrong entities. Now ensures `covered_ranges[i]` corresponds to `entities[i]`.
+
+---
+
+### v0.3.3
 **Released:** 2026-04-06
 
 **Orphaned Reference Intent Capture:**
