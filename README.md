@@ -336,7 +336,18 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.3 (Current Release)
+### v0.2.4 (Current Release)
+**Released:** 2026-04-04
+
+**Parser Enhancements:**
+- **TypeScript Abstract Declarations**: Added support for parsing and extracting `abstract class` and `abstract` method signatures
+  - These are now properly indexed as `Class` and `Method` entities
+  - Enables accurate `find_callers` impact analysis and call graph tracking for interfaces and abstract implementations
+  - Resolved issue where abstract methods inside TypeScript files were skipped by AST extraction
+
+---
+
+### v0.2.3
 **Released:** 2026-04-04
 
 **Language Support Enhancement:**

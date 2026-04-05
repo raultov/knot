@@ -181,7 +181,8 @@ fn extract_entities(
                     name = Some(text.clone());
                     kind = Some(EntityKind::Class);
                     start_line = node.start_position().row + 1;
-                    entity_node = find_parent_by_kind(node, "class_declaration");
+                    entity_node = find_parent_by_kind(node, "class_declaration")
+                        .or_else(|| find_parent_by_kind(node, "abstract_class_declaration"));
                 }
                 "interface.name" => {
                     name = Some(text.clone());
@@ -194,7 +195,9 @@ fn extract_entities(
                     kind = Some(EntityKind::Method);
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "method_declaration")
-                        .or_else(|| find_parent_by_kind(node, "method_definition"));
+                        .or_else(|| find_parent_by_kind(node, "method_definition"))
+                        .or_else(|| find_parent_by_kind(node, "method_signature"))
+                        .or_else(|| find_parent_by_kind(node, "abstract_method_signature"));
                     // For methods, extract call intents from the method body
                     if let Some(method_node) = entity_node {
                         if lang_name == "java" {
@@ -291,7 +294,10 @@ struct ClassContext {
 
 /// Extract all class/interface declarations and their line ranges.
 fn extract_class_contexts(node: Node<'_>, source: &[u8], contexts: &mut Vec<ClassContext>) {
-    if node.kind() == "class_declaration" || node.kind() == "interface_declaration" {
+    if matches!(
+        node.kind(),
+        "class_declaration" | "interface_declaration" | "abstract_class_declaration"
+    ) {
         // Find the name child
         let mut child = node.child(0);
         let mut class_name: Option<String> = None;
@@ -787,8 +793,11 @@ fn extract_child_entity_nodes<'a>(node: Node<'a>, lang_name: &str) -> Vec<Node<'
     } else {
         vec![
             "method_definition",
+            "method_signature",
+            "abstract_method_signature",
             "function_declaration",
             "class_declaration",
+            "abstract_class_declaration",
             "interface_declaration",
             "lexical_declaration",
             "export_statement",

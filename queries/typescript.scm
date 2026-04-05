@@ -20,12 +20,23 @@
 (class_declaration
   name: (type_identifier) @class.name)
 
+(abstract_class_declaration
+  name: (type_identifier) @class.name)
+
 ; --- Interface declarations ---
 (interface_declaration
   name: (type_identifier) @interface.name)
 
 ; --- Method definitions (inside class bodies) ---
 (method_definition
+  name: (property_identifier) @method.name
+  parameters: (formal_parameters) @signature)
+
+(method_signature
+  name: (property_identifier) @method.name
+  parameters: (formal_parameters) @signature)
+
+(abstract_method_signature
   name: (property_identifier) @method.name
   parameters: (formal_parameters) @signature)
 
