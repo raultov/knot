@@ -201,7 +201,11 @@ fn extract_entities(
                     // For methods, extract reference intents from the method body
                     if let Some(method_node) = entity_node {
                         if lang_name == "java" {
-                            extract_reference_intents_java(method_node, source_bytes, &mut reference_intents);
+                            extract_reference_intents_java(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
                         } else {
                             extract_reference_intents_typescript(
                                 method_node,
@@ -220,7 +224,11 @@ fn extract_entities(
                         .or_else(|| find_parent_by_kind(node, "export_statement"));
                     // For functions, extract reference intents from the function body
                     if let Some(func_node) = entity_node {
-                        extract_reference_intents_typescript(func_node, source_bytes, &mut reference_intents);
+                        extract_reference_intents_typescript(
+                            func_node,
+                            source_bytes,
+                            &mut reference_intents,
+                        );
                     }
                 }
                 "constant.name" => {
@@ -270,13 +278,11 @@ fn extract_entities(
                 compute_fqn_and_context(&name, &kind, start_line, lang_name, &class_contexts);
 
             // For classes, also extract extends/implements from AST
-            if matches!(kind, EntityKind::Class | EntityKind::Interface) {
-                if let Some(class_node) = entity_node {
-                    if lang_name == "typescript" {
+            if matches!(kind, EntityKind::Class | EntityKind::Interface)
+                && let Some(class_node) = entity_node
+                    && lang_name == "typescript" {
                         extract_class_inheritance(class_node, source_bytes, &mut reference_intents);
                     }
-                }
-            }
 
             let mut entity = ParsedEntity::new(
                 name,
@@ -355,23 +361,26 @@ fn find_parent_by_kind<'a>(mut node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 
 /// Extract class inheritance (extends/implements) from TypeScript class AST.
 /// Manually traverses the class declaration node to find extends and implements clauses.
-fn extract_class_inheritance(class_node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+fn extract_class_inheritance(
+    class_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
     let line = class_node.start_position().row + 1;
-    
+
     // Look for 'extends' keyword followed by type identifier
     let mut child = class_node.child(0);
     while let Some(c) = child {
         if c.kind() == "extends" {
             // Next type identifier should be the parent class
-            if let Some(next) = c.next_sibling() {
-                if next.kind() == "type_identifier" {
+            if let Some(next) = c.next_sibling()
+                && next.kind() == "type_identifier" {
                     let parent_name = node_text(next, source);
                     intents.push(ReferenceIntent::Extends {
                         parent: parent_name,
                         line,
                     });
                 }
-            }
         } else if c.kind() == "implements_clause" {
             // Extract type identifiers from implements clause
             let mut impl_child = c.child(0);
@@ -391,7 +400,11 @@ fn extract_class_inheritance(class_node: Node<'_>, source: &[u8], intents: &mut 
 }
 
 /// Extract reference intents from a Java method body (wrapper for backward compatibility).
-fn extract_reference_intents_java(node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+fn extract_reference_intents_java(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
     let mut call_intents = Vec::new();
     extract_call_intents_java(node, source, &mut call_intents);
     for call in call_intents {
@@ -489,7 +502,11 @@ fn extract_call_intents_java(node: Node<'_>, source: &[u8], intents: &mut Vec<Ca
 }
 
 /// Extract reference intents from a TypeScript function/method body (wrapper for backward compatibility).
-fn extract_reference_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+fn extract_reference_intents_typescript(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
     let mut call_intents = Vec::new();
     extract_call_intents_typescript(node, source, &mut call_intents);
     for call in call_intents {

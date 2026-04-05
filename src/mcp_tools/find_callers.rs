@@ -132,18 +132,20 @@ fn format_references_result(entity_name: &str, references: &serde_json::Value) -
         return output;
     }
 
-    output.push_str(&format!("Found {} reference(s) across all relationship types:\n\n", total_refs));
+    output.push_str(&format!(
+        "Found {} reference(s) across all relationship types:\n\n",
+        total_refs
+    ));
 
     // Format each relationship type
     for (key, label) in rel_types {
-        if let Some(arr) = references.get(key).and_then(|v| v.as_array()) {
-            if !arr.is_empty() {
+        if let Some(arr) = references.get(key).and_then(|v| v.as_array())
+            && !arr.is_empty() {
                 output.push_str(&format!("## {} ({})\n\n", label, arr.len()));
                 for entity in arr {
                     output.push_str(&format_reference_entry(entity));
                 }
             }
-        }
     }
 
     output

@@ -68,7 +68,9 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
         for intent in reference_intents {
             use crate::models::ReferenceIntent;
             match intent {
-                ReferenceIntent::Call { method, receiver, .. } => {
+                ReferenceIntent::Call {
+                    method, receiver, ..
+                } => {
                     let call_intent = crate::models::CallIntent {
                         method,
                         receiver,
@@ -83,35 +85,44 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
 
                     if let Some(uuid) = resolved_uuid {
                         entity.entity.calls.push(uuid);
-                        entity.entity.relationships.push((uuid, RelationshipType::Calls));
+                        entity
+                            .entity
+                            .relationships
+                            .push((uuid, RelationshipType::Calls));
                     }
                 }
                 ReferenceIntent::Extends { parent, .. } => {
                     // Resolve parent class by name
-                    if let Some(uuids) = name_to_uuids.get(&parent) {
-                        if let Some(&uuid) = uuids.first() {
+                    if let Some(uuids) = name_to_uuids.get(&parent)
+                        && let Some(&uuid) = uuids.first() {
                             entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push((uuid, RelationshipType::Extends));
+                            entity
+                                .entity
+                                .relationships
+                                .push((uuid, RelationshipType::Extends));
                         }
-                    }
                 }
                 ReferenceIntent::Implements { interface, .. } => {
                     // Resolve interface by name
-                    if let Some(uuids) = name_to_uuids.get(&interface) {
-                        if let Some(&uuid) = uuids.first() {
+                    if let Some(uuids) = name_to_uuids.get(&interface)
+                        && let Some(&uuid) = uuids.first() {
                             entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push((uuid, RelationshipType::Implements));
+                            entity
+                                .entity
+                                .relationships
+                                .push((uuid, RelationshipType::Implements));
                         }
-                    }
                 }
                 ReferenceIntent::TypeReference { type_name, .. } => {
                     // Resolve type reference by name (class or interface)
-                    if let Some(uuids) = name_to_uuids.get(&type_name) {
-                        if let Some(&uuid) = uuids.first() {
+                    if let Some(uuids) = name_to_uuids.get(&type_name)
+                        && let Some(&uuid) = uuids.first() {
                             entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push((uuid, RelationshipType::References));
+                            entity
+                                .entity
+                                .relationships
+                                .push((uuid, RelationshipType::References));
                         }
-                    }
                 }
             }
         }
