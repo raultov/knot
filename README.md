@@ -340,16 +340,19 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.3.1 (Current Release)
+### v0.3.2 (Current Release)
+**Released:** 2026-04-06
+
+**Fix:**
+- Correctly include missing JSX rules file (`queries/tsx.scm`) and necessary logic updates to fully resolve Tree-sitter compilation warnings for `.ts` files.
+
+---
+
+### v0.3.1
 **Released:** 2026-04-06
 
 **Fix:**
 - Separated JSX rules into `tsx.scm` to eliminate Tree-sitter compilation warnings for `.ts` files, maintaining full React support in `.tsx` files.
-
----
-
-### v0.3.0
-**Released:** 2026-04-06
 
 **React/JSX Component Invocation Tracking:**
 - **JSX Support**: Full AST extraction and indexing of React component invocations via JSX syntax (e.g., `<ChartToolbar />`).
