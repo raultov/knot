@@ -76,7 +76,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )?
         }
-        "ts" | "tsx" => {
+        "ts" | "tsx" | "cts" => {
             let query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, parse_cfg);
             let lang: Language = if ext == "tsx" {
                 tree_sitter_typescript::LANGUAGE_TSX.into()

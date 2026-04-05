@@ -4,7 +4,7 @@
 //!
 //! | Stage | Module     | Description                                        |
 //! |-------|------------|----------------------------------------------------|
-//! | 1     | `input`    | Discover `.java` / `.ts` / `.tsx` source files     |
+//! | 1     | `input`    | Discover `.java` / `.ts` / `.tsx` / `.cts` source files |
 //! | 2     | `parse`    | Extract entities from ASTs via Tree-sitter + Rayon |
 //! | 3     | `prepare`  | Assign UUIDs and build embedding text              |
 //! | 4     | `embed`    | Generate vectors with fastembed                    |

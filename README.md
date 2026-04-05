@@ -22,7 +22,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
-- **TypeScript/TSX**: Complete support for modern JavaScript/TypeScript codebases
+- **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
 
 **📚 Rich Comment Extraction**
 - Captures docstrings (JavaDoc, JSDoc) preceding declarations
@@ -336,7 +336,18 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.2.2 (Current Release)
+### v0.2.3 (Current Release)
+**Released:** 2026-04-04
+
+**Language Support Enhancement:**
+- **CTS (CommonJS TypeScript) Support**: Added support for `.cts` files used in TypeScript projects targeting CommonJS module systems
+  - Typical use case: Mocha custom interfaces, test runners, and Node.js utilities in TypeScript monorepos
+  - Treated as standard TypeScript files by Tree-sitter AST extraction
+  - Full entity extraction and call graph analysis support
+
+---
+
+### v0.2.2
 **Released:** 2026-04-04
 
 **Continuous Delivery & Stability Improvements:**

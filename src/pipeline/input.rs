@@ -2,7 +2,7 @@
 //!
 //! Uses the `ignore` crate to walk a directory tree while respecting
 //! `.gitignore`, `.ignore`, and other standard ignore files.
-//! Only files with the extensions `.java`, `.ts`, and `.tsx` are retained.
+//! Only files with the extensions `.java`, `.ts`, `.tsx`, and `.cts` are retained.
 
 use anyhow::Result;
 use ignore::WalkBuilder;
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Supported source file extensions.
-const SUPPORTED_EXTENSIONS: &[&str] = &["java", "ts", "tsx"];
+const SUPPORTED_EXTENSIONS: &[&str] = &["java", "ts", "tsx", "cts"];
 
 /// Recursively discover all supported source files under `repo_path`.
 ///
