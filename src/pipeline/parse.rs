@@ -246,15 +246,24 @@ fn extract_entities(
                         .or_else(|| find_parent_by_kind(node, "field_declaration"))
                         .or_else(|| find_parent_by_kind(node, "public_field_definition"));
 
-                    // Extract enum/static member usages from constant initializers
-                    if let Some(const_node) = entity_node
-                        && lang_name == "typescript"
-                    {
-                        extract_enum_usages_typescript(
-                            const_node,
-                            source_bytes,
-                            &mut reference_intents,
-                        );
+                    // Extract reference intents from constant initializers
+                    // This captures function calls inside const assignments like:
+                    //   const formattedItems = formatRegistryItems(registryItems)
+                    //   const config = await getMcpConfig(process.cwd())
+                    if let Some(const_node) = entity_node {
+                        if lang_name == "java" {
+                            extract_reference_intents_java(
+                                const_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        } else {
+                            extract_reference_intents_typescript(
+                                const_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
                     }
                 }
                 "enum.name" => {
@@ -317,7 +326,7 @@ fn extract_entities(
             entity.reference_intents = reference_intents;
             entity.inline_comments = inline_comments;
             entity.decorators = decorators;
-            
+
             // Track byte range of this entity for orphan detection
             // Must be done for ALL entities to keep indices aligned with the entities vector
             if let Some(node) = entity_node {
@@ -326,7 +335,7 @@ fn extract_entities(
                 // If we don't have a node, use a dummy range that won't match any orphans
                 covered_ranges.push((usize::MAX, usize::MAX));
             }
-            
+
             entities.push(entity);
         }
     }
@@ -421,13 +430,9 @@ fn collect_orphaned_references(
         return;
     }
 
-    // Assign orphaned intents to the nearest entity by line, or create <module> entity
-    if let Some(target_entity) = find_nearest_entity_by_byte(root, entities, covered_ranges) {
-        for intent in orphaned_intents {
-            entities[target_entity].reference_intents.push(intent);
-        }
-    } else {
-        // No entities exist or all orphans are before first entity: create synthetic <module>
+    // Assign each orphaned intent to its nearest entity by line number
+    if entities.is_empty() {
+        // No entities exist: create synthetic <module> entity for all orphans
         let mut module_entity = ParsedEntity::new(
             "<module>",
             EntityKind::Function,
@@ -442,6 +447,18 @@ fn collect_orphaned_references(
         );
         module_entity.reference_intents = orphaned_intents;
         entities.push(module_entity);
+    } else {
+        // Assign each orphan individually to its nearest entity by line
+        for intent in orphaned_intents {
+            let orphan_line = match &intent {
+                ReferenceIntent::Call { line, .. } => *line,
+                ReferenceIntent::Extends { line, .. } => *line,
+                ReferenceIntent::Implements { line, .. } => *line,
+                ReferenceIntent::TypeReference { line, .. } => *line,
+            };
+            let target_idx = find_nearest_entity_by_line(entities, orphan_line);
+            entities[target_idx].reference_intents.push(intent);
+        }
     }
 }
 
@@ -543,33 +560,37 @@ fn collect_all_reference_intents_java(
     }
 }
 
-/// Find the entity index nearest to the given orphaned intent byte position.
-/// Returns the index of the entity that should own the orphans, or None if no entity exists.
-fn find_nearest_entity_by_byte(
-    _root: Node<'_>,
-    entities: &[ParsedEntity],
-    covered_ranges: &[(usize, usize)],
-) -> Option<usize> {
-    if entities.is_empty() {
-        return None;
+/// Find the entity index nearest to the given line number.
+/// Prefers the entity immediately preceding the orphan (same or earlier line).
+/// Falls back to the closest entity after the orphan if nothing precedes it.
+fn find_nearest_entity_by_line(entities: &[ParsedEntity], target_line: usize) -> usize {
+    let mut best_idx = 0;
+    let mut best_distance = usize::MAX;
+
+    // First pass: find closest entity at or before target_line
+    for (idx, entity) in entities.iter().enumerate() {
+        let entity_line = entity.start_line;
+        if entity_line <= target_line {
+            let distance = target_line - entity_line;
+            if distance < best_distance {
+                best_distance = distance;
+                best_idx = idx;
+            }
+        }
     }
 
-    // Heuristic 1: If there's only one entity, assign to it
-    if entities.len() == 1 {
-        return Some(0);
+    // If no entity precedes the orphan, fall back to closest entity overall (second pass)
+    if best_distance == usize::MAX {
+        for (idx, entity) in entities.iter().enumerate() {
+            let distance = entity.start_line.abs_diff(target_line);
+            if distance < best_distance {
+                best_distance = distance;
+                best_idx = idx;
+            }
+        }
     }
 
-    // Heuristic 2: Find the entity with the largest start_byte that is still before
-    // the root end. This assigns orphans to "the last entity in the file"
-    // which is most likely to be the containing entity for top-level statements
-    covered_ranges
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, (start, _))| start)
-        .and_then(|(idx, _)| {
-            // Verify this index maps to a valid entity
-            entities.get(idx).map(|_| idx)
-        })
+    best_idx
 }
 
 /// Find the parent node of a given kind by traversing up the AST.

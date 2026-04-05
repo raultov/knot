@@ -340,7 +340,23 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.3.3.1 (Current Release - Patch)
+### v0.3.4 (Current Release)
+**Released:** 2026-04-06
+
+**Orphaned Reference Intent Improvements:**
+- **Fix A — Extract Constants with Calls**: Constants with function calls in initializers (e.g., `const config = await getMcpConfig()`) now properly capture those calls as their own reference intents, eliminating the blind spot where initialization calls were invisible.
+- **Fix B — Per-Orphan Line-Based Assignment**: Replaced global heuristic (assigning all orphans to last entity) with per-orphan line-proximity assignment. Each orphan is now assigned to its nearest preceding entity by line number, dramatically improving accuracy.
+- **Impact**: Solves critical issue where:
+  - `const formattedItems = formatRegistryItems(registryItems)` now correctly shows formatRegistryItems as a CALLS relationship on formattedItems
+  - `const config = await getMcpConfig(process.cwd())` now shows getMcpConfig as a call from config
+  - Other utility constants like `results = await searchRegistries()` now properly track their function calls
+  - Remaining orphans (inside template literals, complex expressions) are assigned to appropriate nearby entities instead of dumped at end-of-file
+
+**Verification**: `find_callers("formatRegistryItems")` now correctly returns `formattedItems` constant as the caller.
+
+---
+
+### v0.3.3.1
 **Released:** 2026-04-06
 
 **Bug Fix:**
@@ -354,9 +370,8 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 **Orphaned Reference Intent Capture:**
 - **Fallback Pass**: Implemented a third parsing pass that captures call expressions, constructor invocations, and JSX component invocations that occur outside of named entities (functions, methods, classes).
 - **Callback Handling**: Fixes critical blind spot where anonymous callbacks, top-level statements, and module-level expressions were completely invisible to the indexer.
-- **Heuristic Assignment**: Orphaned intents are intelligently assigned to the nearest entity by byte position, or to a synthetic `<module>` entity if the file contains no named entities.
+- **Heuristic Assignment**: Orphaned intents are intelligently assigned to the nearest entity by line number, or to a synthetic `<module>` entity if the file contains no named entities.
 - **Impact**: Dramatically improves tracking for MCP server callbacks, event handlers, middleware chains, and any code that exists in the top-level scope.
-- **Example Fix**: Previously, calls like `formatRegistryItems()` inside `server.setRequestHandler()` callbacks were invisible. Now they are properly tracked and discoverable via `find_callers`.
 
 ---
 
