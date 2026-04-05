@@ -239,6 +239,12 @@ fn extract_entities(
                         .or_else(|| find_parent_by_kind(node, "variable_declarator"))
                         .or_else(|| find_parent_by_kind(node, "field_declaration"))
                         .or_else(|| find_parent_by_kind(node, "public_field_definition"));
+                    
+                    // Extract enum/static member usages from constant initializers
+                    if let Some(const_node) = entity_node
+                        && lang_name == "typescript" {
+                            extract_enum_usages_typescript(const_node, source_bytes, &mut reference_intents);
+                        }
                 }
                 "enum.name" => {
                     name = Some(text.clone());
@@ -516,6 +522,9 @@ fn extract_reference_intents_typescript(
             line: call.line,
         });
     }
+    
+    // Also extract enum/static member usages (e.g., WebWorkerEvent.Console)
+    extract_enum_usages_typescript(node, source, intents);
 }
 
 /// Extract call expression call intents from a TypeScript function/method body.
@@ -1020,4 +1029,34 @@ fn strip_comment_markers(raw: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Extract enum and static member usages from a TypeScript node (e.g., EnumName.Value, ClassName.STATIC).
+/// 
+/// Recursively searches for member_expression nodes where the object is a capitalized identifier,
+/// which typically represents enum or static class member access patterns like WebWorkerEvent.Console.
+fn extract_enum_usages_typescript(node: Node<'_>, source: &[u8], intents: &mut Vec<ReferenceIntent>) {
+    if node.kind() == "member_expression" {
+        // member_expression has: object . property
+        // We only want to capture if object is a capitalized identifier (enum/class name)
+        if let Some(object_node) = node.child_by_field_name("object")
+            && object_node.kind() == "identifier" {
+                let obj_text = node_text(object_node, source);
+                // Check if it starts with capital letter (typical of classes/enums)
+                if obj_text.chars().next().is_some_and(|c| c.is_uppercase()) {
+                    let line = object_node.start_position().row + 1;
+                    intents.push(ReferenceIntent::TypeReference {
+                        type_name: obj_text,
+                        line,
+                    });
+                }
+            }
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_enum_usages_typescript(c, source, intents);
+        child = c.next_sibling();
+    }
 }

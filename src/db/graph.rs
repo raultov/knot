@@ -129,7 +129,8 @@ impl GraphDb {
 
     /// Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES) for all resolved edges.
     pub async fn upsert_relationships(&self, entities: &[EmbeddedEntity]) -> Result<()> {
-        let mut edge_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut edge_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for e in entities {
             for (callee_uuid, rel_type) in &e.entity.relationships {
@@ -147,7 +148,9 @@ impl GraphDb {
                             .param("callee_uuid", callee_uuid.to_string()),
                     )
                     .await
-                    .context(format!("Failed to create {rel_label} relationship in Neo4j"))?;
+                    .context(format!(
+                        "Failed to create {rel_label} relationship in Neo4j"
+                    ))?;
 
                 *edge_counts.entry(rel_label.clone()).or_insert(0) += 1;
             }
@@ -300,11 +303,9 @@ impl GraphDb {
                 q = q.param("repo_name", repo);
             }
 
-            let mut rows = self
-                .graph
-                .execute(q)
-                .await
-                .context(format!("Failed to query Neo4j for {rel_label} relationships"))?;
+            let mut rows = self.graph.execute(q).await.context(format!(
+                "Failed to query Neo4j for {rel_label} relationships"
+            ))?;
 
             let mut type_results = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
