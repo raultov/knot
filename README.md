@@ -366,6 +366,9 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Selective Database Operations**: New `--clean` flag (default: false) enables full re-index when needed, otherwise performs surgical updates.
 - ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files by loading context from Neo4j.
 
+### Upcoming (v0.4.1 — Maintenance)
+- [ ] **Refactor large source files**: Break down monolithic modules to improve maintainability and parsing speed.
+
 ### Next (v0.5.0 — Performance & Scale++)
 - [ ] Parallel processing optimizations for large mono-repos.
 - [ ] Cross-repository dependency analysis.
