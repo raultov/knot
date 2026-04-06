@@ -103,6 +103,38 @@ impl VectorDb {
         Ok(())
     }
 
+    /// Delete points for specific file paths (incremental mode).
+    ///
+    /// Called when files are modified or deleted to remove stale vectors
+    /// before re-indexing only the changed files.
+    pub async fn delete_by_file_paths(&self, repo_name: &str, file_paths: &[String]) -> Result<()> {
+        if file_paths.is_empty() {
+            return Ok(());
+        }
+
+        warn!(
+            "Deleting {} file(s) from repo '{}' in Qdrant (incremental mode)",
+            file_paths.len(),
+            repo_name
+        );
+
+        // Delete each file individually (simpler than complex OR filters)
+        // This is acceptable for incremental mode where file counts are low
+        for file_path in file_paths {
+            self.client
+                .delete_points(
+                    DeletePointsBuilder::new(&self.collection).points(Filter::must([
+                        Condition::matches_text("repo_name", repo_name),
+                        Condition::matches_text("file_path", file_path),
+                    ])),
+                )
+                .await
+                .with_context(|| format!("Failed to delete vectors for file: {}", file_path))?;
+        }
+
+        Ok(())
+    }
+
     /// Upsert a batch of [`EmbeddedEntity`] records into Qdrant.
     pub async fn upsert(&self, entities: &[EmbeddedEntity]) -> Result<()> {
         if entities.is_empty() {

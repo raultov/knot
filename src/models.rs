@@ -1,10 +1,20 @@
 //! Core data models shared across all pipeline stages.
 //!
-//! Every extracted entity receives a UUID v4 that acts as the primary key
+//! Every extracted entity receives a deterministic UUID v5 that acts as the primary key
 //! bridging Qdrant (vector store) and Neo4j (graph store).
+//!
+//! UUIDs are deterministic (derived from repo_name + file_path + fqn) to enable
+//! incremental indexing without breaking graph relationships.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Namespace UUID for knot entity generation.
+/// All entity UUIDs are derived from this namespace using UUID v5.
+/// This ensures deterministic, reproducible UUIDs across indexing runs.
+pub const NAMESPACE_KNOT: Uuid = Uuid::from_bytes([
+    0x6b, 0x6e, 0x6f, 0x74, 0x2d, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x65, 0x72, 0x2d, 0x76, 0x35, 0x00,
+]);
 
 /// The kind of code entity extracted from the AST.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,7 +223,11 @@ pub struct ParsedEntity {
 }
 
 impl ParsedEntity {
-    /// Create a new entity with a freshly generated UUID.
+    /// Create a new entity with a deterministic UUID v5.
+    ///
+    /// The UUID is derived from the entity's unique identity (repo_name:file_path:fqn)
+    /// to ensure the same entity always receives the same UUID across indexing runs.
+    /// This is critical for incremental indexing to avoid breaking graph relationships.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
@@ -227,18 +241,27 @@ impl ParsedEntity {
         enclosing_class: Option<String>,
         repo_name: impl Into<String>,
     ) -> Self {
+        let name = name.into();
+        let fqn = fqn.into();
+        let file_path = file_path.into();
+        let repo_name = repo_name.into();
+
+        // Generate deterministic UUID from unique identity
+        let identity = format!("{}:{}:{}", repo_name, file_path, fqn);
+        let uuid = Uuid::new_v5(&NAMESPACE_KNOT, identity.as_bytes());
+
         Self {
-            uuid: Uuid::new_v4(),
-            name: name.into(),
+            uuid,
+            name,
             kind,
-            fqn: fqn.into(),
+            fqn,
             signature,
             docstring,
             language: language.into(),
-            file_path: file_path.into(),
+            file_path,
             start_line,
             enclosing_class,
-            repo_name: repo_name.into(),
+            repo_name,
             reference_intents: Vec::new(),
             calls: Vec::new(),
             relationships: Vec::new(),

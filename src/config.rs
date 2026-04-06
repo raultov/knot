@@ -57,6 +57,11 @@ pub struct Cli {
     /// Number of files to process in each rayon parallel batch.
     #[arg(long, env = "KNOT_BATCH_SIZE", default_value_t = 64)]
     pub batch_size: usize,
+
+    /// Force a full re-index by deleting all existing data for this repository.
+    /// When false (default), performs incremental indexing by tracking file changes.
+    #[arg(long, env = "KNOT_CLEAN", default_value_t = false)]
+    pub clean: bool,
 }
 
 /// Resolved, validated configuration used throughout the application.
@@ -72,6 +77,7 @@ pub struct Config {
     pub custom_queries_path: Option<String>,
     pub embed_dim: u64,
     pub batch_size: usize,
+    pub clean: bool,
 }
 
 impl Config {
@@ -115,6 +121,7 @@ impl Config {
             custom_queries_path: cli.custom_queries_path,
             embed_dim: cli.embed_dim,
             batch_size: cli.batch_size,
+            clean: cli.clean,
         })
     }
 }

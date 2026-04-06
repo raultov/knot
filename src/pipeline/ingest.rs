@@ -38,14 +38,11 @@ pub async fn ingest_batch(
     Ok(())
 }
 
-/// Resolve reference intents to actual entity UUIDs.
+/// Resolve reference intents to actual entity UUIDs (legacy version).
 ///
-/// This function takes raw `reference_intents` and resolves them to actual
-/// entity UUIDs based on the available entities. It must be called on the FULL
-/// set of entities before ingestion.
+/// This function builds lookup maps from the provided entities only.
+/// For incremental indexing, use `resolve_reference_intents_with_context` instead.
 pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
-    use crate::models::RelationshipType;
-
     // Build lookup maps for efficient resolution
     let fqn_to_uuid: HashMap<String, Uuid> = entities
         .iter()
@@ -61,6 +58,30 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
         }
         map
     };
+
+    resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+}
+
+/// Resolve reference intents using pre-loaded context (for incremental indexing).
+///
+/// The provided hashmaps should include ALL entities in the repository (from Neo4j),
+/// not just the newly parsed ones. This enables incremental indexing where we only
+/// re-parse modified files but still resolve calls to unchanged files.
+pub fn resolve_reference_intents_with_context(
+    entities: &mut [EmbeddedEntity],
+    mut fqn_to_uuid: HashMap<String, Uuid>,
+    mut name_to_uuids: HashMap<String, Vec<Uuid>>,
+) {
+    use crate::models::RelationshipType;
+
+    // Merge newly parsed entities into the context
+    for e in entities.iter() {
+        fqn_to_uuid.insert(e.entity.fqn.clone(), e.entity.uuid);
+        name_to_uuids
+            .entry(e.entity.name.clone())
+            .or_default()
+            .push(e.entity.uuid);
+    }
 
     // For each entity, resolve its reference_intents to UUIDs with typed relationships
     for entity in entities.iter_mut() {

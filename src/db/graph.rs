@@ -9,7 +9,9 @@
 
 use anyhow::{Context, Result};
 use neo4rs::{Graph, query};
+use std::collections::HashMap;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::models::{EmbeddedEntity, EntityKind};
 
@@ -73,6 +75,96 @@ impl GraphDb {
             .context("Failed to delete existing Neo4j nodes")?;
 
         Ok(())
+    }
+
+    /// Delete entity nodes for specific file paths (incremental mode).
+    ///
+    /// Called when files are modified or deleted to remove stale nodes
+    /// before re-indexing only the changed files.
+    pub async fn delete_by_file_paths(&self, repo_name: &str, file_paths: &[String]) -> Result<()> {
+        if file_paths.is_empty() {
+            return Ok(());
+        }
+
+        warn!(
+            "Deleting {} file(s) from repo '{}' in Neo4j (incremental mode)",
+            file_paths.len(),
+            repo_name
+        );
+
+        self.graph
+            .run(
+                query(
+                    "MATCH (e:Entity)
+                     WHERE e.repo_name = $repo_name AND e.file_path IN $file_paths
+                     DETACH DELETE e",
+                )
+                .param("repo_name", repo_name)
+                .param("file_paths", file_paths),
+            )
+            .await
+            .context("Failed to delete Neo4j nodes by file paths")?;
+
+        Ok(())
+    }
+
+    /// Load entity mappings (name, fqn -> uuid) for incremental indexing.
+    ///
+    /// This is called before resolving reference intents to hydrate the global
+    /// context with entities from unchanged files that weren't re-parsed.
+    /// Returns two hashmaps for fast lookup during relationship resolution.
+    pub async fn load_entity_mappings(
+        &self,
+        repo_name: &str,
+    ) -> Result<(HashMap<String, Uuid>, HashMap<String, Vec<Uuid>>)> {
+        info!(
+            "Loading entity mappings from Neo4j for repo '{}'",
+            repo_name
+        );
+
+        let mut stream = self
+            .graph
+            .execute(
+                query(
+                    "MATCH (e:Entity)
+                     WHERE e.repo_name = $repo_name
+                     RETURN e.name AS name, e.uuid AS uuid_str, 
+                            COALESCE(e.fqn, e.name) AS fqn",
+                )
+                .param("repo_name", repo_name),
+            )
+            .await
+            .context("Failed to query entity mappings from Neo4j")?;
+
+        let mut fqn_to_uuid: HashMap<String, Uuid> = HashMap::new();
+        let mut name_to_uuids: HashMap<String, Vec<Uuid>> = HashMap::new();
+
+        while let Some(row) = stream
+            .next()
+            .await
+            .context("Failed to fetch row from Neo4j")?
+        {
+            let name: String = row.get("name").context("Missing 'name' field")?;
+            let uuid_str: String = row.get("uuid_str").context("Missing 'uuid_str' field")?;
+            let fqn: String = row.get("fqn").context("Missing 'fqn' field")?;
+
+            let uuid = Uuid::parse_str(&uuid_str)
+                .with_context(|| format!("Invalid UUID string: {}", uuid_str))?;
+
+            // Populate fqn -> uuid mapping
+            fqn_to_uuid.insert(fqn, uuid);
+
+            // Populate name -> uuids mapping (multiple entities can have the same name)
+            name_to_uuids.entry(name).or_default().push(uuid);
+        }
+
+        info!(
+            "Loaded {} FQN mappings and {} name mappings from Neo4j",
+            fqn_to_uuid.len(),
+            name_to_uuids.len()
+        );
+
+        Ok((fqn_to_uuid, name_to_uuids))
     }
 
     /// Upsert a batch of entity nodes into Neo4j.
