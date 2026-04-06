@@ -65,6 +65,12 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
     // For each entity, resolve its reference_intents to UUIDs with typed relationships
     for entity in entities.iter_mut() {
         let reference_intents = entity.entity.reference_intents.clone();
+
+        // Deduplication set: defense-in-depth to prevent duplicate relationships
+        // (main fix is in parse.rs to avoid generating duplicates in the first place)
+        use std::collections::HashSet;
+        let mut seen_relationships: HashSet<(Uuid, RelationshipType)> = HashSet::new();
+
         for intent in reference_intents {
             use crate::models::ReferenceIntent;
             match intent {
@@ -84,11 +90,11 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
                     );
 
                     if let Some(uuid) = resolved_uuid {
-                        entity.entity.calls.push(uuid);
-                        entity
-                            .entity
-                            .relationships
-                            .push((uuid, RelationshipType::Calls));
+                        let relationship = (uuid, RelationshipType::Calls);
+                        if seen_relationships.insert(relationship) {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push(relationship);
+                        }
                     }
                 }
                 ReferenceIntent::Extends { parent, .. } => {
@@ -96,11 +102,11 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
                     if let Some(uuids) = name_to_uuids.get(&parent)
                         && let Some(&uuid) = uuids.first()
                     {
-                        entity.entity.calls.push(uuid);
-                        entity
-                            .entity
-                            .relationships
-                            .push((uuid, RelationshipType::Extends));
+                        let relationship = (uuid, RelationshipType::Extends);
+                        if seen_relationships.insert(relationship) {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push(relationship);
+                        }
                     }
                 }
                 ReferenceIntent::Implements { interface, .. } => {
@@ -108,11 +114,11 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
                     if let Some(uuids) = name_to_uuids.get(&interface)
                         && let Some(&uuid) = uuids.first()
                     {
-                        entity.entity.calls.push(uuid);
-                        entity
-                            .entity
-                            .relationships
-                            .push((uuid, RelationshipType::Implements));
+                        let relationship = (uuid, RelationshipType::Implements);
+                        if seen_relationships.insert(relationship) {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push(relationship);
+                        }
                     }
                 }
                 ReferenceIntent::TypeReference { type_name, .. } => {
@@ -120,11 +126,11 @@ pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
                     if let Some(uuids) = name_to_uuids.get(&type_name)
                         && let Some(&uuid) = uuids.first()
                     {
-                        entity.entity.calls.push(uuid);
-                        entity
-                            .entity
-                            .relationships
-                            .push((uuid, RelationshipType::References));
+                        let relationship = (uuid, RelationshipType::References);
+                        if seen_relationships.insert(relationship) {
+                            entity.entity.calls.push(uuid);
+                            entity.entity.relationships.push(relationship);
+                        }
                     }
                 }
             }

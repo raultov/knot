@@ -487,8 +487,9 @@ fn collect_all_reference_intents_typescript(
 
     match node.kind() {
         "call_expression" | "new_expression" => {
-            let mut call_intents = Vec::new();
-            extract_call_intents_typescript(node, source, &mut call_intents);
+            // Use non-recursive extraction to avoid double-processing children
+            // (this function already handles recursion via the child loop below)
+            let call_intents = extract_single_call_intent_typescript(node, source);
             for call in call_intents {
                 intents.push((
                     ReferenceIntent::Call {
@@ -536,8 +537,9 @@ fn collect_all_reference_intents_java(
 
     match node.kind() {
         "method_invocation" | "object_creation_expression" => {
-            let mut call_intents = Vec::new();
-            extract_call_intents_java(node, source, &mut call_intents);
+            // Use non-recursive extraction to avoid double-processing children
+            // (this function already handles recursion via the child loop below)
+            let call_intents = extract_single_call_intent_java(node, source);
             for call in call_intents {
                 intents.push((
                     ReferenceIntent::Call {
@@ -747,6 +749,96 @@ fn extract_call_intents_java(node: Node<'_>, source: &[u8], intents: &mut Vec<Ca
     }
 }
 
+/// Extract call intents from a SINGLE Java node without recursive descent.
+///
+/// This is the non-recursive version of `extract_call_intents_java`,
+/// designed to be used in contexts where the caller already handles tree traversal
+/// (e.g., the fallback pass in `collect_all_reference_intents_java`).
+///
+/// By extracting only the current node's intent, we avoid double-processing children
+/// that would cause duplicate CALLS with incorrect byte_pos/line attribution.
+fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> Vec<CallIntent> {
+    let mut intents = Vec::new();
+
+    if node.kind() == "method_invocation" {
+        let mut method_name: Option<String> = None;
+        let mut receiver: Option<String> = None;
+        let line = node.start_position().row + 1;
+
+        // Parse method_invocation structure:
+        // - Has optional receiver (identifier or "this")
+        // - Has "." separator if receiver exists
+        // - Has identifier for method name
+        let mut child = node.child(0);
+        let mut found_dot = false;
+        while let Some(c) = child {
+            let kind = c.kind();
+            match kind {
+                "identifier" => {
+                    if found_dot {
+                        // After a dot, this is the method name
+                        method_name = Some(node_text(c, source));
+                    } else if receiver.is_none() {
+                        // Before a dot (or if no dot), could be receiver or method name
+                        receiver = Some(node_text(c, source));
+                    }
+                }
+                "this" => {
+                    receiver = Some("this".to_string());
+                }
+                "." => {
+                    found_dot = true;
+                }
+                _ => {}
+            }
+            child = c.next_sibling();
+        }
+
+        // If we found a dot, we know the last identifier is the method
+        if found_dot {
+            if let Some(method) = method_name {
+                intents.push(CallIntent {
+                    method,
+                    receiver,
+                    line,
+                });
+            }
+        } else if let Some(method) = method_name {
+            // No dot found, so receiver is actually a method name (local call)
+            intents.push(CallIntent {
+                method,
+                receiver: None,
+                line,
+            });
+            // Revert receiver since it's not a receiver
+        } else if let Some(receiver_val) = receiver {
+            // Single identifier - treat as local call
+            intents.push(CallIntent {
+                method: receiver_val,
+                receiver: None,
+                line,
+            });
+        }
+    } else if node.kind() == "object_creation_expression" {
+        let line = node.start_position().row + 1;
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "type_identifier" || c.kind() == "identifier" {
+                intents.push(CallIntent {
+                    method: node_text(c, source),
+                    receiver: None,
+                    line,
+                });
+                break;
+            }
+            child = c.next_sibling();
+        }
+    }
+
+    // NO recursive child processing - that's the key difference!
+    intents
+}
+
 /// Extract reference intents from a TypeScript function/method body (wrapper for backward compatibility).
 fn extract_reference_intents_typescript(
     node: Node<'_>,
@@ -871,6 +963,109 @@ fn extract_call_intents_typescript(node: Node<'_>, source: &[u8], intents: &mut 
         extract_call_intents_typescript(c, source, intents);
         child = c.next_sibling();
     }
+}
+
+/// Extract call intents from a SINGLE node without recursive descent.
+///
+/// This is the non-recursive version of `extract_call_intents_typescript`,
+/// designed to be used in contexts where the caller already handles tree traversal
+/// (e.g., the fallback pass in `collect_all_reference_intents_typescript`).
+///
+/// By extracting only the current node's intent, we avoid double-processing children
+/// that would cause duplicate CALLS with incorrect byte_pos/line attribution.
+fn extract_single_call_intent_typescript(node: Node<'_>, source: &[u8]) -> Vec<CallIntent> {
+    let mut intents = Vec::new();
+
+    if node.kind() == "call_expression" {
+        let line = node.start_position().row + 1;
+
+        // Parse call_expression structure:
+        // - Has a 'function' field which can be:
+        //   - identifier (local call)
+        //   - member_expression (object.method call)
+
+        let mut method_name: Option<String> = None;
+        let mut receiver: Option<String> = None;
+
+        // Look for the function field in the call_expression
+        let mut child = node.child(0);
+        let mut is_bind_call = false;
+
+        while let Some(c) = child {
+            if c.kind() == "member_expression" {
+                // Use Tree-sitter API to extract fields cleanly
+                // member_expression has: object . property
+                if let Some(property_node) = c.child_by_field_name("property") {
+                    let prop_text = node_text(property_node, source);
+                    // Check if this is a .bind() call
+                    if prop_text == "bind" {
+                        is_bind_call = true;
+                    }
+                    method_name = Some(prop_text);
+                }
+
+                // For the object, we need to extract it as text to handle nested members like "this.browserService"
+                if let Some(object_node) = c.child_by_field_name("object") {
+                    receiver = Some(node_text(object_node, source));
+                }
+            } else if c.kind() == "identifier" {
+                // Direct identifier in call_expression (local call)
+                method_name = Some(node_text(c, source));
+            }
+            child = c.next_sibling();
+        }
+
+        if let Some(method) = method_name {
+            // Special handling for .bind(this) and similar patterns
+            if is_bind_call {
+                // For .bind() calls, the actual target is in the receiver
+                // e.g., this.requestPausedHandler.bind(this) -> we want to record call to requestPausedHandler
+                if let Some(receiver) = receiver {
+                    // Extract the method name from receiver (last component if it's a member expression)
+                    if let Some(last_part) = receiver.split('.').next_back() {
+                        intents.push(CallIntent {
+                            method: last_part.to_string(),
+                            receiver: if receiver.contains('.') {
+                                receiver.split('.').next().map(|s| s.to_string())
+                            } else {
+                                Some("this".to_string())
+                            },
+                            line,
+                        });
+                    }
+                }
+            } else {
+                intents.push(CallIntent {
+                    method,
+                    receiver,
+                    line,
+                });
+            }
+        }
+
+        // Also scan arguments for callback references (e.g., app.use(this.handler))
+        extract_callback_arguments(node, source, &mut intents, line);
+    } else if node.kind() == "new_expression" {
+        let line = node.start_position().row + 1;
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "identifier" || c.kind() == "type_identifier" {
+                intents.push(CallIntent {
+                    method: node_text(c, source),
+                    receiver: None,
+                    line,
+                });
+                break;
+            }
+            child = c.next_sibling();
+        }
+    } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
+        // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
+        extract_jsx_component_invocation(node, source, &mut intents);
+    }
+
+    // NO recursive child processing - that's the key difference!
+    intents
 }
 
 /// Extract JSX component invocation as a call intent.

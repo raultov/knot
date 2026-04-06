@@ -340,7 +340,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 📝 Changelog
 
-### v0.3.4 (Current Release)
+### v0.3.5 (Current Release)
+**Released:** 2026-04-06
+
+**Fix for Orphaned Reference Intent Duplication:**
+- **Non-recursive Fallback Pass**: Refactored `collect_all_reference_intents_typescript` and its Java equivalent to use a non-recursive extraction strategy. This completely eliminates the bug where child AST nodes were double-processed, generating false duplicate `CALLS` relationships across unrelated constants.
+- **Ingest Deduplication Layer**: Added a robust deduplication defense-in-depth layer in `ingest.rs` that prevents any duplicate relationship edges from being inserted into Neo4j.
+- **Impact**: Precision in call graph generation is fully restored. Constants no longer accumulate false `CALLS` from deep inside callbacks, and functions accurately report their correct callers.
+
+---
+
+### v0.3.4
 **Released:** 2026-04-06
 
 **Orphaned Reference Intent Improvements:**
@@ -585,38 +595,6 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - Support for Java and TypeScript/TSX
 - Comment extraction (docstrings and inline comments)
 - Call graph analysis
-
----
-
-## ⚠️ Known Issues
-
-### Orphaned Reference Intent Duplication (v0.3.4)
-
-**Issue**: When indexing TypeScript files with constants containing function calls, the fallback pass may create duplicate `CALLS` relationships for some function references.
-
-**Symptom**: In complex files with many constants (e.g., `server.setRequestHandler()` handlers with 20+ constant declarations), certain function calls may appear to be called by both:
-1. The constant where they actually occur (correct)
-2. An unrelated constant further down in the file (incorrect duplicate)
-
-**Example**:
-```typescript
-// Line 307: Correct relationship created by Fix A
-const formattedItems = formatRegistryItems(registryItems)  // formatRegistryItems -> stored here ✓
-
-// Line 452: Incorrect duplicate created by fallback pass
-const errorMessage = error instanceof Error ? error.message : String(error)  // formatRegistryItems also appears here ✗
-```
-
-**Impact**: Medium precision impact on `find_callers()` results for utility functions in large files. The correct relationship still exists, but false positives may appear in addition.
-
-**Workaround**: Filter results manually or use additional filters in your queries. The main use case (tracking function calls in their actual origin constant) works correctly.
-
-**Root Cause**: The fallback pass's AST traversal may not properly exclude all byte ranges that are already covered by entity declarations, particularly in nested contexts within switch statements or complex callback structures.
-
-**Fix Timeline**: Will be addressed in **v0.3.5** with:
-- Refactoring of `collect_all_reference_intents_typescript()` to avoid double recursion
-- Addition of a deduplication pass during the ingest stage
-- Enhanced byte range calculation for nested declarations
 
 ---
 

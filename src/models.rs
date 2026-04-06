@@ -81,7 +81,7 @@ pub enum ReferenceIntent {
 
 /// Represents a typed relationship edge in the dependency graph.
 /// Created during the ingest stage after resolving reference intents to UUIDs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum RelationshipType {
     /// Method/function call or constructor invocation.
     Calls,
