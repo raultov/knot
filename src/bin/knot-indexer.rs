@@ -22,7 +22,7 @@ use knot::{
         embed::Embedder,
         ingest::{ingest_batch, resolve_reference_intents_with_context},
         input::discover_files,
-        parse::{ParseConfig, parse_files},
+        parser::{ParseConfig, parse_files},
         prepare::prepare_entities,
         state::IndexState,
     },
