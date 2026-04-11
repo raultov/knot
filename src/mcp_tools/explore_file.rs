@@ -203,3 +203,154 @@ fn format_entity_summary(entity: &serde_json::Value) -> String {
 
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_explore_file_tool_schema() {
+        let tool = ExploreFileTool::tool();
+        assert_eq!(tool.name, "explore_file");
+        assert!(tool.description.is_some());
+
+        let schema = tool.input_schema;
+        assert!(schema.required.contains(&"file_path".to_string()));
+
+        let props = schema.properties.unwrap();
+        assert!(props.contains_key("file_path"));
+        assert!(props.contains_key("repo_name"));
+    }
+
+    #[test]
+    fn test_format_file_entities_empty() {
+        let entities = json!([]);
+        let formatted = format_file_entities("src/main.java", &entities);
+        assert!(formatted.contains("No entities found in this file"));
+    }
+
+    #[test]
+    fn test_format_file_entities_single_class() {
+        let entities = json!([
+            {
+                "name": "MyClass",
+                "kind": "class",
+                "start_line": 10,
+                "signature": "public class MyClass"
+            }
+        ]);
+        let formatted = format_file_entities("src/main.java", &entities);
+        assert!(formatted.contains("## Classes"));
+        assert!(formatted.contains("MyClass"));
+        assert!(formatted.contains("(line 10)"));
+        assert!(formatted.contains("public class MyClass"));
+    }
+
+    #[test]
+    fn test_format_file_entities_multiple_classes() {
+        let entities = json!([
+            {
+                "name": "Class1",
+                "kind": "class",
+                "start_line": 10
+            },
+            {
+                "name": "Class2",
+                "kind": "class",
+                "start_line": 50
+            }
+        ]);
+        let formatted = format_file_entities("src/main.java", &entities);
+        assert!(formatted.contains("Found 2 entity/entities"));
+        assert!(formatted.contains("Class1"));
+        assert!(formatted.contains("Class2"));
+    }
+
+    #[test]
+    fn test_format_file_entities_groups_by_kind() {
+        let entities = json!([
+            {"name": "MyClass", "kind": "class"},
+            {"name": "MyInterface", "kind": "interface"},
+            {"name": "myMethod", "kind": "method"},
+            {"name": "myFunction", "kind": "function"}
+        ]);
+        let formatted = format_file_entities("src/main.java", &entities);
+        assert!(formatted.contains("## Classes"));
+        assert!(formatted.contains("## Interfaces"));
+        assert!(formatted.contains("## Methods"));
+        assert!(formatted.contains("## Functions"));
+    }
+
+    #[test]
+    fn test_format_entity_summary_with_signature() {
+        let entity = json!({
+            "name": "myMethod",
+            "kind": "method",
+            "start_line": 20,
+            "signature": "public void myMethod(String param)"
+        });
+        let formatted = format_entity_summary(&entity);
+        assert!(formatted.contains("myMethod"));
+        assert!(formatted.contains("(line 20)"));
+        assert!(formatted.contains("public void myMethod(String param)"));
+    }
+
+    #[test]
+    fn test_format_entity_summary_with_docstring() {
+        let entity = json!({
+            "name": "myMethod",
+            "kind": "method",
+            "docstring": "First line of doc\nSecond line of doc"
+        });
+        let formatted = format_entity_summary(&entity);
+        assert!(formatted.contains("myMethod"));
+        assert!(formatted.contains("First line of doc"));
+        assert!(!formatted.contains("Second line of doc"));
+    }
+
+    #[test]
+    fn test_format_entity_summary_ignores_whitespace_docstring() {
+        let entity = json!({
+            "name": "myMethod",
+            "kind": "method",
+            "docstring": "   \n  \t"
+        });
+        let formatted = format_entity_summary(&entity);
+        assert!(!formatted.contains("- Doc:"));
+    }
+
+    #[test]
+    fn test_format_entity_summary_without_optional_fields() {
+        let entity = json!({
+            "name": "MyClass",
+            "kind": "class"
+        });
+        let formatted = format_entity_summary(&entity);
+        assert!(formatted.contains("MyClass"));
+        assert!(!formatted.contains("(line"));
+        assert!(!formatted.contains("Signature:"));
+    }
+
+    #[test]
+    fn test_format_file_entities_unknown_kind() {
+        let entities = json!([
+            {
+                "name": "UnknownEntity",
+                "kind": "unknown_kind"
+            }
+        ]);
+        let formatted = format_file_entities("src/main.java", &entities);
+        // Unknown kinds should be silently ignored
+        assert!(!formatted.contains("UnknownEntity"));
+        assert!(formatted.contains("Found 1 entity/entities"));
+    }
+
+    #[test]
+    fn test_format_file_entities_displays_file_path() {
+        let entities = json!([
+            {"name": "MyClass", "kind": "class"}
+        ]);
+        let formatted = format_file_entities("src/main/java/MyClass.java", &entities);
+        assert!(formatted.contains("src/main/java/MyClass.java"));
+    }
+}

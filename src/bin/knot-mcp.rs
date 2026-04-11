@@ -17,6 +17,36 @@ use tracing::info;
 
 use knot::{config::Config, mcp_handler::KnotMcpHandler, utils};
 
+/// Build server details with configuration for the MCP server.
+fn build_server_details() -> InitializeResult {
+    InitializeResult {
+        server_info: Implementation {
+            name: "knot".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            title: Some("knot Codebase Index".into()),
+            description: Some(
+                "Semantic search and structural exploration of indexed Java/TypeScript codebases"
+                    .into(),
+            ),
+            icons: vec![],
+            website_url: Some("https://github.com/anomalyco/knot".into()),
+        },
+        capabilities: ServerCapabilities {
+            tools: Some(ServerCapabilitiesTools { list_changed: None }),
+            ..Default::default()
+        },
+        protocol_version: ProtocolVersion::V2025_11_25.into(),
+        instructions: Some(
+            "Use the three available tools to search and explore an indexed codebase:\n\
+             1. search_hybrid_context — find entities by semantic meaning with dependencies\n\
+             2. find_callers — reverse dependency lookup (impact analysis)\n\
+             3. explore_file — inspect file structure and entity declarations"
+                .into(),
+        ),
+        meta: None,
+    }
+}
+
 #[tokio::main]
 async fn main() -> SdkResult<()> {
     // Logging must be initialized before anything else.
@@ -54,32 +84,7 @@ async fn main() -> SdkResult<()> {
     // Create MCP server with stdio transport                              //
     // ------------------------------------------------------------------ //
 
-    let server_details = InitializeResult {
-        server_info: Implementation {
-            name: "knot".into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            title: Some("knot Codebase Index".into()),
-            description: Some(
-                "Semantic search and structural exploration of indexed Java/TypeScript codebases"
-                    .into(),
-            ),
-            icons: vec![],
-            website_url: Some("https://github.com/anomalyco/knot".into()),
-        },
-        capabilities: ServerCapabilities {
-            tools: Some(ServerCapabilitiesTools { list_changed: None }),
-            ..Default::default()
-        },
-        protocol_version: ProtocolVersion::V2025_11_25.into(),
-        instructions: Some(
-            "Use the three available tools to search and explore an indexed codebase:\n\
-             1. search_hybrid_context — find entities by semantic meaning with dependencies\n\
-             2. find_callers — reverse dependency lookup (impact analysis)\n\
-             3. explore_file — inspect file structure and entity declarations"
-                .into(),
-        ),
-        meta: None,
-    };
+    let server_details = build_server_details();
 
     let transport = StdioTransport::new(TransportOptions::default())?;
 
@@ -102,4 +107,79 @@ async fn main() -> SdkResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_server_details_has_name() {
+        let details = build_server_details();
+        assert_eq!(details.server_info.name, "knot");
+    }
+
+    #[test]
+    fn test_build_server_details_has_version() {
+        let details = build_server_details();
+        assert!(!details.server_info.version.is_empty());
+        // Version should be a semantic version string like "0.4.3"
+        assert!(details.server_info.version.contains('.'));
+    }
+
+    #[test]
+    fn test_build_server_details_has_title() {
+        let details = build_server_details();
+        assert!(details.server_info.title.is_some());
+        assert_eq!(
+            details.server_info.title.as_ref().unwrap(),
+            "knot Codebase Index"
+        );
+    }
+
+    #[test]
+    fn test_build_server_details_has_description() {
+        let details = build_server_details();
+        assert!(details.server_info.description.is_some());
+        let desc = details.server_info.description.as_ref().unwrap();
+        assert!(desc.contains("Semantic search"));
+        assert!(desc.contains("Java/TypeScript"));
+    }
+
+    #[test]
+    fn test_build_server_details_has_website() {
+        let details = build_server_details();
+        assert!(details.server_info.website_url.is_some());
+        assert!(
+            details
+                .server_info
+                .website_url
+                .as_ref()
+                .unwrap()
+                .contains("github.com")
+        );
+    }
+
+    #[test]
+    fn test_build_server_details_has_tools_capability() {
+        let details = build_server_details();
+        assert!(details.capabilities.tools.is_some());
+    }
+
+    #[test]
+    fn test_build_server_details_has_instructions() {
+        let details = build_server_details();
+        assert!(details.instructions.is_some());
+        let instructions = details.instructions.as_ref().unwrap();
+        assert!(instructions.contains("search_hybrid_context"));
+        assert!(instructions.contains("find_callers"));
+        assert!(instructions.contains("explore_file"));
+    }
+
+    #[test]
+    fn test_build_server_details_protocol_version() {
+        let details = build_server_details();
+        // Just verify that protocol_version is set
+        assert!(!details.protocol_version.is_empty());
+    }
 }

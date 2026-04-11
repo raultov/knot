@@ -150,7 +150,7 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 
 ### Indexing a Codebase
 
-#### Incremental Indexing (Default, v0.4.2+)
+#### Incremental Indexing (Default, v0.4.3+)
 
 ```bash
 # First run: indexes all files
@@ -370,13 +370,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.4.2 — Clean Architecture & Modular Indexer) ✅
-- ✅ **Indexer Refactoring**: Reduced `knot-indexer`'s `main()` function from 220+ lines to a clean, declarative ~50 lines flow.
-- ✅ **Stage Orchestration**: Extracted 8 specialized functions for orchestration (print banner, init DBs, clean stale data, run parse, embed/ingest, resolve relationships).
-- ✅ **Improved Testability**: Added unit tests for pure logic functions (`classify_files_for_indexing`, etc.) while maintaining integration tests for I/O functions.
-- ✅ **Type Safety**: Introduced `FileClassification` type alias and improved type annotations across the indexer.
-- ✅ **Modular Architecture**: Decoupled monolithic modules into specialized sub-modules for better maintainability (v0.4.1).
-- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes in `.knot/index_state.json` (v0.4.0).
+### Current Release (v0.4.3 — Robust MCP & Pure Testability) ✅
+- ✅ **MCP Layer Refactoring**: Decoupled tool execution logic in `enrich_with_relationships` and `build_server_details` into pure, testable functions.
+- ✅ **Comprehensive Test Coverage**: Added 65+ new tests covering the entire MCP toolset (explore, search, find_callers).
+- ✅ **Markdown Formatting Tests**: 20+ tests ensuring consistent and reliable search result formatting for AI clients.
+- ✅ **Tool Consistency Suite**: Automated checks to ensure all MCP tools maintain required schemas and descriptions.
+- ✅ **Indexer Refactoring**: Reduced `knot-indexer`'s `main()` function to a clean, declarative ~50 lines flow (v0.4.2).
+- ✅ **Modular Architecture**: Decoupled monolithic modules into specialized sub-modules (v0.4.1).
+- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes (v0.4.0).
 - ✅ **Memory-Efficient Chunking**: Process entities in 512-entity chunks (v0.4.0).
 - ✅ **Deterministic UUIDs**: Migrated to deterministic UUID v5 (v0.4.0).
 - ✅ **Selective Database Operations**: New `--clean` flag (v0.4.0).

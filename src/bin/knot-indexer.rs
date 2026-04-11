@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
 
 /// Print startup banner with configuration details.
 fn print_startup_banner(cfg: &Config) {
-    info!("knot indexer starting (v0.4.2 - incremental mode)");
+    info!("knot indexer starting (v0.4.3 - incremental mode)");
     info!("Repository path : {}", cfg.repo_path);
     info!("Repository name : {}", cfg.repo_name);
     info!("Clean mode      : {}", cfg.clean);
