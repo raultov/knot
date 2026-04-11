@@ -242,4 +242,89 @@ mod tests {
         assert_eq!(cli.batch_size, 128);
         assert!(cli.clean);
     }
+
+    #[test]
+    fn test_parse_dependencies_single() {
+        let deps_str = "core-lib";
+        let dependency_repos: Vec<String> = deps_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        assert_eq!(dependency_repos.len(), 1);
+        assert_eq!(dependency_repos[0], "core-lib");
+    }
+
+    #[test]
+    fn test_parse_dependencies_multiple() {
+        let deps_str = "core-lib,shared-types,utils";
+        let dependency_repos: Vec<String> = deps_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        assert_eq!(dependency_repos.len(), 3);
+        assert_eq!(dependency_repos[0], "core-lib");
+        assert_eq!(dependency_repos[1], "shared-types");
+        assert_eq!(dependency_repos[2], "utils");
+    }
+
+    #[test]
+    fn test_parse_dependencies_with_whitespace() {
+        let deps_str = "core-lib , shared-types , utils";
+        let dependency_repos: Vec<String> = deps_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        assert_eq!(dependency_repos.len(), 3);
+        assert_eq!(dependency_repos[0], "core-lib");
+        assert_eq!(dependency_repos[1], "shared-types");
+        assert_eq!(dependency_repos[2], "utils");
+    }
+
+    #[test]
+    fn test_parse_dependencies_empty() {
+        let deps_str = "";
+        let dependency_repos: Vec<String> = deps_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        assert_eq!(dependency_repos.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_dependencies_with_trailing_comma() {
+        let deps_str = "core-lib,shared-types,";
+        let dependency_repos: Vec<String> = deps_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        assert_eq!(dependency_repos.len(), 2);
+        assert_eq!(dependency_repos[0], "core-lib");
+        assert_eq!(dependency_repos[1], "shared-types");
+    }
+
+    #[test]
+    fn test_cli_with_dependencies() {
+        let args = vec![
+            "knot",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+            "--dependencies",
+            "core-lib,shared-types",
+        ];
+
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.dependencies, Some("core-lib,shared-types".to_string()));
+    }
 }

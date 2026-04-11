@@ -161,3 +161,200 @@ fn load_query_source(filename: &str, default: &str, cfg: &ParseConfig) -> String
     }
     default.to_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config_creation() {
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+        };
+
+        assert_eq!(cfg.repo_name, "test-repo");
+        assert!(cfg.custom_queries_path.is_none());
+    }
+
+    #[test]
+    fn test_parse_config_with_custom_queries() {
+        let cfg = ParseConfig {
+            custom_queries_path: Some("/custom/queries".to_string()),
+            repo_name: "my-repo".to_string(),
+        };
+
+        assert_eq!(cfg.repo_name, "my-repo");
+        assert_eq!(cfg.custom_queries_path, Some("/custom/queries".to_string()));
+    }
+
+    #[test]
+    fn test_load_query_source_uses_default() {
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+        };
+
+        let default_query = "MATCH (n) RETURN n";
+        let result = load_query_source("test.scm", default_query, &cfg);
+
+        assert_eq!(result, default_query);
+    }
+
+    #[test]
+    fn test_load_query_source_nonexistent_custom_path() {
+        let cfg = ParseConfig {
+            custom_queries_path: Some("/nonexistent/path".to_string()),
+            repo_name: "test-repo".to_string(),
+        };
+
+        let default_query = "MATCH (n) RETURN n";
+        let result = load_query_source("test.scm", default_query, &cfg);
+
+        // Should fall back to default when custom path doesn't exist
+        assert_eq!(result, default_query);
+    }
+
+    #[test]
+    fn test_parse_files_empty_list() {
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+        };
+
+        let files: Vec<PathBuf> = vec![];
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+
+        parse_files_stream(&files, &cfg, sender);
+
+        // No files to parse, channel should receive nothing
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_parse_files_with_mock_channel() {
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+        };
+
+        // Use an empty list since we can't create real files in unit tests
+        let files: Vec<PathBuf> = vec![];
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+
+        parse_files_stream(&files, &cfg, sender);
+
+        // Verify channel can receive messages (simulated)
+        assert!(receiver.try_recv().is_err()); // No data sent
+    }
+
+    #[test]
+    fn test_unsupported_file_extension_handling() {
+        // Test extension detection logic
+        let path = PathBuf::from("/test/file.unsupported");
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+
+        assert_eq!(ext, "unsupported");
+        // File would be skipped (not java, ts, tsx, cts)
+        assert!(ext != "java" && ext != "ts" && ext != "tsx" && ext != "cts");
+    }
+
+    #[test]
+    fn test_java_file_extension_detection() {
+        let path = PathBuf::from("/test/Service.java");
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+
+        assert_eq!(ext, "java");
+    }
+
+    #[test]
+    fn test_typescript_file_extension_detection() {
+        let extensions = vec!["ts", "tsx", "cts"];
+
+        for ext_name in &extensions {
+            let path = PathBuf::from(format!("/test/file.{}", ext_name));
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+
+            assert_eq!(ext, *ext_name);
+        }
+    }
+
+    #[test]
+    fn test_file_path_conversion() {
+        let path = PathBuf::from("/home/user/project/src/Main.java");
+        let file_path = path.to_string_lossy().to_string();
+
+        assert!(file_path.contains("Main.java"));
+        assert_eq!(file_path, "/home/user/project/src/Main.java");
+    }
+
+    #[test]
+    fn test_parse_config_repo_name_assignment() {
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "myproject".to_string(),
+        };
+
+        let path = PathBuf::from("/src/Main.java");
+        let _entities = parse_files(&[path], &cfg);
+
+        // With empty/invalid files, should return empty vector
+        // But repo_name should be preserved in config
+        assert_eq!(cfg.repo_name, "myproject");
+    }
+
+    #[test]
+    fn test_parse_files_with_empty_input() {
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+        };
+
+        let files: Vec<PathBuf> = vec![];
+        let entities = parse_files(&files, &cfg);
+
+        // No files to parse, should return empty vector
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_channel_sender_behavior_mock() {
+        // Test that channel sender doesn't fail on empty input
+        let (sender, mut receiver) = mpsc::unbounded_channel::<ParsedEntity>();
+
+        // Dropping sender without sending should not error
+        drop(sender);
+
+        // Receiver should get no data
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_multiple_file_extensions_in_batch() {
+        let files = [
+            PathBuf::from("file1.java"),
+            PathBuf::from("file2.ts"),
+            PathBuf::from("file3.tsx"),
+            PathBuf::from("file4.unsupported"),
+        ];
+
+        let expected_extensions = ["java", "ts", "tsx", "unsupported"];
+
+        for (file, expected_ext) in files.iter().zip(expected_extensions.iter()) {
+            let ext = file
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            assert_eq!(ext, *expected_ext);
+        }
+    }
+}

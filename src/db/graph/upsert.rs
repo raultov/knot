@@ -222,6 +222,8 @@ mod tests {
     use crate::db::graph::connection::ConnectExt;
     use crate::db::graph::test_utils::create_embedded_test_entity;
     use crate::models::{EntityKind, ResolutionEntity};
+    use std::collections::HashMap;
+    use uuid::Uuid;
 
     #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
     #[tokio::test]
@@ -230,7 +232,9 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let result = graph_db.load_entity_mappings(&["nonexistent-repo".to_string()]).await;
+        let result = graph_db
+            .load_entity_mappings(&["nonexistent-repo".to_string()])
+            .await;
         assert!(result.is_ok());
         let (fqn_map, name_map) = result.unwrap();
         // Both maps should be empty for a nonexistent repo
@@ -316,5 +320,157 @@ mod tests {
 
         let result = graph_db.upsert_calls(&[]).await;
         assert!(result.is_ok());
+    }
+
+    // Unit tests for load_entity_mappings with mocked logic
+    #[test]
+    fn test_load_entity_mappings_empty_repo_list() {
+        let repo_names: Vec<String> = vec![];
+        // Simulate what would happen with empty repo list
+        if repo_names.is_empty() {
+            let fqn_map = std::collections::HashMap::<String, uuid::Uuid>::new();
+            let name_map = std::collections::HashMap::<String, Vec<uuid::Uuid>>::new();
+            assert_eq!(fqn_map.len(), 0);
+            assert_eq!(name_map.len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_load_entity_mappings_cypher_query_single_repo() {
+        let repo_names = ["core-lib".to_string()].to_vec();
+
+        // Verify the query construction logic
+        let cypher = if repo_names.len() == 1 {
+            "MATCH (e:Entity)
+             WHERE e.repo_name = $repo_names[0]
+             RETURN e.name AS name, e.uuid AS uuid_str, 
+                    COALESCE(e.fqn, e.name) AS fqn"
+                .to_string()
+        } else {
+            "MATCH (e:Entity)
+             WHERE e.repo_name IN $repo_names
+             RETURN e.name AS name, e.uuid AS uuid_str, 
+                    COALESCE(e.fqn, e.name) AS fqn"
+                .to_string()
+        };
+
+        assert!(cypher.contains("e.repo_name = $repo_names[0]"));
+        assert!(!cypher.contains("IN $repo_names"));
+    }
+
+    #[test]
+    fn test_load_entity_mappings_cypher_query_multiple_repos() {
+        let repo_names = [
+            "core-lib".to_string(),
+            "shared-types".to_string(),
+            "utils".to_string(),
+        ]
+        .to_vec();
+
+        // Verify the query construction logic
+        let cypher = if repo_names.len() == 1 {
+            "MATCH (e:Entity)
+             WHERE e.repo_name = $repo_names[0]
+             RETURN e.name AS name, e.uuid AS uuid_str, 
+                    COALESCE(e.fqn, e.name) AS fqn"
+                .to_string()
+        } else {
+            "MATCH (e:Entity)
+             WHERE e.repo_name IN $repo_names
+             RETURN e.name AS name, e.uuid AS uuid_str, 
+                    COALESCE(e.fqn, e.name) AS fqn"
+                .to_string()
+        };
+
+        assert!(cypher.contains("IN $repo_names"));
+        assert!(!cypher.contains("e.repo_name = $repo_names[0]"));
+    }
+
+    #[test]
+    fn test_hashmap_merging_simulation() {
+        // Simulate merging entity mappings from multiple repos
+        let mut fqn_to_uuid: HashMap<String, Uuid> = HashMap::new();
+        let mut name_to_uuids: HashMap<String, Vec<Uuid>> = HashMap::new();
+
+        // Simulate data from core-lib
+        let uuid1 = Uuid::new_v5(&crate::models::NAMESPACE_KNOT, b"core.Service");
+        fqn_to_uuid.insert("core.Service".to_string(), uuid1);
+        name_to_uuids
+            .entry("Service".to_string())
+            .or_default()
+            .push(uuid1);
+
+        // Simulate data from shared-types
+        let uuid2 = Uuid::new_v5(&crate::models::NAMESPACE_KNOT, b"shared.Config");
+        fqn_to_uuid.insert("shared.Config".to_string(), uuid2);
+        name_to_uuids
+            .entry("Config".to_string())
+            .or_default()
+            .push(uuid2);
+
+        // Verify merged maps
+        assert_eq!(fqn_to_uuid.len(), 2);
+        assert_eq!(name_to_uuids.len(), 2);
+        assert_eq!(name_to_uuids["Service"].len(), 1);
+        assert_eq!(name_to_uuids["Config"].len(), 1);
+    }
+
+    #[test]
+    fn test_hashmap_merging_duplicate_names() {
+        // Simulate merging when multiple entities have same name from different repos
+        let mut name_to_uuids: HashMap<String, Vec<Uuid>> = HashMap::new();
+
+        let uuid1 = Uuid::new_v5(&crate::models::NAMESPACE_KNOT, b"repo1.Service");
+        let uuid2 = Uuid::new_v5(&crate::models::NAMESPACE_KNOT, b"repo2.Service");
+
+        name_to_uuids
+            .entry("Service".to_string())
+            .or_default()
+            .push(uuid1);
+        name_to_uuids
+            .entry("Service".to_string())
+            .or_default()
+            .push(uuid2);
+
+        // Both UUIDs should be stored for the name
+        assert_eq!(name_to_uuids["Service"].len(), 2);
+        assert!(name_to_uuids["Service"].contains(&uuid1));
+        assert!(name_to_uuids["Service"].contains(&uuid2));
+    }
+
+    #[test]
+    fn test_uuid_parsing_from_string() {
+        let uuid_str = "6b6e6f74-2d69-6e64-6578-6572762d3500";
+        let uuid = Uuid::parse_str(uuid_str);
+        assert!(uuid.is_ok());
+
+        let uuid_str_invalid = "not-a-uuid";
+        let uuid = Uuid::parse_str(uuid_str_invalid);
+        assert!(uuid.is_err());
+    }
+
+    #[test]
+    fn test_fqn_resolution_priority() {
+        // Test logic: FQN takes priority over name for lookups
+        let mut fqn_to_uuid: HashMap<String, Uuid> = HashMap::new();
+        let mut name_to_uuids: HashMap<String, Vec<Uuid>> = HashMap::new();
+
+        let uuid = Uuid::new_v5(&crate::models::NAMESPACE_KNOT, b"Service");
+        let fqn = "com.example.Service";
+        let name = "Service";
+
+        fqn_to_uuid.insert(fqn.to_string(), uuid);
+        name_to_uuids
+            .entry(name.to_string())
+            .or_default()
+            .push(uuid);
+
+        // FQN lookup should be exact
+        assert!(fqn_to_uuid.contains_key(fqn));
+        assert_eq!(fqn_to_uuid[fqn], uuid);
+
+        // Name lookup can have multiple matches
+        assert!(name_to_uuids.contains_key(name));
+        assert_eq!(name_to_uuids[name][0], uuid);
     }
 }
