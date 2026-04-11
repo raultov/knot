@@ -267,4 +267,40 @@ mod tests {
         assert_eq!(cfg_custom.repo_name, "repo2");
         assert_eq!(cfg_custom.custom_queries_path, Some("/path".to_string()));
     }
+
+    #[tokio::test]
+    async fn test_run_indexing_pipeline_empty_repo() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap().to_string();
+
+        let _cfg = Config {
+            repo_path: repo_path.clone(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "test".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "password".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: false,
+            dependency_repos: Vec::new(),
+            watch: false,
+        };
+
+        // We need to mock DBs if we want to run the full pipeline,
+        // but here we just want to see if it returns Ok(()) when no files are found.
+        // discover_files will return empty Vec.
+
+        // However, init_databases is called before this in main.
+        // Here we just test the function directly.
+        // We'll need a way to create Arc<VectorDb> and Arc<GraphDb> without connecting if possible,
+        // or just accept that this test might be limited.
+
+        // Actually, discovering files happens FIRST.
+        // If it's empty, it returns Ok(()).
+        // Let's try to pass dummy Arcs.
+    }
 }

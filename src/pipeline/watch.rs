@@ -56,3 +56,20 @@ pub async fn setup_watch_mode(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_watch_supported_files() {
+        assert!(is_supported_file(Path::new("test.java")));
+        assert!(is_supported_file(Path::new("test.ts")));
+        assert!(is_supported_file(Path::new("test.tsx")));
+        assert!(is_supported_file(Path::new("test.cts")));
+
+        assert!(!is_supported_file(Path::new("test.txt")));
+        assert!(!is_supported_file(Path::new("test.rs")));
+    }
+}
