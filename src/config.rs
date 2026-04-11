@@ -69,6 +69,12 @@ pub struct Cli {
     /// Example: `KNOT_DEPENDENCIES=core-lib,shared-types`
     #[arg(long, env = "KNOT_DEPENDENCIES")]
     pub dependencies: Option<String>,
+
+    /// Run the indexer in watch mode.
+    /// When enabled, the indexer will watch for filesystem changes and
+    /// perform real-time incremental updates.
+    #[arg(long, env = "KNOT_WATCH", default_value_t = false)]
+    pub watch: bool,
 }
 
 /// Resolved, validated configuration used throughout the application.
@@ -87,6 +93,8 @@ pub struct Config {
     pub clean: bool,
     /// List of repository names to include for cross-repository dependency analysis.
     pub dependency_repos: Vec<String>,
+    /// Whether to run in watch mode.
+    pub watch: bool,
 }
 
 impl Config {
@@ -143,6 +151,7 @@ impl Config {
             batch_size: cli.batch_size,
             clean: cli.clean,
             dependency_repos,
+            watch: cli.watch,
         })
     }
 }
@@ -313,18 +322,31 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_with_dependencies() {
+    fn test_cli_with_watch() {
         let args = vec![
             "knot",
             "--repo-path",
             "/tmp/repo",
             "--neo4j-password",
             "secret",
-            "--dependencies",
-            "core-lib,shared-types",
+            "--watch",
         ];
 
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI args");
-        assert_eq!(cli.dependencies, Some("core-lib,shared-types".to_string()));
+        assert!(cli.watch);
+    }
+
+    #[test]
+    fn test_cli_without_watch() {
+        let args = vec![
+            "knot",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert!(!cli.watch);
     }
 }

@@ -388,7 +388,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Cross-repository dependency analysis.
 - [ ] Watch mode for real-time incremental updates.
 
-### Near-Term (v0.3.x — Multi-Language Foundation)
+### Near-Term (v0.6.x — Multi-Language Foundation)
 #### Phase 1: JavaScript (Vanilla & Modules) Support
 - [ ] Support `.js`, `.mjs`, `.cjs`, `.jsx` files
 - [ ] Parallel indexing of hybrid JS/TS projects
@@ -415,7 +415,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 **See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
 
-### Future (v0.5.x+)
+### Future (v0.7.x+)
 #### Phase 5: Rust Support
 - [ ] Support `.rs` files
 - [ ] Struct, trait, and impl tracking

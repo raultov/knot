@@ -2,8 +2,9 @@
 //!
 //! Each sub-module implements one stage of the indexing pipeline:
 //!
-//! | Stage | Module     | Description                                        |
-//! |-------|------------|----------------------------------------------------|
+//! | Stage | Module       | Description                                        |
+//! |-------|----------|----------------------------------------------------|
+//! | 0     | `runner`     | Orchestrates all pipeline stages                   |
 //! | 1     | `input`    | Discover `.java` / `.ts` / `.tsx` / `.cts` source files |
 //! | 2     | `parser`   | Extract entities from ASTs via Tree-sitter + Rayon |
 //! | 3     | `prepare`  | Assign UUIDs and build embedding text              |
@@ -15,6 +16,7 @@ pub mod ingest;
 pub mod input;
 pub mod parser;
 pub mod prepare;
+pub mod runner;
 pub mod state;
 
 #[cfg(test)]
