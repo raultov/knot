@@ -12,12 +12,14 @@
 //! | 5     | `ingest`   | Dual-write to Qdrant and Neo4j                     |
 
 pub mod embed;
+pub mod files;
 pub mod ingest;
 pub mod input;
 pub mod parser;
 pub mod prepare;
 pub mod runner;
 pub mod state;
+pub mod watch;
 
 #[cfg(test)]
 mod tests {

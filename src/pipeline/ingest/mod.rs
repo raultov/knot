@@ -8,4 +8,7 @@ mod batch;
 mod resolve;
 
 pub use batch::ingest_batch;
-pub use resolve::{resolve_reference_intents, resolve_reference_intents_with_context};
+pub use resolve::{
+    resolve_and_save_relationships, resolve_reference_intents,
+    resolve_reference_intents_with_context,
+};

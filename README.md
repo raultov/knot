@@ -39,10 +39,11 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 - **Neo4j**: Graph relationships for structural navigation
 
 **🚀 High Performance**
-- Parallel AST extraction via Rayon
-- Concurrent database writes via Tokio
-- Batch processing with configurable chunk sizes
-- Scales to thousands of files
+- **Parallel Streaming Pipeline**: Overlaps CPU-bound embedding with I/O-bound ingestion via MPSC channels (v0.5.0+)
+- **Incremental Indexing**: Uses SHA-256 hashes to skip unchanged files
+- **Real-time Watch Mode**: Automatically re-indexes changed files in seconds via `--watch`
+- **CPU Parallelism**: AST extraction via Rayon
+- **Scalable**: Configurable batch processing and constant memory footprint (~2GB) regardless of repository size
 
 ---
 
@@ -158,6 +159,9 @@ knot-indexer --repo-path /path/to/your/repo --neo4j-password secret
 
 # Subsequent runs: only re-indexes changed files (fast!)
 knot-indexer --repo-path /path/to/your/repo --neo4j-password secret
+
+# NEW: Real-time Watch mode (v0.5.2+)
+knot-indexer --watch --repo-path /path/to/your/repo --neo4j-password secret
 ```
 
 **How it works:**
@@ -370,7 +374,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.4.3 — Robust MCP & Pure Testability) ✅
+### Current Release (v0.5.2 — Real-time & Parallel Streaming) ✅
+- ✅ **Real-time Watch Mode**: Instant incremental updates on file changes via `--watch` flag (v0.5.2).
+- ✅ **Massive Modular Refactoring**: Clean separation of concerns into specialized modules (`files`, `watch`, `runner`, `orchestrator`) (v0.5.2).
+- ✅ **Cross-Repository Analysis**: Resolve dependencies and call graphs across multiple repositories via `KNOT_DEPENDENCIES` (v0.5.1).
+- ✅ **Parallel Streaming Pipeline**: New MPSC channel-based architecture for overlapping CPU (embeddings) and I/O (ingestion), boosting performance by 40-50% (v0.5.0).
+- ✅ **Comprehensive Test Suite**: Added 190+ unit tests covering core logic, state management, and pipeline orchestration.
+- ✅ **ResolutionEntity Optimization**: Optimized memory usage during relationship resolution.
+
+### Previous Milestone (v0.4.3 — Robust MCP & Pure Testability) ✅
 - ✅ **MCP Layer Refactoring**: Decoupled tool execution logic in `enrich_with_relationships` and `build_server_details` into pure, testable functions.
 - ✅ **Comprehensive Test Coverage**: Added 65+ new tests covering the entire MCP toolset (explore, search, find_callers).
 - ✅ **Markdown Formatting Tests**: 20+ tests ensuring consistent and reliable search result formatting for AI clients.
@@ -383,12 +395,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Selective Database Operations**: New `--clean` flag (v0.4.0).
 - ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files (v0.4.0).
 
-### Next (v0.5.0 — Performance & Scale++)
-- [ ] Parallel processing optimizations for large mono-repos.
-- [ ] Cross-repository dependency analysis.
-- [ ] Watch mode for real-time incremental updates.
-
-### Near-Term (v0.6.x — Multi-Language Foundation)
+### Next (v0.6.x — Multi-Language Foundation)
 #### Phase 1: JavaScript (Vanilla & Modules) Support
 - [ ] Support `.js`, `.mjs`, `.cjs`, `.jsx` files
 - [ ] Parallel indexing of hybrid JS/TS projects
@@ -423,6 +430,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Ownership-aware call graph analysis
 
 #### Long-Term Vision
+- [ ] Kotlin support
 - [ ] Python support
 - [ ] Go support
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)

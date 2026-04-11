@@ -1,7 +1,48 @@
+use anyhow::Result;
 use std::collections::HashMap;
+use tracing::info;
 use uuid::Uuid;
 
+use crate::config::Config;
+use crate::db::graph::{GraphDb, UpsertExt};
 use crate::models::{RelationshipType, ResolutionEntity};
+
+/// Resolve cross-repository relationships and persist them to Neo4j.
+pub async fn resolve_and_save_relationships(
+    entities: &mut [ResolutionEntity],
+    graph_db: &GraphDb,
+    cfg: &Config,
+) -> Result<()> {
+    if !entities.is_empty() {
+        // Build list of repos to include in context (current repo + dependencies)
+        let mut repos_to_load = vec![cfg.repo_name.clone()];
+        repos_to_load.extend(cfg.dependency_repos.clone());
+
+        info!("Loading global entity context from Neo4j for relationship resolution...");
+        let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&repos_to_load).await?;
+
+        if !cfg.dependency_repos.is_empty() {
+            info!(
+                "Cross-repository resolution enabled: {} local repo(s) + {} dependency repo(s)",
+                1,
+                cfg.dependency_repos.len()
+            );
+        }
+
+        info!(
+            "Resolving reference intents with global context ({} FQNs, {} names)...",
+            fqn_to_uuid.len(),
+            name_to_uuids.len()
+        );
+
+        resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+
+        // Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
+        info!("Creating typed relationships in Neo4j...");
+        graph_db.upsert_relationships(entities).await?;
+    }
+    Ok(())
+}
 
 /// Resolve reference intents to actual entity UUIDs for a batch of entities.
 pub fn resolve_reference_intents_with_context(
