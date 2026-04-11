@@ -17,7 +17,10 @@ use tracing::info;
 
 use knot::{
     config::Config,
-    db::{graph::GraphDb, vector::VectorDb},
+    db::{
+        graph::{ConnectExt, DeleteExt, GraphDb, UpsertExt},
+        vector::{VectorConnectExt, VectorDb, VectorDeleteExt},
+    },
     pipeline::{
         embed::Embedder,
         ingest::{ingest_batch, resolve_reference_intents_with_context},
@@ -37,7 +40,7 @@ async fn main() -> Result<()> {
     // Load configuration (.env takes precedence over CLI args).
     let cfg = Config::load()?;
 
-    info!("knot indexer starting (v0.4.0 - incremental mode)");
+    info!("knot indexer starting (v0.4.1 - incremental mode)");
     info!("Repository path : {}", cfg.repo_path);
     info!("Repository name : {}", cfg.repo_name);
     info!("Clean mode      : {}", cfg.clean);

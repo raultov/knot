@@ -1,5 +1,5 @@
-use super::node_text;
 use crate::models::{CallIntent, ReferenceIntent};
+use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 
 /// Recursively extract all call intents from TypeScript/TSX, returning (intent, byte_pos) pairs.

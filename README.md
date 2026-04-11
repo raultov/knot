@@ -150,7 +150,7 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 
 ### Indexing a Codebase
 
-#### Incremental Indexing (Default, v0.4.0+)
+#### Incremental Indexing (Default, v0.4.1+)
 
 ```bash
 # First run: indexes all files
@@ -268,8 +268,20 @@ Add to `claude_desktop_config.json`:
 #### Gemini CLI
 
 ```bash
-gemini mcp add knot /absolute/path/to/knot/target/release/knot-mcp
-gemini mcp enable knot  # Inside Gemini CLI session
+{
+  "mcpServers": {
+    "knot": {
+      "command": "/absolute/path/to/knot/target/release/knot-mcp",
+      "env": {
+        "KNOT_REPO_PATH": "/path/to/indexed/repo",
+        "KNOT_QDRANT_URL": "http://localhost:6334",
+        "KNOT_NEO4J_URI": "bolt://localhost:7687",
+        "KNOT_NEO4J_USER": "neo4j",
+        "KNOT_NEO4J_PASSWORD": "your-password"
+      }
+    }
+  }
+}
 ```
 
 #### ChatGPT / GPT CLI
@@ -291,7 +303,6 @@ All options can be set via environment variables (`.env`) or CLI flags. Environm
 | `KNOT_NEO4J_URI`           | `--neo4j-uri`              | `bolt://localhost:7687`     | Neo4j Bolt URI                                           |
 | `KNOT_NEO4J_USER`          | `--neo4j-user`             | `neo4j`                     | Neo4j username                                           |
 | `KNOT_NEO4J_PASSWORD`      | `--neo4j-password`         | *(required)*                | Neo4j password                                           |
-| `KNOT_CUSTOM_QUERIES_PATH` | `--custom-queries-path`    | *(unset)*                   | Directory with custom `java.scm` / `typescript.scm`      |
 | `KNOT_EMBED_DIM`           | `--embed-dim`              | `384`                       | Embedding vector dimension                               |
 | `KNOT_BATCH_SIZE`          | `--batch-size`             | `64`                        | Entities per batch                                       |
 | `KNOT_CLEAN`               | `--clean`                  | `false`                     | Force full re-index (delete all existing data)           |
@@ -359,15 +370,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.4.0 — Performance & Scale) ✅
-- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes in `.knot/index_state.json`. Dramatically reduces re-indexing time for large codebases.
-- ✅ **Memory-Efficient Chunking**: Process entities in 512-entity chunks to avoid OOM on systems with 32GB RAM when indexing 3800+ files.
-- ✅ **Deterministic UUIDs**: Migrated from random UUID v4 to deterministic UUID v5 based on `repo:file:fqn` for stable graph relationships across indexing runs.
-- ✅ **Selective Database Operations**: New `--clean` flag (default: false) enables full re-index when needed, otherwise performs surgical updates.
-- ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files by loading context from Neo4j.
-
-### Upcoming (v0.4.1 — Maintenance)
-- [ ] **Refactor large source files**: Break down monolithic modules to improve maintainability and parsing speed.
+### Current Release (v0.4.1 — Maintenance & Modular Architecture) ✅
+- ✅ **Modular Refactoring**: Decoupled monolithic modules into specialized sub-modules for better maintainability and scalability.
+- ✅ **Enhanced DB Layer**: Separated `GraphDb` and `VectorDb` responsibilities into structured modules (connection, query, upsert, delete).
+- ✅ **Domain-Driven Models**: Reorganized core data models into a clean `models/` directory.
+- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes in `.knot/index_state.json`. Dramatically reduces re-indexing time for large codebases. (v0.4.0)
+- ✅ **Memory-Efficient Chunking**: Process entities in 512-entity chunks to avoid OOM on systems with 32GB RAM when indexing 3800+ files. (v0.4.0)
+- ✅ **Deterministic UUIDs**: Migrated from random UUID v4 to deterministic UUID v5 based on `repo:file:fqn` for stable graph relationships across indexing runs. (v0.4.0)
+- ✅ **Selective Database Operations**: New `--clean` flag (default: false) enables full re-index when needed, otherwise performs surgical updates. (v0.4.0)
+- ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files by loading context from Neo4j. (v0.4.0)
 
 ### Next (v0.5.0 — Performance & Scale++)
 - [ ] Parallel processing optimizations for large mono-repos.

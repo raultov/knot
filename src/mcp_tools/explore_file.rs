@@ -15,7 +15,7 @@ use rust_mcp_sdk::schema::*;
 use serde_json::json;
 use std::collections::HashMap;
 
-use crate::mcp_handler::KnotMcpHandler;
+use crate::{db::graph::QueryExt, mcp_handler::KnotMcpHandler};
 
 pub struct ExploreFileTool;
 

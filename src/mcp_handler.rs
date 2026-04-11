@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler, schema::*};
 use std::sync::{Arc, Mutex};
 
-use crate::db::{graph::GraphDb, vector::VectorDb};
+use crate::db::{
+    graph::{ConnectExt, GraphDb},
+    vector::{VectorConnectExt, VectorDb},
+};
 use crate::mcp_tools::{
     explore_file::ExploreFileTool, find_callers::FindCallersTool,
     search_hybrid_context::SearchHybridContextTool,

@@ -1,42 +1,7 @@
-//! Stage 5 — Ingest: dual-write to Qdrant (vector) and Neo4j (graph).
-//!
-//! Both writes are issued concurrently via `tokio::try_join!` to avoid
-//! bottlenecking on either database. The two stores are kept in sync
-//! through the shared UUID that every entity carries.
-
-use anyhow::Result;
 use std::collections::HashMap;
-use tracing::info;
 use uuid::Uuid;
 
-use crate::{
-    db::{graph::GraphDb, vector::VectorDb},
-    models::EmbeddedEntity,
-};
-
-/// Write a batch of [`EmbeddedEntity`] records to both databases simultaneously.
-/// NOTE: This only creates the nodes. Relationship edges must be created in a separate
-/// pass after ALL nodes have been upserted, to prevent missing-callee failures.
-pub async fn ingest_batch(
-    entities: &[EmbeddedEntity],
-    vector_db: &VectorDb,
-    graph_db: &GraphDb,
-) -> Result<()> {
-    if entities.is_empty() {
-        return Ok(());
-    }
-
-    info!("Ingesting batch of {} entities…", entities.len());
-
-    // Fire both writes concurrently; surface the first failure.
-    tokio::try_join!(
-        vector_db.upsert(entities),
-        graph_db.upsert_entities(entities),
-    )?;
-
-    info!("Batch ingestion complete");
-    Ok(())
-}
+use crate::models::EmbeddedEntity;
 
 /// Resolve reference intents to actual entity UUIDs (legacy version).
 ///
@@ -88,7 +53,6 @@ pub fn resolve_reference_intents_with_context(
         let reference_intents = entity.entity.reference_intents.clone();
 
         // Deduplication set: defense-in-depth to prevent duplicate relationships
-        // (main fix is in parse.rs to avoid generating duplicates in the first place)
         use std::collections::HashSet;
         let mut seen_relationships: HashSet<(Uuid, RelationshipType)> = HashSet::new();
 
