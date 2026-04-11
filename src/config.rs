@@ -62,6 +62,13 @@ pub struct Cli {
     /// When false (default), performs incremental indexing by tracking file changes.
     #[arg(long, env = "KNOT_CLEAN", default_value_t = false)]
     pub clean: bool,
+
+    /// Comma-separated list of repository names to include during cross-repository
+    /// dependency analysis. When set, the indexer will load entity mappings from
+    /// these additional repositories and resolve cross-repo calls/references.
+    /// Example: `KNOT_DEPENDENCIES=core-lib,shared-types`
+    #[arg(long, env = "KNOT_DEPENDENCIES")]
+    pub dependencies: Option<String>,
 }
 
 /// Resolved, validated configuration used throughout the application.
@@ -78,6 +85,8 @@ pub struct Config {
     pub embed_dim: u64,
     pub batch_size: usize,
     pub clean: bool,
+    /// List of repository names to include for cross-repository dependency analysis.
+    pub dependency_repos: Vec<String>,
 }
 
 impl Config {
@@ -110,6 +119,17 @@ impl Config {
                 .unwrap_or_else(|| "unnamed-repo".to_string())
         };
 
+        // Parse cross-repository dependencies (comma-separated)
+        let dependency_repos = if let Some(deps_str) = &cli.dependencies {
+            deps_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         Ok(Self {
             repo_path: cli.repo_path,
             repo_name,
@@ -122,6 +142,7 @@ impl Config {
             embed_dim: cli.embed_dim,
             batch_size: cli.batch_size,
             clean: cli.clean,
+            dependency_repos,
         })
     }
 }

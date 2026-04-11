@@ -12,7 +12,7 @@ use crate::models::{EmbeddedEntity, ResolutionEntity};
 pub trait UpsertExt {
     async fn load_entity_mappings(
         &self,
-        repo_name: &str,
+        repo_names: &[String],
     ) -> Result<(HashMap<String, Uuid>, HashMap<String, Vec<Uuid>>)>;
     async fn upsert_entities(&self, entities: &[EmbeddedEntity]) -> Result<()>;
     async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()>;
@@ -24,27 +24,40 @@ impl UpsertExt for GraphDb {
     ///
     /// This is called before resolving reference intents to hydrate the global
     /// context with entities from unchanged files that weren't re-parsed.
+    /// Supports loading from multiple repositories for cross-repository dependency analysis.
     /// Returns two hashmaps for fast lookup during relationship resolution.
     async fn load_entity_mappings(
         &self,
-        repo_name: &str,
+        repo_names: &[String],
     ) -> Result<(HashMap<String, Uuid>, HashMap<String, Vec<Uuid>>)> {
+        if repo_names.is_empty() {
+            return Ok((HashMap::new(), HashMap::new()));
+        }
+
         info!(
-            "Loading entity mappings from Neo4j for repo '{}'",
-            repo_name
+            "Loading entity mappings from Neo4j for {} repo(s): {}",
+            repo_names.len(),
+            repo_names.join(", ")
         );
+
+        // Build Cypher query that filters by multiple repo names
+        let cypher = if repo_names.len() == 1 {
+            "MATCH (e:Entity)
+             WHERE e.repo_name = $repo_names[0]
+             RETURN e.name AS name, e.uuid AS uuid_str, 
+                    COALESCE(e.fqn, e.name) AS fqn"
+                .to_string()
+        } else {
+            "MATCH (e:Entity)
+             WHERE e.repo_name IN $repo_names
+             RETURN e.name AS name, e.uuid AS uuid_str, 
+                    COALESCE(e.fqn, e.name) AS fqn"
+                .to_string()
+        };
 
         let mut stream = self
             .graph
-            .execute(
-                query(
-                    "MATCH (e:Entity)
-                     WHERE e.repo_name = $repo_name
-                     RETURN e.name AS name, e.uuid AS uuid_str, 
-                            COALESCE(e.fqn, e.name) AS fqn",
-                )
-                .param("repo_name", repo_name),
-            )
+            .execute(query(&cypher).param("repo_names", repo_names.to_vec()))
             .await
             .context("Failed to query entity mappings from Neo4j")?;
 
@@ -71,9 +84,10 @@ impl UpsertExt for GraphDb {
         }
 
         info!(
-            "Loaded {} FQN mappings and {} name mappings from Neo4j",
+            "Loaded {} FQN mappings and {} name mappings from {} repo(s)",
             fqn_to_uuid.len(),
-            name_to_uuids.len()
+            name_to_uuids.len(),
+            repo_names.len()
         );
 
         Ok((fqn_to_uuid, name_to_uuids))
@@ -216,7 +230,7 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let result = graph_db.load_entity_mappings("nonexistent-repo").await;
+        let result = graph_db.load_entity_mappings(&["nonexistent-repo".to_string()]).await;
         assert!(result.is_ok());
         let (fqn_map, name_map) = result.unwrap();
         // Both maps should be empty for a nonexistent repo

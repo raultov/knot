@@ -227,8 +227,20 @@ async fn resolve_and_save_relationships_v2(
     cfg: &Config,
 ) -> Result<()> {
     if !entities.is_empty() {
+        // Build list of repos to include in context (current repo + dependencies)
+        let mut repos_to_load = vec![cfg.repo_name.clone()];
+        repos_to_load.extend(cfg.dependency_repos.clone());
+
         info!("Loading global entity context from Neo4j for relationship resolution...");
-        let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&cfg.repo_name).await?;
+        let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&repos_to_load).await?;
+
+        if !cfg.dependency_repos.is_empty() {
+            info!(
+                "Cross-repository resolution enabled: {} local repo(s) + {} dependency repo(s)",
+                1,
+                cfg.dependency_repos.len()
+            );
+        }
 
         info!(
             "Resolving reference intents with global context ({} FQNs, {} names)...",
