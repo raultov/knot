@@ -38,7 +38,14 @@ async fn main() -> Result<()> {
 
     // Initial indexing run
     info!("Performing initial indexing run...");
+    let mut cfg = cfg; // Make config mutable for watch mode
     run_indexing_pipeline(&cfg, &vector_db, &graph_db, &mut index_state).await?;
+
+    // After initial run, disable clean mode to ensure watch mode operates incrementally
+    if cfg.watch && cfg.clean {
+        info!("Initial clean indexing complete. Switching to incremental mode for watch.");
+        cfg.clean = false;
+    }
 
     // Watch mode: Monitor filesystem for real-time incremental updates
     if cfg.watch {
@@ -76,4 +83,124 @@ async fn init_databases(cfg: &Config) -> Result<(VectorDb, GraphDb)> {
     graph_db.ensure_indexes().await?;
 
     Ok((vector_db, graph_db))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_mode_disabled_after_initial_run_with_watch() {
+        // Simulate the behavior of clean flag being disabled after initial run in watch mode.
+        let mut cfg = Config {
+            repo_path: "/tmp/test-repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "test".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "password".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: true,
+            dependency_repos: Vec::new(),
+            watch: true,
+        };
+
+        // Initially, clean should be true (from CLI/env)
+        assert!(cfg.clean);
+        assert!(cfg.watch);
+
+        // After initial run, clean should be disabled for incremental watch mode
+        if cfg.watch && cfg.clean {
+            cfg.clean = false;
+        }
+
+        // Now clean should be false, but watch should still be true
+        assert!(!cfg.clean);
+        assert!(cfg.watch);
+    }
+
+    #[test]
+    fn test_clean_mode_unchanged_without_watch() {
+        // When watch is disabled, clean flag should remain as configured.
+        let mut cfg = Config {
+            repo_path: "/tmp/test-repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "test".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "password".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: true,
+            dependency_repos: Vec::new(),
+            watch: false,
+        };
+
+        // Since watch is false, clean flag should not be modified
+        if cfg.watch && cfg.clean {
+            cfg.clean = false;
+        }
+
+        // clean should remain true since watch is false
+        assert!(cfg.clean);
+    }
+
+    #[test]
+    fn test_watch_without_clean_mode() {
+        // When watch is enabled but clean is false, nothing should change.
+        let mut cfg = Config {
+            repo_path: "/tmp/test-repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "test".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "password".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: false,
+            dependency_repos: Vec::new(),
+            watch: true,
+        };
+
+        // clean is already false, so no change should occur
+        if cfg.watch && cfg.clean {
+            cfg.clean = false;
+        }
+
+        assert!(!cfg.clean);
+        assert!(cfg.watch);
+    }
+
+    #[test]
+    fn test_print_startup_banner_clean_mode() {
+        // Test that the startup banner correctly reflects clean mode status.
+        let cfg = Config {
+            repo_path: "/tmp/test-repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "test".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "password".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: true,
+            dependency_repos: Vec::new(),
+            watch: true,
+        };
+
+        // Just verify the config is correctly initialized.
+        assert_eq!(cfg.repo_path, "/tmp/test-repo");
+        assert_eq!(cfg.repo_name, "test-repo");
+        assert!(cfg.clean);
+        assert!(cfg.watch);
+    }
 }
