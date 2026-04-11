@@ -374,8 +374,8 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.5.3 — Real-time & Parallel Streaming) ✅
-- ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together by automatically switching to incremental mode after the initial run (v0.5.3).
+### Current Release (v0.5.4 — Real-time & Parallel Streaming) ✅
+- ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together by automatically switching to incremental mode after the initial run (v0.5.4).
 - ✅ **Real-time Watch Mode**: Instant incremental updates on file changes via `--watch` flag (v0.5.2).
 - ✅ **Massive Modular Refactoring**: Clean separation of concerns into specialized modules (`files`, `watch`, `runner`, `orchestrator`) (v0.5.2).
 - ✅ **Cross-Repository Analysis**: Resolve dependencies and call graphs across multiple repositories via `KNOT_DEPENDENCIES` (v0.5.1).
