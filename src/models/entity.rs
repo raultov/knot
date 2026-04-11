@@ -115,6 +115,39 @@ pub struct ParsedEntity {
     pub embed_text: String,
 }
 
+/// Minimal representation of an entity for relationship resolution.
+///
+/// Retains only the fields necessary to match reference intents to UUIDs,
+/// allowing the heavy `embed_text`, `docstring`, and `vector` to be freed.
+#[derive(Debug, Clone)]
+pub struct ResolutionEntity {
+    pub uuid: Uuid,
+    pub name: String,
+    pub fqn: String,
+    pub enclosing_class: Option<String>,
+    pub reference_intents: Vec<ReferenceIntent>,
+    pub relationships: Vec<(Uuid, RelationshipType)>,
+}
+
+impl From<&ParsedEntity> for ResolutionEntity {
+    fn from(entity: &ParsedEntity) -> Self {
+        Self {
+            uuid: entity.uuid,
+            name: entity.name.clone(),
+            fqn: entity.fqn.clone(),
+            enclosing_class: entity.enclosing_class.clone(),
+            reference_intents: entity.reference_intents.clone(),
+            relationships: Vec::new(),
+        }
+    }
+}
+
+impl From<&EmbeddedEntity> for ResolutionEntity {
+    fn from(ee: &EmbeddedEntity) -> Self {
+        ResolutionEntity::from(&ee.entity)
+    }
+}
+
 impl ParsedEntity {
     /// Create a new entity with a deterministic UUID v5.
     ///

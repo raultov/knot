@@ -57,12 +57,11 @@ mod tests {
             node: tree_sitter::Node<'a>,
             source: &[u8],
         ) -> Option<tree_sitter::Node<'a>> {
-            if node.kind() == "identifier" {
-                if let Ok(text) = node.utf8_text(source) {
-                    if text.contains("method") {
-                        return Some(node);
-                    }
-                }
+            if node.kind() == "identifier"
+                && let Ok(text) = node.utf8_text(source)
+                && text.contains("method")
+            {
+                return Some(node);
             }
             let mut i = 0u32;
             while let Some(child) = node.child(i) {

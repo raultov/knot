@@ -20,10 +20,11 @@ services:
       NEO4J_server_default__listen__address: 0.0.0.0
     volumes:
       # Persist database files on the host machine
-      - ./data/neo4j/data:/data
-      - ./data/neo4j/logs:/logs
-      - ./data/neo4j/import:/var/lib/neo4j/import
-      - ./data/neo4j/plugins:/plugins
+      # Use KNOT_DATA_DIR to change the storage location (e.g. for cleaning/recreating)
+      - ${KNOT_DATA_DIR:-./data}/neo4j/data:/data
+      - ${KNOT_DATA_DIR:-./data}/neo4j/logs:/logs
+      - ${KNOT_DATA_DIR:-./data}/neo4j/import:/var/lib/neo4j/import
+      - ${KNOT_DATA_DIR:-./data}/neo4j/plugins:/plugins
     healthcheck:
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "knot_secret_password", "CALL db.ping()"]
       interval: 30s
@@ -41,7 +42,7 @@ services:
       - "6334:6334"   # gRPC API (used by knot via qdrant-client)
     volumes:
       # Persist vector storage on the host machine
-      - ./data/qdrant:/qdrant/storage
+      - ${KNOT_DATA_DIR:-./data}/qdrant:/qdrant/storage
     environment:
       # Optional: configure Qdrant settings
       QDRANT__SERVICE__HTTP_PORT: 6333

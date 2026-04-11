@@ -19,6 +19,7 @@ use std::{
 use tracing::{debug, warn};
 
 use crate::models::ParsedEntity;
+use tokio::sync::mpsc;
 
 mod comments;
 mod context;
@@ -41,6 +42,32 @@ pub struct ParseConfig {
     pub custom_queries_path: Option<String>,
     /// Logical repository name for multi-repository isolation.
     pub repo_name: String,
+}
+
+/// Parse a collection of source files in parallel and send results through a channel.
+///
+/// This function blocks until all files have been processed. It is intended to be
+/// called from a `tokio::task::spawn_blocking` context.
+pub fn parse_files_stream(
+    files: &[PathBuf],
+    parse_cfg: &ParseConfig,
+    sender: mpsc::UnboundedSender<ParsedEntity>,
+) {
+    files
+        .par_iter()
+        .for_each(|path| match parse_single_file(path, parse_cfg) {
+            Ok(entities) => {
+                for entity in entities {
+                    if let Err(e) = sender.send(entity) {
+                        warn!("Failed to send entity to channel: {e}");
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to parse {}: {e:#}", path.display());
+            }
+        });
 }
 
 /// Parse a collection of source files in parallel and return all extracted entities.

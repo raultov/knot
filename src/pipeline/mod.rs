@@ -22,6 +22,5 @@ mod tests {
     #[test]
     fn test_pipeline_module_structure() {
         // Simple test to ensure all modules are accessible
-        assert!(true);
     }
 }

@@ -22,17 +22,19 @@ use knot::{
         graph::{ConnectExt, DeleteExt, GraphDb, UpsertExt},
         vector::{VectorConnectExt, VectorDb, VectorDeleteExt},
     },
-    models::{EmbeddedEntity, ParsedEntity},
+    models::{EmbeddedEntity, ParsedEntity, ResolutionEntity},
     pipeline::{
         embed::Embedder,
         ingest::{ingest_batch, resolve_reference_intents_with_context},
         input::discover_files,
-        parser::{ParseConfig, parse_files},
+        parser::{ParseConfig, parse_files_stream},
         prepare::prepare_entities,
         state::IndexState,
     },
     utils,
 };
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -88,9 +90,108 @@ async fn main() -> Result<()> {
         files_to_parse.len()
     );
 
-    // Stage 2: Parse and prepare entities.
-    let mut entities = run_parse_stage(&files_to_parse, &cfg).await?;
-    if !should_continue_after_parse(entities.len()) {
+    // --- NEW STREAMING PIPELINE ---
+    let (parse_tx, mut parse_rx) = mpsc::unbounded_channel::<ParsedEntity>();
+    let (embed_tx, mut embed_rx) = mpsc::channel::<Vec<EmbeddedEntity>>(16);
+    let (res_tx, mut res_rx) = mpsc::unbounded_channel::<ResolutionEntity>();
+
+    // Stage 2: Parallel Parsing (Rayon)
+    info!(
+        "Stage 2: Starting parallel parsing of {} files...",
+        files_to_parse.len()
+    );
+    let parse_cfg = build_parse_config(cfg.custom_queries_path.clone(), cfg.repo_name.clone());
+    let files_to_parse_clone = files_to_parse.clone();
+    tokio::task::spawn_blocking(move || {
+        parse_files_stream(&files_to_parse_clone, &parse_cfg, parse_tx);
+        info!("Stage 2: Parallel parsing complete.");
+    });
+
+    // Stage 3 & 4: Batching & Embedding (CPU)
+    let embedder = Arc::new(tokio::sync::Mutex::new(Embedder::init()?));
+    let embed_handle = {
+        let batch_size = cfg.batch_size;
+        let embedder = Arc::clone(&embedder);
+        let embed_tx = embed_tx.clone();
+        tokio::spawn(async move {
+            let mut current_batch = Vec::with_capacity(batch_size);
+            let mut batch_count = 0;
+            while let Some(entity) = parse_rx.recv().await {
+                current_batch.push(entity);
+                if current_batch.len() >= batch_size {
+                    batch_count += 1;
+                    let mut batch =
+                        std::mem::replace(&mut current_batch, Vec::with_capacity(batch_size));
+                    info!(
+                        "[Worker: Embedder] Stage 3: Embedding batch #{} ({} entities)...",
+                        batch_count,
+                        batch.len()
+                    );
+                    prepare_entities(&mut batch);
+                    let embedder_clone = Arc::clone(&embedder);
+                    let embedded = tokio::task::spawn_blocking(move || {
+                        let mut lock = embedder_clone.blocking_lock();
+                        lock.embed(batch, batch_size)
+                    })
+                    .await??;
+                    embed_tx.send(embedded).await?;
+                }
+            }
+            if !current_batch.is_empty() {
+                batch_count += 1;
+                info!(
+                    "[Worker: Embedder] Stage 3: Embedding final batch #{} ({} entities)...",
+                    batch_count,
+                    current_batch.len()
+                );
+                prepare_entities(&mut current_batch);
+                let embedded = tokio::task::spawn_blocking(move || {
+                    let mut lock = embedder.blocking_lock();
+                    lock.embed(current_batch, batch_size)
+                })
+                .await??;
+                embed_tx.send(embedded).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+    };
+
+    // Stage 5 & 6: Ingestion & Resolution Prep
+    let vector_db_arc = Arc::new(vector_db);
+    let graph_db_arc = Arc::new(graph_db);
+    let ingest_handle = {
+        let vdb = Arc::clone(&vector_db_arc);
+        let gdb = Arc::clone(&graph_db_arc);
+        tokio::spawn(async move {
+            let mut total_ingested = 0;
+            let mut batch_count = 0;
+            while let Some(embedded_batch) = embed_rx.recv().await {
+                batch_count += 1;
+                info!(
+                    "[Worker: Ingester] Stage 4: Ingesting batch #{} ({} entities) into Qdrant & Neo4j...",
+                    batch_count,
+                    embedded_batch.len()
+                );
+                total_ingested += embedded_batch.len();
+                for ee in &embedded_batch {
+                    res_tx.send(ResolutionEntity::from(ee))?;
+                }
+                ingest_batch(&embedded_batch, &vdb, &gdb).await?;
+                info!(
+                    "[Worker: Ingester] Stage 4: Batch #{} ingested successfully (Total so far: {})",
+                    batch_count, total_ingested
+                );
+            }
+            Ok::<usize, anyhow::Error>(total_ingested)
+        })
+    };
+
+    // Wait for embedding and ingestion to finish
+    embed_handle.await??;
+    drop(embed_tx); // Ensure ingest task finishes when embed_rx is empty
+    let total_entities = ingest_handle.await??;
+
+    if total_entities == 0 {
         info!("No entities extracted. Saving state and exiting.");
         return save_index_state_and_exit(
             &mut index_state,
@@ -101,14 +202,13 @@ async fn main() -> Result<()> {
         );
     }
 
-    prepare_entities(&mut entities);
+    // Stage 7: Relationship Resolution
+    let mut resolution_entities = Vec::with_capacity(total_entities);
+    while let Ok(res_entity) = res_rx.try_recv() {
+        resolution_entities.push(res_entity);
+    }
 
-    // Stage 4 & 5: Embed and ingest entities in chunks.
-    let mut all_embedded =
-        embed_and_ingest_chunks(entities, &vector_db, &graph_db, cfg.batch_size).await?;
-
-    // Stage 6: Resolve references and relationships.
-    resolve_and_save_relationships(&mut all_embedded, &graph_db, &cfg).await?;
+    resolve_and_save_relationships_v2(&mut resolution_entities, &graph_db_arc, &cfg).await?;
 
     // Save final state and exit.
     save_index_state_and_exit(
@@ -116,13 +216,38 @@ async fn main() -> Result<()> {
         &files_to_parse,
         &deleted_files,
         &cfg.repo_path,
-        all_embedded.len(),
+        total_entities,
     )
+}
+
+/// New version of relationship resolution using ResolutionEntity.
+async fn resolve_and_save_relationships_v2(
+    entities: &mut [ResolutionEntity],
+    graph_db: &GraphDb,
+    cfg: &Config,
+) -> Result<()> {
+    if !entities.is_empty() {
+        info!("Loading global entity context from Neo4j for relationship resolution...");
+        let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&cfg.repo_name).await?;
+
+        info!(
+            "Resolving reference intents with global context ({} FQNs, {} names)...",
+            fqn_to_uuid.len(),
+            name_to_uuids.len()
+        );
+
+        resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+
+        // Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
+        info!("Creating typed relationships in Neo4j...");
+        graph_db.upsert_relationships(entities).await?;
+    }
+    Ok(())
 }
 
 /// Print startup banner with configuration details.
 fn print_startup_banner(cfg: &Config) {
-    info!("knot indexer starting (v0.4.3 - incremental mode)");
+    info!("knot indexer starting (v0.5.0 - parallel streaming mode)");
     info!("Repository path : {}", cfg.repo_path);
     info!("Repository name : {}", cfg.repo_name);
     info!("Clean mode      : {}", cfg.clean);
@@ -175,95 +300,6 @@ async fn clean_stale_data(
                 graph_db.delete_by_file_paths(&cfg.repo_name, &files_to_delete),
             )?;
         }
-    }
-    Ok(())
-}
-
-/// Run the parse stage: extract AST entities from source files.
-async fn run_parse_stage(files_to_parse: &[PathBuf], cfg: &Config) -> Result<Vec<ParsedEntity>> {
-    let parse_cfg = build_parse_config(cfg.custom_queries_path.clone(), cfg.repo_name.clone());
-
-    // Offload blocking Rayon work to a dedicated OS thread
-    let files_clone = files_to_parse.to_vec();
-    let entities =
-        tokio::task::spawn_blocking(move || parse_files(&files_clone, &parse_cfg)).await?;
-
-    info!(
-        "Extracted {} entities from {} file(s)",
-        entities.len(),
-        files_to_parse.len()
-    );
-
-    Ok(entities)
-}
-
-/// Embed and ingest entities in memory-efficient chunks.
-async fn embed_and_ingest_chunks(
-    entities: Vec<ParsedEntity>,
-    vector_db: &VectorDb,
-    graph_db: &GraphDb,
-    batch_size: usize,
-) -> Result<Vec<EmbeddedEntity>> {
-    let chunk_size = calculate_chunk_size(batch_size, 512);
-    let total_entities = entities.len();
-    let mut all_embedded = Vec::with_capacity(total_entities);
-
-    info!(
-        "Processing {} entities in chunks of {} (memory-efficient mode)",
-        total_entities, chunk_size
-    );
-
-    // Initialize embedder once (reuse across chunks)
-    let mut embedder = Embedder::init()?;
-
-    for (chunk_idx, entity_chunk) in entities.chunks(chunk_size).enumerate() {
-        info!(
-            "Processing chunk {}/{} ({} entities)...",
-            chunk_idx + 1,
-            total_entities.div_ceil(chunk_size),
-            entity_chunk.len()
-        );
-
-        // Embed this chunk (CPU-bound ONNX)
-        let embedded_chunk = embedder.embed(entity_chunk.to_vec(), chunk_size)?;
-
-        // Ingest nodes immediately (free up memory after ingestion)
-        ingest_batch(&embedded_chunk, vector_db, graph_db).await?;
-
-        // Keep track of all embedded entities for relationship resolution
-        all_embedded.extend(embedded_chunk);
-
-        info!(
-            "Chunk {}/{} ingested successfully",
-            chunk_idx + 1,
-            total_entities.div_ceil(chunk_size)
-        );
-    }
-
-    Ok(all_embedded)
-}
-
-/// Resolve references and create relationships in the graph database.
-async fn resolve_and_save_relationships(
-    all_embedded: &mut [EmbeddedEntity],
-    graph_db: &GraphDb,
-    cfg: &Config,
-) -> Result<()> {
-    if requires_global_resolution(all_embedded.len()) {
-        info!("Loading global entity context from Neo4j for relationship resolution...");
-        let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&cfg.repo_name).await?;
-
-        info!(
-            "Resolving reference intents with global context ({} FQNs, {} names)...",
-            fqn_to_uuid.len(),
-            name_to_uuids.len()
-        );
-
-        resolve_reference_intents_with_context(all_embedded, fqn_to_uuid, name_to_uuids);
-
-        // Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
-        info!("Creating typed relationships in Neo4j...");
-        graph_db.upsert_relationships(all_embedded).await?;
     }
     Ok(())
 }
@@ -344,21 +380,6 @@ fn build_parse_config(custom_queries_path: Option<String>, repo_name: String) ->
     }
 }
 
-/// Stage 3: Check if we should proceed to preparation after parsing.
-fn should_continue_after_parse(extracted_entities_count: usize) -> bool {
-    extracted_entities_count > 0
-}
-
-/// Stage 4 & 5: Determine batch size for memory safety.
-fn calculate_chunk_size(requested_batch_size: usize, memory_safety_limit: usize) -> usize {
-    requested_batch_size.min(memory_safety_limit)
-}
-
-/// Stage 6: Check if global relationship resolution is needed.
-fn requires_global_resolution(total_embedded_count: usize) -> bool {
-    total_embedded_count > 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,24 +421,6 @@ mod tests {
         let config = build_parse_config(Some("/custom/path".to_string()), "my-repo".to_string());
         assert_eq!(config.repo_name, "my-repo");
         assert_eq!(config.custom_queries_path, Some("/custom/path".to_string()));
-    }
-
-    #[test]
-    fn test_should_continue_after_parse() {
-        assert!(should_continue_after_parse(10));
-        assert!(!should_continue_after_parse(0));
-    }
-
-    #[test]
-    fn test_calculate_chunk_size() {
-        assert_eq!(calculate_chunk_size(100, 512), 100);
-        assert_eq!(calculate_chunk_size(1000, 512), 512);
-    }
-
-    #[test]
-    fn test_requires_global_resolution() {
-        assert!(requires_global_resolution(1));
-        assert!(!requires_global_resolution(0));
     }
 
     #[test]

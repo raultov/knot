@@ -1,145 +1,93 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::models::EmbeddedEntity;
+use crate::models::{RelationshipType, ResolutionEntity};
 
-/// Resolve reference intents to actual entity UUIDs (legacy version).
-///
-/// This function builds lookup maps from the provided entities only.
-/// For incremental indexing, use `resolve_reference_intents_with_context` instead.
-pub fn resolve_reference_intents(entities: &mut [EmbeddedEntity]) {
-    // Build lookup maps for efficient resolution
-    let fqn_to_uuid: HashMap<String, Uuid> = entities
-        .iter()
-        .map(|e| (e.entity.fqn.clone(), e.entity.uuid))
-        .collect();
-
-    let name_to_uuids: HashMap<String, Vec<Uuid>> = {
-        let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
-        for e in entities.iter() {
-            map.entry(e.entity.name.clone())
-                .or_default()
-                .push(e.entity.uuid);
-        }
-        map
-    };
-
-    resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
-}
-
-/// Resolve reference intents using pre-loaded context (for incremental indexing).
-///
-/// The provided hashmaps should include ALL entities in the repository (from Neo4j),
-/// not just the newly parsed ones. This enables incremental indexing where we only
-/// re-parse modified files but still resolve calls to unchanged files.
+/// Resolve reference intents to actual entity UUIDs for a batch of entities.
 pub fn resolve_reference_intents_with_context(
-    entities: &mut [EmbeddedEntity],
+    entities: &mut [ResolutionEntity],
     mut fqn_to_uuid: HashMap<String, Uuid>,
     mut name_to_uuids: HashMap<String, Vec<Uuid>>,
 ) {
-    use crate::models::RelationshipType;
-
-    // Merge newly parsed entities into the context
+    // Merge current entities into the resolution context.
     for e in entities.iter() {
-        fqn_to_uuid.insert(e.entity.fqn.clone(), e.entity.uuid);
+        fqn_to_uuid.insert(e.fqn.clone(), e.uuid);
         name_to_uuids
-            .entry(e.entity.name.clone())
+            .entry(e.name.clone())
             .or_default()
-            .push(e.entity.uuid);
+            .push(e.uuid);
     }
 
-    // For each entity, resolve its reference_intents to UUIDs with typed relationships
+    // Resolve reference intents for each entity.
     for entity in entities.iter_mut() {
-        let reference_intents = entity.entity.reference_intents.clone();
+        let reference_intents = entity.reference_intents.clone();
 
-        // Deduplication set: defense-in-depth to prevent duplicate relationships
+        // Deduplication set to prevent duplicate relationships.
         use std::collections::HashSet;
-        let mut seen_relationships: HashSet<(Uuid, RelationshipType)> = HashSet::new();
+        let mut seen: HashSet<(Uuid, RelationshipType)> = HashSet::new();
 
         for intent in reference_intents {
             use crate::models::ReferenceIntent;
-            match intent {
+            let (resolved_uuid, rel_type) = match &intent {
                 ReferenceIntent::Call {
                     method, receiver, ..
                 } => {
                     let call_intent = crate::models::CallIntent {
-                        method,
-                        receiver,
-                        line: 0, // Not used in resolution
+                        method: method.clone(),
+                        receiver: receiver.clone(),
+                        line: 0,
                     };
-                    let resolved_uuid = resolve_single_call_intent(
-                        &call_intent,
-                        &entity.entity,
-                        &fqn_to_uuid,
-                        &name_to_uuids,
-                    );
+                    (
+                        resolve_single_call_intent(
+                            &call_intent,
+                            entity.fqn.clone(),
+                            entity.enclosing_class.clone(),
+                            &fqn_to_uuid,
+                            &name_to_uuids,
+                        ),
+                        RelationshipType::Calls,
+                    )
+                }
+                ReferenceIntent::Extends { parent, .. } => (
+                    name_to_uuids
+                        .get(parent)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::Extends,
+                ),
+                ReferenceIntent::Implements { interface, .. } => (
+                    name_to_uuids
+                        .get(interface)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::Implements,
+                ),
+                ReferenceIntent::TypeReference { type_name, .. } => (
+                    name_to_uuids
+                        .get(type_name)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::References,
+                ),
+            };
 
-                    if let Some(uuid) = resolved_uuid {
-                        let relationship = (uuid, RelationshipType::Calls);
-                        if seen_relationships.insert(relationship) {
-                            entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push(relationship);
-                        }
-                    }
-                }
-                ReferenceIntent::Extends { parent, .. } => {
-                    // Resolve parent class by name
-                    if let Some(uuids) = name_to_uuids.get(&parent)
-                        && let Some(&uuid) = uuids.first()
-                    {
-                        let relationship = (uuid, RelationshipType::Extends);
-                        if seen_relationships.insert(relationship) {
-                            entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push(relationship);
-                        }
-                    }
-                }
-                ReferenceIntent::Implements { interface, .. } => {
-                    // Resolve interface by name
-                    if let Some(uuids) = name_to_uuids.get(&interface)
-                        && let Some(&uuid) = uuids.first()
-                    {
-                        let relationship = (uuid, RelationshipType::Implements);
-                        if seen_relationships.insert(relationship) {
-                            entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push(relationship);
-                        }
-                    }
-                }
-                ReferenceIntent::TypeReference { type_name, .. } => {
-                    // Resolve type reference by name (class or interface)
-                    if let Some(uuids) = name_to_uuids.get(&type_name)
-                        && let Some(&uuid) = uuids.first()
-                    {
-                        let relationship = (uuid, RelationshipType::References);
-                        if seen_relationships.insert(relationship) {
-                            entity.entity.calls.push(uuid);
-                            entity.entity.relationships.push(relationship);
-                        }
-                    }
-                }
+            if let Some(uuid) = resolved_uuid
+                && seen.insert((uuid, rel_type))
+            {
+                entity.relationships.push((uuid, rel_type));
             }
         }
     }
 }
 
-/// Legacy alias for backward compatibility.
-#[deprecated = "Use resolve_reference_intents instead"]
-pub fn resolve_call_intents(entities: &mut [EmbeddedEntity]) {
-    resolve_reference_intents(entities);
-}
-
 /// Resolve a single CallIntent to a UUID using available context.
 fn resolve_single_call_intent(
     intent: &crate::models::CallIntent,
-    caller: &crate::models::ParsedEntity,
+    _caller_fqn: String,
+    caller_enclosing_class: Option<String>,
     fqn_to_uuid: &HashMap<String, Uuid>,
     name_to_uuids: &HashMap<String, Vec<Uuid>>,
 ) -> Option<Uuid> {
     // Strategy 1: Local call (no receiver or receiver is "this")
-    // Look for a method in the same class
     if (intent.receiver.is_none() || intent.receiver.as_deref() == Some("this"))
-        && let Some(enclosing_class) = &caller.enclosing_class
+        && let Some(enclosing_class) = &caller_enclosing_class
     {
         let fqn = format!("{}.{}", enclosing_class, intent.method);
         if let Some(&uuid) = fqn_to_uuid.get(&fqn) {
@@ -147,22 +95,19 @@ fn resolve_single_call_intent(
         }
     }
 
-    // Strategy 2: Static call (receiver is a class name, capitalized)
+    // Strategy 2: Static call (receiver is a class name)
     if let Some(receiver) = &intent.receiver
         && receiver.chars().next().is_some_and(|c| c.is_uppercase())
         && receiver != "this"
     {
-        // Try to find a method with FQN = Class.method
         let fqn = format!("{}.{}", receiver, intent.method);
         if let Some(&uuid) = fqn_to_uuid.get(&fqn) {
             return Some(uuid);
         }
     }
 
-    // Strategy 3: Instance call (receiver is lowercase variable/object or nested like "this.browserService")
-    // Without type information, we use fuzzy matching on method name + receiver heuristics
+    // Strategy 3: Instance call (receiver is variable or object)
     if let Some(receiver) = &intent.receiver {
-        // If receiver contains a dot (nested like "this.browserService"), extract the last component
         let receiver_class = if receiver.contains('.') {
             receiver
                 .split('.')
@@ -173,20 +118,15 @@ fn resolve_single_call_intent(
             receiver
         };
 
-        // If receiver_class looks like a class name (contains alphanumerics), try to find a matching method
-        // by searching for a method where the class name appears at the start or end of the FQN
         if !receiver_class.is_empty() {
-            // Try exact match first: ReceiverClass.method
             let exact_fqn = format!("{}.{}", receiver_class, intent.method);
             if let Some(&uuid) = fqn_to_uuid.get(&exact_fqn) {
                 return Some(uuid);
             }
 
-            // Try capitalized version: browserService -> BrowserService (heuristic for class names)
-            let capitalized = if !receiver_class.is_empty() {
-                let mut chars = receiver_class.chars();
-                let first = chars.next().unwrap().to_uppercase().to_string();
-                first + chars.as_str()
+            let mut chars = receiver_class.chars();
+            let capitalized = if let Some(first) = chars.next() {
+                first.to_uppercase().to_string() + chars.as_str()
             } else {
                 receiver_class.to_string()
             };
@@ -196,7 +136,7 @@ fn resolve_single_call_intent(
                 return Some(uuid);
             }
 
-            // Fuzzy match: search in fqn_to_uuid for a method where the receiver class appears
+            // Fuzzy match: search for ClassName.method in known FQNs.
             for (fqn, uuid) in fqn_to_uuid.iter() {
                 if fqn.contains(&format!("{}.{}", receiver_class, intent.method))
                     || fqn.contains(&format!("{}.{}", capitalized, intent.method))
@@ -206,13 +146,13 @@ fn resolve_single_call_intent(
             }
         }
 
-        // Final fallback: just match on method name
+        // Fallback: just match on method name.
         if let Some(uuids) = name_to_uuids.get(&intent.method) {
             return uuids.first().copied();
         }
     }
 
-    // Strategy 4: Fallback for local calls without enclosing class (top-level functions)
+    // Strategy 4: Fallback for local calls without enclosing class.
     if intent.receiver.is_none()
         && let Some(uuids) = name_to_uuids.get(&intent.method)
     {
@@ -222,50 +162,44 @@ fn resolve_single_call_intent(
     None
 }
 
+/// Legacy alias for backward compatibility.
+pub fn resolve_reference_intents(entities: &mut [ResolutionEntity]) {
+    let fqn_to_uuid: HashMap<String, Uuid> =
+        entities.iter().map(|e| (e.fqn.clone(), e.uuid)).collect();
+
+    let mut name_to_uuids: HashMap<String, Vec<Uuid>> = HashMap::new();
+    for e in entities.iter() {
+        name_to_uuids
+            .entry(e.name.clone())
+            .or_default()
+            .push(e.uuid);
+    }
+
+    resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{EntityKind, ParsedEntity, ReferenceIntent, RelationshipType};
+    use crate::models::{ReferenceIntent, RelationshipType};
 
-    fn mock_embedded_entity(
-        name: &str,
-        kind: EntityKind,
-        fqn: &str,
-        enclosing_class: Option<&str>,
-    ) -> EmbeddedEntity {
-        EmbeddedEntity {
-            entity: ParsedEntity::new(
-                name,
-                kind,
-                fqn,
-                None,
-                None,
-                "java",
-                "test.java",
-                1,
-                enclosing_class.map(|s| s.to_string()),
-                "test-repo",
-            ),
-            vector: vec![0.0; 384],
+    fn mock_resolution_entity(name: &str, fqn: &str, enclosing: Option<&str>) -> ResolutionEntity {
+        ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: name.to_string(),
+            fqn: fqn.to_string(),
+            enclosing_class: enclosing.map(|s| s.to_string()),
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
         }
     }
 
     #[test]
     fn test_resolve_local_call() {
-        let mut caller = mock_embedded_entity(
-            "methodA",
-            EntityKind::Method,
-            "ClassA.methodA",
-            Some("ClassA"),
-        );
-        let callee = mock_embedded_entity(
-            "methodB",
-            EntityKind::Method,
-            "ClassA.methodB",
-            Some("ClassA"),
-        );
+        let mut caller = mock_resolution_entity("methodA", "ClassA.methodA", Some("ClassA"));
+        let callee = mock_resolution_entity("methodB", "ClassA.methodB", Some("ClassA"));
 
-        caller.entity.reference_intents.push(ReferenceIntent::Call {
+        caller.reference_intents.push(ReferenceIntent::Call {
             method: "methodB".to_string(),
             receiver: None,
             line: 10,
@@ -274,24 +208,19 @@ mod tests {
         let mut entities = vec![caller, callee];
         resolve_reference_intents(&mut entities);
 
-        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(entities[0].relationships.len(), 1);
         assert_eq!(
-            entities[0].entity.relationships[0],
-            (entities[1].entity.uuid, RelationshipType::Calls)
+            entities[0].relationships[0],
+            (entities[1].uuid, RelationshipType::Calls)
         );
     }
 
     #[test]
     fn test_resolve_static_call() {
-        let mut caller = mock_embedded_entity("main", EntityKind::Method, "App.main", None);
-        let callee = mock_embedded_entity(
-            "staticMethod",
-            EntityKind::Method,
-            "Utils.staticMethod",
-            Some("Utils"),
-        );
+        let mut caller = mock_resolution_entity("main", "App.main", None);
+        let callee = mock_resolution_entity("staticMethod", "Utils.staticMethod", Some("Utils"));
 
-        caller.entity.reference_intents.push(ReferenceIntent::Call {
+        caller.reference_intents.push(ReferenceIntent::Call {
             method: "staticMethod".to_string(),
             receiver: Some("Utils".to_string()),
             line: 5,
@@ -300,76 +229,60 @@ mod tests {
         let mut entities = vec![caller, callee];
         resolve_reference_intents(&mut entities);
 
-        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(entities[0].relationships.len(), 1);
         assert_eq!(
-            entities[0].entity.relationships[0],
-            (entities[1].entity.uuid, RelationshipType::Calls)
+            entities[0].relationships[0],
+            (entities[1].uuid, RelationshipType::Calls)
         );
     }
 
     #[test]
     fn test_resolve_instance_call_fuzzy() {
-        let mut caller = mock_embedded_entity(
-            "doWork",
-            EntityKind::Method,
-            "Service.doWork",
-            Some("Service"),
-        );
-        // Method in another class
-        let callee = mock_embedded_entity(
-            "execute",
-            EntityKind::Method,
-            "Worker.execute",
-            Some("Worker"),
-        );
+        let mut caller = mock_resolution_entity("doWork", "Service.doWork", Some("Service"));
+        let callee = mock_resolution_entity("execute", "Worker.execute", Some("Worker"));
 
-        caller.entity.reference_intents.push(ReferenceIntent::Call {
+        caller.reference_intents.push(ReferenceIntent::Call {
             method: "execute".to_string(),
-            receiver: Some("worker".to_string()), // lower case instance name
+            receiver: Some("worker".to_string()),
             line: 20,
         });
 
         let mut entities = vec![caller, callee];
         resolve_reference_intents(&mut entities);
 
-        // Should resolve via Strategy 3 (fuzzy match capitalized 'worker' -> 'Worker')
-        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(entities[0].relationships.len(), 1);
         assert_eq!(
-            entities[0].entity.relationships[0],
-            (entities[1].entity.uuid, RelationshipType::Calls)
+            entities[0].relationships[0],
+            (entities[1].uuid, RelationshipType::Calls)
         );
     }
 
     #[test]
     fn test_resolve_inheritance() {
-        let mut child = mock_embedded_entity("Child", EntityKind::Class, "com.Child", None);
-        let parent = mock_embedded_entity("Parent", EntityKind::Class, "com.Parent", None);
+        let mut child = mock_resolution_entity("Child", "com.Child", None);
+        let parent = mock_resolution_entity("Parent", "com.Parent", None);
 
-        child
-            .entity
-            .reference_intents
-            .push(ReferenceIntent::Extends {
-                parent: "Parent".to_string(),
-                line: 1,
-            });
+        child.reference_intents.push(ReferenceIntent::Extends {
+            parent: "Parent".to_string(),
+            line: 1,
+        });
 
         let mut entities = vec![child, parent];
         resolve_reference_intents(&mut entities);
 
-        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(entities[0].relationships.len(), 1);
         assert_eq!(
-            entities[0].entity.relationships[0],
-            (entities[1].entity.uuid, RelationshipType::Extends)
+            entities[0].relationships[0],
+            (entities[1].uuid, RelationshipType::Extends)
         );
     }
 
     #[test]
     fn test_resolve_type_reference() {
-        let mut entity = mock_embedded_entity("service", EntityKind::Constant, "service", None);
-        let type_entity = mock_embedded_entity("MyType", EntityKind::Interface, "com.MyType", None);
+        let mut entity = mock_resolution_entity("service", "service", None);
+        let type_entity = mock_resolution_entity("MyType", "com.MyType", None);
 
         entity
-            .entity
             .reference_intents
             .push(ReferenceIntent::TypeReference {
                 type_name: "MyType".to_string(),
@@ -379,25 +292,24 @@ mod tests {
         let mut entities = vec![entity, type_entity];
         resolve_reference_intents(&mut entities);
 
-        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(entities[0].relationships.len(), 1);
         assert_eq!(
-            entities[0].entity.relationships[0],
-            (entities[1].entity.uuid, RelationshipType::References)
+            entities[0].relationships[0],
+            (entities[1].uuid, RelationshipType::References)
         );
     }
 
     #[test]
     fn test_resolve_deduplication() {
-        let mut caller = mock_embedded_entity("A", EntityKind::Function, "A", None);
-        let callee = mock_embedded_entity("B", EntityKind::Function, "B", None);
+        let mut caller = mock_resolution_entity("A", "A", None);
+        let callee = mock_resolution_entity("B", "B", None);
 
-        // Duplicate intents
-        caller.entity.reference_intents.push(ReferenceIntent::Call {
+        caller.reference_intents.push(ReferenceIntent::Call {
             method: "B".to_string(),
             receiver: None,
             line: 1,
         });
-        caller.entity.reference_intents.push(ReferenceIntent::Call {
+        caller.reference_intents.push(ReferenceIntent::Call {
             method: "B".to_string(),
             receiver: None,
             line: 2,
@@ -406,7 +318,6 @@ mod tests {
         let mut entities = vec![caller, callee];
         resolve_reference_intents(&mut entities);
 
-        // Should only have 1 relationship despite 2 intents
-        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(entities[0].relationships.len(), 1);
     }
 }

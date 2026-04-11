@@ -102,11 +102,11 @@ mod tests {
     #[test]
     fn test_qdrant_value_to_json_double() {
         let value = qdrant_client::qdrant::Value {
-            kind: Some(qdrant_client::qdrant::value::Kind::DoubleValue(3.14)),
+            kind: Some(qdrant_client::qdrant::value::Kind::DoubleValue(1.23)),
         };
 
         let json = qdrant_value_to_json(&value);
-        assert_eq!(json, serde_json::json!(3.14));
+        assert_eq!(json, serde_json::json!(1.23));
     }
 
     #[test]

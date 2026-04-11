@@ -8,7 +8,4 @@ mod batch;
 mod resolve;
 
 pub use batch::ingest_batch;
-#[allow(deprecated)]
-pub use resolve::{
-    resolve_call_intents, resolve_reference_intents, resolve_reference_intents_with_context,
-};
+pub use resolve::{resolve_reference_intents, resolve_reference_intents_with_context};

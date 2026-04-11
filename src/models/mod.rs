@@ -9,5 +9,5 @@
 mod entity;
 mod relationship;
 
-pub use entity::{EmbeddedEntity, EntityKind, NAMESPACE_KNOT, ParsedEntity};
+pub use entity::{EmbeddedEntity, EntityKind, NAMESPACE_KNOT, ParsedEntity, ResolutionEntity};
 pub use relationship::{CallIntent, ReferenceIntent, RelationshipType};

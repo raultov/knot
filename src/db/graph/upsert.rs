@@ -5,7 +5,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use super::{GraphDb, utils};
-use crate::models::EmbeddedEntity;
+use crate::models::{EmbeddedEntity, ResolutionEntity};
 
 /// Extension trait for upsert and write operations.
 #[allow(async_fn_in_trait)]
@@ -15,7 +15,7 @@ pub trait UpsertExt {
         repo_name: &str,
     ) -> Result<(HashMap<String, Uuid>, HashMap<String, Vec<Uuid>>)>;
     async fn upsert_entities(&self, entities: &[EmbeddedEntity]) -> Result<()>;
-    async fn upsert_relationships(&self, entities: &[EmbeddedEntity]) -> Result<()>;
+    async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()>;
     async fn upsert_calls(&self, entities: &[EmbeddedEntity]) -> Result<()>;
 }
 
@@ -132,12 +132,12 @@ impl UpsertExt for GraphDb {
     }
 
     /// Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES) for all resolved edges.
-    async fn upsert_relationships(&self, entities: &[EmbeddedEntity]) -> Result<()> {
+    async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()> {
         let mut edge_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
 
         for e in entities {
-            for (callee_uuid, rel_type) in &e.entity.relationships {
+            for (callee_uuid, rel_type) in &e.relationships {
                 let rel_label = rel_type.to_string();
                 let cypher = format!(
                     "MATCH (caller:Entity {{uuid: $caller_uuid}})
@@ -148,7 +148,7 @@ impl UpsertExt for GraphDb {
                 self.graph
                     .run(
                         query(&cypher)
-                            .param("caller_uuid", e.entity.uuid.to_string())
+                            .param("caller_uuid", e.uuid.to_string())
                             .param("callee_uuid", callee_uuid.to_string()),
                     )
                     .await
@@ -207,7 +207,7 @@ mod tests {
     use super::UpsertExt;
     use crate::db::graph::connection::ConnectExt;
     use crate::db::graph::test_utils::create_embedded_test_entity;
-    use crate::models::EntityKind;
+    use crate::models::{EntityKind, ResolutionEntity};
 
     #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
     #[tokio::test]
@@ -259,9 +259,11 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let entities = vec![create_embedded_test_entity("RelTest1", EntityKind::Class)];
+        let entities = [create_embedded_test_entity("RelTest1", EntityKind::Class)];
+        let res_entities: Vec<ResolutionEntity> =
+            entities.iter().map(ResolutionEntity::from).collect();
 
-        let result = graph_db.upsert_relationships(&entities).await;
+        let result = graph_db.upsert_relationships(&res_entities).await;
         // Should not fail even if relationships are empty
         assert!(result.is_ok());
     }

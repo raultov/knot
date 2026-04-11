@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_kind_to_label_all_variants() {
-        let variants = vec![
+        let variants = [
             EntityKind::Class,
             EntityKind::Interface,
             EntityKind::Method,
@@ -57,7 +57,7 @@ mod tests {
             EntityKind::Enum,
         ];
 
-        let expected_labels = vec![
+        let expected_labels = [
             "Class",
             "Interface",
             "Method",

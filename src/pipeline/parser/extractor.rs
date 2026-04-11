@@ -457,7 +457,7 @@ mod tests {
         assert!(result.is_ok());
         let entities = result.unwrap();
         // Should find both outer and inner classes
-        assert!(entities.len() >= 1);
+        assert!(!entities.is_empty());
     }
 
     #[test]

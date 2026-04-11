@@ -199,7 +199,7 @@ mod tests {
         extract_class_contexts(tree.root_node(), source, &mut contexts);
 
         // Both outer and inner classes should be captured
-        assert!(contexts.len() >= 1);
+        assert!(!contexts.is_empty());
         assert!(contexts.iter().any(|c| c.name == "Outer"));
     }
 }

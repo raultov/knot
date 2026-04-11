@@ -302,9 +302,7 @@ mod tests {
         let mut state = IndexState::default();
 
         // Update files
-        state
-            .update_files(&vec![file1.clone(), file2.clone()])
-            .unwrap();
+        state.update_files(&[file1.clone(), file2.clone()]).unwrap();
         assert_eq!(state.file_hashes.len(), 2);
 
         let path1 = file1.to_str().unwrap().to_string();
@@ -313,7 +311,7 @@ mod tests {
         assert!(state.file_hashes.contains_key(&path2));
 
         // Remove a file
-        state.remove_files(&vec![path1.clone()]);
+        state.remove_files(std::slice::from_ref(&path1));
         assert_eq!(state.file_hashes.len(), 1);
         assert!(!state.file_hashes.contains_key(&path1));
         assert!(state.file_hashes.contains_key(&path2));

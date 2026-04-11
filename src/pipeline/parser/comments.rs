@@ -316,7 +316,7 @@ mod tests {
         if let Some(class_node) = find_class(tree.root_node()) {
             let children = extract_child_entity_nodes(class_node, "java");
             // Should find methods
-            assert!(children.len() > 0);
+            assert!(!children.is_empty());
         }
     }
 
@@ -345,7 +345,7 @@ mod tests {
         if let Some(class_node) = find_class(tree.root_node()) {
             let children = extract_child_entity_nodes(class_node, "typescript");
             // Should find methods or method definitions
-            assert!(children.len() > 0);
+            assert!(!children.is_empty());
         }
     }
 }
