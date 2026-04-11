@@ -51,3 +51,77 @@ pub fn discover_files(repo_path: &str) -> Result<Vec<PathBuf>> {
 
     Ok(files)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_discover_files_basic() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        // Create supported files
+        fs::write(dir.path().join("test.java"), "public class Test {}").unwrap();
+        fs::write(dir.path().join("app.ts"), "export class App {}").unwrap();
+        fs::write(
+            dir.path().join("component.tsx"),
+            "export const Comp = () => {}",
+        )
+        .unwrap();
+        fs::write(dir.path().join("legacy.cts"), "module.exports = {}").unwrap();
+
+        // Create unsupported files
+        fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
+        fs::write(dir.path().join("config.json"), "{}").unwrap();
+
+        // Create nested supported file
+        let src_dir = dir.path().join("src");
+        fs::create_dir(&src_dir).unwrap();
+        fs::write(src_dir.join("utils.ts"), "export {}").unwrap();
+
+        let files = discover_files(repo_path).unwrap();
+
+        // Should find 5 supported files (4 in root + 1 in src)
+        assert_eq!(files.len(), 5);
+
+        // Verify extensions
+        for path in files {
+            let ext = path.extension().unwrap().to_str().unwrap();
+            assert!(SUPPORTED_EXTENSIONS.contains(&ext));
+        }
+    }
+
+    #[test]
+    fn test_discover_files_with_gitignore() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        // Create .git directory to make WalkBuilder treat it as a repo
+        fs::create_dir(dir.path().join(".git")).unwrap();
+
+        // Create supported files
+        fs::write(dir.path().join("tracked.java"), "public class Tracked {}").unwrap();
+        fs::write(dir.path().join("ignored.java"), "public class Ignored {}").unwrap();
+
+        // Create .gitignore
+        fs::write(dir.path().join(".gitignore"), "ignored.java").unwrap();
+
+        let files = discover_files(repo_path).unwrap();
+
+        // Should only find tracked.java
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_str().unwrap().contains("tracked.java"));
+    }
+
+    #[test]
+    fn test_discover_files_empty() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let files = discover_files(repo_path).unwrap();
+        assert!(files.is_empty());
+    }
+}

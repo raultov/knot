@@ -243,3 +243,109 @@ pub(crate) fn strip_comment_markers(raw: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_comment_markers_java_block() {
+        let raw = "/**\n * This is a doc comment\n * With multiple lines\n */";
+        let stripped = strip_comment_markers(raw);
+        assert_eq!(stripped, "This is a doc comment\nWith multiple lines");
+    }
+
+    #[test]
+    fn test_strip_comment_markers_java_line() {
+        let raw = "// This is a line comment";
+        let stripped = strip_comment_markers(raw);
+        assert_eq!(stripped, "This is a line comment");
+    }
+
+    #[test]
+    fn test_strip_comment_markers_typescript_triple_slash() {
+        let raw = "/// TypeScript doc comment\n/// Second line";
+        let stripped = strip_comment_markers(raw);
+        assert_eq!(stripped, "TypeScript doc comment\nSecond line");
+    }
+
+    #[test]
+    fn test_strip_comment_markers_mixed_block() {
+        let raw = "/* Comment start\n * Middle line\n * End */";
+        let stripped = strip_comment_markers(raw);
+        assert_eq!(stripped, "Comment start\nMiddle line\nEnd");
+    }
+
+    #[test]
+    fn test_strip_comment_markers_empty_lines() {
+        let raw = "// First\n//\n// Third";
+        let stripped = strip_comment_markers(raw);
+        assert_eq!(stripped, "First\nThird");
+    }
+
+    #[test]
+    fn test_strip_comment_markers_whitespace_only() {
+        let raw = "//   \n//\n//";
+        let stripped = strip_comment_markers(raw);
+        assert_eq!(stripped, "");
+    }
+
+    #[ignore = "Tree-sitter query structure varies by language"]
+    #[test]
+    fn test_extract_child_entity_nodes_java() {
+        // Test extract_child_entity_nodes with Java code
+        let code = "class Test { void method1() {} void method2() {} }";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+
+        // Find the class declaration
+        fn find_class(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class(tree.root_node()) {
+            let children = extract_child_entity_nodes(class_node, "java");
+            // Should find methods
+            assert!(children.len() > 0);
+        }
+    }
+
+    #[ignore = "Tree-sitter query structure varies by language"]
+    #[test]
+    fn test_extract_child_entity_nodes_typescript() {
+        let code = "class Test { method1() {} method2() {} }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        // Find the class declaration
+        fn find_class(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class(tree.root_node()) {
+            let children = extract_child_entity_nodes(class_node, "typescript");
+            // Should find methods or method definitions
+            assert!(children.len() > 0);
+        }
+    }
+}

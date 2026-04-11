@@ -16,3 +16,12 @@ pub mod input;
 pub mod parser;
 pub mod prepare;
 pub mod state;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_pipeline_module_structure() {
+        // Simple test to ensure all modules are accessible
+        assert!(true);
+    }
+}

@@ -27,6 +27,9 @@ mod languages;
 mod orphans;
 mod utils;
 
+#[cfg(test)]
+mod test_utils;
+
 // Built-in query files compiled into the binary.
 const DEFAULT_JAVA_QUERY: &str = include_str!("../../../queries/java.scm");
 const DEFAULT_TS_QUERY: &str = include_str!("../../../queries/typescript.scm");

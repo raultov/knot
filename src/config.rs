@@ -125,3 +125,100 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_repo_name_auto_detection() {
+        // We use dummy CLI struct to test the logic
+        let repo_path = "/path/to/my-project";
+        let repo_name_opt: Option<String> = None;
+
+        let repo_name = if let Some(name) = repo_name_opt {
+            name
+        } else {
+            std::path::Path::new(repo_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| "unnamed-repo".to_string())
+        };
+
+        assert_eq!(repo_name, "my-project");
+    }
+
+    #[test]
+    fn test_repo_name_provided() {
+        let repo_path = "/path/to/my-project";
+        let repo_name_opt: Option<String> = Some("custom-name".to_string());
+
+        let repo_name = if let Some(name) = repo_name_opt {
+            name
+        } else {
+            std::path::Path::new(repo_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| "unnamed-repo".to_string())
+        };
+
+        assert_eq!(repo_name, "custom-name");
+    }
+
+    #[test]
+    fn test_cli_parsing_basic() {
+        let args = vec![
+            "knot",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.repo_path, "/tmp/repo");
+        assert_eq!(cli.neo4j_password, "secret");
+        assert_eq!(cli.qdrant_url, "http://localhost:6334"); // default
+    }
+
+    #[test]
+    fn test_cli_parsing_full() {
+        let args = vec![
+            "knot",
+            "--repo-path",
+            "/tmp/repo",
+            "--repo-name",
+            "my-repo",
+            "--qdrant-url",
+            "http://qdrant:6334",
+            "--qdrant-collection",
+            "custom_collection",
+            "--neo4j-uri",
+            "bolt://neo4j:7687",
+            "--neo4j-user",
+            "admin",
+            "--neo4j-password",
+            "admin123",
+            "--embed-dim",
+            "768",
+            "--batch-size",
+            "128",
+            "--clean",
+        ];
+
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.repo_path, "/tmp/repo");
+        assert_eq!(cli.repo_name, Some("my-repo".to_string()));
+        assert_eq!(cli.qdrant_url, "http://qdrant:6334");
+        assert_eq!(cli.qdrant_collection, "custom_collection");
+        assert_eq!(cli.neo4j_uri, "bolt://neo4j:7687");
+        assert_eq!(cli.neo4j_user, "admin");
+        assert_eq!(cli.neo4j_password, "admin123");
+        assert_eq!(cli.embed_dim, 768);
+        assert_eq!(cli.batch_size, 128);
+        assert!(cli.clean);
+    }
+}

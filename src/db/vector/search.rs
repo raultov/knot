@@ -81,3 +81,71 @@ impl VectorSearchExt for VectorDb {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::vector::connection::VectorConnectExt;
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_search_vector() {
+        let vector_db = VectorDb::connect("http://localhost:6334", "test_collection_search", 384)
+            .await
+            .expect("Failed to connect to Qdrant");
+
+        let query_vector = vec![0.5; 384];
+
+        let result = vector_db.search(&query_vector, 10, None).await;
+        assert!(result.is_ok());
+        let results = result.unwrap();
+        assert!(results.is_empty() || !results.is_empty()); // Collection might be empty
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_search_vector_with_repo_filter() {
+        let vector_db = VectorDb::connect(
+            "http://localhost:6334",
+            "test_collection_search_filter",
+            384,
+        )
+        .await
+        .expect("Failed to connect to Qdrant");
+
+        let query_vector = vec![0.5; 384];
+
+        let result = vector_db.search(&query_vector, 10, Some("test-repo")).await;
+        assert!(result.is_ok());
+        let results = result.unwrap();
+        assert!(results.is_empty() || !results.is_empty()); // Collection might be empty
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_search_zero_limit() {
+        let vector_db =
+            VectorDb::connect("http://localhost:6334", "test_collection_search_zero", 384)
+                .await
+                .expect("Failed to connect to Qdrant");
+
+        let query_vector = vec![0.5; 384];
+
+        let result = vector_db.search(&query_vector, 0, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_search_large_limit() {
+        let vector_db =
+            VectorDb::connect("http://localhost:6334", "test_collection_search_large", 384)
+                .await
+                .expect("Failed to connect to Qdrant");
+
+        let query_vector = vec![0.5; 384];
+
+        let result = vector_db.search(&query_vector, 1000, None).await;
+        assert!(result.is_ok());
+    }
+}

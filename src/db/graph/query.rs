@@ -249,3 +249,123 @@ impl QueryExt for GraphDb {
         Ok(serde_json::json!(results))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::GraphDb;
+    use super::QueryExt;
+    use crate::db::graph::connection::ConnectExt;
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entities_with_dependencies_empty() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.get_entities_with_dependencies(&[], None).await;
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entities_with_dependencies() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let uuids = vec!["550e8400-e29b-41d4-a716-446655440000".to_string()];
+        let result = graph_db
+            .get_entities_with_dependencies(&uuids, Some("test-repo"))
+            .await;
+        // Should not fail even if UUID doesn't exist
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_find_references() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.find_references("nonexistent_entity", None).await;
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        assert!(json.is_object());
+        assert!(json.get("calls").is_some());
+        assert!(json.get("extends").is_some());
+        assert!(json.get("implements").is_some());
+        assert!(json.get("references").is_some());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_find_references_with_repo() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .find_references("nonexistent_entity", Some("test-repo"))
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_find_callers() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.find_callers("nonexistent_entity", None).await;
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        assert!(json.is_array());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_find_callers_with_repo() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .find_callers("nonexistent_entity", Some("test-repo"))
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_file_entities() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_file_entities("/test/path/File.java", None)
+            .await;
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        assert!(json.is_array());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_file_entities_with_repo() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_file_entities("/test/path/File.java", Some("test-repo"))
+            .await;
+        assert!(result.is_ok());
+    }
+}

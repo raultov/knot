@@ -233,3 +233,83 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
     // NO recursive child processing - that's the key difference!
     intents
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_single_call_intent_java_method_invocation() {
+        let code = "void test() { obj.method(); }";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+
+        // Find the method invocation node
+        fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_node(child, kind) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(invocation) = find_node(tree.root_node(), "method_invocation") {
+            let code_bytes = code.as_bytes();
+            let intents = extract_single_call_intent_java(invocation, code_bytes);
+            assert!(!intents.is_empty());
+            assert_eq!(intents[0].method, "method");
+            assert_eq!(intents[0].receiver, Some("obj".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_extract_single_call_intent_java_this() {
+        let code = "void test() { this.method(); }";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+
+        fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_node(child, kind) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(invocation) = find_node(tree.root_node(), "method_invocation") {
+            let code_bytes = code.as_bytes();
+            let intents = extract_single_call_intent_java(invocation, code_bytes);
+            assert!(!intents.is_empty());
+            assert_eq!(intents[0].method, "method");
+            assert_eq!(intents[0].receiver, Some("this".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_extract_call_intents_java_nested() {
+        let code = "void test() { obj.method(other.call()); }";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<CallIntent> = Vec::new();
+        extract_call_intents_java(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find both method and call
+        assert!(intents.len() >= 2);
+        assert!(intents.iter().any(|i| i.method == "method"));
+        assert!(intents.iter().any(|i| i.method == "call"));
+    }
+}

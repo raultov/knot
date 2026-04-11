@@ -81,3 +81,107 @@ fn build_embed_text(entity: &ParsedEntity) -> String {
 
     parts.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{EntityKind, ParsedEntity};
+
+    #[test]
+    fn test_build_embed_text_minimal() {
+        let entity = ParsedEntity::new(
+            "MyClass",
+            EntityKind::Class,
+            "com.example.MyClass",
+            None,
+            None,
+            "java",
+            "com/example/MyClass.java",
+            10,
+            None,
+            "test-repo",
+        );
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[class] MyClass"));
+        assert!(embed_text.contains("File: com/example/MyClass.java:10"));
+        assert!(!embed_text.contains("Signature:"));
+        assert!(!embed_text.contains("Decorators:"));
+    }
+
+    #[test]
+    fn test_build_embed_text_full() {
+        let mut entity = ParsedEntity::new(
+            "saveUser",
+            EntityKind::Method,
+            "UserService.saveUser",
+            Some("public void saveUser(User user)".to_string()),
+            Some("Saves a new user to the database.".to_string()),
+            "java",
+            "UserService.java",
+            42,
+            Some("UserService".to_string()),
+            "test-repo",
+        );
+
+        entity.decorators = vec!["@Transactional".to_string(), "@Override".to_string()];
+        entity.inline_comments = vec![
+            "// Check for duplicates".to_string(),
+            "/* Commit transaction */".to_string(),
+        ];
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[method] saveUser"));
+        assert!(embed_text.contains("Signature: public void saveUser(User user)"));
+        assert!(embed_text.contains("Saves a new user to the database."));
+        assert!(embed_text.contains("Decorators: @Transactional, @Override"));
+        assert!(embed_text.contains(
+            "Implementation context:\n// Check for duplicates\n/* Commit transaction */"
+        ));
+        assert!(embed_text.contains("File: UserService.java:42"));
+    }
+
+    #[test]
+    fn test_prepare_entities_batch() {
+        let entity1 = ParsedEntity::new(
+            "Class1",
+            EntityKind::Class,
+            "Class1",
+            None,
+            None,
+            "java",
+            "file1.java",
+            1,
+            None,
+            "test-repo",
+        );
+        let entity2 = ParsedEntity::new(
+            "Class2",
+            EntityKind::Class,
+            "Class2",
+            None,
+            None,
+            "java",
+            "file2.java",
+            1,
+            None,
+            "test-repo",
+        );
+
+        let mut entities = vec![entity1, entity2];
+
+        // Before prepare, embed_text is empty
+        assert!(entities[0].embed_text.is_empty());
+        assert!(entities[1].embed_text.is_empty());
+
+        prepare_entities(&mut entities);
+
+        // After prepare, embed_text is populated
+        assert!(!entities[0].embed_text.is_empty());
+        assert!(!entities[1].embed_text.is_empty());
+        assert!(entities[0].embed_text.contains("Class1"));
+        assert!(entities[1].embed_text.contains("Class2"));
+    }
+}

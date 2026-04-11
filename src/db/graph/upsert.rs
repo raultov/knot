@@ -200,3 +200,105 @@ impl UpsertExt for GraphDb {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::GraphDb;
+    use super::UpsertExt;
+    use crate::db::graph::connection::ConnectExt;
+    use crate::db::graph::test_utils::create_embedded_test_entity;
+    use crate::models::EntityKind;
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_load_entity_mappings_empty() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.load_entity_mappings("nonexistent-repo").await;
+        assert!(result.is_ok());
+        let (fqn_map, name_map) = result.unwrap();
+        // Both maps should be empty for a nonexistent repo
+        assert_eq!(fqn_map.len(), 0);
+        assert_eq!(name_map.len(), 0);
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_upsert_entities() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let entities = vec![
+            create_embedded_test_entity("UpsertTest1", EntityKind::Class),
+            create_embedded_test_entity("UpsertTest2", EntityKind::Method),
+        ];
+
+        let result = graph_db.upsert_entities(&entities).await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_upsert_entities_empty() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.upsert_entities(&[]).await;
+        // Should return Ok immediately without inserting anything
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_upsert_relationships() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let entities = vec![create_embedded_test_entity("RelTest1", EntityKind::Class)];
+
+        let result = graph_db.upsert_relationships(&entities).await;
+        // Should not fail even if relationships are empty
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_upsert_relationships_empty() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.upsert_relationships(&[]).await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_upsert_calls() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let entities = vec![create_embedded_test_entity("CallTest1", EntityKind::Method)];
+
+        let result = graph_db.upsert_calls(&entities).await;
+        // Should not fail even if calls list is empty
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_upsert_calls_empty() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.upsert_calls(&[]).await;
+        assert!(result.is_ok());
+    }
+}

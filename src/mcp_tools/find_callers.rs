@@ -184,3 +184,54 @@ fn format_reference_entry(entity: &serde_json::Value) -> String {
     output.push('\n');
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_callers_tool_schema() {
+        let tool = FindCallersTool::tool();
+        assert_eq!(tool.name, "find_callers");
+
+        let schema = tool.input_schema;
+        assert!(schema.required.contains(&"entity_name".to_string()));
+
+        let props = schema.properties.unwrap();
+        assert!(props.contains_key("entity_name"));
+        assert!(props.contains_key("repo_name"));
+    }
+
+    #[test]
+    fn test_format_references_result_empty() {
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let formatted = format_references_result("MyEntity", &references);
+        assert!(formatted.contains("No references found"));
+    }
+
+    #[test]
+    fn test_format_references_result_with_data() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1",
+                    "kind": "method",
+                    "file_path": "file1.java",
+                    "start_line": 10,
+                    "signature": "void caller1()"
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let formatted = format_references_result("MyEntity", &references);
+        assert!(formatted.contains("caller1"));
+        assert!(formatted.contains("file1.java:10"));
+    }
+}

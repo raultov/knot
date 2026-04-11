@@ -190,3 +190,132 @@ impl IndexState {
         Self::state_dir_path(repo_path).join(STATE_FILE)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_compute_file_hash() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        fs::write(&file_path, "test content").unwrap();
+
+        let hash = IndexState::compute_file_hash(&file_path).unwrap();
+        // SHA-256 for "test content" is 6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72
+        assert_eq!(
+            hash,
+            "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72"
+        );
+
+        // Hash should change if content changes
+        fs::write(&file_path, "updated content").unwrap();
+        let updated_hash = IndexState::compute_file_hash(&file_path).unwrap();
+        assert_ne!(hash, updated_hash);
+    }
+
+    #[test]
+    fn test_state_save_and_load() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let mut state = IndexState::default();
+        state
+            .file_hashes
+            .insert("file1.ts".to_string(), "hash1".to_string());
+        state
+            .file_hashes
+            .insert("file2.java".to_string(), "hash2".to_string());
+
+        // Save state
+        state.save(repo_path).unwrap();
+
+        // Verify file exists
+        let state_file = dir.path().join(".knot").join("index_state.json");
+        assert!(state_file.exists());
+
+        // Load state
+        let loaded_state = IndexState::load(repo_path).unwrap();
+
+        // Check if loaded state matches original
+        assert_eq!(loaded_state.file_hashes.len(), 2);
+        assert_eq!(loaded_state.file_hashes.get("file1.ts").unwrap(), "hash1");
+        assert_eq!(loaded_state.file_hashes.get("file2.java").unwrap(), "hash2");
+    }
+
+    #[test]
+    fn test_classify_files() {
+        let dir = tempdir().unwrap();
+        let unchanged_file = dir.path().join("unchanged.ts");
+        let modified_file = dir.path().join("modified.java");
+        let added_file = dir.path().join("added.tsx");
+
+        fs::write(&unchanged_file, "unchanged").unwrap();
+        fs::write(&modified_file, "original content").unwrap();
+        fs::write(&added_file, "new file").unwrap();
+
+        let mut state = IndexState::default();
+        state.file_hashes.insert(
+            unchanged_file.to_str().unwrap().to_string(),
+            IndexState::compute_file_hash(&unchanged_file).unwrap(),
+        );
+        state.file_hashes.insert(
+            modified_file.to_str().unwrap().to_string(),
+            "fake_old_hash".to_string(),
+        );
+        state
+            .file_hashes
+            .insert("deleted.java".to_string(), "deleted_hash".to_string());
+
+        // Files currently on disk
+        let current_files = vec![
+            unchanged_file.clone(),
+            modified_file.clone(),
+            added_file.clone(),
+        ];
+
+        let (unchanged, modified, added, deleted) = state.classify_files(&current_files).unwrap();
+
+        assert_eq!(unchanged.len(), 1);
+        assert_eq!(unchanged[0], unchanged_file);
+
+        assert_eq!(modified.len(), 1);
+        assert_eq!(modified[0], modified_file);
+
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0], added_file);
+
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0], "deleted.java");
+    }
+
+    #[test]
+    fn test_update_and_remove_files() {
+        let dir = tempdir().unwrap();
+        let file1 = dir.path().join("file1.ts");
+        let file2 = dir.path().join("file2.java");
+        fs::write(&file1, "content1").unwrap();
+        fs::write(&file2, "content2").unwrap();
+
+        let mut state = IndexState::default();
+
+        // Update files
+        state
+            .update_files(&vec![file1.clone(), file2.clone()])
+            .unwrap();
+        assert_eq!(state.file_hashes.len(), 2);
+
+        let path1 = file1.to_str().unwrap().to_string();
+        let path2 = file2.to_str().unwrap().to_string();
+        assert!(state.file_hashes.contains_key(&path1));
+        assert!(state.file_hashes.contains_key(&path2));
+
+        // Remove a file
+        state.remove_files(&vec![path1.clone()]);
+        assert_eq!(state.file_hashes.len(), 1);
+        assert!(!state.file_hashes.contains_key(&path1));
+        assert!(state.file_hashes.contains_key(&path2));
+    }
+}

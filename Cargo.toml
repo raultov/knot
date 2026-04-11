@@ -1,6 +1,6 @@
 [package]
 name = "knot"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java and TypeScript codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
@@ -66,6 +66,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # --- MCP Server SDK ---
 rust-mcp-sdk = "0.8.3"
 async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3.10"
 
 [profile.release]
 lto = true

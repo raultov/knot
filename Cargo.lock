@@ -1798,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "knot"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1815,6 +1815,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "streaming-iterator",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

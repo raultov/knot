@@ -94,3 +94,47 @@ impl Embedder {
             .ok_or_else(|| anyhow::anyhow!("No vector returned for query"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{EntityKind, ParsedEntity};
+
+    #[ignore = "Downloads ONNX model (~23MB) and requires significant memory/CPU"]
+    #[test]
+    fn test_embedder_init_and_embed_basic() {
+        let mut embedder = Embedder::init().expect("Failed to init embedder");
+
+        let entity = ParsedEntity::new(
+            "TestClass",
+            EntityKind::Class,
+            "TestClass",
+            None,
+            None,
+            "java",
+            "Test.java",
+            1,
+            None,
+            "test-repo",
+        );
+
+        let mut entities = vec![entity];
+        entities[0].embed_text = "[class] TestClass\nFile: Test.java:1".to_string();
+
+        let results = embedder.embed(entities, 1).expect("Failed to embed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].vector.len(), 384); // AllMiniLML6V2 produces 384-dim vectors
+    }
+
+    #[ignore = "Downloads ONNX model (~23MB) and requires significant memory/CPU"]
+    #[test]
+    fn test_embedder_embed_query() {
+        let mut embedder = Embedder::init().expect("Failed to init embedder");
+        let vector = embedder
+            .embed_query("How to implement a singleton in Java?")
+            .expect("Failed to embed query");
+
+        assert_eq!(vector.len(), 384);
+    }
+}

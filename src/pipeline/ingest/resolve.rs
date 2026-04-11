@@ -221,3 +221,192 @@ fn resolve_single_call_intent(
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{EntityKind, ParsedEntity, ReferenceIntent, RelationshipType};
+
+    fn mock_embedded_entity(
+        name: &str,
+        kind: EntityKind,
+        fqn: &str,
+        enclosing_class: Option<&str>,
+    ) -> EmbeddedEntity {
+        EmbeddedEntity {
+            entity: ParsedEntity::new(
+                name,
+                kind,
+                fqn,
+                None,
+                None,
+                "java",
+                "test.java",
+                1,
+                enclosing_class.map(|s| s.to_string()),
+                "test-repo",
+            ),
+            vector: vec![0.0; 384],
+        }
+    }
+
+    #[test]
+    fn test_resolve_local_call() {
+        let mut caller = mock_embedded_entity(
+            "methodA",
+            EntityKind::Method,
+            "ClassA.methodA",
+            Some("ClassA"),
+        );
+        let callee = mock_embedded_entity(
+            "methodB",
+            EntityKind::Method,
+            "ClassA.methodB",
+            Some("ClassA"),
+        );
+
+        caller.entity.reference_intents.push(ReferenceIntent::Call {
+            method: "methodB".to_string(),
+            receiver: None,
+            line: 10,
+        });
+
+        let mut entities = vec![caller, callee];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(
+            entities[0].entity.relationships[0],
+            (entities[1].entity.uuid, RelationshipType::Calls)
+        );
+    }
+
+    #[test]
+    fn test_resolve_static_call() {
+        let mut caller = mock_embedded_entity("main", EntityKind::Method, "App.main", None);
+        let callee = mock_embedded_entity(
+            "staticMethod",
+            EntityKind::Method,
+            "Utils.staticMethod",
+            Some("Utils"),
+        );
+
+        caller.entity.reference_intents.push(ReferenceIntent::Call {
+            method: "staticMethod".to_string(),
+            receiver: Some("Utils".to_string()),
+            line: 5,
+        });
+
+        let mut entities = vec![caller, callee];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(
+            entities[0].entity.relationships[0],
+            (entities[1].entity.uuid, RelationshipType::Calls)
+        );
+    }
+
+    #[test]
+    fn test_resolve_instance_call_fuzzy() {
+        let mut caller = mock_embedded_entity(
+            "doWork",
+            EntityKind::Method,
+            "Service.doWork",
+            Some("Service"),
+        );
+        // Method in another class
+        let callee = mock_embedded_entity(
+            "execute",
+            EntityKind::Method,
+            "Worker.execute",
+            Some("Worker"),
+        );
+
+        caller.entity.reference_intents.push(ReferenceIntent::Call {
+            method: "execute".to_string(),
+            receiver: Some("worker".to_string()), // lower case instance name
+            line: 20,
+        });
+
+        let mut entities = vec![caller, callee];
+        resolve_reference_intents(&mut entities);
+
+        // Should resolve via Strategy 3 (fuzzy match capitalized 'worker' -> 'Worker')
+        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(
+            entities[0].entity.relationships[0],
+            (entities[1].entity.uuid, RelationshipType::Calls)
+        );
+    }
+
+    #[test]
+    fn test_resolve_inheritance() {
+        let mut child = mock_embedded_entity("Child", EntityKind::Class, "com.Child", None);
+        let parent = mock_embedded_entity("Parent", EntityKind::Class, "com.Parent", None);
+
+        child
+            .entity
+            .reference_intents
+            .push(ReferenceIntent::Extends {
+                parent: "Parent".to_string(),
+                line: 1,
+            });
+
+        let mut entities = vec![child, parent];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(
+            entities[0].entity.relationships[0],
+            (entities[1].entity.uuid, RelationshipType::Extends)
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_reference() {
+        let mut entity = mock_embedded_entity("service", EntityKind::Constant, "service", None);
+        let type_entity = mock_embedded_entity("MyType", EntityKind::Interface, "com.MyType", None);
+
+        entity
+            .entity
+            .reference_intents
+            .push(ReferenceIntent::TypeReference {
+                type_name: "MyType".to_string(),
+                line: 1,
+            });
+
+        let mut entities = vec![entity, type_entity];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(entities[0].entity.relationships.len(), 1);
+        assert_eq!(
+            entities[0].entity.relationships[0],
+            (entities[1].entity.uuid, RelationshipType::References)
+        );
+    }
+
+    #[test]
+    fn test_resolve_deduplication() {
+        let mut caller = mock_embedded_entity("A", EntityKind::Function, "A", None);
+        let callee = mock_embedded_entity("B", EntityKind::Function, "B", None);
+
+        // Duplicate intents
+        caller.entity.reference_intents.push(ReferenceIntent::Call {
+            method: "B".to_string(),
+            receiver: None,
+            line: 1,
+        });
+        caller.entity.reference_intents.push(ReferenceIntent::Call {
+            method: "B".to_string(),
+            receiver: None,
+            line: 2,
+        });
+
+        let mut entities = vec![caller, callee];
+        resolve_reference_intents(&mut entities);
+
+        // Should only have 1 relationship despite 2 intents
+        assert_eq!(entities[0].entity.relationships.len(), 1);
+    }
+}

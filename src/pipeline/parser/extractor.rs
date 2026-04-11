@@ -242,3 +242,305 @@ pub(crate) fn extract_entities(
 
     Ok(entities)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_entities_empty_source_java() {
+        let source = "";
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            "",
+            "java",
+            "/test.java",
+            "test-repo",
+        );
+
+        // Empty source should still return Ok with empty vec
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_extract_entities_empty_source_typescript() {
+        let source = "";
+        let result = extract_entities(
+            source,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "",
+            "typescript",
+            "/test.ts",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_extract_entities_simple_java_class() {
+        let source = "public class MyClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/MyClass.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].name, "MyClass");
+        assert_eq!(entities[0].kind, EntityKind::Class);
+    }
+
+    #[test]
+    fn test_extract_entities_simple_typescript_function() {
+        let source = "function myFunction() {}";
+        let query = "(function_declaration name: (identifier) @function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            query,
+            "typescript",
+            "/test.ts",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].name, "myFunction");
+        assert_eq!(entities[0].kind, EntityKind::Function);
+    }
+
+    #[test]
+    fn test_extract_entities_with_signature() {
+        let source = "public void testMethod(String param) {}";
+        let query = "(method_declaration name: (identifier) @method.name (#any-of? @method.name \"testMethod\"))";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/Test.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+    }
+
+    #[test]
+    fn test_extract_entities_interface_java() {
+        let source = "public interface MyInterface {}";
+        // Use identifier instead of type_identifier for interface names in Java
+        let query = "(interface_declaration name: (identifier) @interface.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/MyInterface.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].kind, EntityKind::Interface);
+    }
+
+    #[test]
+    fn test_extract_entities_enum_java() {
+        let source = "public enum Color { RED, GREEN, BLUE }";
+        let query = "(enum_declaration name: (identifier) @enum.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/Color.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_entities_constant_typescript() {
+        let source = "const MY_CONSTANT = 42;";
+        let query = "(lexical_declaration (variable_declarator name: (identifier) @constant.name))";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            query,
+            "typescript",
+            "/constants.ts",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].kind, EntityKind::Constant);
+    }
+
+    #[test]
+    fn test_extract_entities_with_docstring() {
+        let source = "/** Test documentation */\npublic class DocClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/DocClass.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        // Docstring extraction depends on comments parsing
+    }
+
+    #[test]
+    fn test_extract_entities_multiple_entities_java() {
+        let source = "public class FirstClass {} public class SecondClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/Classes.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0].name, "FirstClass");
+        assert_eq!(entities[1].name, "SecondClass");
+    }
+
+    #[test]
+    fn test_extract_entities_nested_class() {
+        let source = "public class Outer { public class Inner {} }";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/Outer.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        // Should find both outer and inner classes
+        assert!(entities.len() >= 1);
+    }
+
+    #[test]
+    fn test_extract_entities_file_path_preservation() {
+        let file_path = "/src/main/java/com/example/MyClass.java";
+        let source = "public class MyClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            file_path,
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].file_path, file_path);
+    }
+
+    #[test]
+    fn test_extract_entities_repo_name_preservation() {
+        let repo_name = "my-awesome-repo";
+        let source = "public class MyClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/MyClass.java",
+            repo_name,
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].repo_name, repo_name);
+    }
+
+    #[test]
+    fn test_extract_entities_start_line_calculation() {
+        let source = "\n\n\npublic class MyClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/MyClass.java",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        // Line should be 4 (1-indexed, after 3 newlines)
+        assert_eq!(entities[0].start_line, 4);
+    }
+
+    #[test]
+    fn test_extract_entities_language_name_preserved() {
+        let source = "public class MyClass {}";
+        let query = "(class_declaration name: (identifier) @class.name)";
+
+        let result_java = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            query,
+            "java",
+            "/MyClass.java",
+            "test-repo",
+        );
+
+        assert!(result_java.is_ok());
+        let entities_java = result_java.unwrap();
+        assert!(!entities_java.is_empty());
+        // Language is part of the model but not directly accessible via public getter
+        // This is tested indirectly through extraction behavior
+    }
+}

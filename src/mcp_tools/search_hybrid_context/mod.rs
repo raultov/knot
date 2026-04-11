@@ -176,3 +176,23 @@ impl SearchHybridContextTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_search_hybrid_context_tool_schema() {
+        let tool = SearchHybridContextTool::tool();
+        assert_eq!(tool.name, "search_hybrid_context");
+        assert!(tool.description.is_some());
+
+        let schema = tool.input_schema;
+        assert!(schema.required.contains(&"query".to_string()));
+
+        let props = schema.properties.unwrap();
+        assert!(props.contains_key("query"));
+        assert!(props.contains_key("max_results"));
+        assert!(props.contains_key("repo_name"));
+    }
+}

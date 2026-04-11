@@ -48,3 +48,33 @@ impl ConnectExt for GraphDb {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::GraphDb;
+    use super::ConnectExt;
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_graph_db_connection() {
+        // This test requires a running Neo4j instance
+        // Run with: cargo test -- --ignored --test-threads=1
+        let result = GraphDb::connect("bolt://localhost:7687", "neo4j", "password").await;
+        assert!(result.is_ok(), "Should be able to connect to Neo4j");
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_graph_db_ensure_indexes() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db.ensure_indexes().await;
+        assert!(
+            result.is_ok(),
+            "Should be able to create indexes in Neo4j: {:?}",
+            result.err()
+        );
+    }
+}

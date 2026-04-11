@@ -101,3 +101,105 @@ pub(crate) fn compute_fqn_and_context(
 
     (fqn, enclosing_class)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_fqn_and_context_class() {
+        let contexts = vec![];
+        let (fqn, enclosing_class) =
+            compute_fqn_and_context("MyClass", &EntityKind::Class, 10, "java", &contexts);
+        assert_eq!(fqn, "MyClass");
+        assert!(enclosing_class.is_none());
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_method_with_class() {
+        let contexts = vec![ClassContext {
+            name: "MyClass".to_string(),
+            start_line: 5,
+            end_line: 20,
+        }];
+        let (fqn, enclosing_class) =
+            compute_fqn_and_context("myMethod", &EntityKind::Method, 10, "java", &contexts);
+        assert_eq!(fqn, "MyClass.myMethod");
+        assert_eq!(enclosing_class, Some("MyClass".to_string()));
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_method_without_class() {
+        let contexts = vec![];
+        let (fqn, enclosing_class) =
+            compute_fqn_and_context("myFunction", &EntityKind::Method, 10, "java", &contexts);
+        assert_eq!(fqn, "myFunction");
+        assert!(enclosing_class.is_none());
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_function() {
+        let contexts = vec![];
+        let (fqn, enclosing_class) = compute_fqn_and_context(
+            "topLevelFunction",
+            &EntityKind::Function,
+            10,
+            "typescript",
+            &contexts,
+        );
+        assert_eq!(fqn, "topLevelFunction");
+        assert!(enclosing_class.is_none());
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_constant_with_class() {
+        let contexts = vec![ClassContext {
+            name: "Constants".to_string(),
+            start_line: 1,
+            end_line: 50,
+        }];
+        let (fqn, enclosing_class) =
+            compute_fqn_and_context("CONST_VALUE", &EntityKind::Constant, 25, "java", &contexts);
+        assert_eq!(fqn, "Constants.CONST_VALUE");
+        assert_eq!(enclosing_class, Some("Constants".to_string()));
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_enum() {
+        let contexts = vec![];
+        let (fqn, enclosing_class) =
+            compute_fqn_and_context("Color", &EntityKind::Enum, 1, "java", &contexts);
+        assert_eq!(fqn, "Color");
+        assert!(enclosing_class.is_none());
+    }
+
+    #[test]
+    fn test_extract_class_contexts_java() {
+        let code = "public class TestClass { }\npublic interface TestInterface { }";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+
+        let source = code.as_bytes();
+        let mut contexts: Vec<ClassContext> = Vec::new();
+        extract_class_contexts(tree.root_node(), source, &mut contexts);
+
+        assert_eq!(contexts.len(), 2);
+        assert!(contexts.iter().any(|c| c.name == "TestClass"));
+        assert!(contexts.iter().any(|c| c.name == "TestInterface"));
+    }
+
+    #[test]
+    fn test_extract_class_contexts_nested() {
+        let code = "class Outer { \n  class Inner { } \n}";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let source = code.as_bytes();
+        let mut contexts: Vec<ClassContext> = Vec::new();
+        extract_class_contexts(tree.root_node(), source, &mut contexts);
+
+        // Both outer and inner classes should be captured
+        assert!(contexts.len() >= 1);
+        assert!(contexts.iter().any(|c| c.name == "Outer"));
+    }
+}

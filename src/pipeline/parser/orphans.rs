@@ -111,3 +111,145 @@ pub(crate) fn find_nearest_entity_by_line(entities: &[ParsedEntity], target_line
 
     best_idx
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ParsedEntity;
+
+    #[test]
+    fn test_find_nearest_entity_by_line_before() {
+        // Create mock entities at specific lines
+        let entity1 = ParsedEntity::new(
+            "Entity1",
+            crate::models::EntityKind::Class,
+            "Entity1",
+            None,
+            None,
+            "java",
+            "/test.java",
+            10,
+            None,
+            "test-repo",
+        );
+        let entity2 = ParsedEntity::new(
+            "Entity2",
+            crate::models::EntityKind::Method,
+            "Entity2",
+            None,
+            None,
+            "java",
+            "/test.java",
+            30,
+            None,
+            "test-repo",
+        );
+        let entity3 = ParsedEntity::new(
+            "Entity3",
+            crate::models::EntityKind::Function,
+            "Entity3",
+            None,
+            None,
+            "java",
+            "/test.java",
+            50,
+            None,
+            "test-repo",
+        );
+
+        let entities = vec![entity1, entity2, entity3];
+
+        // Target line 25 should be assigned to entity1 (at line 10, since 25 > 10 and closest entity before it)
+        let idx = find_nearest_entity_by_line(&entities, 25);
+        assert_eq!(idx, 0, "Line 25 should be assigned to entity1 (line 10)");
+    }
+
+    #[test]
+    fn test_find_nearest_entity_by_line_exact() {
+        let entity1 = ParsedEntity::new(
+            "Entity1",
+            crate::models::EntityKind::Class,
+            "Entity1",
+            None,
+            None,
+            "java",
+            "/test.java",
+            10,
+            None,
+            "test-repo",
+        );
+
+        let entities = vec![entity1];
+
+        let idx = find_nearest_entity_by_line(&entities, 10);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn test_find_nearest_entity_by_line_after() {
+        let entity1 = ParsedEntity::new(
+            "Entity1",
+            crate::models::EntityKind::Class,
+            "Entity1",
+            None,
+            None,
+            "java",
+            "/test.java",
+            10,
+            None,
+            "test-repo",
+        );
+        let entity2 = ParsedEntity::new(
+            "Entity2",
+            crate::models::EntityKind::Method,
+            "Entity2",
+            None,
+            None,
+            "java",
+            "/test.java",
+            30,
+            None,
+            "test-repo",
+        );
+
+        let entities = vec![entity1, entity2];
+
+        // Target line 50 is after both entities, should be assigned to closest (entity2)
+        let idx = find_nearest_entity_by_line(&entities, 50);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn test_find_nearest_entity_by_line_before_all() {
+        let entity1 = ParsedEntity::new(
+            "Entity1",
+            crate::models::EntityKind::Class,
+            "Entity1",
+            None,
+            None,
+            "java",
+            "/test.java",
+            10,
+            None,
+            "test-repo",
+        );
+        let entity2 = ParsedEntity::new(
+            "Entity2",
+            crate::models::EntityKind::Method,
+            "Entity2",
+            None,
+            None,
+            "java",
+            "/test.java",
+            30,
+            None,
+            "test-repo",
+        );
+
+        let entities = vec![entity1, entity2];
+
+        // Target line 5 is before all entities, should be assigned to closest (entity1)
+        let idx = find_nearest_entity_by_line(&entities, 5);
+        assert_eq!(idx, 0);
+    }
+}

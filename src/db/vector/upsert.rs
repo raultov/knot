@@ -53,3 +53,61 @@ impl VectorUpsertExt for VectorDb {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::vector::connection::VectorConnectExt;
+    use crate::db::vector::test_utils::create_embedded_entity;
+    use crate::models::EntityKind;
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_upsert_entities() {
+        let vector_db = VectorDb::connect("http://localhost:6334", "test_collection_upsert", 384)
+            .await
+            .expect("Failed to connect to Qdrant");
+
+        let entities = vec![
+            create_embedded_entity("UpsertEntity1", EntityKind::Class, 0.1),
+            create_embedded_entity("UpsertEntity2", EntityKind::Method, 0.2),
+        ];
+
+        let result = vector_db.upsert(&entities).await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_upsert_entities_empty() {
+        let vector_db =
+            VectorDb::connect("http://localhost:6334", "test_collection_upsert_empty", 384)
+                .await
+                .expect("Failed to connect to Qdrant");
+
+        let result = vector_db.upsert(&[]).await;
+        // Should return Ok immediately without inserting anything
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_upsert_single_entity() {
+        let vector_db = VectorDb::connect(
+            "http://localhost:6334",
+            "test_collection_upsert_single",
+            384,
+        )
+        .await
+        .expect("Failed to connect to Qdrant");
+
+        let entity = vec![create_embedded_entity(
+            "SingleEntity",
+            EntityKind::Class,
+            0.5,
+        )];
+
+        let result = vector_db.upsert(&entity).await;
+        assert!(result.is_ok());
+    }
+}

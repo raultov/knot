@@ -73,3 +73,45 @@ impl VectorConnectExt for VectorDb {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::VectorDb;
+    use super::VectorConnectExt;
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_vector_db_connection() {
+        // This test requires a running Qdrant instance
+        // Run with: cargo test -- --ignored --test-threads=1
+        let result = VectorDb::connect("http://localhost:6334", "test_collection", 384).await;
+        assert!(result.is_ok(), "Should be able to connect to Qdrant");
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_vector_db_ensure_collection() {
+        let vector_db = VectorDb::connect("http://localhost:6334", "test_collection_ensure", 384)
+            .await
+            .expect("Failed to connect to Qdrant");
+
+        let result = vector_db.ensure_collection().await;
+        assert!(result.is_ok(), "Should be able to ensure collection exists");
+    }
+
+    #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
+    #[tokio::test]
+    async fn test_vector_db_ensure_collection_idempotent() {
+        let vector_db =
+            VectorDb::connect("http://localhost:6334", "test_collection_idempotent", 384)
+                .await
+                .expect("Failed to connect to Qdrant");
+
+        let result1 = vector_db.ensure_collection().await;
+        assert!(result1.is_ok());
+
+        // Second call should also succeed (idempotent)
+        let result2 = vector_db.ensure_collection().await;
+        assert!(result2.is_ok());
+    }
+}

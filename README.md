@@ -150,7 +150,7 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 
 ### Indexing a Codebase
 
-#### Incremental Indexing (Default, v0.4.1+)
+#### Incremental Indexing (Default, v0.4.2+)
 
 ```bash
 # First run: indexes all files
@@ -370,15 +370,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.4.1 — Maintenance & Modular Architecture) ✅
-- ✅ **Modular Refactoring**: Decoupled monolithic modules into specialized sub-modules for better maintainability and scalability.
-- ✅ **Enhanced DB Layer**: Separated `GraphDb` and `VectorDb` responsibilities into structured modules (connection, query, upsert, delete).
-- ✅ **Domain-Driven Models**: Reorganized core data models into a clean `models/` directory.
-- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes in `.knot/index_state.json`. Dramatically reduces re-indexing time for large codebases. (v0.4.0)
-- ✅ **Memory-Efficient Chunking**: Process entities in 512-entity chunks to avoid OOM on systems with 32GB RAM when indexing 3800+ files. (v0.4.0)
-- ✅ **Deterministic UUIDs**: Migrated from random UUID v4 to deterministic UUID v5 based on `repo:file:fqn` for stable graph relationships across indexing runs. (v0.4.0)
-- ✅ **Selective Database Operations**: New `--clean` flag (default: false) enables full re-index when needed, otherwise performs surgical updates. (v0.4.0)
-- ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files by loading context from Neo4j. (v0.4.0)
+### Current Release (v0.4.2 — Clean Architecture & Modular Indexer) ✅
+- ✅ **Indexer Refactoring**: Reduced `knot-indexer`'s `main()` function from 220+ lines to a clean, declarative ~50 lines flow.
+- ✅ **Stage Orchestration**: Extracted 8 specialized functions for orchestration (print banner, init DBs, clean stale data, run parse, embed/ingest, resolve relationships).
+- ✅ **Improved Testability**: Added unit tests for pure logic functions (`classify_files_for_indexing`, etc.) while maintaining integration tests for I/O functions.
+- ✅ **Type Safety**: Introduced `FileClassification` type alias and improved type annotations across the indexer.
+- ✅ **Modular Architecture**: Decoupled monolithic modules into specialized sub-modules for better maintainability (v0.4.1).
+- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes in `.knot/index_state.json` (v0.4.0).
+- ✅ **Memory-Efficient Chunking**: Process entities in 512-entity chunks (v0.4.0).
+- ✅ **Deterministic UUIDs**: Migrated to deterministic UUID v5 (v0.4.0).
+- ✅ **Selective Database Operations**: New `--clean` flag (v0.4.0).
+- ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files (v0.4.0).
 
 ### Next (v0.5.0 — Performance & Scale++)
 - [ ] Parallel processing optimizations for large mono-repos.
