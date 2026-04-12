@@ -375,11 +375,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.2 — Angular/React Decorator & DI Support) ✅
-- ✅ **Angular Decorator Extraction**: Properly capture class references inside `@NgModule`, `@Component`, and other decorators (e.g., `declarations: [AppComponent]` now creates REFERENCES relationships).
-- ✅ **Dependency Injection Support**: Extract type references from constructor parameters (e.g., `constructor(private analytics: AnalyticsService)` creates REFERENCES to `AnalyticsService`).
-- ✅ **Java Annotation Support**: Extract references from Spring/Jakarta annotations like `@Autowired`, `@Component`, `@Service`.
-- ✅ **E2E Test Suite**: New integration tests validate the full indexing pipeline with real Docker-based Neo4j and Qdrant instances.
+### Current Release (v0.6.3 — HTML & JSX Attribute Indexing) ✅
+- ✅ **HTML Support**: Full parsing of `.html` files for Angular templates and Web Components.
+- ✅ **JSX Attribute Indexing**: Extract `id` and `className` from React components for cross-language CSS search.
+- ✅ **CI/CD Pipeline**: Added GitHub Actions workflow with automated unit and E2E tests.
+
+### Previous Release (v0.6.2 — Angular/React Decorator & DI Support)
+- ✅ **Decorator Extraction**: Capture references inside `@Component`, `@NgModule`, and custom decorators.
+- ✅ **Native JavaScript Support**: Robust support for Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`) with entity deduplication.
+- ✅ **TypeScript Getter & Property Support**: Track `this.property` and `this.getter` patterns in TypeScript, creating proper `CALLS` relationships in the graph.
 
 ### Previous Release (v0.6.1 — Multi-Language Support & Enhanced CLI)
 - ✅ **Native JavaScript Support**: Robust support for Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`) with entity deduplication.

@@ -61,7 +61,10 @@ async fn main() -> Result<()> {
 
 /// Print startup banner with configuration details.
 fn print_startup_banner(cfg: &Config) {
-    info!("knot indexer starting (v0.6.1 - parallel streaming + watch mode)");
+    info!(
+        "knot indexer starting (v{} - parallel streaming + watch mode)",
+        env!("CARGO_PKG_VERSION")
+    );
     info!("Repository path : {}", cfg.repo_path);
     info!("Repository name : {}", cfg.repo_name);
     info!("Clean mode      : {}", cfg.clean);
