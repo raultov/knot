@@ -374,7 +374,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.0 — Multi-Language Support & Enhanced CLI) ✅
+### Current Release (v0.6.1 — Multi-Language Support & Enhanced CLI) ✅
 - ✅ **Native JavaScript Support**: Robust support for Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`) with entity deduplication.
 - ✅ **TypeScript Getter & Property Support**: Track `this.property` and `this.getter` patterns in TypeScript, creating proper `CALLS` relationships in the graph.
 - ✅ **Enhanced CLI & MCP UX**: Optional `--repo-path` (defaults to current directory) and cleaner `knot-mcp --help` output.
@@ -382,7 +382,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together (v0.5.4).
 
 ### Roadmap
-#### Completed: Phase 1 — JavaScript & TypeScript (v0.6.0)
+#### Completed: Phase 1 — JavaScript & TypeScript (v0.6.1)
 - ✅ Support `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx` files
 - ✅ Parallel indexing of hybrid projects
 - ✅ Call graph analysis for classes, functions, and methods
