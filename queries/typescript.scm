@@ -10,9 +10,11 @@
 ;   @enum.name       — name node of an enum declaration
 ;   @signature       — parameter list node (type params included)
 ;   @doc             — comment node immediately preceding the declaration
-;   @class.extends   — parent class in extends clause
-;   @class.implements — interface in implements clause
-;   @type.reference  — type reference in annotations (variable declarations, method signatures)
+;   @class.extends   — parent class in extends clause (extracted via AST traversal)
+;   @class.implements — interface in implements clause (extracted via AST traversal)
+;
+; Note: Type references, decorators, and complex annotations are extracted via
+; direct AST traversal in src/pipeline/parser/languages/ for better reliability.
 ;
 ; Override this file by placing a custom typescript.scm in the directory
 ; pointed to by --custom-queries-path / KNOT_CUSTOM_QUERIES_PATH.
@@ -116,42 +118,9 @@
 (new_expression
   constructor: (identifier) @call.method)
 
-; --- Type references in variable declarations ---
-; Matches: const prompt: DeviceRequestPrompt = ...
-; or: private prop: SomeType;
-(variable_declarator
-  type: (type_annotation
-    (type_identifier) @type.reference))
-
-(property_signature
-  type: (type_annotation
-    (type_identifier) @type.reference))
-
-(public_field_definition
-  type: (type_annotation
-    (type_identifier) @type.reference))
-
-; --- Type references in function/method return types ---
-; Matches: function foo(): ReturnType { ... }
-; or: method(): PromiseType { ... }
-(function_declaration
-  return_type: (type_annotation
-    (type_identifier) @type.reference))
-
-(method_definition
-  return_type: (type_annotation
-    (type_identifier) @type.reference))
-
-(method_signature
-  return_type: (type_annotation
-    (type_identifier) @type.reference))
-
-(arrow_function
-  return_type: (type_annotation
-    (type_identifier) @type.reference))
-
-; --- Type references in formal parameters ---
-; NOTE: Tree-sitter's TypeScript grammar doesn't expose parameter types as named fields
-; in a way that's easily queryable. These are extracted via other mechanisms.
-; Removed: problematic query for parameter type annotations
+; --- Type references ---
+; NOTE: Type references (constructor parameters, field types, return types, etc.)
+; are now extracted directly via AST traversal in src/pipeline/parser/languages/
+; This provides better coverage and handles complex type annotations that
+; Tree-sitter queries cannot reliably capture.
 

@@ -41,6 +41,22 @@ pub(crate) fn collect_all_reference_intents_typescript(
                 ));
             }
         }
+        "decorator" => {
+            // Extract decorator references (e.g., @NgModule({ declarations: [AppComponent] }))
+            let mut decorator_refs = Vec::new();
+            extract_identifiers_from_decorator(node, source, &mut decorator_refs, line);
+            for ref_intent in decorator_refs {
+                intents.push((ref_intent, byte_pos));
+            }
+        }
+        "type_identifier" => {
+            // Extract type references (e.g., constructor parameters, property types)
+            let type_name = node_text(node, source);
+            // Only capture capitalized identifiers (likely classes/interfaces)
+            if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                intents.push((ReferenceIntent::TypeReference { type_name, line }, byte_pos));
+            }
+        }
         _ => {}
     }
 
@@ -89,6 +105,115 @@ pub(crate) fn extract_class_inheritance(
                 impl_child = impl_c.next_sibling();
             }
         }
+        child = c.next_sibling();
+    }
+}
+
+/// Extract decorator references from TypeScript/TSX decorators (e.g., @NgModule, @Component).
+///
+/// Recursively searches for `decorator` nodes and extracts capitalized identifiers
+/// (likely class/component names) as TypeReference intents.
+///
+/// Example:
+/// ```typescript
+/// @NgModule({
+///   declarations: [AppComponent, UserComponent],
+///   bootstrap: [AppComponent]
+/// })
+/// export class AppModule {}
+/// ```
+///
+/// This will extract: AppComponent (twice), UserComponent
+pub(crate) fn extract_decorator_references(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = node.start_position().row + 1;
+
+    // If this is a decorator node, extract references from its arguments
+    if node.kind() == "decorator" {
+        extract_identifiers_from_decorator(node, source, intents, line);
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_decorator_references(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract capitalized identifiers from decorator arguments (likely class references).
+fn extract_identifiers_from_decorator(
+    decorator_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+    line: usize,
+) {
+    // Recursively scan all children for identifiers
+    let mut child = decorator_node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "identifier" | "type_identifier" => {
+                let name = node_text(c, source);
+                // Only capture capitalized identifiers (likely classes/components)
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    intents.push(ReferenceIntent::TypeReference {
+                        type_name: name,
+                        line,
+                    });
+                }
+            }
+            _ => {
+                // Recurse into nested structures (objects, arrays, etc.)
+                extract_identifiers_from_decorator(c, source, intents, line);
+            }
+        }
+        child = c.next_sibling();
+    }
+}
+
+/// Extract type references from TypeScript type annotations.
+///
+/// Recursively searches for `type_identifier` nodes in:
+/// - Constructor parameters (dependency injection)
+/// - Method parameters
+/// - Property types
+/// - Return types
+///
+/// Example:
+/// ```typescript
+/// class AppComponent {
+///   constructor(private analytics: AnalyticsService, private seo: SeoService) {}
+///   
+///   process(data: DataService): ResultType {
+///     return null;
+///   }
+/// }
+/// ```
+///
+/// This will extract: AnalyticsService, SeoService, DataService, ResultType
+pub(crate) fn extract_type_references(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = node.start_position().row + 1;
+
+    // Capture type_identifier nodes (type annotations)
+    if node.kind() == "type_identifier" {
+        let type_name = node_text(node, source);
+        // Only capture capitalized identifiers (likely classes/interfaces)
+        if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            intents.push(ReferenceIntent::TypeReference { type_name, line });
+        }
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_type_references(c, source, intents);
         child = c.next_sibling();
     }
 }
@@ -897,5 +1022,110 @@ mod tests {
                 .any(|i| i.method == "client" && i.receiver == Some("this".to_string()))
         );
         assert!(intents.iter().any(|i| i.method == "send"));
+    }
+
+    #[test]
+    fn test_extract_decorator_references_angular_component() {
+        let code = r#"
+            @Component({
+                selector: 'ngx-app',
+                declarations: [AppComponent, UserComponent],
+            })
+            export class AppModule {}
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<ReferenceIntent> = Vec::new();
+        extract_decorator_references(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find Component, AppComponent, and UserComponent
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "Component")
+        }));
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "AppComponent")
+        }));
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "UserComponent")
+        }));
+    }
+
+    #[test]
+    fn test_extract_type_references_constructor_params() {
+        let code = r#"
+            class AppComponent {
+                constructor(private analytics: AnalyticsService, private seo: SeoService) {}
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<ReferenceIntent> = Vec::new();
+        extract_type_references(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find AnalyticsService and SeoService
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "AnalyticsService")
+        }));
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "SeoService")
+        }));
+    }
+
+    #[test]
+    fn test_extract_type_references_method_params_and_return() {
+        let code = r#"
+            class Service {
+                process(data: DataService): ResultType {
+                    return null;
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<ReferenceIntent> = Vec::new();
+        extract_type_references(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find DataService and ResultType
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "DataService")
+        }));
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "ResultType")
+        }));
+    }
+
+    #[test]
+    fn test_extract_decorator_references_ngmodule() {
+        let code = r#"
+            @NgModule({
+                declarations: [AppComponent],
+                bootstrap: [AppComponent]
+            })
+            export class AppModule {}
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<ReferenceIntent> = Vec::new();
+        extract_decorator_references(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find NgModule and AppComponent (appears twice in the decorator)
+        assert!(intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "NgModule")
+        }));
+        let app_component_count = intents.iter().filter(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "AppComponent")
+        }).count();
+        assert!(
+            app_component_count >= 2,
+            "AppComponent should appear at least twice"
+        );
     }
 }

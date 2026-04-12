@@ -40,6 +40,14 @@ pub(crate) fn collect_all_reference_intents_javascript(
                 ));
             }
         }
+        "decorator" => {
+            // Extract decorator references (e.g., @Component({ declarations: [AppComponent] }))
+            let mut decorator_refs = Vec::new();
+            extract_identifiers_from_decorator(node, source, &mut decorator_refs, line);
+            for ref_intent in decorator_refs {
+                intents.push((ref_intent, byte_pos));
+            }
+        }
         _ => {}
     }
 
@@ -74,6 +82,71 @@ pub(crate) fn extract_class_inheritance_js(
                     parent: parent_name,
                     line,
                 });
+            }
+        }
+        child = c.next_sibling();
+    }
+}
+
+/// Extract decorator references from JavaScript decorators (e.g., @Component, @Injectable).
+///
+/// Recursively searches for `decorator` nodes and extracts capitalized identifiers
+/// (likely class/component names) as TypeReference intents.
+///
+/// Example:
+/// ```javascript
+/// @Component({
+///   declarations: [AppComponent, UserComponent],
+///   bootstrap: [AppComponent]
+/// })
+/// export class AppModule {}
+/// ```
+///
+/// This will extract: AppComponent (twice), UserComponent
+pub(crate) fn extract_decorator_references(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = node.start_position().row + 1;
+
+    // If this is a decorator node, extract references from its arguments
+    if node.kind() == "decorator" {
+        extract_identifiers_from_decorator(node, source, intents, line);
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_decorator_references(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract capitalized identifiers from decorator arguments (likely class references).
+fn extract_identifiers_from_decorator(
+    decorator_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+    line: usize,
+) {
+    // Recursively scan all children for identifiers
+    let mut child = decorator_node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "identifier" => {
+                let name = node_text(c, source);
+                // Only capture capitalized identifiers (likely classes/components)
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    intents.push(ReferenceIntent::TypeReference {
+                        type_name: name,
+                        line,
+                    });
+                }
+            }
+            _ => {
+                // Recurse into nested structures (objects, arrays, etc.)
+                extract_identifiers_from_decorator(c, source, intents, line);
             }
         }
         child = c.next_sibling();

@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # Neo4j Graph Database for E2E Tests
+  # Uses high ports (17xxx) to avoid conflicts with developer's local instances
+  neo4j-e2e:
+    image: neo4j:5
+    container_name: knot_neo4j_e2e
+    ports:
+      - "17474:7474"   # Web interface
+      - "17687:7687"   # Bolt protocol
+    environment:
+      NEO4J_AUTH: neo4j/e2e_test_password
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_default__listen__address: 0.0.0.0
+    volumes:
+      # Use ephemeral storage in tests/.e2e_data (will be cleaned up)
+      - ./.e2e_data/neo4j/data:/data
+      - ./.e2e_data/neo4j/logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "e2e_test_password", "CALL db.ping()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Qdrant Vector Database for E2E Tests
+  # Uses high ports (16xxx) to avoid conflicts
+  qdrant-e2e:
+    image: qdrant/qdrant:latest
+    container_name: knot_qdrant_e2e
+    ports:
+      - "16333:6333"   # REST API
+      - "16334:6334"   # gRPC API
+    volumes:
+      - ./.e2e_data/qdrant:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  default:
+    name: knot_e2e_network

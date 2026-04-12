@@ -4,6 +4,8 @@
 
 # Local Database Persistent Storage
 /data/
+/tests/.e2e_data/
+/tests/testing_files/.knot/
 
 # fastembed cache (downloaded models)
 .fastembed_cache/

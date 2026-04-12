@@ -27,6 +27,22 @@ pub(crate) fn collect_all_reference_intents_java(
                 ));
             }
         }
+        "marker_annotation" | "annotation" => {
+            // Extract annotation references (e.g., @Component, @Autowired)
+            let mut annotation_refs = Vec::new();
+            extract_identifiers_from_annotation(node, source, &mut annotation_refs, line);
+            for ref_intent in annotation_refs {
+                intents.push((ref_intent, byte_pos));
+            }
+        }
+        "type_identifier" => {
+            // Extract type references (e.g., constructor parameters, field types)
+            let type_name = node_text(node, source);
+            // Only capture capitalized identifiers (likely classes/interfaces)
+            if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                intents.push((ReferenceIntent::TypeReference { type_name, line }, byte_pos));
+            }
+        }
         _ => {}
     }
 
@@ -34,6 +50,119 @@ pub(crate) fn collect_all_reference_intents_java(
     let mut child = node.child(0);
     while let Some(c) = child {
         collect_all_reference_intents_java(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract annotation references from Java annotations (e.g., @Component, @Autowired).
+///
+/// Recursively searches for `marker_annotation` and `annotation` nodes and extracts
+/// capitalized identifiers (likely class/component names) as TypeReference intents.
+///
+/// Example:
+/// ```java
+/// @Configuration
+/// @ComponentScan(basePackageClasses = {AppConfig.class, SecurityConfig.class})
+/// public class AppModule {}
+/// ```
+///
+/// This will extract: AppConfig, SecurityConfig
+pub(crate) fn extract_annotation_references(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = node.start_position().row + 1;
+
+    // If this is an annotation node, extract references from its arguments
+    if matches!(node.kind(), "marker_annotation" | "annotation") {
+        extract_identifiers_from_annotation(node, source, intents, line);
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_annotation_references(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract capitalized identifiers from annotation arguments (likely class references).
+fn extract_identifiers_from_annotation(
+    annotation_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+    line: usize,
+) {
+    // Recursively scan all children for identifiers
+    let mut child = annotation_node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "identifier" | "type_identifier" => {
+                let name = node_text(c, source);
+                // Only capture capitalized identifiers (likely classes/components)
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    intents.push(ReferenceIntent::TypeReference {
+                        type_name: name,
+                        line,
+                    });
+                }
+            }
+            _ => {
+                // Recurse into nested structures (objects, arrays, etc.)
+                extract_identifiers_from_annotation(c, source, intents, line);
+            }
+        }
+        child = c.next_sibling();
+    }
+}
+
+/// Extract type references from Java type annotations.
+///
+/// Recursively searches for `type_identifier` nodes in:
+/// - Method parameters
+/// - Constructor parameters (dependency injection)
+/// - Field types
+/// - Return types
+///
+/// Example:
+/// ```java
+/// public class AppComponent {
+///   private final AnalyticsService analytics;
+///   private final SeoService seo;
+///   
+///   public AppComponent(AnalyticsService analytics, SeoService seo) {
+///     this.analytics = analytics;
+///     this.seo = seo;
+///   }
+///   
+///   public ResultType process(DataService data) {
+///     return null;
+///   }
+/// }
+/// ```
+///
+/// This will extract: AnalyticsService (3 times), SeoService (3 times), DataService, ResultType
+pub(crate) fn extract_type_references(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = node.start_position().row + 1;
+
+    // Capture type_identifier nodes (type annotations)
+    if node.kind() == "type_identifier" {
+        let type_name = node_text(node, source);
+        // Only capture capitalized identifiers (likely classes/interfaces)
+        if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            intents.push(ReferenceIntent::TypeReference { type_name, line });
+        }
+    }
+
+    // Recursively process children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_type_references(c, source, intents);
         child = c.next_sibling();
     }
 }

@@ -107,6 +107,21 @@ pub(crate) fn extract_entities(
                                 &mut reference_intents,
                             );
                         }
+
+                        // Extract type references from method signatures (parameters, return types)
+                        if lang_name == "typescript" {
+                            typescript::extract_type_references(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        } else if lang_name == "java" {
+                            java::extract_type_references(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
                     }
                 }
                 "function.name" => {
@@ -217,12 +232,49 @@ pub(crate) fn extract_entities(
                         source_bytes,
                         &mut reference_intents,
                     );
+                    // Extract decorator references for JavaScript (e.g., @Component, @Injectable)
+                    // Decorators may be in the parent node (export_statement) rather than class_declaration
+                    let decorator_node = class_node
+                        .parent()
+                        .filter(|p| p.kind() == "export_statement")
+                        .unwrap_or(class_node);
+                    javascript::extract_decorator_references(
+                        decorator_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
                 } else if lang_name == "typescript" {
                     typescript::extract_class_inheritance(
                         class_node,
                         source_bytes,
                         &mut reference_intents,
                     );
+                    // Extract decorator references (e.g., @Component, @NgModule)
+                    // Decorators may be in the parent node (export_statement) rather than class_declaration
+                    let decorator_node = class_node
+                        .parent()
+                        .filter(|p| p.kind() == "export_statement")
+                        .unwrap_or(class_node);
+                    typescript::extract_decorator_references(
+                        decorator_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                    // Extract type references (e.g., constructor parameters, property types)
+                    typescript::extract_type_references(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                } else if lang_name == "java" {
+                    // Extract annotation references (e.g., @Component, @Autowired)
+                    java::extract_annotation_references(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                    // Extract type references (e.g., constructor parameters, field types)
+                    java::extract_type_references(class_node, source_bytes, &mut reference_intents);
                 }
             }
 
@@ -761,5 +813,149 @@ mod tests {
 
         // They should have different start lines
         assert_ne!(entities[0].start_line, entities[1].start_line);
+    }
+
+    #[test]
+    fn test_extract_entities_angular_decorator_references() {
+        // Test the complete Angular use case that motivated this bugfix
+        let source = r#"
+            import { Component } from '@angular/core';
+            import { AnalyticsService } from './analytics.service';
+            import { SeoService } from './seo.service';
+
+            @Component({
+                selector: 'ngx-app',
+                template: '<router-outlet></router-outlet>',
+            })
+            export class AppComponent {
+                constructor(
+                    private analytics: AnalyticsService,
+                    private seo: SeoService
+                ) {}
+            }
+        "#;
+
+        let query = r#"
+            (class_declaration name: (type_identifier) @class.name)
+        "#;
+
+        let result = extract_entities(
+            source,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            query,
+            "typescript",
+            "/test/app.component.ts",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+
+        // Should have 1 class entity
+        assert_eq!(entities.len(), 1);
+        let app_component = &entities[0];
+        assert_eq!(app_component.name, "AppComponent");
+
+        // Should have captured decorator references
+        let decorator_refs: Vec<_> = app_component
+            .reference_intents
+            .iter()
+            .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "Component"))
+            .collect();
+        assert!(
+            !decorator_refs.is_empty(),
+            "Should capture @Component decorator reference"
+        );
+
+        // Should have captured type references from constructor parameters
+        let analytics_refs: Vec<_> = app_component
+            .reference_intents
+            .iter()
+            .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "AnalyticsService"))
+            .collect();
+        assert!(
+            !analytics_refs.is_empty(),
+            "Should capture AnalyticsService type reference from constructor"
+        );
+
+        let seo_refs: Vec<_> = app_component
+            .reference_intents
+            .iter()
+            .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "SeoService"))
+            .collect();
+        assert!(
+            !seo_refs.is_empty(),
+            "Should capture SeoService type reference from constructor"
+        );
+    }
+
+    #[test]
+    fn test_extract_entities_angular_ngmodule_references() {
+        // Test NgModule decorator with component references
+        let source = r#"
+            import { NgModule } from '@angular/core';
+            import { AppComponent } from './app.component';
+            import { UserComponent } from './user.component';
+
+            @NgModule({
+                declarations: [AppComponent, UserComponent],
+                bootstrap: [AppComponent]
+            })
+            export class AppModule {}
+        "#;
+
+        let query = r#"
+            (class_declaration name: (type_identifier) @class.name)
+        "#;
+
+        let result = extract_entities(
+            source,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            query,
+            "typescript",
+            "/test/app.module.ts",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+
+        // Should have 1 class entity
+        assert_eq!(entities.len(), 1);
+        let app_module = &entities[0];
+        assert_eq!(app_module.name, "AppModule");
+
+        // Should capture NgModule decorator reference
+        let ngmodule_refs: Vec<_> = app_module
+            .reference_intents
+            .iter()
+            .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "NgModule"))
+            .collect();
+        assert!(
+            !ngmodule_refs.is_empty(),
+            "Should capture @NgModule decorator reference"
+        );
+
+        // Should capture AppComponent references from decorator arguments
+        let app_component_refs: Vec<_> = app_module
+            .reference_intents
+            .iter()
+            .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "AppComponent"))
+            .collect();
+        assert!(
+            app_component_refs.len() >= 2,
+            "Should capture AppComponent references (appears in declarations and bootstrap)"
+        );
+
+        // Should capture UserComponent reference from decorator arguments
+        let user_component_refs: Vec<_> = app_module
+            .reference_intents
+            .iter()
+            .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "UserComponent"))
+            .collect();
+        assert!(
+            !user_component_refs.is_empty(),
+            "Should capture UserComponent reference from declarations"
+        );
     }
 }
