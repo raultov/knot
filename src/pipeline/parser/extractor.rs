@@ -342,7 +342,110 @@ pub(crate) fn extract_entities(
         );
     }
 
+    // Fourth pass: extract HTML attributes from JSX elements (id, className)
+    // This enables cross-language CSS/HTML search (e.g., "which components use class 'btn'?")
+    if lang_name == "javascript" || lang_name == "typescript" {
+        extract_jsx_html_attributes(
+            tree.root_node(),
+            source_bytes,
+            lang_name,
+            &mut entities,
+            file_path,
+            repo_name,
+        );
+    }
+
     Ok(entities)
+}
+
+/// Extract HTML id/className attributes from JSX elements for cross-language search.
+///
+/// Recursively traverses the AST looking for JSX elements (jsx_self_closing_element, jsx_opening_element)
+/// and extracts their `id` and `className` attributes to create HtmlId and HtmlClass entities.
+///
+/// This enables cross-language queries like:
+/// - "Which React components use the CSS class 'btn-primary'?"
+/// - "Find all usages of id='header'"
+fn extract_jsx_html_attributes(
+    node: Node<'_>,
+    source: &[u8],
+    lang_name: &str,
+    entities: &mut Vec<ParsedEntity>,
+    file_path: &str,
+    repo_name: &str,
+) {
+    use uuid::Uuid;
+
+    // Check if this is a JSX element
+    if matches!(
+        node.kind(),
+        "jsx_self_closing_element" | "jsx_opening_element"
+    ) {
+        // Extract attributes using the language-specific function
+        let attrs = if lang_name == "javascript" {
+            javascript::extract_jsx_attributes(node, source)
+        } else {
+            typescript::extract_jsx_attributes(node, source)
+        };
+
+        // Create entities for each extracted attribute
+        for (attr_name, attr_value, line) in attrs {
+            if attr_name == "id" {
+                // Create HtmlId entity
+                entities.push(ParsedEntity {
+                    uuid: Uuid::new_v4(),
+                    name: attr_value.clone(),
+                    kind: EntityKind::HtmlId,
+                    fqn: format!("#{}", attr_value),
+                    signature: None,
+                    docstring: None,
+                    inline_comments: Vec::new(),
+                    decorators: Vec::new(),
+                    language: lang_name.to_string(),
+                    file_path: file_path.to_string(),
+                    start_line: line,
+                    enclosing_class: None,
+                    repo_name: repo_name.to_string(),
+                    reference_intents: Vec::new(),
+                    calls: Vec::new(),
+                    relationships: Vec::new(),
+                    embed_text: String::new(),
+                });
+            } else if attr_name == "className" {
+                // Split by whitespace and create HtmlClass entity for each class
+                for class_name in attr_value.split_whitespace() {
+                    if !class_name.is_empty() {
+                        entities.push(ParsedEntity {
+                            uuid: Uuid::new_v4(),
+                            name: class_name.to_string(),
+                            kind: EntityKind::HtmlClass,
+                            fqn: format!(".{}", class_name),
+                            signature: None,
+                            docstring: None,
+                            inline_comments: Vec::new(),
+                            decorators: Vec::new(),
+                            language: lang_name.to_string(),
+                            file_path: file_path.to_string(),
+                            start_line: line,
+                            enclosing_class: None,
+                            repo_name: repo_name.to_string(),
+                            reference_intents: Vec::new(),
+                            calls: Vec::new(),
+                            relationships: Vec::new(),
+                            embed_text: String::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Recursively process all children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_jsx_html_attributes(c, source, lang_name, entities, file_path, repo_name);
+        child = c.next_sibling();
+    }
 }
 
 #[cfg(test)]

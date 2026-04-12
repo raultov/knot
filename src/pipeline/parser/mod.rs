@@ -36,6 +36,8 @@ const DEFAULT_JAVA_QUERY: &str = include_str!("../../../queries/java.scm");
 const DEFAULT_TS_QUERY: &str = include_str!("../../../queries/typescript.scm");
 const DEFAULT_TSX_QUERY: &str = include_str!("../../../queries/tsx.scm");
 const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
+#[allow(dead_code)] // Reserved for future query-based HTML parsing
+const DEFAULT_HTML_QUERY: &str = include_str!("../../../queries/html.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -144,6 +146,21 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &file_path,
                 &parse_cfg.repo_name,
             )?
+        }
+        "html" | "htm" => {
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_html::LANGUAGE.into())
+                .context("Failed to load HTML grammar")?;
+            let tree = parser
+                .parse(&source, None)
+                .context("Failed to parse HTML")?;
+            languages::html::extract_entities_html(
+                tree.root_node(),
+                source.as_bytes(),
+                &file_path,
+                &parse_cfg.repo_name,
+            )
         }
         other => {
             warn!("Unsupported extension '{other}', skipping");

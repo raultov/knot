@@ -1,0 +1,111 @@
+<!-- E2E Test File for HTML/Angular Features -->
+<!-- This file tests HTML parsing capabilities:
+     - Custom HTML elements (Angular components with hyphens)
+     - HTML id attributes
+     - HTML class attributes (multiple classes separated by spaces)
+     - Standard HTML elements should be ignored (div, span, p, etc.)
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Angular App Test</title>
+</head>
+<body>
+    <!-- Standard HTML elements (should be IGNORED) -->
+    <div class="container">
+        <header>
+            <h1>Angular Application</h1>
+        </header>
+    </div>
+
+    <!-- Custom Angular component with id and classes -->
+    <app-header id="main-header" class="header header-primary sticky">
+        <nav class="navbar navbar-expand">
+            <ul>
+                <li><a href="#">Home</a></li>
+                <li><a href="#">About</a></li>
+            </ul>
+        </nav>
+    </app-header>
+
+    <!-- Main application component -->
+    <app-root id="app-root" class="app-container">
+        <!-- Dashboard component -->
+        <app-dashboard id="dashboard" class="dashboard dashboard-layout">
+            <!-- Sidebar component -->
+            <app-sidebar class="sidebar sidebar-collapsed">
+                <app-menu-item class="menu-item active">Dashboard</app-menu-item>
+                <app-menu-item class="menu-item">Settings</app-menu-item>
+                <app-menu-item class="menu-item">Profile</app-menu-item>
+            </app-sidebar>
+
+            <!-- Main content area -->
+            <app-main-content id="main-content" class="content">
+                <!-- Data grid component -->
+                <app-data-grid id="users-grid" class="grid grid-striped grid-bordered">
+                    <app-grid-header class="grid-header">
+                        <span>Name</span>
+                        <span>Email</span>
+                        <span>Status</span>
+                    </app-grid-header>
+                </app-data-grid>
+
+                <!-- Chart component -->
+                <app-chart id="analytics-chart" class="chart chart-responsive">
+                    <app-chart-toolbar class="toolbar toolbar-top">
+                        <button class="btn btn-primary">Export</button>
+                        <button class="btn btn-secondary">Refresh</button>
+                    </app-chart-toolbar>
+                </app-chart>
+            </app-main-content>
+        </app-dashboard>
+
+        <!-- User profile component -->
+        <app-user-profile id="user-profile" class="profile card shadow">
+            <app-avatar class="avatar avatar-large"></app-avatar>
+            <app-user-details class="details">
+                <span class="name">John Doe</span>
+                <span class="email">john@example.com</span>
+            </app-user-details>
+        </app-user-profile>
+
+        <!-- Settings panel -->
+        <app-settings-panel id="settings-panel" class="panel panel-right hidden">
+            <app-settings-section class="section">
+                <h3>General Settings</h3>
+            </app-settings-section>
+            <app-settings-section class="section">
+                <h3>Privacy Settings</h3>
+            </app-settings-section>
+        </app-settings-panel>
+    </app-root>
+
+    <!-- Footer component -->
+    <app-footer id="main-footer" class="footer footer-sticky">
+        <p>&copy; 2026 Angular App</p>
+    </app-footer>
+
+    <!-- Modal components (initially hidden) -->
+    <app-modal id="confirm-modal" class="modal modal-centered hidden">
+        <app-modal-header class="modal-header">Confirm Action</app-modal-header>
+        <app-modal-body class="modal-body">Are you sure?</app-modal-body>
+        <app-modal-footer class="modal-footer">
+            <button class="btn btn-cancel">Cancel</button>
+            <button class="btn btn-confirm">OK</button>
+        </app-modal-footer>
+    </app-modal>
+
+    <!-- Web Component example (with hyphen) -->
+    <custom-element id="custom-widget" class="widget widget-interactive"></custom-element>
+
+    <!-- More standard HTML (should be IGNORED) -->
+    <div class="wrapper">
+        <section>
+            <p>This is a paragraph in a standard HTML element.</p>
+            <span>This span should be ignored too.</span>
+        </section>
+    </div>
+</body>
+</html>

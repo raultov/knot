@@ -20,6 +20,10 @@ pub enum EntityKind {
     Function,
     Constant,
     Enum,
+    // HTML/Web Components entities
+    HtmlElement, // Custom elements like <app-profile>, <web-component>
+    HtmlId,      // id="..." attributes
+    HtmlClass,   // class="..." or className="..." attributes
 }
 
 impl std::fmt::Display for EntityKind {
@@ -31,6 +35,9 @@ impl std::fmt::Display for EntityKind {
             EntityKind::Function => "function",
             EntityKind::Constant => "constant",
             EntityKind::Enum => "enum",
+            EntityKind::HtmlElement => "html_element",
+            EntityKind::HtmlId => "html_id",
+            EntityKind::HtmlClass => "html_class",
         };
         write!(f, "{s}")
     }

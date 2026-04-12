@@ -207,6 +207,80 @@ else
     exit 1
 fi
 
+# Test 5: Search for HTML elements and attributes from Angular file
+echo ""
+echo "Test 5: Searching for HTML elements and attributes in test_angular.html..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"app-header"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "app-header"; then
+    echo -e "${GREEN}✓ Found app-header custom element${NC}"
+else
+    echo -e "${RED}✗ app-header custom element not found${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test for HTML id attribute
+MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"dashboard"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "dashboard"; then
+    echo -e "${GREEN}✓ Found HTML id 'dashboard'${NC}"
+else
+    echo -e "${RED}✗ HTML id 'dashboard' not found${NC}"
+    exit 1
+fi
+
+# Test for HTML class attribute
+MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"navbar"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "navbar"; then
+    echo -e "${GREEN}✓ Found HTML class 'navbar'${NC}"
+else
+    echo -e "${RED}✗ HTML class 'navbar' not found${NC}"
+    exit 1
+fi
+
+# Test 6: Search for JSX attributes from JavaScript file
+echo ""
+echo "Test 6: Searching for JSX attributes in test_javascript.jsx..."
+# Search for id attribute
+MCP_REQUEST='{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"chart-toolbar"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "chart-toolbar"; then
+    echo -e "${GREEN}✓ Found JSX id 'chart-toolbar'${NC}"
+else
+    echo -e "${RED}✗ JSX id 'chart-toolbar' not found${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Search for className attribute
+MCP_REQUEST='{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "btn-primary"; then
+    echo -e "${GREEN}✓ Found JSX className 'btn-primary'${NC}"
+else
+    echo -e "${RED}✗ JSX className 'btn-primary' not found${NC}"
+    exit 1
+fi
+
+# Test for multiple classes in JSX
+MCP_REQUEST='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"profile-card"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "profile-card"; then
+    echo -e "${GREEN}✓ Found JSX className 'profile-card' (multiple classes)${NC}"
+else
+    echo -e "${RED}✗ JSX className 'profile-card' not found${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -218,6 +292,9 @@ echo "  ✓ TypeScript decorator extraction (@Component, @NgModule)"
 echo "  ✓ Type reference extraction (constructor DI)"
 echo "  ✓ JavaScript class parsing and JSX components"
 echo "  ✓ Java annotation extraction"
+echo "  ✓ HTML custom elements extraction (Angular components)"
+echo "  ✓ HTML id and class attributes indexing"
+echo "  ✓ JSX id and className attributes indexing"
 echo "  ✓ MCP server query functionality"
 echo ""
 

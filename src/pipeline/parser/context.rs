@@ -97,6 +97,9 @@ pub(crate) fn compute_fqn_and_context(
                 name.to_string()
             }
         }
+        // HTML entities already have their FQN computed in the parser
+        // (e.g., "#id-name", ".class-name", "<custom-element>")
+        EntityKind::HtmlElement | EntityKind::HtmlId | EntityKind::HtmlClass => name.to_string(),
     };
 
     (fqn, enclosing_class)

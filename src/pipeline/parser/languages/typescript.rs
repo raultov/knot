@@ -678,6 +678,65 @@ pub(crate) fn extract_enum_usages_typescript(
     }
 }
 
+/// Extract HTML attributes (id, className) from JSX elements in TypeScript/TSX.
+///
+/// Used to index React components' HTML attributes for cross-language search
+/// (e.g., finding which components use a specific CSS class).
+///
+/// Extracts:
+/// - `id="my-id"` → HtmlId entity with name "my-id"
+/// - `className="btn primary"` → HtmlClass entities for "btn" and "primary"
+///
+/// Returns a vector of tuples (attribute_name, attribute_value, line).
+pub(crate) fn extract_jsx_attributes(
+    node: Node<'_>,
+    source: &[u8],
+) -> Vec<(String, String, usize)> {
+    use crate::pipeline::parser::utils::node_text;
+
+    let mut attributes = Vec::new();
+
+    // JSX attributes are structured as:
+    // jsx_attribute
+    //   property_identifier (e.g., "id", "className")
+    //   jsx_expression | string (the value)
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "jsx_attribute" {
+            let line = c.start_position().row + 1;
+            let mut attr_name = String::new();
+            let mut attr_value = String::new();
+
+            // Navigate children to extract property_identifier and value
+            let mut attr_child = c.child(0);
+            while let Some(ac) = attr_child {
+                if ac.kind() == "property_identifier" {
+                    attr_name = node_text(ac, source);
+                } else if ac.kind() == "string" {
+                    // String literal (e.g., "my-id")
+                    let raw = node_text(ac, source);
+                    // Remove quotes
+                    attr_value = raw.trim_matches(|c| c == '"' || c == '\'').to_string();
+                } else if ac.kind() == "jsx_expression" {
+                    // Expression (e.g., {myVar}) - we skip these for now
+                    // Only capture static string values
+                    attr_child = ac.next_sibling();
+                    continue;
+                }
+                attr_child = ac.next_sibling();
+            }
+
+            // Only capture id and className attributes with non-empty values
+            if (attr_name == "id" || attr_name == "className") && !attr_value.is_empty() {
+                attributes.push((attr_name, attr_value, line));
+            }
+        }
+        child = c.next_sibling();
+    }
+
+    attributes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1127,5 +1186,109 @@ mod tests {
             app_component_count >= 2,
             "AppComponent should appear at least twice"
         );
+    }
+
+    #[test]
+    fn test_extract_jsx_attributes_id() {
+        let code = r#"function App() { return <div id="main-container">Hello</div>; }"#;
+        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
+            .expect("Failed to parse TSX code");
+
+        fn find_jsx_opening_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "jsx_opening_element" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_jsx_opening_element(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(jsx_elem) = find_jsx_opening_element(tree.root_node()) {
+            let code_bytes = code.as_bytes();
+            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
+            assert_eq!(attrs.len(), 1);
+            assert_eq!(attrs[0].0, "id");
+            assert_eq!(attrs[0].1, "main-container");
+        } else {
+            panic!("No JSX opening element found");
+        }
+    }
+
+    #[test]
+    fn test_extract_jsx_attributes_classname() {
+        let code =
+            r#"function Button() { return <button className="btn primary">Click</button>; }"#;
+        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
+            .expect("Failed to parse TSX code");
+
+        fn find_jsx_opening_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "jsx_opening_element" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_jsx_opening_element(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(jsx_elem) = find_jsx_opening_element(tree.root_node()) {
+            let code_bytes = code.as_bytes();
+            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
+            assert_eq!(attrs.len(), 1);
+            assert_eq!(attrs[0].0, "className");
+            assert_eq!(attrs[0].1, "btn primary");
+        } else {
+            panic!("No JSX opening element found");
+        }
+    }
+
+    #[test]
+    fn test_extract_jsx_attributes_multiple() {
+        let code =
+            r#"function Form() { return <input id="email-input" className="form-control" />; }"#;
+        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
+            .expect("Failed to parse TSX code");
+
+        fn find_jsx_self_closing(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "jsx_self_closing_element" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_jsx_self_closing(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(jsx_elem) = find_jsx_self_closing(tree.root_node()) {
+            let code_bytes = code.as_bytes();
+            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
+            assert_eq!(attrs.len(), 2);
+
+            // attrs may be in any order depending on AST traversal
+            let has_id = attrs
+                .iter()
+                .any(|(name, val, _)| name == "id" && val == "email-input");
+            let has_classname = attrs
+                .iter()
+                .any(|(name, val, _)| name == "className" && val == "form-control");
+
+            assert!(has_id, "Should extract id attribute");
+            assert!(has_classname, "Should extract className attribute");
+        } else {
+            panic!("No JSX self-closing element found");
+        }
     }
 }

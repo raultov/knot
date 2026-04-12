@@ -92,8 +92,8 @@ class ChartToolbar extends React.Component {
 
     render() {
         return (
-            <div className="toolbar">
-                <Button onClick={this.handleClick}>Toggle</Button>
+            <div id="chart-toolbar" className="toolbar toolbar-expanded">
+                <Button onClick={this.handleClick} className="btn btn-primary">Toggle</Button>
                 <Icons.Search size={24} />
                 <Icons.Settings size={24} />
             </div>
@@ -116,12 +116,12 @@ class Dashboard extends React.Component {
 
     render() {
         return (
-            <Sheet.Container>
-                <Sheet.Header>
+            <Sheet.Container id="dashboard-container" className="dashboard">
+                <Sheet.Header className="dashboard-header">
                     <ChartToolbar />
                 </Sheet.Header>
-                <Sheet.Content>
-                    <DataGrid data={this.dataService.data} />
+                <Sheet.Content className="dashboard-content">
+                    <DataGrid data={this.dataService.data} className="data-grid" />
                 </Sheet.Content>
             </Sheet.Container>
         );
@@ -137,9 +137,9 @@ const UserProfile = ({ user, onUpdate }) => {
     };
 
     return (
-        <div>
-            <h1>{user.name}</h1>
-            <Button onClick={handleSave}>Save</Button>
+        <div id="user-profile" className="profile-card shadow">
+            <h1 className="profile-title">{user.name}</h1>
+            <Button onClick={handleSave} className="btn btn-save">Save</Button>
         </div>
     );
 };

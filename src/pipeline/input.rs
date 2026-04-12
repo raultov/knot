@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Supported source file extensions.
-const SUPPORTED_EXTENSIONS: &[&str] = &["java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx"];
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "html", "htm",
+];
 
 /// Recursively discover all supported source files under `repo_path`.
 ///

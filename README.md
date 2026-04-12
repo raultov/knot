@@ -24,7 +24,8 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 - **Java**: Full AST extraction with package awareness
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
 - **JavaScript/Node.js** (v0.7.0+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
-- **HTML** (Planned): Document structure, Web Components, embedded scripts
+- **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
+- **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (Planned): Stylesheet indexing with variable and mixin tracking
 - **Rust** (Planned): Struct, trait, and macro analysis
 
@@ -395,11 +396,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ JSDoc / JavaDoc comment extraction
 - ✅ Entity deduplication across overlapping AST patterns
 
-#### Phase 2: HTML Indexing (Next)
-- [ ] Support `.html` and `.htm` files
-- [ ] Extract HTML elements, IDs, and classes
-- [ ] Web Components recognition
-- [ ] Embedded script/style block extraction
+#### Completed: Phase 2 — HTML & JSX Attributes (v0.6.3)
+- ✅ Support `.html` and `.htm` files
+- ✅ Extract custom HTML elements (Web Components, Angular components with hyphens)
+- ✅ Extract HTML `id` and `class` attributes for cross-language CSS search
+- ✅ Extract JSX/TSX `id` and `className` attributes from React components
+- ✅ Unified indexing: Find "which components use CSS class 'btn-primary'?" across HTML/JSX
+- ⏳ Embedded script/style block extraction (deferred to Phase 4)
 
 #### Phase 3: CSS & SCSS Support
 - [ ] Support `.css`, `.scss`, `.sass` files
