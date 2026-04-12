@@ -52,8 +52,8 @@ async fn main() -> SdkResult<()> {
     // Logging must be initialized before anything else.
     utils::init_logging().expect("Failed to initialize logging");
 
-    // Load configuration (.env takes precedence over CLI args).
-    let cfg = Config::load().expect("Failed to load configuration");
+    // Load configuration for MCP server (.env takes precedence over CLI args).
+    let cfg = Config::load_mcp().expect("Failed to load configuration");
 
     info!("knot MCP server starting");
     info!("Repository path : {}", cfg.repo_path);

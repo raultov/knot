@@ -2,7 +2,7 @@
 name = "knot"
 version = "0.6.0"
 edition = "2024"
-description = "Codebase Graph + Vector RAG Indexer for Java and TypeScript codebases"
+description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, and JavaScript codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
 license = "MIT"
 repository = "https://github.com/raultov/knot"

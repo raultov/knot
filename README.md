@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java and TypeScript, with planned support for JavaScript, HTML, CSS/SCSS, and Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, TypeScript, and JavaScript/Node.js, with planned support for HTML, CSS/SCSS, and Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -374,40 +374,22 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.0 — Multi-Language Foundation & TypeScript Getters) ✅
+### Current Release (v0.6.0 — Multi-Language Support & Enhanced CLI) ✅
+- ✅ **Native JavaScript Support**: Robust support for Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`) with entity deduplication.
 - ✅ **TypeScript Getter & Property Support**: Track `this.property` and `this.getter` patterns in TypeScript, creating proper `CALLS` relationships in the graph.
+- ✅ **Enhanced CLI & MCP UX**: Optional `--repo-path` (defaults to current directory) and cleaner `knot-mcp --help` output.
 - ✅ **Graph Metadata Persistence**: Fixed an issue where `fqn` and `enclosing_class` were not being persisted in Neo4j, improving incremental resolution accuracy.
-- ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together by automatically switching to incremental mode after the initial run (v0.5.4).
+- ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together (v0.5.4).
 
-### Previous Milestone (v0.5.4 — Real-time & Parallel Streaming) ✅
-- ✅ **Real-time Watch Mode**: Instant incremental updates on file changes via `--watch` flag (v0.5.2).
-- ✅ **Massive Modular Refactoring**: Clean separation of concerns into specialized modules (`files`, `watch`, `runner`, `orchestrator`) (v0.5.2).
-- ✅ **Cross-Repository Analysis**: Resolve dependencies and call graphs across multiple repositories via `KNOT_DEPENDENCIES` (v0.5.1).
-- ✅ **Parallel Streaming Pipeline**: New MPSC channel-based architecture for overlapping CPU (embeddings) and I/O (ingestion), boosting performance by 40-50% (v0.5.0).
-- ✅ **Comprehensive Test Suite**: Added 190+ unit tests covering core logic, state management, and pipeline orchestration.
-- ✅ **ResolutionEntity Optimization**: Optimized memory usage during relationship resolution.
+### Roadmap
+#### Completed: Phase 1 — JavaScript & TypeScript (v0.6.0)
+- ✅ Support `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx` files
+- ✅ Parallel indexing of hybrid projects
+- ✅ Call graph analysis for classes, functions, and methods
+- ✅ JSDoc / JavaDoc comment extraction
+- ✅ Entity deduplication across overlapping AST patterns
 
-### Previous Milestone (v0.4.3 — Robust MCP & Pure Testability) ✅
-- ✅ **MCP Layer Refactoring**: Decoupled tool execution logic in `enrich_with_relationships` and `build_server_details` into pure, testable functions.
-- ✅ **Comprehensive Test Coverage**: Added 65+ new tests covering the entire MCP toolset (explore, search, find_callers).
-- ✅ **Markdown Formatting Tests**: 20+ tests ensuring consistent and reliable search result formatting for AI clients.
-- ✅ **Tool Consistency Suite**: Automated checks to ensure all MCP tools maintain required schemas and descriptions.
-- ✅ **Indexer Refactoring**: Reduced `knot-indexer`'s `main()` function to a clean, declarative ~50 lines flow (v0.4.2).
-- ✅ **Modular Architecture**: Decoupled monolithic modules into specialized sub-modules (v0.4.1).
-- ✅ **Incremental Indexing**: Skip unchanged files by tracking SHA-256 content hashes (v0.4.0).
-- ✅ **Memory-Efficient Chunking**: Process entities in 512-entity chunks (v0.4.0).
-- ✅ **Deterministic UUIDs**: Migrated to deterministic UUID v5 (v0.4.0).
-- ✅ **Selective Database Operations**: New `--clean` flag (v0.4.0).
-- ✅ **Global Context Hydration**: Resolves relationships to entities in unchanged files (v0.4.0).
-
-### Next (v0.6.x — Multi-Language Foundation)
-#### Phase 1: JavaScript (Vanilla & Modules) Support
-- [ ] Support `.js`, `.mjs`, `.cjs`, `.jsx` files
-- [ ] Parallel indexing of hybrid JS/TS projects
-- [ ] Call graph analysis for JavaScript functions and classes
-- [ ] JSDoc comment extraction
-
-#### Phase 2: HTML Indexing
+#### Phase 2: HTML Indexing (Next)
 - [ ] Support `.html` and `.htm` files
 - [ ] Extract HTML elements, IDs, and classes
 - [ ] Web Components recognition
@@ -441,6 +423,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)
 - [ ] Web UI for graph visualization
 - [ ] Language Server Protocol (LSP) integration
+- [ ] Automated Code Review tool (MCP-based)
 
 ---
 

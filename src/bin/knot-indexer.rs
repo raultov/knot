@@ -25,8 +25,8 @@ async fn main() -> Result<()> {
     // Logging must be initialised before anything else.
     utils::init_logging()?;
 
-    // Load configuration (.env takes precedence over CLI args).
-    let cfg = Config::load()?;
+    // Load configuration for indexer (.env takes precedence over CLI args).
+    let cfg = Config::load_indexer()?;
     print_startup_banner(&cfg);
 
     // Initialize databases and load previous state.
