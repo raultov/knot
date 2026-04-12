@@ -1,4 +1,4 @@
-use super::languages::{java, typescript};
+use super::languages::{java, javascript, typescript};
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use tree_sitter::Node;
 
@@ -76,6 +76,8 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
         typescript::collect_all_reference_intents_typescript(node, source, intents);
     } else if lang_name == "java" {
         java::collect_all_reference_intents_java(node, source, intents);
+    } else if lang_name == "javascript" {
+        javascript::collect_all_reference_intents_javascript(node, source, intents);
     }
 }
 

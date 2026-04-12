@@ -23,7 +23,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
-- **JavaScript** (Planned): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
+- **JavaScript/Node.js** (v0.7.0+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - **HTML** (Planned): Document structure, Web Components, embedded scripts
 - **CSS/SCSS** (Planned): Stylesheet indexing with variable and mixin tracking
 - **Rust** (Planned): Struct, trait, and macro analysis

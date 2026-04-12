@@ -200,14 +200,11 @@ mod tests {
 
     #[test]
     fn test_unsupported_file_extensions() {
-        // Test common unsupported extensions
+        // Test common unsupported extensions (JavaScript and JSX are now supported)
         let unsupported = vec![
             "readme.md",
             "config.json",
             "style.css",
-            "script.js",
-            "module.mjs",
-            "vendor.cjs",
             "data.xml",
             "document.txt",
             "image.png",

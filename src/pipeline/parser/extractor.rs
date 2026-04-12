@@ -4,7 +4,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
-use super::languages::{java, typescript};
+use super::languages::{java, javascript, typescript};
 use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
@@ -94,6 +94,12 @@ pub(crate) fn extract_entities(
                                 source_bytes,
                                 &mut reference_intents,
                             );
+                        } else if lang_name == "javascript" {
+                            javascript::extract_reference_intents_javascript(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
                         } else {
                             typescript::extract_reference_intents_typescript(
                                 method_node,
@@ -109,14 +115,23 @@ pub(crate) fn extract_entities(
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "function_declaration")
                         .or_else(|| find_parent_by_kind(node, "lexical_declaration"))
+                        .or_else(|| find_parent_by_kind(node, "variable_declaration"))
                         .or_else(|| find_parent_by_kind(node, "export_statement"));
                     // For functions, extract reference intents from the function body
                     if let Some(func_node) = entity_node {
-                        typescript::extract_reference_intents_typescript(
-                            func_node,
-                            source_bytes,
-                            &mut reference_intents,
-                        );
+                        if lang_name == "javascript" {
+                            javascript::extract_reference_intents_javascript(
+                                func_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        } else {
+                            typescript::extract_reference_intents_typescript(
+                                func_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
                     }
                 }
                 "constant.name" => {
@@ -135,6 +150,12 @@ pub(crate) fn extract_entities(
                     if let Some(const_node) = entity_node {
                         if lang_name == "java" {
                             java::extract_reference_intents_java(
+                                const_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        } else if lang_name == "javascript" {
+                            javascript::extract_reference_intents_javascript(
                                 const_node,
                                 source_bytes,
                                 &mut reference_intents,
@@ -188,13 +209,20 @@ pub(crate) fn extract_entities(
             // For classes, also extract extends/implements from AST
             if matches!(kind, EntityKind::Class | EntityKind::Interface)
                 && let Some(class_node) = entity_node
-                && lang_name == "typescript"
             {
-                typescript::extract_class_inheritance(
-                    class_node,
-                    source_bytes,
-                    &mut reference_intents,
-                );
+                if lang_name == "javascript" {
+                    javascript::extract_class_inheritance_js(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                } else if lang_name == "typescript" {
+                    typescript::extract_class_inheritance(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                }
             }
 
             let mut entity = ParsedEntity::new(
@@ -228,7 +256,7 @@ pub(crate) fn extract_entities(
 
     // Third pass: capture orphaned reference intents (calls in top-level statements,
     // callbacks, etc. that were not captured by any named entity)
-    if lang_name == "typescript" || lang_name == "java" {
+    if lang_name == "typescript" || lang_name == "java" || lang_name == "javascript" {
         collect_orphaned_references(
             tree.root_node(),
             source_bytes,

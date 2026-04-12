@@ -35,6 +35,7 @@ mod test_utils;
 const DEFAULT_JAVA_QUERY: &str = include_str!("../../../queries/java.scm");
 const DEFAULT_TS_QUERY: &str = include_str!("../../../queries/typescript.scm");
 const DEFAULT_TSX_QUERY: &str = include_str!("../../../queries/tsx.scm");
+const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -128,6 +129,18 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 lang,
                 &query_src,
                 "typescript",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "js" | "mjs" | "cjs" | "jsx" => {
+            let query_src = load_query_source("javascript.scm", DEFAULT_JS_QUERY, parse_cfg);
+            let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
+            extractor::extract_entities(
+                &source,
+                lang,
+                &query_src,
+                "javascript",
                 &file_path,
                 &parse_cfg.repo_name,
             )?
@@ -258,8 +271,17 @@ mod tests {
             .unwrap_or_default();
 
         assert_eq!(ext, "unsupported");
-        // File would be skipped (not java, ts, tsx, cts)
-        assert!(ext != "java" && ext != "ts" && ext != "tsx" && ext != "cts");
+        // File would be skipped (not java, ts, tsx, cts, js, mjs, cjs, jsx)
+        assert!(
+            ext != "java"
+                && ext != "ts"
+                && ext != "tsx"
+                && ext != "cts"
+                && ext != "js"
+                && ext != "mjs"
+                && ext != "cjs"
+                && ext != "jsx"
+        );
     }
 
     #[test]
@@ -276,6 +298,21 @@ mod tests {
     #[test]
     fn test_typescript_file_extension_detection() {
         let extensions = vec!["ts", "tsx", "cts"];
+
+        for ext_name in &extensions {
+            let path = PathBuf::from(format!("/test/file.{}", ext_name));
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+
+            assert_eq!(ext, *ext_name);
+        }
+    }
+
+    #[test]
+    fn test_javascript_file_extension_detection() {
+        let extensions = vec!["js", "mjs", "cjs", "jsx"];
 
         for ext_name in &extensions {
             let path = PathBuf::from(format!("/test/file.{}", ext_name));

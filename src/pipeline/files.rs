@@ -18,7 +18,10 @@ pub fn is_supported_file(path: &Path) -> bool {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default();
-    matches!(ext, "java" | "ts" | "tsx" | "cts")
+    matches!(
+        ext,
+        "java" | "ts" | "tsx" | "cts" | "js" | "mjs" | "cjs" | "jsx"
+    )
 }
 
 /// Classify files into unchanged, modified, added, and deleted categories.
@@ -230,6 +233,10 @@ mod tests {
         assert!(is_supported_file(Path::new("test.ts")));
         assert!(is_supported_file(Path::new("test.tsx")));
         assert!(is_supported_file(Path::new("test.cts")));
+        assert!(is_supported_file(Path::new("test.js")));
+        assert!(is_supported_file(Path::new("test.mjs")));
+        assert!(is_supported_file(Path::new("test.cjs")));
+        assert!(is_supported_file(Path::new("test.jsx")));
 
         assert!(!is_supported_file(Path::new("test.txt")));
         assert!(!is_supported_file(Path::new("test.rs")));
