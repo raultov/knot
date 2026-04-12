@@ -35,27 +35,94 @@
   name: (identifier) @function.name
   parameters: (formal_parameters) @signature)
 
-; --- Arrow function assigned to a variable (const foo = () => ...) ---
+; --- Arrow functions and function expressions assigned to variables (const/let) ---
+; Matches: const foo = () => {}; let bar = function() {};
+; Uses lexical_declaration for const/let declarations
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @function.name
+    value: (arrow_function
+      parameters: (formal_parameters) @signature)))
+
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @function.name
+    value: (function_expression
+      parameters: (formal_parameters) @signature)))
+
+; --- Arrow functions and function expressions assigned to variables (var) ---
+; Matches: var foo = () => {}; var bar = function() {};
+; Uses variable_declaration for var declarations
 (variable_declaration
   (variable_declarator
     name: (identifier) @function.name
     value: (arrow_function
       parameters: (formal_parameters) @signature)))
 
-; Alternative pattern for const/let/var with arrow functions
-(variable_declarator
-  name: (identifier) @function.name
-  value: (arrow_function
-    parameters: (formal_parameters) @signature))
-
-; --- Top-level const/let/var declarations (const MY_CONST = ...) ---
-; These become Constant entities
 (variable_declaration
   (variable_declarator
-    name: (identifier) @constant.name))
+    name: (identifier) @function.name
+    value: (function_expression
+      parameters: (formal_parameters) @signature)))
 
-(variable_declarator
-  name: (identifier) @constant.name)
+; --- Top-level constant declarations (non-function values, const/let) ---
+; Matches: const FOO = 42; let CONFIG = {}; const NAME = "value";
+; IMPORTANT: Explicitly lists value types to exclude arrow_function/function_expression
+; This prevents duplication with the function patterns above
+; Uses lexical_declaration for const/let
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @constant.name
+    value: [
+      (number)
+      (string)
+      (template_string)
+      (true)
+      (false)
+      (null)
+      (undefined)
+      (object)
+      (array)
+      (identifier)
+      (member_expression)
+      (call_expression)
+      (await_expression)
+      (binary_expression)
+      (unary_expression)
+      (ternary_expression)
+      (new_expression)
+      (class)
+      (regex)
+    ]))
+
+; --- Top-level constant declarations (non-function values, var) ---
+; Matches: var FOO = 42; var CONFIG = {}; var NAME = "value";
+; IMPORTANT: Explicitly lists value types to exclude arrow_function/function_expression
+; Uses variable_declaration for var
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @constant.name
+    value: [
+      (number)
+      (string)
+      (template_string)
+      (true)
+      (false)
+      (null)
+      (undefined)
+      (object)
+      (array)
+      (identifier)
+      (member_expression)
+      (call_expression)
+      (await_expression)
+      (binary_expression)
+      (unary_expression)
+      (ternary_expression)
+      (new_expression)
+      (class)
+      (regex)
+    ]))
 
 ; --- Default export function declaration (export default function() {...}) ---
 (export_statement
@@ -75,8 +142,8 @@
     parameters: (formal_parameters) @signature))
 
 ; --- Static class properties and methods ---
-(public_field_definition
-  name: (property_identifier) @constant.name)
+; (field_definition
+;   property: (property_identifier) @constant.name)
 
 ; --- Method and function invocations (call expressions) ---
 ; Matches: this.method(), object.method(), Class.method(), localCall()

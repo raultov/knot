@@ -2,7 +2,7 @@
 //!
 //! Uses the `ignore` crate to walk a directory tree while respecting
 //! `.gitignore`, `.ignore`, and other standard ignore files.
-//! Only files with the extensions `.java`, `.ts`, `.tsx`, and `.cts` are retained.
+//! Supported extensions: `.java`, `.ts`, `.tsx`, `.cts`, `.js`, `.mjs`, `.cjs`, `.jsx`.
 
 use anyhow::Result;
 use ignore::WalkBuilder;
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Supported source file extensions.
-const SUPPORTED_EXTENSIONS: &[&str] = &["java", "ts", "tsx", "cts"];
+const SUPPORTED_EXTENSIONS: &[&str] = &["java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx"];
 
 /// Recursively discover all supported source files under `repo_path`.
 ///
@@ -72,6 +72,8 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.path().join("legacy.cts"), "module.exports = {}").unwrap();
+        fs::write(dir.path().join("vanilla.js"), "console.log('test')").unwrap();
+        fs::write(dir.path().join("module.mjs"), "export {}").unwrap();
 
         // Create unsupported files
         fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
@@ -84,8 +86,8 @@ mod tests {
 
         let files = discover_files(repo_path).unwrap();
 
-        // Should find 5 supported files (4 in root + 1 in src)
-        assert_eq!(files.len(), 5);
+        // Should find 7 supported files (6 in root + 1 in src)
+        assert_eq!(files.len(), 7);
 
         // Verify extensions
         for path in files {

@@ -42,7 +42,7 @@ pub struct Cli {
 
     /// Neo4j password.
     #[arg(long, env = "KNOT_NEO4J_PASSWORD")]
-    pub neo4j_password: String,
+    pub neo4j_password: Option<String>,
 
     /// Optional path to a directory containing custom Tree-sitter query files
     /// (`java.scm`, `typescript.scm`). When set, these override the built-in
@@ -115,6 +115,12 @@ impl Config {
 
         let cli = Cli::parse();
 
+        // Validate required fields that can come from CLI or Env.
+        // Even with clap's env support, we manually fall back and provide clear errors.
+        let neo4j_password = cli.neo4j_password
+            .or_else(|| std::env::var("KNOT_NEO4J_PASSWORD").ok())
+            .context("Neo4j password is required. Provide it via --neo4j-password or KNOT_NEO4J_PASSWORD environment variable.")?;
+
         // Auto-detect repo_name from repo_path if not provided
         let repo_name = if let Some(name) = cli.repo_name {
             name
@@ -145,7 +151,7 @@ impl Config {
             qdrant_collection: cli.qdrant_collection,
             neo4j_uri: cli.neo4j_uri,
             neo4j_user: cli.neo4j_user,
-            neo4j_password: cli.neo4j_password,
+            neo4j_password,
             custom_queries_path: cli.custom_queries_path,
             embed_dim: cli.embed_dim,
             batch_size: cli.batch_size,
@@ -210,7 +216,7 @@ mod tests {
 
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI args");
         assert_eq!(cli.repo_path, "/tmp/repo");
-        assert_eq!(cli.neo4j_password, "secret");
+        assert_eq!(cli.neo4j_password, Some("secret".to_string()));
         assert_eq!(cli.qdrant_url, "http://localhost:6334"); // default
     }
 
@@ -246,7 +252,7 @@ mod tests {
         assert_eq!(cli.qdrant_collection, "custom_collection");
         assert_eq!(cli.neo4j_uri, "bolt://neo4j:7687");
         assert_eq!(cli.neo4j_user, "admin");
-        assert_eq!(cli.neo4j_password, "admin123");
+        assert_eq!(cli.neo4j_password, Some("admin123".to_string()));
         assert_eq!(cli.embed_dim, 768);
         assert_eq!(cli.batch_size, 128);
         assert!(cli.clean);

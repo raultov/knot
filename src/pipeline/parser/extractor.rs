@@ -141,7 +141,8 @@ pub(crate) fn extract_entities(
                     entity_node = find_parent_by_kind(node, "lexical_declaration")
                         .or_else(|| find_parent_by_kind(node, "variable_declarator"))
                         .or_else(|| find_parent_by_kind(node, "field_declaration"))
-                        .or_else(|| find_parent_by_kind(node, "public_field_definition"));
+                        .or_else(|| find_parent_by_kind(node, "public_field_definition"))
+                        .or_else(|| find_parent_by_kind(node, "field_definition"));
 
                     // Extract reference intents from constant initializers
                     // This captures function calls inside const assignments like:
@@ -253,6 +254,27 @@ pub(crate) fn extract_entities(
             entities.push(entity);
         }
     }
+
+    // Deduplicate entities extracted from tree-sitter queries.
+    // This handles cases where multiple query patterns match the same AST node.
+    // For example, in JavaScript: var foo = function() {} can match both:
+    //   1. (variable_declaration ... @function.name) → foo as Function
+    //   2. (variable_declaration ... @constant.name) → foo as Constant
+    // Deduplication key: (file_path, name, kind, start_line)
+    // This ensures we keep only one entity per unique declaration.
+    entities.sort_by(|a, b| {
+        a.file_path
+            .cmp(&b.file_path)
+            .then(a.name.cmp(&b.name))
+            .then(format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)))
+            .then(a.start_line.cmp(&b.start_line))
+    });
+    entities.dedup_by(|a, b| {
+        a.file_path == b.file_path
+            && a.name == b.name
+            && a.kind == b.kind
+            && a.start_line == b.start_line
+    });
 
     // Third pass: capture orphaned reference intents (calls in top-level statements,
     // callbacks, etc. that were not captured by any named entity)
@@ -570,5 +592,174 @@ mod tests {
         assert!(!entities_java.is_empty());
         // Language is part of the model but not directly accessible via public getter
         // This is tested indirectly through extraction behavior
+    }
+
+    #[test]
+    fn test_extract_entities_deduplication_javascript() {
+        // Test deduplication with overlapping patterns in JavaScript
+        // The actual javascript.scm has patterns that can capture the same node
+        // multiple times due to tree-sitter query semantics
+        let source = r#"
+            function myFunc() {}
+            var myVar = 42;
+        "#;
+
+        // Use a simple query that extracts both functions and constants
+        let query = r#"
+            (function_declaration name: (identifier) @function.name)
+            (variable_declaration
+              (variable_declarator
+                name: (identifier) @constant.name))
+        "#;
+
+        let result = extract_entities(
+            source,
+            tree_sitter_javascript::LANGUAGE.into(),
+            query,
+            "javascript",
+            "/test.js",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+
+        // Should have 2 unique entities
+        assert_eq!(
+            entities.len(),
+            2,
+            "Should have exactly 2 unique entities: function and constant"
+        );
+
+        // Verify myFunc is captured as function
+        let func_entity = entities.iter().find(|e| e.name == "myFunc");
+        assert!(func_entity.is_some());
+        assert_eq!(func_entity.unwrap().kind, EntityKind::Function);
+
+        // Verify myVar is captured as constant
+        let const_entity = entities.iter().find(|e| e.name == "myVar");
+        assert!(const_entity.is_some());
+        assert_eq!(const_entity.unwrap().kind, EntityKind::Constant);
+    }
+
+    #[test]
+    fn test_extract_entities_deduplication_respects_file_path() {
+        // Same entity name in different "files" should NOT be deduplicated
+        let source = "var myVar = 42;";
+        let query =
+            "(variable_declaration (variable_declarator name: (identifier) @constant.name))";
+
+        // Extract from "file1"
+        let result1 = extract_entities(
+            source,
+            tree_sitter_javascript::LANGUAGE.into(),
+            query,
+            "javascript",
+            "/file1.js",
+            "test-repo",
+        );
+
+        // Extract from "file2"
+        let result2 = extract_entities(
+            source,
+            tree_sitter_javascript::LANGUAGE.into(),
+            query,
+            "javascript",
+            "/file2.js",
+            "test-repo",
+        );
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+
+        let entities1 = result1.unwrap();
+        let entities2 = result2.unwrap();
+
+        // Each file should have 1 entity
+        assert_eq!(entities1.len(), 1);
+        assert_eq!(entities2.len(), 1);
+
+        // Same name but different file paths
+        assert_eq!(entities1[0].name, "myVar");
+        assert_eq!(entities2[0].name, "myVar");
+        assert_ne!(entities1[0].file_path, entities2[0].file_path);
+    }
+
+    #[test]
+    fn test_extract_entities_deduplication_respects_kind() {
+        // Hypothetical scenario: same name used for class and function
+        // (unrealistic in real code, but tests the deduplication logic)
+        let source = r#"
+            class MyEntity {}
+            function MyEntity() {}
+        "#;
+
+        let query = r#"
+            (class_declaration name: (identifier) @class.name)
+            (function_declaration name: (identifier) @function.name)
+        "#;
+
+        let result = extract_entities(
+            source,
+            tree_sitter_javascript::LANGUAGE.into(),
+            query,
+            "javascript",
+            "/test.js",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+
+        // Should have 2 entities with same name but different kinds
+        assert_eq!(
+            entities.len(),
+            2,
+            "Should keep both entities with same name but different kinds"
+        );
+
+        let class_entity = entities.iter().find(|e| e.kind == EntityKind::Class);
+        let function_entity = entities.iter().find(|e| e.kind == EntityKind::Function);
+
+        assert!(class_entity.is_some());
+        assert!(function_entity.is_some());
+        assert_eq!(class_entity.unwrap().name, "MyEntity");
+        assert_eq!(function_entity.unwrap().name, "MyEntity");
+    }
+
+    #[test]
+    fn test_extract_entities_deduplication_respects_line_number() {
+        // Multiple functions with same name on different lines (overloading scenario)
+        let source = r#"
+            function process(x) { return x; }
+            function process(x, y) { return x + y; }
+        "#;
+
+        let query = "(function_declaration name: (identifier) @function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_javascript::LANGUAGE.into(),
+            query,
+            "javascript",
+            "/test.js",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+
+        // Should have 2 entities (same name, same kind, different lines)
+        assert_eq!(
+            entities.len(),
+            2,
+            "Should keep both functions with same name on different lines"
+        );
+
+        // Both should be named "process"
+        assert!(entities.iter().all(|e| e.name == "process"));
+
+        // They should have different start lines
+        assert_ne!(entities[0].start_line, entities[1].start_line);
     }
 }

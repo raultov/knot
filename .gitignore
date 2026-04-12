@@ -1,5 +1,6 @@
 /target
 /data/
+./node_modules/
 
 # Local Database Persistent Storage
 /data/
