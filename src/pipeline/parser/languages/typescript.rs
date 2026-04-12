@@ -122,6 +122,7 @@ pub(crate) fn extract_reference_intents_typescript(
 /// - JSX components: `<ChartToolbar />`, `<Sheet.Content />`
 /// - Callbacks passed as arguments: `app.use(this.handler)` -> records call to handler
 /// - Bind calls: `this.method.bind(this)` -> records call to method
+/// - Property/getter access: `this.client`, `this.field` -> records access to property/getter
 pub(crate) fn extract_call_intents_typescript(
     node: Node<'_>,
     source: &[u8],
@@ -213,6 +214,24 @@ pub(crate) fn extract_call_intents_typescript(
     } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
         // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
         extract_jsx_component_invocation(node, source, intents);
+    } else if node.kind() == "member_expression" {
+        // Detect property/getter access via `this.property` (e.g., this.client, this.field)
+        // This captures accesses like:
+        //   - this.client          (getter access)
+        //   - this._field          (private field access)
+        //   - this.publicProp      (public property access)
+        if let Some(object_node) = node.child_by_field_name("object")
+            && node_text(object_node, source) == "this"
+            && let Some(property_node) = node.child_by_field_name("property")
+        {
+            let prop_text = node_text(property_node, source);
+            let line = node.start_position().row + 1;
+            intents.push(CallIntent {
+                method: prop_text,
+                receiver: Some("this".to_string()),
+                line,
+            });
+        }
     }
 
     // Recursively process children
@@ -231,6 +250,8 @@ pub(crate) fn extract_call_intents_typescript(
 ///
 /// By extracting only the current node's intent, we avoid double-processing children
 /// that would cause duplicate CALLS with incorrect byte_pos/line attribution.
+///
+/// Handles property/getter access (e.g., `this.client`) as well as call expressions.
 pub(crate) fn extract_single_call_intent_typescript(
     node: Node<'_>,
     source: &[u8],
@@ -323,6 +344,20 @@ pub(crate) fn extract_single_call_intent_typescript(
     } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
         // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
         extract_jsx_component_invocation(node, source, &mut intents);
+    } else if node.kind() == "member_expression" {
+        // Detect property/getter access via `this.property` (e.g., this.client, this.field)
+        if let Some(object_node) = node.child_by_field_name("object")
+            && node_text(object_node, source) == "this"
+            && let Some(property_node) = node.child_by_field_name("property")
+        {
+            let prop_text = node_text(property_node, source);
+            let line = node.start_position().row + 1;
+            intents.push(CallIntent {
+                method: prop_text,
+                receiver: Some("this".to_string()),
+                line,
+            });
+        }
     }
 
     // NO recursive child processing - that's the key difference!
@@ -769,5 +804,98 @@ mod tests {
                 false
             }
         }));
+    }
+
+    #[test]
+    fn test_extract_call_intents_this_property_access() {
+        let code = "class Frame { navigate() { this.client.send(); } }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<CallIntent> = Vec::new();
+        extract_call_intents_typescript(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find both this.client (property access) and send() (method call)
+        assert!(
+            intents
+                .iter()
+                .any(|i| i.method == "client" && i.receiver == Some("this".to_string()))
+        );
+        assert!(intents.iter().any(|i| i.method == "send"));
+    }
+
+    #[test]
+    fn test_extract_call_intents_this_private_property_access() {
+        let code = "class Frame { method() { return this.#client; } }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<CallIntent> = Vec::new();
+        extract_call_intents_typescript(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find this.#client (private property access)
+        assert!(
+            intents
+                .iter()
+                .any(|i| i.method == "#client" && i.receiver == Some("this".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_extract_single_call_intent_this_property_access() {
+        let code = "function test() { const x = this.myProperty; }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_member_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "member_expression" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_member_expression(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(member_expr) = find_member_expression(tree.root_node()) {
+            let code_bytes = code.as_bytes();
+            let intents = extract_single_call_intent_typescript(member_expr, code_bytes);
+            assert!(!intents.is_empty());
+            assert_eq!(intents[0].method, "myProperty");
+            assert_eq!(intents[0].receiver, Some("this".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_extract_call_intents_this_getter_access() {
+        let code = "class Frame { get client(): CDPSession { return this.#client; } navigate() { this.client.send('test'); } }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<CallIntent> = Vec::new();
+        extract_call_intents_typescript(tree.root_node(), code_bytes, &mut intents);
+
+        // Should find:
+        // 1. this.#client (private field access in getter)
+        // 2. this.client (getter call in navigate)
+        // 3. send() (method call on result)
+        assert!(
+            intents
+                .iter()
+                .any(|i| i.method == "#client" && i.receiver == Some("this".to_string()))
+        );
+        assert!(
+            intents
+                .iter()
+                .any(|i| i.method == "client" && i.receiver == Some("this".to_string()))
+        );
+        assert!(intents.iter().any(|i| i.method == "send"));
     }
 }

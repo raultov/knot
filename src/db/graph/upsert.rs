@@ -118,7 +118,9 @@ impl UpsertExt for GraphDb {
                      n.docstring   = $docstring,
                      n.inline_comments = $inline_comments,
                      n.decorators  = $decorators,
-                     n.embed_text  = $embed_text"
+                     n.embed_text  = $embed_text,
+                     n.fqn         = $fqn,
+                     n.enclosing_class = $enclosing_class"
             );
 
             self.graph
@@ -135,7 +137,12 @@ impl UpsertExt for GraphDb {
                         .param("docstring", e.entity.docstring.clone().unwrap_or_default())
                         .param("inline_comments", e.entity.inline_comments.clone())
                         .param("decorators", e.entity.decorators.clone())
-                        .param("embed_text", e.entity.embed_text.clone()),
+                        .param("embed_text", e.entity.embed_text.clone())
+                        .param("fqn", e.entity.fqn.clone())
+                        .param(
+                            "enclosing_class",
+                            e.entity.enclosing_class.clone().unwrap_or_default(),
+                        ),
                 )
                 .await
                 .context("Failed to upsert entity node into Neo4j")?;

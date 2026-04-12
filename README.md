@@ -374,8 +374,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.5.4 — Real-time & Parallel Streaming) ✅
+### Current Release (v0.6.0 — Multi-Language Foundation & TypeScript Getters) ✅
+- ✅ **TypeScript Getter & Property Support**: Track `this.property` and `this.getter` patterns in TypeScript, creating proper `CALLS` relationships in the graph.
+- ✅ **Graph Metadata Persistence**: Fixed an issue where `fqn` and `enclosing_class` were not being persisted in Neo4j, improving incremental resolution accuracy.
 - ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together by automatically switching to incremental mode after the initial run (v0.5.4).
+
+### Previous Milestone (v0.5.4 — Real-time & Parallel Streaming) ✅
 - ✅ **Real-time Watch Mode**: Instant incremental updates on file changes via `--watch` flag (v0.5.2).
 - ✅ **Massive Modular Refactoring**: Clean separation of concerns into specialized modules (`files`, `watch`, `runner`, `orchestrator`) (v0.5.2).
 - ✅ **Cross-Repository Analysis**: Resolve dependencies and call graphs across multiple repositories via `KNOT_DEPENDENCIES` (v0.5.1).
