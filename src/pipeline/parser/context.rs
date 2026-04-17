@@ -100,6 +100,14 @@ pub(crate) fn compute_fqn_and_context(
         // HTML entities already have their FQN computed in the parser
         // (e.g., "#id-name", ".class-name", "<custom-element>")
         EntityKind::HtmlElement | EntityKind::HtmlId | EntityKind::HtmlClass => name.to_string(),
+        // CSS entities: FQN is the selector/variable name
+        EntityKind::CssClass => format!(".{}", name),
+        EntityKind::CssId => format!("#{}", name),
+        EntityKind::CssVariable => format!("--{}", name),
+        // SCSS entities: FQN is the variable/mixin/function name with prefix
+        EntityKind::ScssVariable => format!("${}", name),
+        EntityKind::ScssMixin => format!("@mixin {}", name),
+        EntityKind::ScssFunction => format!("@function {}", name),
     };
 
     (fqn, enclosing_class)

@@ -1,0 +1,119 @@
+/* SCSS Test File for Phase 3: SCSS Support */
+
+// SCSS Variables
+$primary-color: #0066cc;
+$secondary-color: #ff6b6b;
+$base-font-size: 16px;
+$border-radius: 4px;
+
+// SCSS Mixin: border-radius utility
+@mixin border-radius($radius) {
+  -webkit-border-radius: $radius;
+  -moz-border-radius: $radius;
+  border-radius: $radius;
+}
+
+// SCSS Mixin: button styles
+@mixin button-style($color) {
+  color: white;
+  background-color: $color;
+  padding: 10px 20px;
+  @include border-radius($border-radius);
+  border: none;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.9;
+  }
+}
+
+// SCSS Mixin: flexbox centering
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// SCSS Function: lighten color
+@function lighten-color($color, $amount) {
+  @return lighten($color, $amount);
+}
+
+// SCSS Function: calculate font size
+@function calc-font-size($scale) {
+  @return $base-font-size * $scale;
+}
+
+// Button styles using mixins
+.btn-primary {
+  @include button-style($primary-color);
+}
+
+.btn-secondary {
+  @include button-style($secondary-color);
+}
+
+// Header styles
+#header-container {
+  font-size: calc-font-size(1.5);
+  font-weight: bold;
+  padding: 20px;
+  @include flex-center;
+}
+
+#header-title {
+  color: #333333;
+  margin: 0;
+}
+
+// Container styles
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.card {
+  border: 1px solid lighten-color(#999, 20%);
+  @include border-radius(8px);
+  padding: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+// Nested styles
+.navbar {
+  background-color: $primary-color;
+  padding: 10px;
+
+  .navbar-item {
+    color: white;
+    margin: 0 10px;
+
+    &:hover {
+      color: lighten-color($primary-color, 30%);
+    }
+  }
+
+  .navbar-brand {
+    font-size: calc-font-size(1.2);
+    font-weight: bold;
+  }
+}
+
+// Grid system
+.responsive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+// Responsive utilities using SCSS
+@media (max-width: 768px) {
+  .responsive-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .navbar {
+    flex-direction: column;
+  }
+}

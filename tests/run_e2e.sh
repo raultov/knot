@@ -281,6 +281,43 @@ else
     exit 1
 fi
 
+# Test 7: Search for CSS classes
+echo ""
+echo "Test 7: Searching for CSS classes in test_styles.css..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "btn-primary"; then
+    echo -e "${GREEN}✓ Found CSS class 'btn-primary'${NC}"
+else
+    echo -e "${RED}✗ CSS class 'btn-primary' not found${NC}"
+    exit 1
+fi
+
+# Test CSS ID
+MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"header-container"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "header-container"; then
+    echo -e "${GREEN}✓ Found CSS id 'header-container'${NC}"
+else
+    echo -e "${RED}✗ CSS id 'header-container' not found${NC}"
+    exit 1
+fi
+
+# Test 8: Search for SCSS classes (uses card selector from test_styles.scss)
+echo ""
+echo "Test 8: Searching for SCSS classes in test_styles.scss..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"responsive-grid"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "responsive-grid"; then
+    echo -e "${GREEN}✓ Found SCSS class 'responsive-grid'${NC}"
+else
+    echo -e "${RED}✗ SCSS class 'responsive-grid' not found${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -295,6 +332,10 @@ echo "  ✓ Java annotation extraction"
 echo "  ✓ HTML custom elements extraction (Angular components)"
 echo "  ✓ HTML id and class attributes indexing"
 echo "  ✓ JSX id and className attributes indexing"
+echo "  ✓ CSS class and id selector extraction"
+echo "  ✓ CSS Custom Properties (variables) indexing"
+echo "  ✓ SCSS variable definitions extraction"
+echo "  ✓ SCSS mixin and function extraction"
 echo "  ✓ MCP server query functionality"
 echo ""
 

@@ -24,6 +24,14 @@ pub enum EntityKind {
     HtmlElement, // Custom elements like <app-profile>, <web-component>
     HtmlId,      // id="..." attributes
     HtmlClass,   // class="..." or className="..." attributes
+    // CSS entities
+    CssClass,    // .my-class
+    CssId,       // #my-id
+    CssVariable, // --my-var (CSS Custom Properties)
+    // SCSS entities
+    ScssVariable, // $my-var
+    ScssMixin,    // @mixin my-mixin()
+    ScssFunction, // @function my-function()
 }
 
 impl std::fmt::Display for EntityKind {
@@ -38,6 +46,12 @@ impl std::fmt::Display for EntityKind {
             EntityKind::HtmlElement => "html_element",
             EntityKind::HtmlId => "html_id",
             EntityKind::HtmlClass => "html_class",
+            EntityKind::CssClass => "css_class",
+            EntityKind::CssId => "css_id",
+            EntityKind::CssVariable => "css_variable",
+            EntityKind::ScssVariable => "scss_variable",
+            EntityKind::ScssMixin => "scss_mixin",
+            EntityKind::ScssFunction => "scss_function",
         };
         write!(f, "{s}")
     }

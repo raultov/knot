@@ -12,6 +12,12 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::HtmlElement => "HtmlElement",
         EntityKind::HtmlId => "HtmlId",
         EntityKind::HtmlClass => "HtmlClass",
+        EntityKind::CssClass => "CssClass",
+        EntityKind::CssId => "CssId",
+        EntityKind::CssVariable => "CssVariable",
+        EntityKind::ScssVariable => "ScssVariable",
+        EntityKind::ScssMixin => "ScssMixin",
+        EntityKind::ScssFunction => "ScssFunction",
     }
 }
 
@@ -65,6 +71,36 @@ mod tests {
     }
 
     #[test]
+    fn test_kind_to_label_css_class() {
+        assert_eq!(kind_to_label(&EntityKind::CssClass), "CssClass");
+    }
+
+    #[test]
+    fn test_kind_to_label_css_id() {
+        assert_eq!(kind_to_label(&EntityKind::CssId), "CssId");
+    }
+
+    #[test]
+    fn test_kind_to_label_css_variable() {
+        assert_eq!(kind_to_label(&EntityKind::CssVariable), "CssVariable");
+    }
+
+    #[test]
+    fn test_kind_to_label_scss_variable() {
+        assert_eq!(kind_to_label(&EntityKind::ScssVariable), "ScssVariable");
+    }
+
+    #[test]
+    fn test_kind_to_label_scss_mixin() {
+        assert_eq!(kind_to_label(&EntityKind::ScssMixin), "ScssMixin");
+    }
+
+    #[test]
+    fn test_kind_to_label_scss_function() {
+        assert_eq!(kind_to_label(&EntityKind::ScssFunction), "ScssFunction");
+    }
+
+    #[test]
     fn test_kind_to_label_all_variants() {
         let variants = [
             EntityKind::Class,
@@ -76,6 +112,12 @@ mod tests {
             EntityKind::HtmlElement,
             EntityKind::HtmlId,
             EntityKind::HtmlClass,
+            EntityKind::CssClass,
+            EntityKind::CssId,
+            EntityKind::CssVariable,
+            EntityKind::ScssVariable,
+            EntityKind::ScssMixin,
+            EntityKind::ScssFunction,
         ];
 
         let expected_labels = [
@@ -88,6 +130,12 @@ mod tests {
             "HtmlElement",
             "HtmlId",
             "HtmlClass",
+            "CssClass",
+            "CssId",
+            "CssVariable",
+            "ScssVariable",
+            "ScssMixin",
+            "ScssFunction",
         ];
 
         for (variant, expected_label) in variants.iter().zip(expected_labels.iter()) {

@@ -199,6 +199,62 @@ pub(crate) fn extract_entities(
                         line: node.start_position().row + 1,
                     });
                 }
+                "css.class" => {
+                    let mut clean_name = text.clone();
+                    if clean_name.starts_with('.') {
+                        clean_name.remove(0);
+                    }
+                    name = Some(clean_name);
+                    kind = Some(EntityKind::CssClass);
+                    start_line = node.start_position().row + 1;
+                    entity_node = Some(node);
+                }
+                "css.id" => {
+                    let mut clean_name = text.clone();
+                    if clean_name.starts_with('#') {
+                        clean_name.remove(0);
+                    }
+                    name = Some(clean_name);
+                    kind = Some(EntityKind::CssId);
+                    start_line = node.start_position().row + 1;
+                    entity_node = Some(node);
+                }
+                "css.variable" => {
+                    let mut clean_name = text.clone();
+                    if clean_name.starts_with("--") {
+                        clean_name = clean_name[2..].to_string();
+                    }
+                    name = Some(clean_name);
+                    kind = Some(EntityKind::CssVariable);
+                    start_line = node.start_position().row + 1;
+                    entity_node = Some(node);
+                }
+                "scss.mixin" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::ScssMixin);
+                    start_line = node.start_position().row + 1;
+                    entity_node = Some(node);
+                }
+                "scss.function" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::ScssFunction);
+                    start_line = node.start_position().row + 1;
+                    entity_node = Some(node);
+                }
+                "scss.variable" => {
+                    let mut clean_name = text.clone();
+                    if clean_name.starts_with('$') {
+                        clean_name.remove(0);
+                    }
+                    name = Some(clean_name);
+                    kind = Some(EntityKind::ScssVariable);
+                    start_line = node.start_position().row + 1;
+                    entity_node = Some(node);
+                }
+                "css.keyframe" => {
+                    // Keyframes are not named entities (the @keyframes is just a marker)
+                    // Skip them for now
+                }
                 _ => {}
             }
         }

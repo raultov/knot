@@ -2,7 +2,7 @@
 //!
 //! Uses the `ignore` crate to walk a directory tree while respecting
 //! `.gitignore`, `.ignore`, and other standard ignore files.
-//! Supported extensions: `.java`, `.ts`, `.tsx`, `.cts`, `.js`, `.mjs`, `.cjs`, `.jsx`.
+//! Supported extensions: `.java`, `.ts`, `.tsx`, `.cts`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.html`, `.htm`, `.css`, `.scss`, `.sass`.
 
 use anyhow::Result;
 use ignore::WalkBuilder;
@@ -11,7 +11,7 @@ use tracing::info;
 
 /// Supported source file extensions.
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "html", "htm",
+    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "html", "htm", "css", "scss", "sass",
 ];
 
 /// Recursively discover all supported source files under `repo_path`.

@@ -38,6 +38,8 @@ const DEFAULT_TSX_QUERY: &str = include_str!("../../../queries/tsx.scm");
 const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
 #[allow(dead_code)] // Reserved for future query-based HTML parsing
 const DEFAULT_HTML_QUERY: &str = include_str!("../../../queries/html.scm");
+const DEFAULT_CSS_QUERY: &str = include_str!("../../../queries/css.scm");
+const DEFAULT_SCSS_QUERY: &str = include_str!("../../../queries/scss.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -161,6 +163,28 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &file_path,
                 &parse_cfg.repo_name,
             )
+        }
+        "css" => {
+            let query_src = load_query_source("css.scm", DEFAULT_CSS_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_css::LANGUAGE.into(),
+                &query_src,
+                "css",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "scss" | "sass" => {
+            let query_src = load_query_source("scss.scm", DEFAULT_SCSS_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_scss::language(),
+                &query_src,
+                "scss",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
         }
         other => {
             warn!("Unsupported extension '{other}', skipping");
