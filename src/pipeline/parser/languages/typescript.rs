@@ -688,6 +688,7 @@ pub(crate) fn extract_enum_usages_typescript(
 /// - `className="btn primary"` → HtmlClass entities for "btn" and "primary"
 ///
 /// Returns a vector of tuples (attribute_name, attribute_value, line).
+#[allow(dead_code)]
 pub(crate) fn extract_jsx_attributes(
     node: Node<'_>,
     source: &[u8],

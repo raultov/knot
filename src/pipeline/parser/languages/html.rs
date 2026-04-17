@@ -1,6 +1,12 @@
 //! HTML/Angular template extraction for custom elements and attributes.
+//!
+//! Handles:
+//! - HTML id and class attributes
+//! - Custom HTML elements (Web Components, Angular components)
+//! - HTML file imports (<script> and <link> tags)
+//! - Phase 4 cross-language linking
 
-use crate::models::{EntityKind, ParsedEntity};
+use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 use uuid::Uuid;
@@ -170,7 +176,221 @@ pub(crate) fn extract_entities_html(
 ) -> Vec<ParsedEntity> {
     let mut entities = Vec::new();
     extract_html_elements(root, source, &mut entities, file_path, repo_name);
+    // Phase 4: Extract HTML file imports (<script src> and <link href>)
+    extract_html_file_imports(root, source, &mut entities, file_path, repo_name);
     entities
+}
+
+/// Process HTML capture names (html_id_value, html_class_value, etc.)
+/// and extract entity information.
+///
+/// Returns (name, kind, start_line) or None if not a named entity.
+pub(crate) fn handle_html_capture(
+    cap_name: &str,
+    text: &str,
+    node: Node<'_>,
+) -> Option<(String, EntityKind, usize)> {
+    let start_line = node.start_position().row + 1;
+
+    match cap_name {
+        "html_id_value" => {
+            let clean_id = text
+                .trim_start_matches('"')
+                .trim_start_matches('\'')
+                .trim_end_matches('"')
+                .trim_end_matches('\'')
+                .to_string();
+            Some((clean_id, EntityKind::HtmlId, start_line))
+        }
+        "html_class_value" => {
+            let clean_class = text
+                .trim_start_matches('"')
+                .trim_start_matches('\'')
+                .trim_end_matches('"')
+                .trim_end_matches('\'')
+                .to_string();
+            if !clean_class.is_empty() {
+                Some((clean_class, EntityKind::HtmlClass, start_line))
+            } else {
+                None
+            }
+        }
+        "html_element_name" => Some((text.to_string(), EntityKind::HtmlElement, start_line)),
+        _ => None,
+    }
+}
+
+/// Extract HTML file imports (<script src="..."> and <link rel="stylesheet" href="...">)
+/// for cross-language linking.
+///
+/// This creates reference intents that link HTML files to imported JavaScript and CSS files,
+/// enabling queries like "which HTML files import this JavaScript file?"
+fn extract_html_file_imports(
+    node: Node<'_>,
+    source: &[u8],
+    entities: &mut Vec<ParsedEntity>,
+    file_path: &str,
+    repo_name: &str,
+) {
+    // Check if this is a script_element (Tree-sitter HTML parses <script> as script_element)
+    if node.kind() == "script_element" {
+        // For <script src="...">, find the src attribute
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "start_tag" {
+                for attr_child in child.children(&mut child.walk()) {
+                    if attr_child.kind() == "attribute" {
+                        let mut attr_name = String::new();
+                        let mut attr_value = String::new();
+
+                        for attr_part in attr_child.children(&mut attr_child.walk()) {
+                            match attr_part.kind() {
+                                "attribute_name" => {
+                                    attr_name = String::from_utf8_lossy(
+                                        &source[attr_part.start_byte()..attr_part.end_byte()],
+                                    )
+                                    .to_string();
+                                }
+                                "quoted_attribute_value" => {
+                                    let raw_value = String::from_utf8_lossy(
+                                        &source[attr_part.start_byte()..attr_part.end_byte()],
+                                    )
+                                    .to_string();
+                                    attr_value = raw_value
+                                        .trim_start_matches('"')
+                                        .trim_start_matches('\'')
+                                        .trim_end_matches('"')
+                                        .trim_end_matches('\'')
+                                        .to_string();
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if attr_name == "src" && !attr_value.is_empty() {
+                            // Create a reference intent for the script import
+                            let mut entity = ParsedEntity::new(
+                                format!("import({})", attr_value),
+                                EntityKind::Function,
+                                format!("{}::import({})", file_path, attr_value),
+                                None,
+                                None,
+                                "html",
+                                file_path,
+                                attr_child.start_position().row + 1,
+                                None,
+                                repo_name,
+                            );
+                            entity
+                                .reference_intents
+                                .push(ReferenceIntent::HtmlFileImport {
+                                    file_path: attr_value,
+                                    line: attr_child.start_position().row + 1,
+                                });
+                            entities.push(entity);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Check if this is a regular element (for <link> tags)
+    else if node.kind() == "element" {
+        // Get the tag name by finding the tag_name child in start_tag
+        let tag_name = if let Some(start_tag) = node.child(0).filter(|n| n.kind() == "start_tag") {
+            let mut found_tag = String::new();
+            for child in start_tag.children(&mut start_tag.walk()) {
+                if child.kind() == "tag_name" {
+                    found_tag =
+                        String::from_utf8_lossy(&source[child.start_byte()..child.end_byte()])
+                            .to_string();
+                    break;
+                }
+            }
+            found_tag
+        } else {
+            String::new()
+        };
+
+        // Process <link rel="stylesheet" href="...">
+        // Note: <script src="..."> is handled separately as script_element above
+        if tag_name == "link" {
+            let mut is_stylesheet = false;
+            let mut href_value = String::new();
+
+            // Find rel and href attributes
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "start_tag" {
+                    for attr_child in child.children(&mut child.walk()) {
+                        if attr_child.kind() == "attribute" {
+                            let mut attr_name = String::new();
+                            let mut attr_value = String::new();
+
+                            for attr_part in attr_child.children(&mut attr_child.walk()) {
+                                match attr_part.kind() {
+                                    "attribute_name" => {
+                                        attr_name = String::from_utf8_lossy(
+                                            &source[attr_part.start_byte()..attr_part.end_byte()],
+                                        )
+                                        .to_string();
+                                    }
+                                    "quoted_attribute_value" => {
+                                        let raw_value = String::from_utf8_lossy(
+                                            &source[attr_part.start_byte()..attr_part.end_byte()],
+                                        )
+                                        .to_string();
+                                        attr_value = raw_value
+                                            .trim_start_matches('"')
+                                            .trim_start_matches('\'')
+                                            .trim_end_matches('"')
+                                            .trim_end_matches('\'')
+                                            .to_string();
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if attr_name == "rel" && attr_value.contains("stylesheet") {
+                                is_stylesheet = true;
+                            }
+                            if attr_name == "href" {
+                                href_value = attr_value;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if is_stylesheet && !href_value.is_empty() {
+                // Create a reference intent for the stylesheet import
+                let mut entity = ParsedEntity::new(
+                    format!("import({})", href_value),
+                    EntityKind::Constant,
+                    format!("{}::import({})", file_path, href_value),
+                    None,
+                    None,
+                    "html",
+                    file_path,
+                    node.start_position().row + 1,
+                    None,
+                    repo_name,
+                );
+                entity
+                    .reference_intents
+                    .push(ReferenceIntent::CssFileImport {
+                        file_path: href_value,
+                        line: node.start_position().row + 1,
+                    });
+                entities.push(entity);
+            }
+        }
+    }
+
+    // Recursively process all children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_html_file_imports(c, source, entities, file_path, repo_name);
+        child = c.next_sibling();
+    }
 }
 
 #[cfg(test)]

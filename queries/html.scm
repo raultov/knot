@@ -59,7 +59,7 @@
       (quoted_attribute_value) @stylesheet_href))
   (#eq? @link_tag "link")
   (#eq? @rel_attr "rel")
-  (#eq? @rel_value "\"stylesheet\"" "stylesheet" "'stylesheet'")
+  (#match? @rel_value "stylesheet")
   (#eq? @href_attr "href"))
 
 ; Alternative: stylesheet link with any order of attributes

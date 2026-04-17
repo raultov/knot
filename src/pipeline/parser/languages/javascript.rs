@@ -1,6 +1,7 @@
-use crate::models::{CallIntent, ReferenceIntent};
+use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
+use uuid::Uuid;
 
 /// Recursively extract all call intents from JavaScript, returning (intent, byte_pos) pairs.
 pub(crate) fn collect_all_reference_intents_javascript(
@@ -939,5 +940,123 @@ mod tests {
         } else {
             panic!("No JSX self-closing element found");
         }
+    }
+}
+
+/// Handle DOM and CSS reference captures in JavaScript
+/// (dom.element_id, css.class_name, etc.)
+pub(crate) fn handle_dom_css_capture(
+    cap_name: &str,
+    text: &str,
+    line: usize,
+) -> Option<ReferenceIntent> {
+    match cap_name {
+        "dom.element_id" => {
+            let clean_id = text
+                .trim_start_matches('"')
+                .trim_start_matches('\'')
+                .trim_end_matches('"')
+                .trim_end_matches('\'')
+                .to_string();
+
+            Some(ReferenceIntent::DomElementReference {
+                element_id: clean_id,
+                line,
+            })
+        }
+        "css.class_name" | "css.class_assignment" => {
+            let clean_class = text
+                .trim_start_matches('"')
+                .trim_start_matches('\'')
+                .trim_end_matches('"')
+                .trim_end_matches('\'')
+                .to_string();
+
+            Some(ReferenceIntent::CssClassUsage {
+                class_name: clean_class,
+                line,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extract JSX HTML attributes (id, className) for cross-language search.
+///
+/// Recursively traverses the AST looking for JSX elements and creates
+/// HtmlId and HtmlClass entities from their attributes.
+pub(crate) fn extract_jsx_html_attributes(
+    node: Node<'_>,
+    source: &[u8],
+    entities: &mut Vec<ParsedEntity>,
+    file_path: &str,
+    repo_name: &str,
+) {
+    // Check if this is a JSX element
+    if matches!(
+        node.kind(),
+        "jsx_self_closing_element" | "jsx_opening_element"
+    ) {
+        // Extract attributes
+        let attrs = extract_jsx_attributes(node, source);
+
+        // Create entities for each extracted attribute
+        let line = node.start_position().row + 1;
+        for (attr_name, attr_value, _) in attrs {
+            if attr_name == "id" {
+                // Create HtmlId entity
+                entities.push(ParsedEntity {
+                    uuid: Uuid::new_v4(),
+                    name: attr_value.clone(),
+                    kind: EntityKind::HtmlId,
+                    fqn: format!("#{}", attr_value),
+                    signature: None,
+                    docstring: None,
+                    inline_comments: Vec::new(),
+                    decorators: Vec::new(),
+                    language: "javascript".to_string(),
+                    file_path: file_path.to_string(),
+                    start_line: line,
+                    enclosing_class: None,
+                    repo_name: repo_name.to_string(),
+                    reference_intents: Vec::new(),
+                    calls: Vec::new(),
+                    relationships: Vec::new(),
+                    embed_text: String::new(),
+                });
+            } else if attr_name == "className" {
+                // Split by whitespace and create HtmlClass entity for each class
+                for class_name in attr_value.split_whitespace() {
+                    if !class_name.is_empty() {
+                        entities.push(ParsedEntity {
+                            uuid: Uuid::new_v4(),
+                            name: class_name.to_string(),
+                            kind: EntityKind::HtmlClass,
+                            fqn: format!(".{}", class_name),
+                            signature: None,
+                            docstring: None,
+                            inline_comments: Vec::new(),
+                            decorators: Vec::new(),
+                            language: "javascript".to_string(),
+                            file_path: file_path.to_string(),
+                            start_line: line,
+                            enclosing_class: None,
+                            repo_name: repo_name.to_string(),
+                            reference_intents: Vec::new(),
+                            calls: Vec::new(),
+                            relationships: Vec::new(),
+                            embed_text: String::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Recursively process all children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_jsx_html_attributes(c, source, entities, file_path, repo_name);
+        child = c.next_sibling();
     }
 }

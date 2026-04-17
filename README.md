@@ -27,7 +27,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Hybrid Web Ecosystem** (v0.6.5+): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
+- **Hybrid Web Ecosystem** (v0.6.5): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
 - **Rust** (Planned): Struct, trait, and macro analysis
 
 **📚 Rich Comment Extraction**
