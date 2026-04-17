@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, TypeScript, and JavaScript/Node.js, with planned support for HTML, CSS/SCSS, and Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS, with planned support for Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -26,7 +26,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 - **JavaScript/Node.js** (v0.7.0+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
-- **CSS/SCSS** (Planned): Stylesheet indexing with variable and mixin tracking
+- **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
 - **Rust** (Planned): Struct, trait, and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -375,7 +375,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.3 — HTML & JSX Attribute Indexing) ✅
+### Current Release (v0.6.4 — CSS & SCSS Support) ✅
+- ✅ **CSS Support**: Extraction of class and ID selectors, and CSS Custom Properties (variables).
+- ✅ **SCSS Support**: Extraction of mixins, functions, variables, and selectors from `.scss` and `.sass` files.
+- ✅ **Unified Indexing**: Cross-language discovery of CSS class/ID usage in HTML, JSX, and TSX.
+
+### Previous Release (v0.6.3 — HTML & JSX Attribute Indexing)
 - ✅ **HTML Support**: Full parsing of `.html` files for Angular templates and Web Components.
 - ✅ **JSX Attribute Indexing**: Extract `id` and `className` from React components for cross-language CSS search.
 - ✅ **CI/CD Pipeline**: Added GitHub Actions workflow with automated unit and E2E tests.
@@ -406,13 +411,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ Extract HTML `id` and `class` attributes for cross-language CSS search
 - ✅ Extract JSX/TSX `id` and `className` attributes from React components
 - ✅ Unified indexing: Find "which components use CSS class 'btn-primary'?" across HTML/JSX
-- ⏳ Embedded script/style block extraction (deferred to Phase 4)
 
-#### Phase 3: CSS & SCSS Support
-- [ ] Support `.css`, `.scss`, `.sass` files
-- [ ] Index CSS/SCSS selectors, variables, and mixins
-- [ ] Track selector usage and definitions
-- [ ] SCSS function and mixin extraction
+#### Completed: Phase 3 — CSS & SCSS Support (v0.6.4)
+- ✅ Support `.css`, `.scss`, `.sass` files
+- ✅ Index CSS/SCSS selectors, variables, and mixins
+- ✅ Track selector usage and definitions
+- ✅ SCSS function and mixin extraction
 
 #### Phase 4: Hybrid Web Ecosystem
 - [ ] Cross-language dependency resolution (JS ↔ HTML ↔ CSS)
