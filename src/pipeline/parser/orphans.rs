@@ -58,6 +58,10 @@ pub(crate) fn collect_orphaned_references(
                 ReferenceIntent::Extends { line, .. } => *line,
                 ReferenceIntent::Implements { line, .. } => *line,
                 ReferenceIntent::TypeReference { line, .. } => *line,
+                ReferenceIntent::DomElementReference { line, .. } => *line,
+                ReferenceIntent::CssClassUsage { line, .. } => *line,
+                ReferenceIntent::HtmlFileImport { line, .. } => *line,
+                ReferenceIntent::CssFileImport { line, .. } => *line,
             };
             let target_idx = find_nearest_entity_by_line(entities, orphan_line);
             entities[target_idx].reference_intents.push(intent);

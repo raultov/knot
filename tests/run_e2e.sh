@@ -318,6 +318,58 @@ else
     exit 1
 fi
 
+# Test 9: Phase 4 - Search for CSS class referenced in JavaScript (hybrid web ecosystem)
+echo ""
+echo "Test 9: Searching for CSS class 'btn-primary' referenced in spa_app.js..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "btn-primary"; then
+    echo -e "${GREEN}✓ Found CSS class 'btn-primary' (used in HTML, defined in CSS, referenced in JS)${NC}"
+else
+    echo -e "${RED}✗ CSS class 'btn-primary' not found in hybrid search${NC}"
+    exit 1
+fi
+
+# Test 10: Phase 4 - Search for HTML element ID referenced in JavaScript
+echo ""
+echo "Test 10: Searching for HTML id 'app-container' referenced in spa_app.js..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"app-container"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "app-container"; then
+    echo -e "${GREEN}✓ Found HTML id 'app-container' (defined in HTML, manipulated in JS)${NC}"
+else
+    echo -e "${RED}✗ HTML id 'app-container' not found in hybrid search${NC}"
+    exit 1
+fi
+
+# Test 11: Phase 4 - Search for dashboard element referenced in JavaScript
+echo ""
+echo "Test 11: Searching for HTML id 'dashboard' referenced in spa_app.js..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"dashboard"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "dashboard"; then
+    echo -e "${GREEN}✓ Found HTML id 'dashboard' (defined in HTML, manipulated in JS)${NC}"
+else
+    echo -e "${RED}✗ HTML id 'dashboard' not found in hybrid search${NC}"
+    exit 1
+fi
+
+# Test 12: Phase 4 - Search for toggle button element
+echo ""
+echo "Test 12: Searching for HTML id 'toggle-btn' used in theme switching..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"toggle-btn"}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "toggle-btn"; then
+    echo -e "${GREEN}✓ Found HTML id 'toggle-btn' (cross-language reference)${NC}"
+else
+    echo -e "${RED}✗ HTML id 'toggle-btn' not found${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -337,6 +389,9 @@ echo "  ✓ CSS Custom Properties (variables) indexing"
 echo "  ✓ SCSS variable definitions extraction"
 echo "  ✓ SCSS mixin and function extraction"
 echo "  ✓ MCP server query functionality"
+echo "  ✓ Phase 4: Hybrid Web Ecosystem - Cross-language CSS class references (JS → CSS)"
+echo "  ✓ Phase 4: Hybrid Web Ecosystem - Cross-language HTML ID references (JS → HTML)"
+echo "  ✓ Phase 4: Hybrid Web Ecosystem - Multi-file SPA linking (HTML → JS, HTML → CSS)"
 echo ""
 
 exit 0

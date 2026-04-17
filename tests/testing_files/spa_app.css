@@ -1,0 +1,228 @@
+/**
+ * Phase 4 Test: Hybrid Web Ecosystem CSS
+ * This CSS file defines classes and IDs that are referenced in spa_app.html and spa_app.js
+ */
+
+/* Root theme variables */
+:root {
+    --primary-color: #007bff;
+    --secondary-color: #6c757d;
+    --danger-color: #dc3545;
+    --success-color: #28a745;
+    --bg-light: #f8f9fa;
+    --bg-dark: #343a40;
+    --text-light: #f8f9fa;
+    --text-dark: #343a40;
+}
+
+/* General layout styles */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+        sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-light);
+    color: var(--text-dark);
+}
+
+/* App wrapper container */
+.app-wrapper {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+/* Navbar styles - referenced in HTML and JavaScript */
+.navbar {
+    background-color: var(--primary-color);
+    color: white;
+    padding: 1rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.navbar h1 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.5rem;
+}
+
+/* Button styles - used in both HTML and manipulated in JavaScript */
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #0056b3;
+    box-shadow: 0 2px 8px rgba(0, 86, 179, 0.3);
+}
+
+.btn-secondary {
+    background-color: var(--secondary-color);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #5a6268;
+}
+
+.btn-dark {
+    background-color: var(--bg-dark);
+    color: var(--text-light);
+}
+
+.btn-disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Content section */
+.content-section {
+    flex: 1;
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.content-item {
+    opacity: 0.5;
+    transition: opacity 0.3s ease;
+}
+
+.content-item.active {
+    opacity: 1;
+}
+
+/* Dashboard panel - referenced in HTML and JavaScript */
+.dashboard-panel {
+    flex: 2;
+    background-color: white;
+    border-radius: 4px;
+    padding: 1rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.dashboard-panel.loading {
+    opacity: 0.7;
+    background-color: #f0f0f0;
+}
+
+.dashboard-panel h2 {
+    margin-top: 0;
+    color: var(--primary-color);
+}
+
+/* Sidebar widget */
+.sidebar-widget {
+    flex: 1;
+    background-color: white;
+    border-radius: 4px;
+    padding: 1rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-widget h3 {
+    margin-top: 0;
+    color: var(--secondary-color);
+}
+
+/* Navigation links */
+.nav-links {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.nav-links li {
+    margin-bottom: 0.5rem;
+}
+
+.nav-links a {
+    text-decoration: none;
+    color: var(--primary-color);
+    transition: color 0.3s ease;
+}
+
+.nav-links a:hover {
+    color: #0056b3;
+    text-decoration: underline;
+}
+
+.nav-link-active {
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+/* Status text styling */
+#status-text {
+    padding: 0.5rem;
+    background-color: var(--bg-light);
+    border-left: 4px solid var(--primary-color);
+    border-radius: 2px;
+    margin: 1rem 0;
+}
+
+#status-text.status-updated {
+    background-color: #d4edda;
+    border-left-color: var(--success-color);
+    color: #155724;
+}
+
+/* Footer container */
+.footer-container {
+    background-color: var(--text-dark);
+    color: var(--text-light);
+    text-align: center;
+    padding: 1rem;
+    margin-top: auto;
+}
+
+.footer-container p {
+    margin: 0;
+}
+
+/* Theme switching styles */
+.dark-theme {
+    background-color: var(--bg-dark);
+    color: var(--text-light);
+}
+
+.dark-theme .navbar {
+    background-color: #1a1a1a;
+}
+
+.dark-theme .dashboard-panel,
+.dark-theme .sidebar-widget {
+    background-color: #2d2d2d;
+    color: var(--text-light);
+}
+
+.dark-theme .dashboard-panel.loading {
+    background-color: #1a1a1a;
+}
+
+.light-theme {
+    background-color: var(--bg-light);
+    color: var(--text-dark);
+}
+
+/* Visibility states */
+.visible {
+    display: block;
+    opacity: 1;
+}
+
+.hidden {
+    display: none;
+    opacity: 0;
+}

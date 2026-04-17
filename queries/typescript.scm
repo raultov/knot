@@ -124,3 +124,46 @@
 ; This provides better coverage and handles complex type annotations that
 ; Tree-sitter queries cannot reliably capture.
 
+; ============================================================
+; Phase 4: Cross-Language References (DOM and CSS)
+; ============================================================
+
+; --- DOM Element References ---
+; Matches: document.getElementById('element-id')
+; Captures both the method name and the string argument
+(call_expression
+  function: (member_expression
+    object: (member_expression
+      object: (identifier) @dom.receiver
+      property: (property_identifier) @dom.method)
+    property: (property_identifier) @dom.action)
+  arguments: (arguments
+    (string) @dom.element_id))
+
+; Shorter form: element.getElementById() without nested member_expression
+(call_expression
+  function: (member_expression
+    object: (identifier) @dom.receiver
+    property: (property_identifier) @dom.action)
+  arguments: (arguments
+    (string) @dom.element_id))
+
+; --- CSS Class Manipulations ---
+; Matches: element.classList.add('class-name')
+(call_expression
+  function: (member_expression
+    object: (member_expression
+      object: (identifier) @css.receiver
+      property: (property_identifier) @css.classList)
+    property: (property_identifier) @css.method)
+  arguments: (arguments
+    (string) @css.class_name))
+
+; --- CSS Class Assignments ---
+; Matches: element.className = 'new-class' or element.className = "new-class"
+(assignment_expression
+  left: (member_expression
+    object: (identifier) @css.receiver
+    property: (property_identifier) @css.className)
+  right: (string) @css.class_assignment)
+

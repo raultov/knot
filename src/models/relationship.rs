@@ -45,6 +45,38 @@ pub enum ReferenceIntent {
         /// Line number where the reference appears.
         line: usize,
     },
+    /// JavaScript references an HTML element by ID.
+    /// Example: `document.getElementById('app')`, `querySelector('#main')`
+    DomElementReference {
+        /// The HTML element ID being referenced (without the `#` prefix).
+        element_id: String,
+        /// Line number where this reference occurs.
+        line: usize,
+    },
+    /// JavaScript uses or manipulates a CSS class.
+    /// Examples: `element.classList.add('active')`, `element.className = 'new-class'`
+    CssClassUsage {
+        /// The CSS class name being used (without the `.` prefix).
+        class_name: String,
+        /// Line number where this usage occurs.
+        line: usize,
+    },
+    /// HTML imports a JavaScript file.
+    /// Example: `<script src="main.js"></script>`
+    HtmlFileImport {
+        /// The imported file path (relative or absolute).
+        file_path: String,
+        /// Line number where this import occurs.
+        line: usize,
+    },
+    /// HTML imports a CSS stylesheet.
+    /// Example: `<link rel="stylesheet" href="style.css">`
+    CssFileImport {
+        /// The imported CSS file path (relative or absolute).
+        file_path: String,
+        /// Line number where this import occurs.
+        line: usize,
+    },
 }
 
 /// Represents a typed relationship edge in the dependency graph.
@@ -59,6 +91,14 @@ pub enum RelationshipType {
     Implements,
     /// Type annotation or usage in a signature/variable.
     References,
+    /// JavaScript code references an HTML element by ID.
+    ReferencesDOM,
+    /// JavaScript code uses or manipulates a CSS class.
+    UsesCSSClass,
+    /// HTML file imports a JavaScript file via <script> tag.
+    ImportsScript,
+    /// HTML file imports a CSS stylesheet via <link> tag.
+    ImportsStylesheet,
 }
 
 impl std::fmt::Display for RelationshipType {
@@ -68,6 +108,10 @@ impl std::fmt::Display for RelationshipType {
             RelationshipType::Extends => write!(f, "EXTENDS"),
             RelationshipType::Implements => write!(f, "IMPLEMENTS"),
             RelationshipType::References => write!(f, "REFERENCES"),
+            RelationshipType::ReferencesDOM => write!(f, "REFERENCES_DOM"),
+            RelationshipType::UsesCSSClass => write!(f, "USES_CSS_CLASS"),
+            RelationshipType::ImportsScript => write!(f, "IMPORTS_SCRIPT"),
+            RelationshipType::ImportsStylesheet => write!(f, "IMPORTS_STYLESHEET"),
         }
     }
 }

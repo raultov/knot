@@ -255,6 +255,54 @@ pub(crate) fn extract_entities(
                     // Keyframes are not named entities (the @keyframes is just a marker)
                     // Skip them for now
                 }
+                // Phase 4: Cross-Language References (DOM element IDs)
+                "dom.receiver" => {
+                    // Captured from: document.getElementById('app')
+                    // We'll process this in a dedicated phase after collecting all captures
+                }
+                "dom.action" | "dom.method" => {
+                    // These are the method names like "getElementById", "querySelector"
+                    // We'll process them below when we have both receiver and ID
+                }
+                "dom.element_id" => {
+                    // This is the string literal ID being referenced
+                    // Extract by removing quotes and adding to reference intents
+                    let clean_id = text
+                        .trim_start_matches('"')
+                        .trim_start_matches('\'')
+                        .trim_end_matches('"')
+                        .trim_end_matches('\'')
+                        .to_string();
+
+                    reference_intents.push(ReferenceIntent::DomElementReference {
+                        element_id: clean_id,
+                        line: node.start_position().row + 1,
+                    });
+                }
+                // Phase 4: Cross-Language References (CSS class usage)
+                "css.receiver" => {
+                    // Captured from: element.classList.add('active')
+                    // We'll process this in a dedicated phase
+                }
+                "css.classList" | "css.className" | "css.method" => {
+                    // These are property/method names like "classList", "className", "add", "remove"
+                    // We'll use them to validate CSS references below
+                }
+                "css.class_name" | "css.class_assignment" => {
+                    // This is the string literal class name being used
+                    // Extract by removing quotes and add to reference intents
+                    let clean_class = text
+                        .trim_start_matches('"')
+                        .trim_start_matches('\'')
+                        .trim_end_matches('"')
+                        .trim_end_matches('\'')
+                        .to_string();
+
+                    reference_intents.push(ReferenceIntent::CssClassUsage {
+                        class_name: clean_class,
+                        line: node.start_position().row + 1,
+                    });
+                }
                 _ => {}
             }
         }
@@ -411,6 +459,18 @@ pub(crate) fn extract_entities(
         );
     }
 
+    // Fifth pass: extract HTML file imports (script src, link href) for Phase 4 cross-language linking
+    // This creates reference intents linking HTML to imported JS and CSS files
+    if lang_name == "html" {
+        extract_html_file_imports(
+            tree.root_node(),
+            source_bytes,
+            &mut entities,
+            file_path,
+            repo_name,
+        );
+    }
+
     Ok(entities)
 }
 
@@ -500,6 +560,174 @@ fn extract_jsx_html_attributes(
     let mut child = node.child(0);
     while let Some(c) = child {
         extract_jsx_html_attributes(c, source, lang_name, entities, file_path, repo_name);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract HTML file imports (<script src="..."> and <link rel="stylesheet" href="...">)
+/// for cross-language linking.
+///
+/// This creates reference intents that link HTML files to imported JavaScript and CSS files,
+/// enabling queries like "which HTML files import this JavaScript file?"
+fn extract_html_file_imports(
+    node: Node<'_>,
+    source: &[u8],
+    entities: &mut Vec<ParsedEntity>,
+    file_path: &str,
+    repo_name: &str,
+) {
+    // Check if this is a script or link element
+    if node.kind() == "element" {
+        // Get the tag name
+        let tag_name = if let Some(start_tag) = node.child(0).filter(|n| n.kind() == "start_tag") {
+            if let Some(tag_node) = start_tag.child(0) {
+                String::from_utf8_lossy(&source[tag_node.start_byte()..tag_node.end_byte()])
+                    .to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        // Process <script src="...">
+        if tag_name == "script" {
+            // Find the src attribute
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "start_tag" {
+                    for attr_child in child.children(&mut child.walk()) {
+                        if attr_child.kind() == "attribute" {
+                            let mut attr_name = String::new();
+                            let mut attr_value = String::new();
+
+                            for attr_part in attr_child.children(&mut attr_child.walk()) {
+                                match attr_part.kind() {
+                                    "attribute_name" => {
+                                        attr_name = String::from_utf8_lossy(
+                                            &source[attr_part.start_byte()..attr_part.end_byte()],
+                                        )
+                                        .to_string();
+                                    }
+                                    "quoted_attribute_value" => {
+                                        let raw_value = String::from_utf8_lossy(
+                                            &source[attr_part.start_byte()..attr_part.end_byte()],
+                                        )
+                                        .to_string();
+                                        attr_value = raw_value
+                                            .trim_start_matches('"')
+                                            .trim_start_matches('\'')
+                                            .trim_end_matches('"')
+                                            .trim_end_matches('\'')
+                                            .to_string();
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if attr_name == "src" && !attr_value.is_empty() {
+                                // Create a reference intent for the script import
+                                let mut entity = ParsedEntity::new(
+                                    format!("import({})", attr_value),
+                                    crate::models::EntityKind::Function,
+                                    format!("{}::import({})", file_path, attr_value),
+                                    None,
+                                    None,
+                                    "html",
+                                    file_path,
+                                    attr_child.start_position().row + 1,
+                                    None,
+                                    repo_name,
+                                );
+                                entity
+                                    .reference_intents
+                                    .push(ReferenceIntent::HtmlFileImport {
+                                        file_path: attr_value,
+                                        line: attr_child.start_position().row + 1,
+                                    });
+                                entities.push(entity);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Process <link rel="stylesheet" href="...">
+        else if tag_name == "link" {
+            let mut is_stylesheet = false;
+            let mut href_value = String::new();
+
+            // Find rel and href attributes
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "start_tag" {
+                    for attr_child in child.children(&mut child.walk()) {
+                        if attr_child.kind() == "attribute" {
+                            let mut attr_name = String::new();
+                            let mut attr_value = String::new();
+
+                            for attr_part in attr_child.children(&mut attr_child.walk()) {
+                                match attr_part.kind() {
+                                    "attribute_name" => {
+                                        attr_name = String::from_utf8_lossy(
+                                            &source[attr_part.start_byte()..attr_part.end_byte()],
+                                        )
+                                        .to_string();
+                                    }
+                                    "quoted_attribute_value" => {
+                                        let raw_value = String::from_utf8_lossy(
+                                            &source[attr_part.start_byte()..attr_part.end_byte()],
+                                        )
+                                        .to_string();
+                                        attr_value = raw_value
+                                            .trim_start_matches('"')
+                                            .trim_start_matches('\'')
+                                            .trim_end_matches('"')
+                                            .trim_end_matches('\'')
+                                            .to_string();
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if attr_name == "rel" && attr_value.contains("stylesheet") {
+                                is_stylesheet = true;
+                            }
+                            if attr_name == "href" {
+                                href_value = attr_value;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if is_stylesheet && !href_value.is_empty() {
+                // Create a reference intent for the stylesheet import
+                let mut entity = ParsedEntity::new(
+                    format!("import({})", href_value),
+                    crate::models::EntityKind::Constant,
+                    format!("{}::import({})", file_path, href_value),
+                    None,
+                    None,
+                    "html",
+                    file_path,
+                    node.start_position().row + 1,
+                    None,
+                    repo_name,
+                );
+                entity
+                    .reference_intents
+                    .push(ReferenceIntent::CssFileImport {
+                        file_path: href_value,
+                        line: node.start_position().row + 1,
+                    });
+                entities.push(entity);
+            }
+        }
+    }
+
+    // Recursively process all children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_html_file_imports(c, source, entities, file_path, repo_name);
         child = c.next_sibling();
     }
 }

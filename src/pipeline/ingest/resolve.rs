@@ -107,6 +107,26 @@ pub fn resolve_reference_intents_with_context(
                         .and_then(|uuids| uuids.first().copied()),
                     RelationshipType::References,
                 ),
+                ReferenceIntent::DomElementReference { element_id, .. } => (
+                    name_to_uuids
+                        .get(element_id)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::ReferencesDOM,
+                ),
+                ReferenceIntent::CssClassUsage { class_name, .. } => (
+                    name_to_uuids
+                        .get(class_name)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::UsesCSSClass,
+                ),
+                ReferenceIntent::HtmlFileImport { file_path, .. } => (
+                    fqn_to_uuid.get(file_path).copied(),
+                    RelationshipType::ImportsScript,
+                ),
+                ReferenceIntent::CssFileImport { file_path, .. } => (
+                    fqn_to_uuid.get(file_path).copied(),
+                    RelationshipType::ImportsStylesheet,
+                ),
             };
 
             if let Some(uuid) = resolved_uuid

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS, with planned support for Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -27,6 +27,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
+- **Hybrid Web Ecosystem** (v0.6.5+): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
 - **Rust** (Planned): Struct, trait, and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -375,7 +376,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.4 — CSS & SCSS Support) ✅
+### Current Release (v0.6.5 — Hybrid Web Ecosystem) ✅
+- ✅ **Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements
+- ✅ **CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions
+- ✅ **HTML-to-JS Imports**: `<script src="...">` tags create references to JavaScript files
+- ✅ **HTML-to-CSS Imports**: `<link rel="stylesheet" href="...">` tags create references to CSS files
+- ✅ **Full-Stack SPA Analysis**: Query which HTML files import which JS/CSS, what JS manipulates what DOM elements, etc.
+
+### Previous Release (v0.6.4 — CSS & SCSS Support)
 - ✅ **CSS Support**: Extraction of class and ID selectors, and CSS Custom Properties (variables).
 - ✅ **SCSS Support**: Extraction of mixins, functions, variables, and selectors from `.scss` and `.sass` files.
 - ✅ **Unified Indexing**: Cross-language discovery of CSS class/ID usage in HTML, JSX, and TSX.
@@ -418,20 +426,27 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ Track selector usage and definitions
 - ✅ SCSS function and mixin extraction
 
-#### Phase 4: Hybrid Web Ecosystem
-- [ ] Cross-language dependency resolution (JS ↔ HTML ↔ CSS)
-- [ ] Link JavaScript DOM operations to HTML elements
-- [ ] Connect CSS class usage in JavaScript to stylesheets
-- [ ] Enable full-stack SPA indexing
+#### Completed: Phase 4 — Hybrid Web Ecosystem (v0.6.5)
+- ✅ Cross-language dependency resolution (JS ↔ HTML ↔ CSS)
+- ✅ Link JavaScript DOM operations to HTML elements via `getElementById`, `querySelector`
+- ✅ Connect CSS class usage in JavaScript (`classList.add`, `className=`) to stylesheets
+- ✅ Enable full-stack SPA indexing with HTML-to-JS and HTML-to-CSS file linking
+- ✅ Support pattern detection for DOM manipulation and CSS class manipulation
 
 **See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
 
-### Future (v0.7.x+)
+### Upcoming (v0.7.x+)
 #### Phase 5: Rust Support
 - [ ] Support `.rs` files
 - [ ] Struct, trait, and impl tracking
 - [ ] Macro invocation analysis
 - [ ] Ownership-aware call graph analysis
+
+#### Phase 6: Event Binding & Advanced Patterns
+- [ ] Angular event binding (`(click)`, `(submit)`, etc.) to handler methods
+- [ ] React event handler tracking (`onClick`, `onChange`, etc.)
+- [ ] DOM event listener tracking (`addEventListener`)
+- [ ] CSS media query and animation reference tracking
 
 #### Long-Term Vision
 - [ ] Kotlin support
