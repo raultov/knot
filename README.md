@@ -24,6 +24,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 - **Java**: Full AST extraction with package awareness
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
 - **JavaScript/Node.js** (v0.7.0+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
+- **Hybrid Web Ecosystem** (v0.6.5): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
@@ -376,14 +377,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.5 — Hybrid Web Ecosystem) ✅
-- ✅ **Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements
-- ✅ **CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions
-- ✅ **HTML-to-JS Imports**: `<script src="...">` tags create references to JavaScript files
-- ✅ **HTML-to-CSS Imports**: `<link rel="stylesheet" href="...">` tags create references to CSS files
+### Current Release (v0.6.6 — Enhanced Web Ecosystem) ✅
+- ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability
+- ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction
+- ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements
+- ✅ **Advanced CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions
+- ✅ **HTML-to-JS/CSS Imports**: `<script src="...">` and `<link rel="stylesheet" href="...">` create proper file references
 - ✅ **Full-Stack SPA Analysis**: Query which HTML files import which JS/CSS, what JS manipulates what DOM elements, etc.
 
-### Previous Release (v0.6.4 — CSS & SCSS Support)
+### Previous Release (v0.6.5 — Hybrid Web Ecosystem)
 - ✅ **CSS Support**: Extraction of class and ID selectors, and CSS Custom Properties (variables).
 - ✅ **SCSS Support**: Extraction of mixins, functions, variables, and selectors from `.scss` and `.sass` files.
 - ✅ **Unified Indexing**: Cross-language discovery of CSS class/ID usage in HTML, JSX, and TSX.
