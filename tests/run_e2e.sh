@@ -500,6 +500,67 @@ else
     echo -e "${YELLOW}  Note: This is expected if method call tracking for Kotlin needs tuning${NC}"
 fi
 
+
+# Test 22: Java field_access and FQN resolution for method calls
+echo ""
+echo "Test 22: Searching for callers of ChatMemory.add (testing field_access receiver and FQN)..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"ChatMemory.add"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "before"; then
+    echo -e "${GREEN}✓ Found ChatMemoryAdvisor.before calling ChatMemory.add${NC}"
+else
+    echo -e "${RED}✗ ChatMemoryAdvisor.before calling ChatMemory.add not found${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test 23: Java method signature search with parameter types
+echo ""
+echo "Test 23: Searching for Java method by full signature registerUser(String..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"registerUser(String"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "createUser"; then
+    echo -e "${GREEN}✓ Found callers of registerUser by signature${NC}"
+else
+    echo -e "${RED}✗ Signature-based search for registerUser failed${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test 24: Kotlin method signature search with parameter type
+echo ""
+echo "Test 24: Searching for Kotlin method by signature fragment : Int..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":": Int"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "loadData\|UserService"; then
+    echo -e "${GREEN}✓ Found Kotlin callers by signature fragment${NC}"
+else
+    echo -e "${RED}✗ Kotlin callers by signature fragment not found${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test 25: TypeScript method signature search with parameter type
+echo ""
+echo "Test 25: Searching for TypeScript method by parameter type EventData..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"EventData"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "trackEvent"; then
+    echo -e "${GREEN}✓ Found TypeScript methods using EventData type${NC}"
+else
+    echo -e "${RED}✗ TypeScript methods using EventData type not found${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -511,6 +572,7 @@ echo "  ✓ TypeScript decorator extraction (@Component, @NgModule)"
 echo "  ✓ Type reference extraction (constructor DI)"
 echo "  ✓ JavaScript class parsing and JSX components"
 echo "  ✓ Java annotation extraction"
+echo "  ✓ Java field_access method invocations and FQN-based caller resolution"
 echo "  ✓ HTML custom elements extraction (Angular components)"
 echo "  ✓ HTML id and class attributes indexing"
 echo "  ✓ JSX id and className attributes indexing"
@@ -528,6 +590,9 @@ echo "  ✓ Phase 5: Kotlin Support - Companion object extraction"
 echo "  ✓ Phase 5: Kotlin Support - Top-level function extraction"
 echo "  ✓ Phase 5: Kotlin Support - Extension function extraction"
 echo "  ✓ Phase 5: Kotlin Support - Annotation extraction"
+echo "  ✓ Phase 6: Signature-based search - Java method signatures"
+echo "  ✓ Phase 6: Signature-based search - Kotlin parameter types"
+echo "  ✓ Phase 6: Signature-based search - TypeScript type annotations"
 echo ""
 
 exit 0

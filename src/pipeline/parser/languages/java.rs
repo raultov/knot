@@ -204,7 +204,7 @@ pub(crate) fn extract_call_intents_java(
         while let Some(c) = child {
             let kind = c.kind();
             match kind {
-                "identifier" => {
+                "identifier" | "field_access" => {
                     if found_dot {
                         // After a dot, this is the method name
                         method_name = Some(node_text(c, source));
@@ -298,7 +298,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
         while let Some(c) = child {
             let kind = c.kind();
             match kind {
-                "identifier" => {
+                "identifier" | "field_access" => {
                     if found_dot {
                         // After a dot, this is the method name
                         method_name = Some(node_text(c, source));
@@ -440,5 +440,20 @@ mod tests {
         assert!(intents.len() >= 2);
         assert!(intents.iter().any(|i| i.method == "method"));
         assert!(intents.iter().any(|i| i.method == "call"));
+    }
+
+    #[test]
+    fn test_extract_call_intent_java_field_access() {
+        let code = "void test() { this.chatMemory.add(foo); }";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+
+        let code_bytes = code.as_bytes();
+        let mut intents: Vec<CallIntent> = Vec::new();
+        extract_call_intents_java(tree.root_node(), code_bytes, &mut intents);
+
+        assert!(!intents.is_empty());
+        assert_eq!(intents[0].method, "add");
+        assert_eq!(intents[0].receiver, Some("this.chatMemory".to_string()));
     }
 }

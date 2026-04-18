@@ -265,3 +265,24 @@ class AppConfig {
 @interface PostMapping { String value(); }
 @interface Configuration {}
 @interface Bean {}
+
+/**
+ * Interface for chat memory.
+ * Tests: FQN resolution and reference finding for interface methods.
+ */
+interface ChatMemory {
+    void add(String message);
+}
+
+/**
+ * Advisor class that uses ChatMemory.
+ * Tests: field_access as method_invocation receiver (e.g. this.chatMemory.add)
+ */
+class ChatMemoryAdvisor {
+    private ChatMemory chatMemory;
+
+    public void before(String msg) {
+        // This is a test for field_access as a receiver
+        this.chatMemory.add(msg);
+    }
+}

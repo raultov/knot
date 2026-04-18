@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.3+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -22,9 +22,9 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
-- **Kotlin** (v0.7.3+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
+- **Kotlin** (v0.7.4+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
-- **JavaScript/Node.js** (v0.7.3+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
+- **JavaScript/Node.js** (v0.7.4+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - **Hybrid Web Ecosystem** (v0.6.5): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
@@ -232,6 +232,18 @@ Query: "Find callers of getCurrentTimeInSeconds"
 Result: All code that invokes this function + file locations
 ```
 
+**Advanced: Search by Signature (NEW in v0.7.4)**
+```bash
+# Find by full signature (Java)
+echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"registerUser(String"}}}' | knot-mcp
+
+# Find by parameter type (Kotlin)
+echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"findById(Int"}}}' | knot-mcp
+
+# Find by type annotation (TypeScript)
+echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"(EventData"}}}' | knot-mcp
+```
+
 **Use Cases:**
 - **Dead Code Detection**: Zero callers = unused code
 - **Impact Analysis**: "What breaks if I modify this?"
@@ -391,21 +403,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.7.3 — MCP UX Improvements) ✅
-- ✅ **MCP UX Improvements**: Enhanced tool descriptions to guide LLMs in multi-repository environments.
-- ✅ **Clippy & Formatting**: Resolved all linting warnings and applied idiomatic Rust improvements.
-- ✅ **Kotlin Language Support**: Full AST extraction for `.kt` and `.kts` files with 7 new entity types.
-- ✅ **tree-sitter-kotlin-ng Integration**: Compatible with the latest Kotlin grammar for robust parsing.
-- ✅ **Enhanced MCP explore_file**: Specialized categorization for Kotlin classes, objects, and properties.
-- ✅ **Comprehensive E2E Testing**: 10 new integration tests validating the full Kotlin pipeline.
-- ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability.
-- ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction.
-- ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements.
-- ✅ **Advanced CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions.
-- ✅ **HTML-to-JS/CSS Imports**: `<script src="...">` and `<link rel="stylesheet" href="...">` create proper file references.
-- ✅ **Full-Stack SPA Analysis**: Query which HTML files import which JS/CSS, what JS manipulates what DOM elements, etc.
+### Current Release (v0.7.4 — Enhanced Search Precision) ✅
+- ✅ **Signature-based Search**: Enhanced `find_callers` and `find_references` to support searching by full method signatures (e.g., "method(Type param)").
+- ✅ **Improved Search Accuracy**: Fixed limitations when searching with complex receivers or fully qualified names.
+- ✅ **Cross-Language Parity**: Applied signature search improvements across Java, Kotlin, and TypeScript.
+- ✅ **Comprehensive E2E Testing**: Added new integration tests validating the signature-based search pipeline.
 
-### Previous Release (v0.6.6 — Enhanced Web Ecosystem)
+### Previous Release (v0.7.3 — MCP UX Improvements)
 - ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability.
 - ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction.
 - ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements.

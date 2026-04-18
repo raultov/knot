@@ -35,7 +35,7 @@ pub(crate) fn collect_all_reference_intents_kotlin(
                 intents.push((ref_intent, byte_pos));
             }
         }
-        "type_identifier" | "simple_identifier" => {
+        "type_identifier" | "simple_identifier" | "identifier" => {
             // Extract type references in parameter lists, field types, return types
             let type_name = node_text(node, source);
             // Only capture capitalized identifiers (likely classes/interfaces)
@@ -98,7 +98,7 @@ fn extract_identifiers_from_annotation(
     let mut child = annotation_node.child(0);
     while let Some(c) = child {
         match c.kind() {
-            "simple_identifier" | "type_identifier" => {
+            "simple_identifier" | "type_identifier" | "identifier" => {
                 let name = node_text(c, source);
                 // Only capture capitalized identifiers (likely classes/components)
                 if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
@@ -146,7 +146,7 @@ pub(crate) fn extract_type_references(
     let line = node.start_position().row + 1;
 
     // Capture type_identifier nodes (type annotations)
-    if matches!(node.kind(), "type_identifier" | "user_type") {
+    if matches!(node.kind(), "type_identifier" | "user_type" | "identifier") {
         let type_name = node_text(node, source);
         // Only capture capitalized identifiers (likely classes/interfaces)
         if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
@@ -197,18 +197,18 @@ pub(crate) fn extract_call_intents_kotlin(
         while let Some(c) = child {
             let kind = c.kind();
             match kind {
-                "simple_identifier" => {
+                "simple_identifier" | "identifier" => {
                     // Direct function call
                     method_name = Some(node_text(c, source));
                 }
-                "postfix_expression" => {
+                "postfix_expression" | "navigation_expression" => {
                     // Check for receiver.method pattern
                     extract_receiver_and_method(c, source, &mut receiver, &mut method_name);
                 }
                 "navigation_suffix" => {
                     // Method name in navigation suffix
                     if let Some(nav_child) = c.child(0)
-                        && nav_child.kind() == "simple_identifier"
+                        && matches!(nav_child.kind(), "simple_identifier" | "identifier")
                     {
                         method_name = Some(node_text(nav_child, source));
                     }
@@ -236,20 +236,46 @@ pub(crate) fn extract_call_intents_kotlin(
     }
 }
 
-/// Helper function to extract receiver and method from postfix_expression.
+/// Helper function to extract receiver and method from postfix_expression or navigation_expression.
 fn extract_receiver_and_method(
     node: Node<'_>,
     source: &[u8],
     receiver: &mut Option<String>,
     method: &mut Option<String>,
 ) {
+    // If it's a navigation_expression, it usually has [receiver, ., method]
+    if node.kind() == "navigation_expression" {
+        let count = node.child_count();
+        if count >= 3 {
+            let last_child = node.child(count as u32 - 1).unwrap();
+            let first_child = node.child(0).unwrap();
+
+            if matches!(last_child.kind(), "simple_identifier" | "identifier") {
+                *method = Some(node_text(last_child, source));
+            }
+
+            if first_child.kind() == "navigation_expression" {
+                // Recurse to get the base receiver if needed,
+                // but for now let's just take the whole text of the first part as receiver
+                *receiver = Some(node_text(first_child, source));
+            } else if matches!(
+                first_child.kind(),
+                "simple_identifier" | "identifier" | "this"
+            ) {
+                *receiver = Some(node_text(first_child, source));
+            }
+            return;
+        }
+    }
+
     let mut child = node.child(0);
     while let Some(c) = child {
         match c.kind() {
-            "simple_identifier" => {
+            "simple_identifier" | "identifier" => {
                 if receiver.is_none() {
                     *receiver = Some(node_text(c, source));
-                } else if method.is_none() {
+                } else {
+                    // Always take the latest identifier as the potential method name
                     *method = Some(node_text(c, source));
                 }
             }
@@ -257,12 +283,14 @@ fn extract_receiver_and_method(
                 *receiver = Some("this".to_string());
             }
             "navigation_suffix" => {
-                // Extract method name from navigation_suffix
                 if let Some(nav_child) = c.child(0)
-                    && nav_child.kind() == "simple_identifier"
+                    && matches!(nav_child.kind(), "simple_identifier" | "identifier")
                 {
                     *method = Some(node_text(nav_child, source));
                 }
+            }
+            "navigation_expression" | "postfix_expression" => {
+                extract_receiver_and_method(c, source, receiver, method);
             }
             _ => {}
         }
@@ -290,15 +318,15 @@ pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -
         while let Some(c) = child {
             let kind = c.kind();
             match kind {
-                "simple_identifier" => {
+                "simple_identifier" | "identifier" => {
                     method_name = Some(node_text(c, source));
                 }
-                "postfix_expression" => {
+                "postfix_expression" | "navigation_expression" => {
                     extract_receiver_and_method(c, source, &mut receiver, &mut method_name);
                 }
                 "navigation_suffix" => {
                     if let Some(nav_child) = c.child(0)
-                        && nav_child.kind() == "simple_identifier"
+                        && matches!(nav_child.kind(), "simple_identifier" | "identifier")
                     {
                         method_name = Some(node_text(nav_child, source));
                     }
@@ -418,5 +446,37 @@ mod tests {
             child = c.next_sibling();
         }
         assert!(found_property, "Property declaration not found in AST");
+    }
+
+    #[test]
+    fn test_extract_call_intent_navigation() {
+        let code = "fun main() { userService.getUser(1) }";
+        let lang = tree_sitter_kotlin_ng::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut intents = Vec::new();
+        extract_call_intents_kotlin(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].method, "getUser");
+        assert_eq!(intents[0].receiver, Some("userService".to_string()));
+    }
+
+    #[test]
+    fn test_extract_call_intent_chained_navigation() {
+        let code = "fun main() { Config.instance.getUser(1) }";
+        let lang = tree_sitter_kotlin_ng::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut intents = Vec::new();
+        extract_call_intents_kotlin(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].method, "getUser");
+        assert!(intents[0].receiver.as_ref().unwrap().contains("Config"));
     }
 }

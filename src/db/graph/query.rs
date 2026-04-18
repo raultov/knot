@@ -121,12 +121,21 @@ impl QueryExt for GraphDb {
         for (rel_label, result_key) in rel_types {
             let query_str = if repo_name.is_some() {
                 format!(
-                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity {{name: $name, repo_name: $repo_name}})
+                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
+                     WHERE target.repo_name = $repo_name
+                       AND (target.name = $name 
+                        OR target.fqn = $name 
+                        OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
+                        OR (target.fqn + COALESCE(target.signature, '')) CONTAINS $name)
                      RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature"
                 )
             } else {
                 format!(
-                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity {{name: $name}})
+                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
+                     WHERE target.name = $name 
+                        OR target.fqn = $name 
+                        OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
+                        OR (target.fqn + COALESCE(target.signature, '')) CONTAINS $name
                      RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature"
                 )
             };
@@ -170,11 +179,20 @@ impl QueryExt for GraphDb {
         let mut results = Vec::new();
 
         let query_str = if repo_name.is_some() {
-            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity {name: $name, repo_name: $repo_name})
+            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
+             WHERE callee.repo_name = $repo_name
+               AND (callee.name = $name 
+                OR callee.fqn = $name 
+                OR (callee.name + COALESCE(callee.signature, '')) CONTAINS $name
+                OR (callee.fqn + COALESCE(callee.signature, '')) CONTAINS $name)
              RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
                 .to_string()
         } else {
-            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity {name: $name})
+            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
+             WHERE callee.name = $name 
+                OR callee.fqn = $name 
+                OR (callee.name + COALESCE(callee.signature, '')) CONTAINS $name
+                OR (callee.fqn + COALESCE(callee.signature, '')) CONTAINS $name
              RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
                 .to_string()
         };
