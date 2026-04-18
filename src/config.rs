@@ -223,7 +223,7 @@ impl Config {
 
         // Parse McpCli from empty args to get defaults from env vars only
         // This avoids conflicts with knot subcommand arguments (search, callers, explore)
-        let cli = McpCli::try_parse_from(&["knot"])?;
+        let cli = McpCli::try_parse_from(["knot"])?;
 
         // Validate required fields from environment
         let neo4j_password = cli.neo4j_password()
@@ -753,7 +753,7 @@ mod tests {
         // Test that McpCli can parse from empty args (used by load_knot_cli)
         let args = vec!["knot"];
         let cli = McpCli::try_parse_from(args).expect("Failed to parse from empty args");
-        
+
         // Should have valid configuration (values may be overridden by env vars)
         assert!(!cli.qdrant_url.is_empty());
         assert!(!cli.qdrant_collection.is_empty());
@@ -777,7 +777,7 @@ mod tests {
         // Just verify that parsing works and values are not empty
         let args = vec!["knot"];
         let cli = McpCli::try_parse_from(args).expect("Failed to parse");
-        
+
         // Should have valid configuration
         assert!(!cli.qdrant_url.is_empty());
         assert_eq!(cli.neo4j_user, "neo4j"); // Default value
