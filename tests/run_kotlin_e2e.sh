@@ -124,11 +124,12 @@ cargo run --release --bin knot-indexer -- --clean
 
 echo -e "${GREEN}✓ Kotlin file indexed${NC}"
 
-# Step 4: Validate results via MCP server
-echo -e "${YELLOW}[4/5] Validating Kotlin entities via knot-mcp...${NC}"
+# Step 4: Validate results via MCP server and CLI
+echo -e "${YELLOW}[4/5] Validating Kotlin entities via knot-mcp and knot CLI...${NC}"
 
-echo "Building knot-mcp..."
+echo "Building knot-mcp and knot..."
 cargo build --release --bin knot-mcp 2>&1 | grep -E "(Compiling|Finished|error)" || true
+cargo build --release --bin knot 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
 # Test 1: Kotlin class extraction
 echo ""
@@ -159,6 +160,7 @@ echo "Test 2: Searching for Kotlin interface Repository..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Repository"; then
     echo -e "${GREEN}✓ Found Kotlin interface Repository${NC}"
@@ -173,6 +175,7 @@ echo "Test 3: Searching for Kotlin singleton object DatabaseManager..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"DatabaseManager"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "DatabaseManager" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "DatabaseManager"; then
     echo -e "${GREEN}✓ Found Kotlin object DatabaseManager (singleton pattern)${NC}"
@@ -187,6 +190,7 @@ echo "Test 4: Searching for Kotlin data class User..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"User"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "User" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "User"; then
     echo -e "${GREEN}✓ Found Kotlin data class User${NC}"
@@ -201,6 +205,7 @@ echo "Test 5: Searching for Kotlin companion object in ConfigManager..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"ConfigManager"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "ConfigManager" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "ConfigManager"; then
     echo -e "${GREEN}✓ Found Kotlin class ConfigManager with companion object${NC}"
@@ -215,6 +220,7 @@ echo "Test 6: Searching for top-level Kotlin function greetUser..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greetUser"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "greetUser" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "greetUser"; then
     echo -e "${GREEN}✓ Found Kotlin top-level function greetUser${NC}"
@@ -229,6 +235,7 @@ echo "Test 7: Searching for Kotlin extension function isValidEmail..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"isValidEmail"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "isValidEmail" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "isValidEmail"; then
     echo -e "${GREEN}✓ Found Kotlin extension function isValidEmail on String${NC}"
@@ -243,6 +250,7 @@ echo "Test 8: Searching for Kotlin methods (findById, save)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"findById"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "findById" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "findById"; then
     echo -e "${GREEN}✓ Found Kotlin method findById${NC}"
@@ -271,6 +279,7 @@ echo "Test 10: Searching for Kotlin type references (Random, User)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Random"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Random" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Random"; then
     echo -e "${GREEN}✓ Found Kotlin type references${NC}"

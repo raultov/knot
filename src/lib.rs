@@ -2,6 +2,7 @@
 //!
 //! Provides shared modules for both the batch indexer and the MCP server.
 
+pub mod cli_tools;
 pub mod config;
 pub mod db;
 pub mod mcp_handler;

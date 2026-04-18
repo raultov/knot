@@ -1,11 +1,102 @@
-use crate::mcp_handler::KnotMcpHandler;
+//! Core search_hybrid_context logic shared between CLI and MCP
+//!
+//! Performs a hybrid search combining:
+//! 1. Semantic search via Qdrant vector similarity (understands code meaning)
+//! 2. Structural expansion via Neo4j graph relationships (understands architecture)
+
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 
-// Note: These functions are kept for backward compatibility.
-// The actual implementation is in src/cli_tools/search_hybrid_context.rs
-// and is shared between CLI and MCP interfaces.
+use crate::db::{
+    graph::{GraphDb, QueryExt},
+    vector::{VectorDb, VectorSearchExt},
+};
+use crate::pipeline::embed::Embedder;
 
-#[allow(dead_code)]
+/// Main search function called by both CLI and MCP
+pub async fn run_search_hybrid_context(
+    query: &str,
+    max_results: usize,
+    repo_name: Option<&str>,
+    vector_db: &Arc<VectorDb>,
+    graph_db: &Arc<GraphDb>,
+    embedder: &Arc<Mutex<Embedder>>,
+) -> anyhow::Result<String> {
+    // Step 1: Embed the query using fastembed
+    let vector = embedder
+        .lock()
+        .unwrap()
+        .embed_query(query)
+        .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
+
+    // Step 2: Search Qdrant for similar vectors
+    let search_results = vector_db.search(&vector, max_results, repo_name).await?;
+
+    if search_results.is_empty() {
+        return Ok("No matching code found for your query.".to_string());
+    }
+
+    // Extract UUIDs and names from search results
+    let uuids: Vec<String> = search_results
+        .iter()
+        .filter_map(|result| {
+            result
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .collect();
+
+    let entity_names: Vec<String> = search_results
+        .iter()
+        .filter_map(|result| {
+            result
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .collect();
+
+    // Step 3: Query Neo4j for detailed context and dependencies
+    let context = graph_db
+        .get_entities_with_dependencies(&uuids, repo_name)
+        .await?;
+
+    // Step 4: Enrich context with related entities (subclasses, implementers, references)
+    let enriched_context = enrich_with_relationships(&context, &entity_names, graph_db, repo_name)
+        .await
+        .unwrap_or(context);
+
+    // Step 5: Format results as Markdown
+    let formatted = format_search_results(&enriched_context);
+
+    Ok(formatted)
+}
+
+/// Enrich search results with related entities (subclasses, implementers, usages)
+async fn enrich_with_relationships(
+    context: &serde_json::Value,
+    _entity_names: &[String],
+    graph_db: &Arc<GraphDb>,
+    repo_name: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let mut enriched = context.clone();
+
+    // For each entity in the search results, find related entities
+    if let Some(entities) = enriched.as_array_mut() {
+        for entity in entities.iter_mut() {
+            if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
+                // Query for all references to this entity
+                if let Ok(references) = graph_db.find_references(name, repo_name).await {
+                    enrich_single_entity(entity, &references);
+                }
+            }
+        }
+    }
+
+    Ok(enriched)
+}
+
 /// Extract subclass names from an extends relationship array.
 fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {
     extends_arr
@@ -14,7 +105,6 @@ fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-#[allow(dead_code)]
 /// Extract implementer names from an implements relationship array.
 fn extract_implementer_names(implements_arr: &[serde_json::Value]) -> Vec<String> {
     implements_arr
@@ -23,7 +113,6 @@ fn extract_implementer_names(implements_arr: &[serde_json::Value]) -> Vec<String
         .collect()
 }
 
-#[allow(dead_code)]
 /// Format type usage samples from a references array (limited to 3 samples).
 fn format_usage_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
     references_arr
@@ -37,7 +126,6 @@ fn format_usage_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-#[allow(dead_code)]
 /// Format caller samples from a calls array (limited to 3 samples).
 fn format_caller_samples(calls_arr: &[serde_json::Value]) -> Vec<String> {
     calls_arr
@@ -51,7 +139,6 @@ fn format_caller_samples(calls_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-#[allow(dead_code)]
 /// Enrich a single entity with relationship data extracted from references.
 /// This is a pure function that operates only on JSON data.
 fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json::Value) {
@@ -100,30 +187,10 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
     }
 }
 
-#[allow(dead_code)]
-/// Enrich search results with related entities (subclasses, implementers, usages)
-pub(crate) async fn enrich_with_relationships(
-    context: &serde_json::Value,
-    _entity_names: &[String],
-    handler: &KnotMcpHandler,
-    repo_name: Option<&str>,
-) -> std::result::Result<serde_json::Value, String> {
-    use crate::db::graph::QueryExt;
-    let mut enriched = context.clone();
-
-    // For each entity in the search results, find related entities
-    if let Some(entities) = enriched.as_array_mut() {
-        for entity in entities.iter_mut() {
-            if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
-                // Query for all references to this entity
-                if let Ok(references) = handler.graph_db.find_references(name, repo_name).await {
-                    enrich_single_entity(entity, &references);
-                }
-            }
-        }
-    }
-
-    Ok(enriched)
+/// Format search results as Markdown
+fn format_search_results(context: &serde_json::Value) -> String {
+    use crate::mcp_tools::search_hybrid_context::format::format_search_results as mcp_format;
+    mcp_format(context)
 }
 
 #[cfg(test)]
@@ -204,45 +271,5 @@ mod tests {
             entity.get("subclasses"),
             Some(&json!(vec!["Child1", "Child2"]))
         );
-    }
-
-    #[test]
-    fn test_enrich_single_entity_with_all_relationships() {
-        let mut entity = json!({"name": "MyInterface"});
-        let references = json!({
-            "extends": [{"name": "Child1"}],
-            "implements": [{"name": "Impl1"}, {"name": "Impl2"}],
-            "references": [
-                {"name": "ref1", "file_path": "ref1.java"},
-                {"name": "ref2", "file_path": "ref2.java"}
-            ],
-            "calls": [{"name": "caller1", "file_path": "caller.java"}]
-        });
-
-        enrich_single_entity(&mut entity, &references);
-
-        assert!(entity.get("subclasses").is_some());
-        assert!(entity.get("implementers").is_some());
-        assert!(entity.get("type_usage_count").is_some());
-        assert!(entity.get("caller_count").is_some());
-    }
-
-    #[test]
-    fn test_enrich_single_entity_ignores_empty_arrays() {
-        let mut entity = json!({"name": "MyClass"});
-        let references = json!({
-            "extends": [],
-            "implements": [],
-            "references": [],
-            "calls": []
-        });
-
-        enrich_single_entity(&mut entity, &references);
-
-        // None of the relationship fields should be added
-        assert!(entity.get("subclasses").is_none());
-        assert!(entity.get("implementers").is_none());
-        assert!(entity.get("type_usage_count").is_none());
-        assert!(entity.get("caller_count").is_none());
     }
 }

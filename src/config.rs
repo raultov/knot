@@ -207,6 +207,69 @@ impl Config {
         )
     }
 
+    /// Load configuration for the CLI binary (knot).
+    /// Uses McpCli parser but ignores CLI subcommand arguments to avoid conflicts.
+    /// This allows the CLI to accept search/callers/explore subcommands without
+    /// clap trying to parse them as configuration arguments.
+    pub fn load_knot_cli() -> Result<Self> {
+        // Load .env file (not an error if missing)
+        match dotenvy::dotenv() {
+            Ok(path) => tracing::info!("Loaded env from {}", path.display()),
+            Err(dotenvy::Error::Io(_)) => {
+                tracing::debug!("No .env file found, using environment variables only")
+            }
+            Err(e) => return Err(e).context("Failed to parse .env file"),
+        }
+
+        // Parse McpCli from empty args to get defaults from env vars only
+        // This avoids conflicts with knot subcommand arguments (search, callers, explore)
+        let cli = McpCli::try_parse_from(&["knot"])?;
+
+        // Validate required fields from environment
+        let neo4j_password = cli.neo4j_password()
+            .or_else(|| std::env::var("KNOT_NEO4J_PASSWORD").ok())
+            .context("Neo4j password is required. Provide it via KNOT_NEO4J_PASSWORD environment variable.")?;
+
+        // Resolve repo_path: if not provided, use current directory and canonicalize
+        let repo_path = if let Some(path) = cli.repo_path() {
+            std::fs::canonicalize(&path)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or(path)
+        } else {
+            std::env::current_dir()
+                .context("Failed to determine current working directory for repo_path")?
+                .to_string_lossy()
+                .into_owned()
+        };
+
+        // Auto-detect repo_name from the resolved canonical repo_path if not provided
+        let repo_name = if let Some(name) = cli.repo_name() {
+            name
+        } else {
+            std::path::Path::new(&repo_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| "unnamed-repo".to_string())
+        };
+
+        Ok(Self {
+            repo_path,
+            repo_name,
+            qdrant_url: cli.qdrant_url,
+            qdrant_collection: cli.qdrant_collection,
+            neo4j_uri: cli.neo4j_uri,
+            neo4j_user: cli.neo4j_user,
+            neo4j_password,
+            custom_queries_path: None,
+            embed_dim: cli.embed_dim,
+            batch_size: 0, // Not used by CLI
+            clean: false,  // Not used by CLI
+            dependency_repos: Vec::new(),
+            watch: false, // Not used by CLI
+        })
+    }
+
     /// Common shared logic for loading environment and resolving repo_path/repo_name.
     /// Takes a closure that parses the CLI arguments.
     fn load_env_and_parse<T, F>(parse_cli: F) -> Result<(T, String, String, String)>
@@ -683,5 +746,40 @@ mod tests {
         };
 
         assert_eq!(repo_name, "custom-repo-name");
+    }
+
+    #[test]
+    fn test_knot_cli_parsing_from_empty_args() {
+        // Test that McpCli can parse from empty args (used by load_knot_cli)
+        let args = vec!["knot"];
+        let cli = McpCli::try_parse_from(args).expect("Failed to parse from empty args");
+        
+        // Should have valid configuration (values may be overridden by env vars)
+        assert!(!cli.qdrant_url.is_empty());
+        assert!(!cli.qdrant_collection.is_empty());
+        assert!(!cli.neo4j_uri.is_empty());
+        assert!(!cli.neo4j_user.is_empty());
+        assert!(cli.embed_dim > 0);
+    }
+
+    #[test]
+    fn test_knot_cli_no_subcommand_interference() {
+        // Verify that McpCli parsing doesn't interfere with CLI subcommands
+        // (knot uses separate Cli with subcommands: search, callers, explore)
+        let args = vec!["knot"];
+        let result = McpCli::try_parse_from(args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_knot_cli_env_var_precedence() {
+        // Test that environment variables can be read (simple test, doesn't modify env)
+        // Just verify that parsing works and values are not empty
+        let args = vec!["knot"];
+        let cli = McpCli::try_parse_from(args).expect("Failed to parse");
+        
+        // Should have valid configuration
+        assert!(!cli.qdrant_url.is_empty());
+        assert_eq!(cli.neo4j_user, "neo4j"); // Default value
     }
 }

@@ -13,17 +13,14 @@
 //! - **Dependency Context**: Get full dependency chains and architectural relationships
 //! - **Multi-language Support**: Works with Java and TypeScript codebases
 
-mod enrich;
-mod format;
+pub mod enrich;
+pub mod format;
 
 use rust_mcp_sdk::schema::*;
 use serde_json::json;
 use std::collections::HashMap;
 
-use crate::{
-    db::{graph::QueryExt, vector::VectorSearchExt},
-    mcp_handler::KnotMcpHandler,
-};
+use crate::mcp_handler::KnotMcpHandler;
 
 pub struct SearchHybridContextTool;
 
@@ -85,6 +82,8 @@ impl SearchHybridContextTool {
         params: CallToolRequestParams,
         handler: &KnotMcpHandler,
     ) -> std::result::Result<CallToolResult, CallToolError> {
+        use crate::cli_tools;
+
         let args = params
             .arguments
             .ok_or_else(|| CallToolError::from_message("Missing arguments".to_string()))?;
@@ -101,70 +100,17 @@ impl SearchHybridContextTool {
 
         let repo_name = args.get("repo_name").and_then(|v| v.as_str());
 
-        // Step 1: Embed the query using fastembed
-        let vector = handler
-            .embedder
-            .lock()
-            .unwrap()
-            .embed_query(query)
-            .map_err(|e| CallToolError::from_message(format!("Embedding failed: {}", e)))?;
-
-        // Step 2: Search Qdrant for similar vectors
-        let search_results = handler
-            .vector_db
-            .search(&vector, max_results, repo_name)
-            .await
-            .map_err(|e| CallToolError::from_message(format!("Vector search failed: {}", e)))?;
-
-        if search_results.is_empty() {
-            return Ok(CallToolResult {
-                content: vec![ContentBlock::TextContent(TextContent::new(
-                    "No matching code found for your query.".to_string(),
-                    None,
-                    None,
-                ))],
-                is_error: None,
-                meta: None,
-                structured_content: None,
-            });
-        }
-
-        // Extract UUIDs and names from search results
-        let uuids: Vec<String> = search_results
-            .iter()
-            .filter_map(|result| {
-                result
-                    .get("uuid")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
-            .collect();
-
-        let entity_names: Vec<String> = search_results
-            .iter()
-            .filter_map(|result| {
-                result
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
-            .collect();
-
-        // Step 3: Query Neo4j for detailed context and dependencies
-        let context = handler
-            .graph_db
-            .get_entities_with_dependencies(&uuids, repo_name)
-            .await
-            .map_err(|e| CallToolError::from_message(format!("Graph query failed: {}", e)))?;
-
-        // Step 4: Enrich context with related entities (subclasses, implementers, references)
-        let enriched_context =
-            enrich::enrich_with_relationships(&context, &entity_names, handler, repo_name)
-                .await
-                .unwrap_or(context);
-
-        // Step 5: Format results as Markdown
-        let formatted = format::format_search_results(&enriched_context);
+        // Call the shared CLI tool logic
+        let formatted = cli_tools::run_search_hybrid_context(
+            query,
+            max_results,
+            repo_name,
+            &handler.vector_db,
+            &handler.graph_db,
+            &handler.embedder,
+        )
+        .await
+        .map_err(|e| CallToolError::from_message(format!("Search failed: {}", e)))?;
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(

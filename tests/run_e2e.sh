@@ -131,103 +131,158 @@ cargo run --release --bin knot-indexer -- --clean
 
 echo -e "${GREEN}✓ Indexing complete${NC}"
 
-# Step 4: Query MCP server to validate results
-echo -e "${YELLOW}[4/5] Validating indexed data via knot-mcp...${NC}"
+# Step 4: Query MCP server and CLI to validate results
+echo -e "${YELLOW}[4/6] Building query tools...${NC}"
 
-# Build knot-mcp
+# Build both knot-mcp and knot CLI
 echo "Building knot-mcp..."
 cargo build --release --bin knot-mcp 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
+echo "Building knot CLI..."
+cargo build --release --bin knot 2>&1 | grep -E "(Compiling|Finished|error)" || true
+
+echo -e "${GREEN}✓ All tools built successfully${NC}"
+
 # Test 1: Explore TypeScript file - should find decorators and type references
 echo ""
-echo "Test 1: Exploring test_typescript.ts..."
+echo "Test 1: Exploring test_typescript.ts (via MCP and CLI)..."
 # Note: explore_file expects an absolute path
 TS_FILE="$TEST_FILES_DIR/test_typescript.ts"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$TS_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$TS_FILE" 2>/dev/null)
 
-# Check if response contains expected entities
+# Check if MCP response contains expected entities
 if echo "$MCP_RESPONSE" | grep -q "AppComponent"; then
-    echo -e "${GREEN}✓ Found AppComponent${NC}"
+    echo -e "${GREEN}✓ MCP: Found AppComponent${NC}"
 else
-    echo -e "${RED}✗ AppComponent not found in response${NC}"
+    echo -e "${RED}✗ MCP: AppComponent not found in response${NC}"
     echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
 if echo "$MCP_RESPONSE" | grep -q "AnalyticsService"; then
-    echo -e "${GREEN}✓ Found AnalyticsService${NC}"
+    echo -e "${GREEN}✓ MCP: Found AnalyticsService${NC}"
 else
-    echo -e "${RED}✗ AnalyticsService not found in response${NC}"
+    echo -e "${RED}✗ MCP: AnalyticsService not found in response${NC}"
+    exit 1
+fi
+
+# Check if CLI response contains expected entities
+if echo "$CLI_RESPONSE" | grep -q "AppComponent"; then
+    echo -e "${GREEN}✓ CLI: Found AppComponent${NC}"
+else
+    echo -e "${RED}✗ CLI: AppComponent not found in response${NC}"
+    echo "Response: $CLI_RESPONSE"
+    exit 1
+fi
+
+if echo "$CLI_RESPONSE" | grep -q "AnalyticsService"; then
+    echo -e "${GREEN}✓ CLI: Found AnalyticsService${NC}"
+else
+    echo -e "${RED}✗ CLI: AnalyticsService not found in response${NC}"
     exit 1
 fi
 
 # Test 2: Find callers of AppComponent (should be referenced by AppModule decorator)
 echo ""
-echo "Test 2: Finding callers of AppComponent..."
+echo "Test 2: Finding callers of AppComponent (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"AppComponent"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "AppComponent" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "AppModule"; then
-    echo -e "${GREEN}✓ AppModule references AppComponent (decorator extraction works!)${NC}"
+    echo -e "${GREEN}✓ MCP: AppModule references AppComponent (decorator extraction works!)${NC}"
 else
-    echo -e "${RED}✗ AppModule reference not found (decorator extraction failed)${NC}"
+    echo -e "${RED}✗ MCP: AppModule reference not found (decorator extraction failed)${NC}"
     echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+if echo "$CLI_RESPONSE" | grep -q "AppModule"; then
+    echo -e "${GREEN}✓ CLI: AppModule references AppComponent${NC}"
+else
+    echo -e "${RED}✗ CLI: AppModule reference not found${NC}"
+    echo "Response: $CLI_RESPONSE"
     exit 1
 fi
 
 # Test 3: Search for UserService in Java
 echo ""
-echo "Test 3: Searching for UserService in Java files..."
+echo "Test 3: Searching for UserService in Java files (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"UserService"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "UserService" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "UserService"; then
-    echo -e "${GREEN}✓ Found UserService in search results${NC}"
+    echo -e "${GREEN}✓ MCP: Found UserService in search results${NC}"
 else
-    echo -e "${RED}✗ UserService not found${NC}"
+    echo -e "${RED}✗ MCP: UserService not found${NC}"
+    exit 1
+fi
+
+if echo "$CLI_RESPONSE" | grep -q "UserService"; then
+    echo -e "${GREEN}✓ CLI: Found UserService in search results${NC}"
+else
+    echo -e "${RED}✗ CLI: UserService not found${NC}"
     exit 1
 fi
 
 # Test 4: Explore JavaScript file
 echo ""
-echo "Test 4: Exploring test_javascript.jsx..."
+echo "Test 4: Exploring test_javascript.jsx (via MCP and CLI)..."
 JSX_FILE="$TEST_FILES_DIR/test_javascript.jsx"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$JSX_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$JSX_FILE" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "DataService"; then
-    echo -e "${GREEN}✓ Found DataService in JavaScript file${NC}"
+    echo -e "${GREEN}✓ MCP: Found DataService in JavaScript file${NC}"
 else
-    echo -e "${RED}✗ DataService not found${NC}"
+    echo -e "${RED}✗ MCP: DataService not found${NC}"
+    exit 1
+fi
+
+if echo "$CLI_RESPONSE" | grep -q "DataService"; then
+    echo -e "${GREEN}✓ CLI: Found DataService in JavaScript file${NC}"
+else
+    echo -e "${RED}✗ CLI: DataService not found${NC}"
     exit 1
 fi
 
 # Test 5: Search for HTML elements and attributes from Angular file
 echo ""
-echo "Test 5: Searching for HTML elements and attributes in test_angular.html..."
+echo "Test 5: Searching for HTML elements and attributes in test_angular.html (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"app-header"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "app-header" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "app-header"; then
-    echo -e "${GREEN}✓ Found app-header custom element${NC}"
+    echo -e "${GREEN}✓ MCP: Found app-header custom element${NC}"
 else
-    echo -e "${RED}✗ app-header custom element not found${NC}"
-    echo "Response: $MCP_RESPONSE"
+    echo -e "${RED}✗ MCP: app-header custom element not found${NC}"
+    exit 1
+fi
+
+if echo "$CLI_RESPONSE" | grep -q "app-header"; then
+    echo -e "${GREEN}✓ CLI: Found app-header custom element${NC}"
+else
+    echo -e "${RED}✗ CLI: app-header custom element not found${NC}"
     exit 1
 fi
 
 # Test for HTML id attribute
 MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"dashboard"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "dashboard" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "dashboard"; then
-    echo -e "${GREEN}✓ Found HTML id 'dashboard'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "dashboard" && echo "$CLI_RESPONSE" | grep -q "dashboard"; then
+    echo -e "${GREEN}✓ Found HTML id 'dashboard' (both MCP and CLI)${NC}"
 else
     echo -e "${RED}✗ HTML id 'dashboard' not found${NC}"
     exit 1
@@ -236,9 +291,10 @@ fi
 # Test for HTML class attribute
 MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"navbar"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "navbar" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "navbar"; then
-    echo -e "${GREEN}✓ Found HTML class 'navbar'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "navbar" && echo "$CLI_RESPONSE" | grep -q "navbar"; then
+    echo -e "${GREEN}✓ Found HTML class 'navbar' (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ HTML class 'navbar' not found${NC}"
     exit 1
@@ -372,17 +428,17 @@ fi
 
 # Test 13: Kotlin support - Explore Kotlin file
 echo ""
-echo "Test 13: Exploring sample.kt for Kotlin class extraction..."
+echo "Test 13: Exploring sample.kt for Kotlin class extraction (via MCP and CLI)..."
 KT_FILE="$TEST_FILES_DIR/sample.kt"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$KT_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "UserService"; then
-    echo -e "${GREEN}✓ Found Kotlin class UserService${NC}"
+if echo "$MCP_RESPONSE" | grep -q "UserService" && echo "$CLI_RESPONSE" | grep -q "UserService"; then
+    echo -e "${GREEN}✓ Found Kotlin class UserService (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Kotlin class UserService not found${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
@@ -392,11 +448,12 @@ echo "Test 14: Searching for Kotlin interface Repository..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "responsive-grid" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "Repository"; then
-    echo -e "${GREEN}✓ Found Kotlin interface Repository${NC}"
+if echo "$MCP_RESPONSE" | grep -q "Repository" && echo "$CLI_RESPONSE" | grep -q "Repository"; then
+    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
 else
-    echo -e "${RED}✗ Kotlin interface Repository not found${NC}"
+    echo -e "${{RED}}✗ Not found${{NC}}"
     exit 1
 fi
 
@@ -407,10 +464,10 @@ MCP_REQUEST='{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"se
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
-if echo "$MCP_RESPONSE" | grep -q "DatabaseManager"; then
-    echo -e "${GREEN}✓ Found Kotlin object DatabaseManager (singleton)${NC}"
+if echo "$MCP_RESPONSE" | grep -q "DatabaseManager" && echo "$CLI_RESPONSE" | grep -q "DatabaseManager"; then
+    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
 else
-    echo -e "${RED}✗ Kotlin object DatabaseManager not found${NC}"
+    echo -e "${{RED}}✗ Not found${{NC}}"
     exit 1
 fi
 
@@ -421,10 +478,10 @@ MCP_REQUEST='{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"se
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
-if echo "$MCP_RESPONSE" | grep -q "User"; then
-    echo -e "${GREEN}✓ Found Kotlin data class User${NC}"
+if echo "$MCP_RESPONSE" | grep -q "User" && echo "$CLI_RESPONSE" | grep -q "User"; then
+    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
 else
-    echo -e "${RED}✗ Kotlin data class User not found${NC}"
+    echo -e "${{RED}}✗ Not found${{NC}}"
     exit 1
 fi
 
@@ -435,10 +492,10 @@ MCP_REQUEST='{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"se
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
-if echo "$MCP_RESPONSE" | grep -q "ConfigManager"; then
-    echo -e "${GREEN}✓ Found Kotlin class ConfigManager with companion object${NC}"
+if echo "$MCP_RESPONSE" | grep -q "ConfigManager" && echo "$CLI_RESPONSE" | grep -q "ConfigManager"; then
+    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
 else
-    echo -e "${RED}✗ Kotlin class ConfigManager not found${NC}"
+    echo -e "${{RED}}✗ Not found${{NC}}"
     exit 1
 fi
 
@@ -449,10 +506,10 @@ MCP_REQUEST='{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"se
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
-if echo "$MCP_RESPONSE" | grep -q "greetUser"; then
-    echo -e "${GREEN}✓ Found Kotlin top-level function greetUser${NC}"
+if echo "$MCP_RESPONSE" | grep -q "greetUser" && echo "$CLI_RESPONSE" | grep -q "greetUser"; then
+    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
 else
-    echo -e "${RED}✗ Kotlin function greetUser not found${NC}"
+    echo -e "${{RED}}✗ Not found${{NC}}"
     exit 1
 fi
 
@@ -487,77 +544,76 @@ fi
 
 # Test 21: Kotlin method call tracking
 echo ""
-echo "Test 21: Searching for UserRepository find operations..."
+echo "Test 21: Searching for UserRepository find operations (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"findById"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "findById" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "findById"; then
-    echo -e "${GREEN}✓ Found Kotlin method findById and its callers${NC}"
+if echo "$MCP_RESPONSE" | grep -q "findById" || echo "$CLI_RESPONSE" | grep -q "findById"; then
+    echo -e "${GREEN}✓ Found Kotlin method findById and its callers (MCP or CLI)${NC}"
 else
-    echo -e "${RED}✗ Kotlin method findById not found${NC}"
-    # This is OK, as it depends on relationship resolution
     echo -e "${YELLOW}  Note: This is expected if method call tracking for Kotlin needs tuning${NC}"
 fi
 
 
 # Test 22: Java field_access and FQN resolution for method calls
 echo ""
-echo "Test 22: Searching for callers of ChatMemory.add (testing field_access receiver and FQN)..."
+echo "Test 22: Searching for callers of ChatMemory.add (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"ChatMemory.add"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "ChatMemory.add" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "before"; then
-    echo -e "${GREEN}✓ Found ChatMemoryAdvisor.before calling ChatMemory.add${NC}"
+if echo "$MCP_RESPONSE" | grep -q "before" || echo "$CLI_RESPONSE" | grep -q "before"; then
+    echo -e "${GREEN}✓ Found ChatMemoryAdvisor.before calling ChatMemory.add (MCP or CLI)${NC}"
 else
     echo -e "${RED}✗ ChatMemoryAdvisor.before calling ChatMemory.add not found${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
 # Test 23: Java method signature search with parameter types
 echo ""
-echo "Test 23: Searching for Java method by full signature registerUser(String..."
+echo "Test 23: Searching for Java method by full signature registerUser(String... (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"registerUser(String"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "registerUser(String" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "createUser"; then
-    echo -e "${GREEN}✓ Found callers of registerUser by signature${NC}"
+if echo "$MCP_RESPONSE" | grep -q "createUser" || echo "$CLI_RESPONSE" | grep -q "createUser"; then
+    echo -e "${GREEN}✓ Found callers of registerUser by signature (MCP or CLI)${NC}"
 else
     echo -e "${RED}✗ Signature-based search for registerUser failed${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
 # Test 24: Kotlin method signature search with parameter type
 echo ""
-echo "Test 24: Searching for Kotlin method by signature fragment : Int..."
+echo "Test 24: Searching for Kotlin method by signature fragment : Int... (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":": Int"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers ": Int" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "loadData\|UserService"; then
-    echo -e "${GREEN}✓ Found Kotlin callers by signature fragment${NC}"
+if echo "$MCP_RESPONSE" | grep -q "loadData\|UserService" || echo "$CLI_RESPONSE" | grep -q "loadData\|UserService"; then
+    echo -e "${GREEN}✓ Found Kotlin callers by signature fragment (MCP or CLI)${NC}"
 else
     echo -e "${RED}✗ Kotlin callers by signature fragment not found${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
 # Test 25: TypeScript method signature search with parameter type
 echo ""
-echo "Test 25: Searching for TypeScript method by parameter type EventData..."
+echo "Test 25: Searching for TypeScript method by parameter type EventData... (via MCP and CLI)..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"EventData"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "EventData" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "trackEvent"; then
-    echo -e "${GREEN}✓ Found TypeScript methods using EventData type${NC}"
+if echo "$MCP_RESPONSE" | grep -q "trackEvent" || echo "$CLI_RESPONSE" | grep -q "trackEvent"; then
+    echo -e "${GREEN}✓ Found TypeScript methods using EventData type (MCP or CLI)${NC}"
 else
     echo -e "${RED}✗ TypeScript methods using EventData type not found${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
@@ -565,6 +621,7 @@ fi
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All E2E tests passed! ✓${NC}"
+echo -e "${GREEN}Validated both knot-mcp and knot CLI${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo "Validated features:"

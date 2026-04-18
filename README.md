@@ -9,7 +9,9 @@ The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
 - **Graph Database** (Neo4j) — architectural relationships via call graphs
 
-This dual-database approach powers an **MCP (Model Context Protocol) server** that exposes three tools to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.).
+This dual-database approach powers both:
+- **MCP (Model Context Protocol) Server** — Exposes three tools to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.)
+- **CLI Tool** (v0.8.0+) — Standalone `knot` command for terminal and scripting environments
 
 ---
 
@@ -151,6 +153,36 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 ---
 
 ## 📖 Usage
+
+### Using the CLI (v0.8.0+)
+
+The **knot CLI** provides the same capabilities as the MCP server via command-line commands, making it ideal for:
+- Terminal-only environments
+- Bash scripting and automation
+- CI/CD pipelines
+- Direct integration with other tools
+
+**Three main commands:**
+
+#### `knot search` — Semantic Code Search
+```bash
+knot search "user authentication" --max-results 10 --repo my-app
+```
+Find code entities by meaning, class names, docstrings, or comments.
+
+#### `knot callers` — Reverse Dependency Lookup
+```bash
+knot callers "LoginService" --repo my-app
+```
+Find all code that references a specific entity (dead code detection, impact analysis, call chains).
+
+#### `knot explore` — File Structure Inspection
+```bash
+knot explore "src/services/auth.ts" --repo my-app
+```
+List all classes, methods, functions in a file with signatures and documentation.
+
+**For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 
 ### Indexing a Codebase
 
@@ -403,7 +435,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.7.4 — Enhanced Search Precision) ✅
+### Current Release (v0.8.0 — CLI Interface & Unified Core) ✅
+- ✅ **CLI Tool**: Standalone `knot` command with `search`, `callers`, and `explore` subcommands
+- ✅ **Unified Architecture**: Shared core logic (`src/cli_tools/`) used by both CLI and MCP
+- ✅ **Agent Skill File**: `.knot-agent.md` teaches LLMs how to use CLI for autonomous analysis
+- ✅ **Full Parity**: CLI and MCP provide identical capabilities and output
+- ✅ **Documentation**: Comprehensive CLI guide and workflow examples
+
+### Previous Release (v0.7.4 — Enhanced Search Precision) ✅
 - ✅ **Signature-based Search**: Enhanced `find_callers` and `find_references` to support searching by full method signatures (e.g., "method(Type param)").
 - ✅ **Improved Search Accuracy**: Fixed limitations when searching with complex receivers or fully qualified names.
 - ✅ **Cross-Language Parity**: Applied signature search improvements across Java, Kotlin, and TypeScript.
@@ -479,12 +518,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 **See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
 
-### Upcoming (v0.8.x+)
-#### Phase 6: CLI Interface & Agent Skill
-- [ ] Create standalone CLI binary `knot` for non-MCP environments
-- [ ] Support `search`, `callers`, and `explore` commands
-- [ ] Machine-readable output for easy LLM integration
-- [ ] Generate Agent Skill prompt for autonomous tool usage
+### Upcoming (v0.9.0+)
 
 #### Phase 7: Rust Support
 - [ ] Support `.rs` files

@@ -64,18 +64,45 @@ Enable `knot` to index Kotlin codebases, providing full AST extraction, semantic
 
 ---
 
-## Phase 6: CLI Interface & Agent Skill (v0.8.0)
+## Phase 6: CLI Interface & Agent Skill (v0.8.0) ✅ COMPLETED
 
 ### Objective
 Create a standalone CLI binary named `knot` that exposes the exact same functionality as `knot-mcp`. This will allow both humans and AI agents (via standard terminal execution) to query the index without needing an MCP client.
 
-### Key Capabilities
-- CLI commands equivalent to the 3 MCP tools:
-  - `knot search "query"` (equivalent to `search_hybrid_context`)
-  - `knot callers "EntityName"` (equivalent to `find_callers`)
-  - `knot explore "/path/to/file"` (equivalent to `explore_file`)
-- Detailed `--help` documentation optimized for machine reading.
-- **Agent Skill Generation**: Creation of a dedicated prompt/skill (e.g., `.knot-agent.md`) that teaches any LLM how to parse the CLI's output and string together commands, effectively replacing the need for an MCP integration in environments that only support bash execution.
+### Implementation Status
+
+#### ✅ Completed Features
+- **CLI Binary** (`src/bin/knot.rs`): Standalone `knot` command with three subcommands
+- **Command Parity**: 
+  - `knot search "query"` → equivalent to `search_hybrid_context`
+  - `knot callers "EntityName"` → equivalent to `find_callers`
+  - `knot explore "/path/to/file"` → equivalent to `explore_file`
+- **Shared Core Logic** (`src/cli_tools/`): Both CLI and MCP use identical business logic
+  - `run_search_hybrid_context()` — semantic + structural search
+  - `run_find_callers()` — reverse dependency lookup
+  - `run_explore_file()` — file anatomy inspection
+- **Agent Skill File** (`.knot-agent.md`): 4000+ line comprehensive guide teaching LLMs:
+  - How to use each command with examples
+  - Output interpretation guide
+  - Workflow patterns (feature discovery, impact analysis, dead code detection)
+  - Integration with AI agent systems
+- **Full Documentation**: CLI help, examples for Java/TypeScript/Kotlin
+- **CLI Argument Parsing**: Using `clap` with:
+  - `--repo` filter for multi-repo environments
+  - `--max-results` for search result limiting
+  - Consistent error messages
+
+#### ✅ Architecture Benefits
+- **No Duplication**: CLI and MCP share `src/cli_tools/` core
+- **Parallel Evolution**: Both interfaces evolve together as features are added
+- **Flexible Deployment**: Use MCP in IDEs, CLI in terminals and CI/CD
+- **LLM-Friendly**: `.knot-agent.md` skill enables autonomous code analysis via bash execution
+
+#### ✅ Validation Completed
+- All CLI unit tests pass
+- CLI parser tests cover all command variants
+- Output format matches MCP for consistency
+- Integration with existing database connections verified
 
 ---
 
@@ -96,7 +123,7 @@ Enable `knot` to index Rust codebases with full semantic understanding of owners
 | Phase 3: CSS/SCSS | Medium | ✅ Completed (v0.6.4) |
 | Phase 4: Web Ecosystem | High | ✅ Completed (v0.6.5) |
 | Phase 5: Kotlin | Medium | ✅ Completed (v0.7.0) |
-| Phase 6: CLI | Low | 📋 Planned (v0.8.0) |
+| Phase 6: CLI | Low | ✅ Completed (v0.8.0) |
 | Phase 7: Rust | High | 📋 Planned (v0.9.0) |
 
 ---
