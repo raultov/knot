@@ -306,21 +306,22 @@ echo "Test 6: Searching for JSX attributes in test_javascript.jsx..."
 # Search for id attribute
 MCP_REQUEST='{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"chart-toolbar"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "chart-toolbar" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "chart-toolbar"; then
-    echo -e "${GREEN}✓ Found JSX id 'chart-toolbar'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "chart-toolbar" && echo "$CLI_RESPONSE" | grep -q "chart-toolbar"; then
+    echo -e "${GREEN}✓ Found JSX id 'chart-toolbar' (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ JSX id 'chart-toolbar' not found${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
 # Search for className attribute
 MCP_REQUEST='{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "btn-primary" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "btn-primary"; then
-    echo -e "${GREEN}✓ Found JSX className 'btn-primary'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "btn-primary" && echo "$CLI_RESPONSE" | grep -q "btn-primary"; then
+    echo -e "${GREEN}✓ Found JSX className 'btn-primary' (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ JSX className 'btn-primary' not found${NC}"
     exit 1
@@ -329,9 +330,10 @@ fi
 # Test for multiple classes in JSX
 MCP_REQUEST='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"profile-card"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "profile-card" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "profile-card"; then
-    echo -e "${GREEN}✓ Found JSX className 'profile-card' (multiple classes)${NC}"
+if echo "$MCP_RESPONSE" | grep -q "profile-card" && echo "$CLI_RESPONSE" | grep -q "profile-card"; then
+    echo -e "${GREEN}✓ Found JSX className 'profile-card' (multiple classes, MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ JSX className 'profile-card' not found${NC}"
     exit 1
@@ -342,9 +344,10 @@ echo ""
 echo "Test 7: Searching for CSS classes in test_styles.css..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "btn-primary" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "btn-primary"; then
-    echo -e "${GREEN}✓ Found CSS class 'btn-primary'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "btn-primary" && echo "$CLI_RESPONSE" | grep -q "btn-primary"; then
+    echo -e "${GREEN}✓ Found CSS class 'btn-primary' (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ CSS class 'btn-primary' not found${NC}"
     exit 1
@@ -353,9 +356,10 @@ fi
 # Test CSS ID
 MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"header-container"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "header-container" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "header-container"; then
-    echo -e "${GREEN}✓ Found CSS id 'header-container'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "header-container" && echo "$CLI_RESPONSE" | grep -q "header-container"; then
+    echo -e "${GREEN}✓ Found CSS id 'header-container' (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ CSS id 'header-container' not found${NC}"
     exit 1
@@ -366,9 +370,10 @@ echo ""
 echo "Test 8: Searching for SCSS classes in test_styles.scss..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"responsive-grid"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "responsive-grid" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "responsive-grid"; then
-    echo -e "${GREEN}✓ Found SCSS class 'responsive-grid'${NC}"
+if echo "$MCP_RESPONSE" | grep -q "responsive-grid" && echo "$CLI_RESPONSE" | grep -q "responsive-grid"; then
+    echo -e "${GREEN}✓ Found SCSS class 'responsive-grid' (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ SCSS class 'responsive-grid' not found${NC}"
     exit 1
@@ -379,9 +384,10 @@ echo ""
 echo "Test 9: Searching for CSS class 'btn-primary' referenced in spa_app.js..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "btn-primary" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "btn-primary"; then
-    echo -e "${GREEN}✓ Found CSS class 'btn-primary' (used in HTML, defined in CSS, referenced in JS)${NC}"
+if echo "$MCP_RESPONSE" | grep -q "btn-primary" && echo "$CLI_RESPONSE" | grep -q "btn-primary"; then
+    echo -e "${GREEN}✓ Found CSS class 'btn-primary' (used in HTML, defined in CSS, referenced in JS, MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ CSS class 'btn-primary' not found in hybrid search${NC}"
     exit 1
@@ -392,9 +398,10 @@ echo ""
 echo "Test 10: Searching for HTML id 'app-container' referenced in spa_app.js..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"app-container"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "app-container" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "app-container"; then
-    echo -e "${GREEN}✓ Found HTML id 'app-container' (defined in HTML, manipulated in JS)${NC}"
+if echo "$MCP_RESPONSE" | grep -q "app-container" && echo "$CLI_RESPONSE" | grep -q "app-container"; then
+    echo -e "${GREEN}✓ Found HTML id 'app-container' (defined in HTML, manipulated in JS, MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ HTML id 'app-container' not found in hybrid search${NC}"
     exit 1
@@ -405,9 +412,10 @@ echo ""
 echo "Test 11: Searching for HTML id 'dashboard' referenced in spa_app.js..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"dashboard"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "dashboard" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "dashboard"; then
-    echo -e "${GREEN}✓ Found HTML id 'dashboard' (defined in HTML, manipulated in JS)${NC}"
+if echo "$MCP_RESPONSE" | grep -q "dashboard" && echo "$CLI_RESPONSE" | grep -q "dashboard"; then
+    echo -e "${GREEN}✓ Found HTML id 'dashboard' (defined in HTML, manipulated in JS, MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ HTML id 'dashboard' not found in hybrid search${NC}"
     exit 1
@@ -418,9 +426,10 @@ echo ""
 echo "Test 12: Searching for HTML id 'toggle-btn' used in theme switching..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"toggle-btn"}}}'
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "toggle-btn" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "toggle-btn"; then
-    echo -e "${GREEN}✓ Found HTML id 'toggle-btn' (cross-language reference)${NC}"
+if echo "$MCP_RESPONSE" | grep -q "toggle-btn" && echo "$CLI_RESPONSE" | grep -q "toggle-btn"; then
+    echo -e "${GREEN}✓ Found HTML id 'toggle-btn' (cross-language reference, MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ HTML id 'toggle-btn' not found${NC}"
     exit 1
@@ -448,12 +457,12 @@ echo "Test 14: Searching for Kotlin interface Repository..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "responsive-grid" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Repository" && echo "$CLI_RESPONSE" | grep -q "Repository"; then
-    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
+    echo -e "${GREEN}✓ Found (MCP & CLI)${NC}"
 else
-    echo -e "${{RED}}✗ Not found${{NC}}"
+    echo -e "${RED}✗ Not found${NC}"
     exit 1
 fi
 
@@ -463,11 +472,12 @@ echo "Test 15: Searching for Kotlin singleton object DatabaseManager..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"DatabaseManager"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "DatabaseManager" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "DatabaseManager" && echo "$CLI_RESPONSE" | grep -q "DatabaseManager"; then
-    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
+    echo -e "${GREEN}✓ Found (MCP & CLI)${NC}"
 else
-    echo -e "${{RED}}✗ Not found${{NC}}"
+    echo -e "${RED}✗ Not found${NC}"
     exit 1
 fi
 
@@ -477,11 +487,12 @@ echo "Test 16: Searching for Kotlin data class User..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"User"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "User" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "User" && echo "$CLI_RESPONSE" | grep -q "User"; then
-    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
+    echo -e "${GREEN}✓ Found (MCP & CLI)${NC}"
 else
-    echo -e "${{RED}}✗ Not found${{NC}}"
+    echo -e "${RED}✗ Not found${NC}"
     exit 1
 fi
 
@@ -491,11 +502,12 @@ echo "Test 17: Searching for Kotlin companion object in ConfigManager..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"ConfigManager"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "ConfigManager" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "ConfigManager" && echo "$CLI_RESPONSE" | grep -q "ConfigManager"; then
-    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
+    echo -e "${GREEN}✓ Found (MCP & CLI)${NC}"
 else
-    echo -e "${{RED}}✗ Not found${{NC}}"
+    echo -e "${RED}✗ Not found${NC}"
     exit 1
 fi
 
@@ -505,11 +517,12 @@ echo "Test 18: Searching for top-level Kotlin function greetUser..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greetUser"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "greetUser" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "greetUser" && echo "$CLI_RESPONSE" | grep -q "greetUser"; then
-    echo -e "${{GREEN}}✓ Found (MCP & CLI)${{NC}}"
+    echo -e "${GREEN}✓ Found (MCP & CLI)${NC}"
 else
-    echo -e "${{RED}}✗ Not found${{NC}}"
+    echo -e "${RED}✗ Not found${NC}"
     exit 1
 fi
 
@@ -519,9 +532,10 @@ echo "Test 19: Searching for Kotlin extension function isValidEmail..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"isValidEmail"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "isValidEmail" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "isValidEmail"; then
-    echo -e "${GREEN}✓ Found Kotlin extension function isValidEmail${NC}"
+if echo "$MCP_RESPONSE" | grep -q "isValidEmail" && echo "$CLI_RESPONSE" | grep -q "isValidEmail"; then
+    echo -e "${GREEN}✓ Found Kotlin extension function isValidEmail (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Kotlin extension function isValidEmail not found${NC}"
     exit 1
@@ -533,12 +547,12 @@ echo "Test 20: Searching for @Service annotation in UserService..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$KT_FILE"'"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" 2>/dev/null)
 
-if echo "$MCP_RESPONSE" | grep -q "Service"; then
-    echo -e "${GREEN}✓ Found Kotlin @Service annotation${NC}"
+if echo "$MCP_RESPONSE" | grep -q "Service" && echo "$CLI_RESPONSE" | grep -q "Service"; then
+    echo -e "${GREEN}✓ Found Kotlin @Service annotation (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Kotlin @Service annotation not found${NC}"
-    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 
