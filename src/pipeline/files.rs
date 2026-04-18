@@ -7,8 +7,8 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use crate::pipeline::state::IndexState;
 use crate::pipeline::input::SUPPORTED_EXTENSIONS;
+use crate::pipeline::state::IndexState;
 
 /// Type alias for file classification result: (unchanged, modified, added, deleted)
 pub type FileClassification = (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<String>);

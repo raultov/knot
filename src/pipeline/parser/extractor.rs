@@ -183,7 +183,8 @@ pub(crate) fn extract_entities(
                     entity_node = find_parent_by_kind(node, "function_declaration");
                     // For Kotlin functions, extract reference intents from the function body
                     if let Some(func_node) = entity_node
-                        && lang_name == "kotlin" {
+                        && lang_name == "kotlin"
+                    {
                         kotlin::extract_reference_intents_kotlin(
                             func_node,
                             source_bytes,
@@ -198,7 +199,8 @@ pub(crate) fn extract_entities(
                     entity_node = find_parent_by_kind(node, "property_declaration");
                     // For Kotlin properties, extract reference intents from the property
                     if let Some(prop_node) = entity_node
-                        && lang_name == "kotlin" {
+                        && lang_name == "kotlin"
+                    {
                         kotlin::extract_reference_intents_kotlin(
                             prop_node,
                             source_bytes,

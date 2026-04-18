@@ -391,12 +391,24 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.6.6 — Enhanced Web Ecosystem) ✅
-- ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability
-- ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction
-- ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements
-- ✅ **Advanced CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions
-- ✅ **HTML-to-JS/CSS Imports**: `<script src="...">` and `<link rel="stylesheet" href="...">` create proper file references
+### Current Release (v0.7.0 — Kotlin Support) ✅
+- ✅ **Kotlin Language Support**: Full AST extraction for `.kt` and `.kts` files with 7 new entity types.
+- ✅ **tree-sitter-kotlin-ng Integration**: Compatible with the latest Kotlin grammar for robust parsing.
+- ✅ **Enhanced MCP explore_file**: Specialized categorization for Kotlin classes, objects, and properties.
+- ✅ **Comprehensive E2E Testing**: 10 new integration tests validating the full Kotlin pipeline.
+- ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability.
+- ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction.
+- ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements.
+- ✅ **Advanced CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions.
+- ✅ **HTML-to-JS/CSS Imports**: `<script src="...">` and `<link rel="stylesheet" href="...">` create proper file references.
+- ✅ **Full-Stack SPA Analysis**: Query which HTML files import which JS/CSS, what JS manipulates what DOM elements, etc.
+
+### Previous Release (v0.6.6 — Enhanced Web Ecosystem)
+- ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability.
+- ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction.
+- ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements.
+- ✅ **Advanced CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions.
+- ✅ **HTML-to-JS/CSS Imports**: `<script src="...">` and `<link rel="stylesheet" href="...">` create proper file references.
 - ✅ **Full-Stack SPA Analysis**: Query which HTML files import which JS/CSS, what JS manipulates what DOM elements, etc.
 
 ### Previous Release (v0.6.5 — Hybrid Web Ecosystem)
@@ -461,18 +473,18 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 **See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
 
-### Upcoming (v0.7.x+)
-#### Phase 6: Rust Support
+### Upcoming (v0.8.x+)
+#### Phase 6: CLI Interface & Agent Skill
+- [ ] Create standalone CLI binary `knot` for non-MCP environments
+- [ ] Support `search`, `callers`, and `explore` commands
+- [ ] Machine-readable output for easy LLM integration
+- [ ] Generate Agent Skill prompt for autonomous tool usage
+
+#### Phase 7: Rust Support
 - [ ] Support `.rs` files
 - [ ] Struct, trait, and impl tracking
 - [ ] Macro invocation analysis
 - [ ] Ownership-aware call graph analysis
-
-#### Phase 7: Event Binding & Advanced Patterns
-- [ ] Angular event binding (`(click)`, `(submit)`, etc.) to handler methods
-- [ ] React event handler tracking (`onClick`, `onChange`, etc.)
-- [ ] DOM event listener tracking (`addEventListener`)
-- [ ] CSS media query and animation reference tracking
 
 #### Long-Term Vision
 - [ ] Python support
