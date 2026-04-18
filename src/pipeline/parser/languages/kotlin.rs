@@ -207,10 +207,10 @@ pub(crate) fn extract_call_intents_kotlin(
                 }
                 "navigation_suffix" => {
                     // Method name in navigation suffix
-                    if let Some(nav_child) = c.child(0) {
-                        if nav_child.kind() == "simple_identifier" {
-                            method_name = Some(node_text(nav_child, source));
-                        }
+                    if let Some(nav_child) = c.child(0)
+                        && nav_child.kind() == "simple_identifier"
+                    {
+                        method_name = Some(node_text(nav_child, source));
                     }
                 }
                 _ => {}
@@ -258,10 +258,10 @@ fn extract_receiver_and_method(
             }
             "navigation_suffix" => {
                 // Extract method name from navigation_suffix
-                if let Some(nav_child) = c.child(0) {
-                    if nav_child.kind() == "simple_identifier" {
-                        *method = Some(node_text(nav_child, source));
-                    }
+                if let Some(nav_child) = c.child(0)
+                    && nav_child.kind() == "simple_identifier"
+                {
+                    *method = Some(node_text(nav_child, source));
                 }
             }
             _ => {}
@@ -297,10 +297,10 @@ pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -
                     extract_receiver_and_method(c, source, &mut receiver, &mut method_name);
                 }
                 "navigation_suffix" => {
-                    if let Some(nav_child) = c.child(0) {
-                        if nav_child.kind() == "simple_identifier" {
-                            method_name = Some(node_text(nav_child, source));
-                        }
+                    if let Some(nav_child) = c.child(0)
+                        && nav_child.kind() == "simple_identifier"
+                    {
+                        method_name = Some(node_text(nav_child, source));
                     }
                 }
                 _ => {}

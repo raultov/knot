@@ -154,14 +154,14 @@ pub(crate) fn extract_entities(
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "function_declaration");
                     // For Kotlin methods, extract reference intents from the method body
-                    if let Some(method_node) = entity_node {
-                        if lang_name == "kotlin" {
-                            kotlin::extract_reference_intents_kotlin(
-                                method_node,
-                                source_bytes,
-                                &mut reference_intents,
-                            );
-                        }
+                    if let Some(method_node) = entity_node
+                        && lang_name == "kotlin"
+                    {
+                        kotlin::extract_reference_intents_kotlin(
+                            method_node,
+                            source_bytes,
+                            &mut reference_intents,
+                        );
                     }
                 }
                 "kotlin_object.name" => {
