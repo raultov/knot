@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.1+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.2+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -22,9 +22,9 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
-- **Kotlin** (v0.7.1+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
+- **Kotlin** (v0.7.2+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
-- **JavaScript/Node.js** (v0.7.1+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
+- **JavaScript/Node.js** (v0.7.2+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - **Hybrid Web Ecosystem** (v0.6.5): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
@@ -391,7 +391,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.7.1 — Clippy Fixes & Kotlin Support) ✅
+### Current Release (v0.7.2 — Clippy Fixes & Kotlin Support) ✅
 - ✅ **Clippy & Formatting**: Resolved all linting warnings and applied idiomatic Rust improvements.
 - ✅ **Kotlin Language Support**: Full AST extraction for `.kt` and `.kts` files with 7 new entity types.
 - ✅ **tree-sitter-kotlin-ng Integration**: Compatible with the latest Kotlin grammar for robust parsing.
@@ -462,7 +462,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ Enable full-stack SPA indexing with HTML-to-JS and HTML-to-CSS file linking
 - ✅ Support pattern detection for DOM manipulation and CSS class manipulation
 
-#### Completed: Phase 5 — Kotlin Support (v0.7.1)
+#### Completed: Phase 5 — Kotlin Support (v0.7.2)
 - ✅ Support `.kt` and `.kts` files
 - ✅ Extract classes, interfaces, objects, companion objects
 - ✅ Extract top-level and method functions

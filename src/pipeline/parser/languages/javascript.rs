@@ -629,7 +629,6 @@ pub(crate) fn extract_jsx_attributes(
     attributes
 }
 
-
 /// Handle DOM and CSS reference captures in JavaScript
 /// (dom.element_id, css.class_name, etc.)
 pub(crate) fn handle_dom_css_capture(
@@ -1061,4 +1060,3 @@ mod tests {
         }
     }
 }
-
