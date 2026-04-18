@@ -2,7 +2,7 @@
 //!
 //! Uses the `ignore` crate to walk a directory tree while respecting
 //! `.gitignore`, `.ignore`, and other standard ignore files.
-//! Supported extensions: `.java`, `.ts`, `.tsx`, `.cts`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.html`, `.htm`, `.css`, `.scss`, `.sass`.
+//! Supported extensions: `.java`, `.ts`, `.tsx`, `.cts`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.kt`, `.kts`, `.html`, `.htm`, `.css`, `.scss`, `.sass`.
 
 use anyhow::Result;
 use ignore::WalkBuilder;
@@ -10,8 +10,9 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Supported source file extensions.
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "html", "htm", "css", "scss", "sass",
+/// This is the single source of truth for all supported languages across the indexing pipeline.
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "html", "htm", "css", "scss", "sass",
 ];
 
 /// Recursively discover all supported source files under `repo_path`.
@@ -76,6 +77,7 @@ mod tests {
         fs::write(dir.path().join("legacy.cts"), "module.exports = {}").unwrap();
         fs::write(dir.path().join("vanilla.js"), "console.log('test')").unwrap();
         fs::write(dir.path().join("module.mjs"), "export {}").unwrap();
+        fs::write(dir.path().join("service.kt"), "class Service {}").unwrap();
 
         // Create unsupported files
         fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
@@ -88,8 +90,8 @@ mod tests {
 
         let files = discover_files(repo_path).unwrap();
 
-        // Should find 7 supported files (6 in root + 1 in src)
-        assert_eq!(files.len(), 7);
+        // Should find 8 supported files (7 in root + 1 in src)
+        assert_eq!(files.len(), 8);
 
         // Verify extensions
         for path in files {

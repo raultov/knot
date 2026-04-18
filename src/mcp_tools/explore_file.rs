@@ -119,22 +119,28 @@ fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String
         // Group entities by kind for better organization
         let mut classes = Vec::new();
         let mut interfaces = Vec::new();
+        let mut objects = Vec::new();
+        let mut companions = Vec::new();
         let mut methods = Vec::new();
         let mut functions = Vec::new();
+        let mut properties = Vec::new();
 
         for entity in entities_array {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
                 match kind {
-                    "class" => classes.push(entity),
-                    "interface" => interfaces.push(entity),
-                    "method" => methods.push(entity),
-                    "function" => functions.push(entity),
+                    "class" | "kotlin_class" => classes.push(entity),
+                    "interface" | "kotlin_interface" => interfaces.push(entity),
+                    "kotlin_object" => objects.push(entity),
+                    "kotlin_companion" => companions.push(entity),
+                    "method" | "kotlin_method" => methods.push(entity),
+                    "function" | "kotlin_function" => functions.push(entity),
+                    "kotlin_property" => properties.push(entity),
                     _ => {}
                 }
             }
         }
 
-        // Format in order: Classes, Interfaces, Methods, Functions
+        // Format in order: Classes, Interfaces, Objects, Companions, Methods, Functions, Properties
         if !classes.is_empty() {
             output.push_str("## Classes\n\n");
             for entity in classes {
@@ -149,6 +155,20 @@ fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String
             }
         }
 
+        if !objects.is_empty() {
+            output.push_str("## Objects (Singletons)\n\n");
+            for entity in objects {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !companions.is_empty() {
+            output.push_str("## Companion Objects\n\n");
+            for entity in companions {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
         if !methods.is_empty() {
             output.push_str("## Methods\n\n");
             for entity in methods {
@@ -159,6 +179,13 @@ fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String
         if !functions.is_empty() {
             output.push_str("## Functions\n\n");
             for entity in functions {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !properties.is_empty() {
+            output.push_str("## Properties\n\n");
+            for entity in properties {
                 output.push_str(&format_entity_summary(entity));
             }
         }

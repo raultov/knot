@@ -349,6 +349,21 @@ mod tests {
     }
 
     #[test]
+    fn test_kotlin_file_extension_detection() {
+        let extensions = vec!["kt", "kts"];
+
+        for ext_name in &extensions {
+            let path = PathBuf::from(format!("/test/file.{}", ext_name));
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+
+            assert_eq!(ext, *ext_name);
+        }
+    }
+
+    #[test]
     fn test_typescript_file_extension_detection() {
         let extensions = vec!["ts", "tsx", "cts"];
 
@@ -434,10 +449,11 @@ mod tests {
             PathBuf::from("file1.java"),
             PathBuf::from("file2.ts"),
             PathBuf::from("file3.tsx"),
-            PathBuf::from("file4.unsupported"),
+            PathBuf::from("file4.kt"),
+            PathBuf::from("file5.unsupported"),
         ];
 
-        let expected_extensions = ["java", "ts", "tsx", "unsupported"];
+        let expected_extensions = ["java", "ts", "tsx", "kt", "unsupported"];
 
         for (file, expected_ext) in files.iter().zip(expected_extensions.iter()) {
             let ext = file

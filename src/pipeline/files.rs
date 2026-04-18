@@ -8,20 +8,20 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::pipeline::state::IndexState;
+use crate::pipeline::input::SUPPORTED_EXTENSIONS;
 
 /// Type alias for file classification result: (unchanged, modified, added, deleted)
 pub type FileClassification = (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<String>);
 
 /// Check if a file path refers to a supported source file.
+/// Uses the centralized SUPPORTED_EXTENSIONS list to ensure consistency
+/// across all pipeline stages (discovery, watching, parsing, etc.).
 pub fn is_supported_file(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default();
-    matches!(
-        ext,
-        "java" | "ts" | "tsx" | "cts" | "js" | "mjs" | "cjs" | "jsx"
-    )
+    SUPPORTED_EXTENSIONS.contains(&ext)
 }
 
 /// Classify files into unchanged, modified, added, and deleted categories.

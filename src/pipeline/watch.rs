@@ -119,9 +119,15 @@ mod tests {
         assert!(is_supported_file(Path::new("test.ts")));
         assert!(is_supported_file(Path::new("test.tsx")));
         assert!(is_supported_file(Path::new("test.cts")));
+        assert!(is_supported_file(Path::new("test.kt")));
+        assert!(is_supported_file(Path::new("test.kts")));
+        assert!(is_supported_file(Path::new("test.html")));
+        assert!(is_supported_file(Path::new("test.css")));
+        assert!(is_supported_file(Path::new("test.scss")));
 
         assert!(!is_supported_file(Path::new("test.txt")));
         assert!(!is_supported_file(Path::new("test.rs")));
+        assert!(!is_supported_file(Path::new("test.py")));
     }
 
     #[test]
@@ -200,15 +206,16 @@ mod tests {
 
     #[test]
     fn test_unsupported_file_extensions() {
-        // Test common unsupported extensions (JavaScript and JSX are now supported)
+        // Test common unsupported extensions (JavaScript, JSX, CSS, HTML, and Kotlin are now supported)
         let unsupported = vec![
             "readme.md",
             "config.json",
-            "style.css",
             "data.xml",
             "document.txt",
             "image.png",
             "lib.rs",
+            "script.py",
+            "styles.less",
         ];
 
         for filename in unsupported {
