@@ -4,7 +4,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
-use super::languages::{css, html, java, javascript, typescript};
+use super::languages::{css, html, java, javascript, kotlin, typescript};
 use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
@@ -72,9 +72,21 @@ pub(crate) fn extract_entities(
                     entity_node = find_parent_by_kind(node, "class_declaration")
                         .or_else(|| find_parent_by_kind(node, "abstract_class_declaration"));
                 }
+                "kotlin_class.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinClass);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "class_declaration");
+                }
                 "interface.name" => {
                     name = Some(text.clone());
                     kind = Some(EntityKind::Interface);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "interface_declaration");
+                }
+                "kotlin_interface.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinInterface);
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "interface_declaration");
                 }
@@ -100,6 +112,12 @@ pub(crate) fn extract_entities(
                                 source_bytes,
                                 &mut reference_intents,
                             );
+                        } else if lang_name == "kotlin" {
+                            kotlin::extract_reference_intents_kotlin(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
                         } else {
                             typescript::extract_reference_intents_typescript(
                                 method_node,
@@ -121,7 +139,71 @@ pub(crate) fn extract_entities(
                                 source_bytes,
                                 &mut reference_intents,
                             );
+                        } else if lang_name == "kotlin" {
+                            kotlin::extract_type_references(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
                         }
+                    }
+                }
+                "kotlin_method.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinMethod);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "function_declaration");
+                    // For Kotlin methods, extract reference intents from the method body
+                    if let Some(method_node) = entity_node {
+                        if lang_name == "kotlin" {
+                            kotlin::extract_reference_intents_kotlin(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
+                    }
+                }
+                "kotlin_object.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinObject);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "object_declaration");
+                }
+                "kotlin_companion.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinCompanionObject);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "companion_object");
+                }
+                "kotlin_function.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinFunction);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "function_declaration");
+                    // For Kotlin functions, extract reference intents from the function body
+                    if let Some(func_node) = entity_node
+                        && lang_name == "kotlin" {
+                        kotlin::extract_reference_intents_kotlin(
+                            func_node,
+                            source_bytes,
+                            &mut reference_intents,
+                        );
+                    }
+                }
+                "kotlin_property.name" => {
+                    name = Some(text.clone());
+                    kind = Some(EntityKind::KotlinProperty);
+                    start_line = node.start_position().row + 1;
+                    entity_node = find_parent_by_kind(node, "property_declaration");
+                    // For Kotlin properties, extract reference intents from the property
+                    if let Some(prop_node) = entity_node
+                        && lang_name == "kotlin" {
+                        kotlin::extract_reference_intents_kotlin(
+                            prop_node,
+                            source_bytes,
+                            &mut reference_intents,
+                        );
                     }
                 }
                 "function.name" => {
@@ -136,6 +218,12 @@ pub(crate) fn extract_entities(
                     if let Some(func_node) = entity_node {
                         if lang_name == "javascript" {
                             javascript::extract_reference_intents_javascript(
+                                func_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        } else if lang_name == "kotlin" {
+                            kotlin::extract_reference_intents_kotlin(
                                 func_node,
                                 source_bytes,
                                 &mut reference_intents,
@@ -163,6 +251,7 @@ pub(crate) fn extract_entities(
                     // This captures function calls inside const assignments like:
                     //   const formattedItems = formatRegistryItems(registryItems)
                     //   const config = await getMcpConfig(process.cwd())
+                    //   val result = someFunction()
                     if let Some(const_node) = entity_node {
                         if lang_name == "java" {
                             java::extract_reference_intents_java(
@@ -172,6 +261,12 @@ pub(crate) fn extract_entities(
                             );
                         } else if lang_name == "javascript" {
                             javascript::extract_reference_intents_javascript(
+                                const_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        } else if lang_name == "kotlin" {
+                            kotlin::extract_reference_intents_kotlin(
                                 const_node,
                                 source_bytes,
                                 &mut reference_intents,
@@ -267,8 +362,13 @@ pub(crate) fn extract_entities(
                 compute_fqn_and_context(&name, &kind, start_line, lang_name, &class_contexts);
 
             // For classes, also extract extends/implements from AST
-            if matches!(kind, EntityKind::Class | EntityKind::Interface)
-                && let Some(class_node) = entity_node
+            if matches!(
+                kind,
+                EntityKind::Class
+                    | EntityKind::Interface
+                    | EntityKind::KotlinClass
+                    | EntityKind::KotlinInterface
+            ) && let Some(class_node) = entity_node
             {
                 if lang_name == "javascript" {
                     javascript::extract_class_inheritance_js(
@@ -319,6 +419,19 @@ pub(crate) fn extract_entities(
                     );
                     // Extract type references (e.g., constructor parameters, field types)
                     java::extract_type_references(class_node, source_bytes, &mut reference_intents);
+                } else if lang_name == "kotlin" {
+                    // Extract annotation references (e.g., @Component, @Composable)
+                    kotlin::extract_annotation_references(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                    // Extract type references (e.g., constructor parameters, property types)
+                    kotlin::extract_type_references(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
                 }
             }
 
@@ -374,7 +487,11 @@ pub(crate) fn extract_entities(
 
     // Third pass: capture orphaned reference intents (calls in top-level statements,
     // callbacks, etc. that were not captured by any named entity)
-    if lang_name == "typescript" || lang_name == "java" || lang_name == "javascript" {
+    if lang_name == "typescript"
+        || lang_name == "java"
+        || lang_name == "javascript"
+        || lang_name == "kotlin"
+    {
         collect_orphaned_references(
             tree.root_node(),
             source_bytes,

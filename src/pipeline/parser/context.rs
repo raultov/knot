@@ -64,12 +64,15 @@ pub(crate) fn compute_fqn_and_context(
 
     // Compute FQN
     let fqn = match kind {
-        EntityKind::Class | EntityKind::Interface => {
-            // For Java, we'd want to include package name here
+        EntityKind::Class
+        | EntityKind::Interface
+        | EntityKind::KotlinClass
+        | EntityKind::KotlinInterface => {
+            // For Java/Kotlin, we'd want to include package name here
             // For now, just use the class name
             name.to_string()
         }
-        EntityKind::Method => {
+        EntityKind::Method | EntityKind::KotlinMethod => {
             // Method FQN: ClassName.methodName
             if let Some(class_name) = &enclosing_class {
                 format!("{}.{}", class_name, name)
@@ -77,11 +80,11 @@ pub(crate) fn compute_fqn_and_context(
                 name.to_string()
             }
         }
-        EntityKind::Function => {
+        EntityKind::Function | EntityKind::KotlinFunction => {
             // Top-level function - just the function name
             name.to_string()
         }
-        EntityKind::Constant => {
+        EntityKind::Constant | EntityKind::KotlinProperty => {
             // Constant FQN: ClassName.CONST_NAME or just CONST_NAME for top-level
             if let Some(class_name) = &enclosing_class {
                 format!("{}.{}", class_name, name)
@@ -108,6 +111,11 @@ pub(crate) fn compute_fqn_and_context(
         EntityKind::ScssVariable => format!("${}", name),
         EntityKind::ScssMixin => format!("@mixin {}", name),
         EntityKind::ScssFunction => format!("@function {}", name),
+        // Kotlin-specific entities that don't nest like classes
+        EntityKind::KotlinObject | EntityKind::KotlinCompanionObject => {
+            // These are top-level entities, just use the name
+            name.to_string()
+        }
     };
 
     (fqn, enclosing_class)

@@ -1,8 +1,8 @@
 [package]
 name = "knot"
-version = "0.6.6"
+version = "0.7.0"
 edition = "2024"
-description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, and HTML codebases"
+description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, and HTML codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
 license = "MIT"
 repository = "https://github.com/raultov/knot"
@@ -31,6 +31,7 @@ tree-sitter = "0.26"
 tree-sitter-java = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.23"
+tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-html = "0.23"
 tree-sitter-css = "0.23"
 tree-sitter-scss = "1.0"

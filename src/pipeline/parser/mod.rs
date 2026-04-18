@@ -33,6 +33,7 @@ mod test_utils;
 
 // Built-in query files compiled into the binary.
 const DEFAULT_JAVA_QUERY: &str = include_str!("../../../queries/java.scm");
+const DEFAULT_KOTLIN_QUERY: &str = include_str!("../../../queries/kotlin.scm");
 const DEFAULT_TS_QUERY: &str = include_str!("../../../queries/typescript.scm");
 const DEFAULT_TSX_QUERY: &str = include_str!("../../../queries/tsx.scm");
 const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
@@ -113,6 +114,17 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 tree_sitter_java::LANGUAGE.into(),
                 &query_src,
                 "java",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "kt" | "kts" => {
+            let query_src = load_query_source("kotlin.scm", DEFAULT_KOTLIN_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_kotlin_ng::LANGUAGE.into(),
+                &query_src,
+                "kotlin",
                 &file_path,
                 &parse_cfg.repo_name,
             )?
