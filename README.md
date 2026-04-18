@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin, TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.0+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -22,7 +22,7 @@ This dual-database approach powers an **MCP (Model Context Protocol) server** th
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
-- **Kotlin** (v0.7.0+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties
+- **Kotlin** (v0.7.0+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
 - **JavaScript/Node.js** (v0.7.0+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - **Hybrid Web Ecosystem** (v0.6.5): Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
@@ -190,6 +190,20 @@ Use `--clean` when:
 - You want to rebuild the entire index from scratch
 - You've changed Tree-sitter queries or embedding models
 - Troubleshooting indexing issues
+
+### Running E2E Integration Tests
+
+To ensure indexer stability, run the E2E integration test suite:
+
+```bash
+# Run all language E2E tests (Java, TS, JS, HTML, CSS, Kotlin)
+./tests/run_e2e.sh
+
+# Run only Kotlin E2E tests
+./tests/run_kotlin_e2e.sh
+```
+
+See `tests/KOTLIN_E2E_TESTS.md` for detailed coverage and troubleshooting.
 
 ### Using the MCP Server
 
@@ -435,25 +449,35 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ Enable full-stack SPA indexing with HTML-to-JS and HTML-to-CSS file linking
 - ✅ Support pattern detection for DOM manipulation and CSS class manipulation
 
+#### Completed: Phase 5 — Kotlin Support (v0.7.0)
+- ✅ Support `.kt` and `.kts` files
+- ✅ Extract classes, interfaces, objects, companion objects
+- ✅ Extract top-level and method functions
+- ✅ Extract properties (val/var declarations)
+- ✅ Support extension functions and type references
+- ✅ Full annotation and docstring extraction
+- ✅ tree-sitter-kotlin-ng v1.1.0 grammar compatibility
+- ✅ Comprehensive E2E testing with 10 test cases
+
 **See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
 
 ### Upcoming (v0.7.x+)
-#### Phase 5: Rust Support
+#### Phase 6: Rust Support
 - [ ] Support `.rs` files
 - [ ] Struct, trait, and impl tracking
 - [ ] Macro invocation analysis
 - [ ] Ownership-aware call graph analysis
 
-#### Phase 6: Event Binding & Advanced Patterns
+#### Phase 7: Event Binding & Advanced Patterns
 - [ ] Angular event binding (`(click)`, `(submit)`, etc.) to handler methods
 - [ ] React event handler tracking (`onClick`, `onChange`, etc.)
 - [ ] DOM event listener tracking (`addEventListener`)
 - [ ] CSS media query and animation reference tracking
 
 #### Long-Term Vision
-- [ ] Kotlin support
 - [ ] Python support
 - [ ] Go support
+- [ ] C# support
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)
 - [ ] Web UI for graph visualization
 - [ ] Language Server Protocol (LSP) integration

@@ -1,15 +1,19 @@
 {
   "file_hashes": {
-    "/home/raul/workspace/rust/knot/tests/fixtures/DataProcessor.java": "1c23834a6ed28eadb8987ec078a8b2fb58fe4f367d22b63017ee694bb60fbd10",
-    "/home/raul/workspace/rust/knot/tests/testing_files/test_angular.html": "ac82ba7462b0ca01229b7e19b99a5d9f1d841c50df4758566d7287fdd1bdca47",
-    "/home/raul/workspace/rust/knot/tests/fixtures/ApiController.ts": "7279f1dfd1d9d8ad4060558383cc18cef9b94e709a9162b3a52f983d8d811e03",
-    "/home/raul/workspace/rust/knot/tests/testing_files/test_java.java": "83d44fc6d34af53af688b99268444e1ed9584122913f2121756cf5de3dcaed6d",
-    "/home/raul/workspace/rust/knot/tests/fixtures/SimpleService.java": "135ec8306202ed952d91c6bbda04019dfad28cbc6564f6189be462233478891d",
-    "/home/raul/workspace/rust/knot/tests/testing_files/test_styles.css": "1befb252354760cd16e308c26d987affeb8332eba694faf9bae4181f11c9bdd6",
-    "/home/raul/workspace/rust/knot/tests/fixtures/Counter.tsx": "9ebe2a5e0fa13148a3bf230ebfd3e864c8630c40f244ed735f6b6894c28020e1",
-    "/home/raul/workspace/rust/knot/tests/testing_files/test_styles.scss": "394666acfe92af1feda7c5c7cc8e79fc87115b5960d0121fd535479ed92cd455",
     "/home/raul/workspace/rust/knot/tests/testing_files/test_javascript.jsx": "2e12f9edc2ac24d448502581f3b186b9d4319b85dc5cb540d07470c1cc6dc408",
+    "/home/raul/workspace/rust/knot/tests/testing_files/test_styles.css": "1befb252354760cd16e308c26d987affeb8332eba694faf9bae4181f11c9bdd6",
+    "/home/raul/workspace/rust/knot/tests/testing_files/sample.kt": "b6b00c02e8cbffda3467e195052da319c171405f5d13ab22b4bd14e2f979b9eb",
+    "/home/raul/workspace/rust/knot/tests/testing_files/spa_app.html": "53479209f0969756e279ca16d2ef6ce024be9e52fca979d8e84da88296357386",
+    "/home/raul/workspace/rust/knot/tests/testing_files/test_typescript.ts": "aa2a2b642d84a7154451606770d913d12c27e1fa1ca457ff0c7b38dd0a74088e",
+    "/home/raul/workspace/rust/knot/tests/testing_files/spa_app.css": "9a3d79f051d1ac8b9d9a9ea85849db44a431d31749988205e7207d3dc9ac4210",
+    "/home/raul/workspace/rust/knot/tests/fixtures/DataProcessor.java": "1c23834a6ed28eadb8987ec078a8b2fb58fe4f367d22b63017ee694bb60fbd10",
+    "/home/raul/workspace/rust/knot/tests/testing_files/spa_app.js": "cd1863e9f46306b8194b3fe2dd2254f803f32ca0cf780d7f64ace75ed4516c05",
+    "/home/raul/workspace/rust/knot/tests/testing_files/test_angular.html": "ac82ba7462b0ca01229b7e19b99a5d9f1d841c50df4758566d7287fdd1bdca47",
+    "/home/raul/workspace/rust/knot/tests/fixtures/SimpleService.java": "135ec8306202ed952d91c6bbda04019dfad28cbc6564f6189be462233478891d",
     "/home/raul/workspace/rust/knot/tests/fixtures/UserService.ts": "9a31d6f566a6066ed3bef9cdc014a93604665e4d554089113725090e33a99c14",
-    "/home/raul/workspace/rust/knot/tests/testing_files/test_typescript.ts": "aa2a2b642d84a7154451606770d913d12c27e1fa1ca457ff0c7b38dd0a74088e"
+    "/home/raul/workspace/rust/knot/tests/testing_files/test_java.java": "83d44fc6d34af53af688b99268444e1ed9584122913f2121756cf5de3dcaed6d",
+    "/home/raul/workspace/rust/knot/tests/fixtures/ApiController.ts": "7279f1dfd1d9d8ad4060558383cc18cef9b94e709a9162b3a52f983d8d811e03",
+    "/home/raul/workspace/rust/knot/tests/testing_files/test_styles.scss": "394666acfe92af1feda7c5c7cc8e79fc87115b5960d0121fd535479ed92cd455",
+    "/home/raul/workspace/rust/knot/tests/fixtures/Counter.tsx": "9ebe2a5e0fa13148a3bf230ebfd3e864c8630c40f244ed735f6b6894c28020e1"
   }
 }
