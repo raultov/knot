@@ -473,7 +473,7 @@ fi
 # Test 20: Kotlin annotation extraction
 echo ""
 echo "Test 20: Searching for @Service annotation in UserService..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"$KT_FILE"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$KT_FILE"'"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -481,6 +481,7 @@ if echo "$MCP_RESPONSE" | grep -q "Service"; then
     echo -e "${GREEN}✓ Found Kotlin @Service annotation${NC}"
 else
     echo -e "${RED}✗ Kotlin @Service annotation not found${NC}"
+    echo "Response: $MCP_RESPONSE"
     exit 1
 fi
 

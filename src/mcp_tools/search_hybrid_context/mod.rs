@@ -55,7 +55,7 @@ impl SearchHybridContextTool {
             "repo_name".to_string(),
             serde_json::from_value(json!({
                 "type": "string",
-                "description": "Optional repository name to filter results to a specific codebase (e.g., 'my-java-repo'). Omit to search across all repositories.",
+                "description": "Optional but HIGHLY RECOMMENDED: repository name to filter results to a specific codebase (e.g., 'my-java-repo'). If you know the repository you are working on, include this in your FIRST query to avoid mixed results from other indexed projects. Omit only to search across all repositories.",
                 "minLength": 1,
                 "maxLength": 255
             }))
@@ -68,7 +68,7 @@ impl SearchHybridContextTool {
                 "Hybrid semantic + structural search combining AI understanding with code architecture. \
                  Search by meaning ('user authentication'), class/method names, docstrings, comments, or architectural patterns. \
                  Returns full context including signatures, documentation, inline comments, and dependencies. \
-                 Works with Java and TypeScript codebases. Supports optional repository filtering."
+                 Works with Java, Kotlin and TypeScript codebases. IMPORTANT: If you know the repository name, ALWAYS include the 'repo_name' parameter in your initial call to avoid mixed results from other indexed projects."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(vec!["query".to_string()], Some(properties), None),

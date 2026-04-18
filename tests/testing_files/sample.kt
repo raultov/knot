@@ -60,7 +60,7 @@ object DatabaseManager {
     }
 }
 
-// Companon object
+// Companion object
 class ConfigManager {
     companion object {
         const val DEFAULT_TIMEOUT = 5000

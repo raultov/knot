@@ -38,7 +38,7 @@ impl FindCallersTool {
             "repo_name".to_string(),
             serde_json::from_value(json!({
                 "type": "string",
-                "description": "Optional repository name to filter results to a specific codebase (e.g., 'my-java-repo'). Omit to search across all repositories.",
+                "description": "Optional but HIGHLY RECOMMENDED: repository name to filter results to a specific codebase (e.g., 'my-java-repo'). If you know the repository you are working on, include this in your FIRST query to avoid mixed results from other indexed projects. Omit only to search across all repositories.",
                 "minLength": 1,
                 "maxLength": 255
             }))
@@ -52,7 +52,7 @@ impl FindCallersTool {
                  any relationship type (calls, inheritance, implementation, type usage). \
                  Use this to: detect dead code, understand impact analysis, refactor safely, discover inheritance chains, \
                  or track type usage. Returns results grouped by relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES). \
-                 Works with Java and TypeScript. Supports optional repository filtering."
+                 Works with Java, Kotlin and TypeScript. IMPORTANT: If you know the repository name, ALWAYS include the 'repo_name' parameter in your initial call to avoid mixed results from other indexed projects."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(

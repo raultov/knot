@@ -150,6 +150,25 @@ pub(crate) fn extract_decorators(
             }
             child = c.next_sibling();
         }
+    } else if lang_name == "kotlin" {
+        // For Kotlin: annotations are in the modifiers section (similar to Java)
+        let mut child = entity_node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "modifiers" {
+                // Extract annotations from the modifiers node
+                let mut modifier_child = c.child(0);
+                while let Some(mc) = modifier_child {
+                    if mc.kind() == "annotation" {
+                        let annotation_text = node_text(mc, source);
+                        if !annotation_text.is_empty() {
+                            decorators.push(annotation_text);
+                        }
+                    }
+                    modifier_child = mc.next_sibling();
+                }
+            }
+            child = c.next_sibling();
+        }
     }
 
     decorators
@@ -346,6 +365,50 @@ mod tests {
             let children = extract_child_entity_nodes(class_node, "typescript");
             // Should find methods or method definitions
             assert!(!children.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_extract_decorators_kotlin() {
+        let code = r#"
+@Service
+class UserService {
+    fun getUser(id: Int): User? {
+        return null
+    }
+}
+"#;
+        let lang = tree_sitter_kotlin_ng::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        fn find_class(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class(tree.root_node()) {
+            let decorators = extract_decorators(class_node, code.as_bytes(), "kotlin");
+            assert!(
+                !decorators.is_empty(),
+                "Expected to find decorators on Kotlin class"
+            );
+            assert!(
+                decorators.iter().any(|d| d.contains("Service")),
+                "Expected to find @Service decorator"
+            );
+        } else {
+            panic!("Could not find class declaration in Kotlin code");
         }
     }
 }

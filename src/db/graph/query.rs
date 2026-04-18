@@ -214,12 +214,12 @@ impl QueryExt for GraphDb {
 
         let query_str = if repo_name.is_some() {
             "MATCH (e:Entity {file_path: $file_path, repo_name: $repo_name})
-             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line
+             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
              ORDER BY e.start_line"
                 .to_string()
         } else {
             "MATCH (e:Entity {file_path: $file_path})
-             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line
+             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
              ORDER BY e.start_line"
                 .to_string()
         };
@@ -236,12 +236,15 @@ impl QueryExt for GraphDb {
             .context("Failed to query Neo4j for file entities")?;
 
         while let Ok(Some(row)) = rows.next().await {
+            let decorators = row.get::<Vec<String>>("e.decorators").unwrap_or_default();
+
             let entity_json = serde_json::json!({
                 "name": row.get::<String>("e.name").ok(),
                 "kind": row.get::<String>("e.kind").ok(),
                 "signature": row.get::<String>("e.signature").ok(),
                 "docstring": row.get::<String>("e.docstring").ok(),
                 "start_line": row.get::<i64>("e.start_line").ok(),
+                "decorators": decorators,
             });
             results.push(entity_json);
         }

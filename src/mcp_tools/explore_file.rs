@@ -35,7 +35,7 @@ impl ExploreFileTool {
             "repo_name".to_string(),
             serde_json::from_value(json!({
                 "type": "string",
-                "description": "Optional repository name to filter results to a specific codebase (e.g., 'my-java-repo'). Omit to search across all repositories.",
+                "description": "Optional but HIGHLY RECOMMENDED: repository name to filter results to a specific codebase (e.g., 'my-java-repo'). If you know the repository you are working on, include this in your FIRST query to avoid mixed results from other indexed projects. Omit only to search across all repositories.",
                 "minLength": 1,
                 "maxLength": 255
             }))
@@ -47,8 +47,8 @@ impl ExploreFileTool {
             description: Some(
                 "Explore the complete anatomy of a source file: all classes, interfaces, methods, and functions \
                  organized by type with signatures and documentation. Use this to understand file structure, \
-                 navigate large modules, or get a quick overview before diving into details. Works with Java and TypeScript. \
-                 Supports optional repository filtering."
+                 navigate large modules, or get a quick overview before diving into details. Works with Java, Kotlin and TypeScript. \
+                 IMPORTANT: If you know the repository name, ALWAYS include the 'repo_name' parameter in your initial call to avoid mixed results from other indexed projects."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
@@ -207,6 +207,19 @@ fn format_entity_summary(entity: &serde_json::Value) -> String {
         }
 
         output.push('\n');
+
+        if let Some(decorators_array) = entity.get("decorators").and_then(|v| v.as_array())
+            && !decorators_array.is_empty()
+        {
+            let decorator_strs: Vec<String> = decorators_array
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect();
+            if !decorator_strs.is_empty() {
+                output.push_str(&format!("  - Decorators: {}\n", decorator_strs.join(", ")));
+            }
+        }
 
         if let Some(signature) = entity
             .get("signature")
