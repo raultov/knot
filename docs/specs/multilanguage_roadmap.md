@@ -6,8 +6,9 @@ This document outlines the phased expansion of `knot` from a Java/TypeScript ind
 
 ## Overview
 
-**Current State (v0.6.6):**
+**Current State (v0.7.0):**
 - ✅ Java support (full AST extraction)
+- ✅ Kotlin support (v0.7.0) - Complete with classes, interfaces, objects, functions, methods, properties
 - ✅ TypeScript/TSX/CTS support (modern JavaScript/TypeScript)
 - ✅ JavaScript/Node.js support (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - ✅ HTML support (`.html`, `.htm` with custom elements, id/class indexing)
@@ -22,52 +23,44 @@ This document outlines the phased expansion of `knot` from a Java/TypeScript ind
 
 ---
 
-## Phase 5: Kotlin Support (v0.7.0)
+## Phase 5: Kotlin Support (v0.7.0) ✅ COMPLETED
 
 ### Objective
 Enable `knot` to index Kotlin codebases, providing full AST extraction, semantic understanding of Kotlin-specific constructs (data classes, companion objects, extension functions), and cross-language linking (e.g., with Java).
 
-### Technical Implementation
+### Implementation Status
 
-#### Dependencies
-Add to `Cargo.toml`:
-```toml
-tree-sitter-kotlin = "0.3" # (or current stable version)
-```
+#### ✅ Completed Features
+- **File Extensions**: Full support for `.kt` and `.kts` files
+- **Entity Types**: All 7 Kotlin entity types fully extracted:
+  - KotlinClass
+  - KotlinInterface
+  - KotlinObject (singleton objects)
+  - KotlinCompanionObject
+  - KotlinFunction (Top-level and extension functions)
+  - KotlinMethod (Class methods)
+  - KotlinProperty (val/var declarations)
 
-#### File Extensions Supported
-- `.kt` — Kotlin source files
-- `.kts` — Kotlin script files (Gradle scripts, etc.)
+#### ✅ Dependencies
+- tree-sitter-kotlin-ng = "1.1.0" (in Cargo.toml)
 
-#### New Entity Types
-```rust
-pub enum EntityKind {
-    KotlinClass,
-    KotlinInterface,
-    KotlinObject,          // singleton objects
-    KotlinCompanionObject,
-    KotlinFunction,        // Top-level or extension functions
-    KotlinMethod,          // Class methods
-    KotlinProperty,
-}
-```
+#### ✅ Relationship Tracking
+- **EXTENDS/IMPLEMENTS**: Track class inheritance and interface implementation
+- **CALLS**: Function and method invocations
+- **REFERENCES**: Type usage in signatures and generics
+- **ANNOTATES**: Capture annotations for Spring Boot/Android frameworks
 
-#### Relationship Tracking
-- **EXTENDS/IMPLEMENTS**: Track class inheritance and interface implementation.
-- **CALLS**: Function and method invocations.
-- **REFERENCES**: Type usage in signatures and generics.
-- **ANNOTATES**: Capture annotations (e.g., `@Component`, `@Inject`) for Spring Boot/Android frameworks.
+#### ✅ Special Handling
+- **Extension Functions**: Properly link `fun String.myExtension()` as callable methods on receiver type
+- **Companion Objects**: Map `companion object` methods as static-like calls to parent class
+- **Data Classes**: Auto-infer properties from primary constructor
 
-#### Special Handling
-- **Extension Functions**: Need to properly link `fun String.myExtension()` so it resolves as a callable method on the receiver type.
-- **Companion Objects**: Map `companion object` methods so they appear as static-like calls to the parent class.
-- **Data Classes**: Auto-infer properties defined in the primary constructor.
-
-### Validation Checklist
-- [ ] Parse a standard Kotlin project (Android or Spring Boot).
-- [ ] Extract top-level functions and extension functions accurately.
-- [ ] Correctly map companion object methods to their parent class.
-- [ ] Track dependencies between Kotlin and Java files in mixed projects.
+#### ✅ Validation Completed
+- ✅ 10 comprehensive E2E integration tests - ALL PASSING
+- ✅ Extract top-level functions and extension functions accurately
+- ✅ Correctly map companion object methods to parent class
+- ✅ Track dependencies between Kotlin and Java files in mixed projects
+- ✅ Full tree-sitter-kotlin-ng v1.1.0 grammar compatibility
 
 ---
 
@@ -102,7 +95,7 @@ Enable `knot` to index Rust codebases with full semantic understanding of owners
 | Phase 2: HTML | Low | ✅ Completed (v0.6.3) |
 | Phase 3: CSS/SCSS | Medium | ✅ Completed (v0.6.4) |
 | Phase 4: Web Ecosystem | High | ✅ Completed (v0.6.5) |
-| Phase 5: Kotlin | Medium | 📋 Planned (v0.7.0) |
+| Phase 5: Kotlin | Medium | ✅ Completed (v0.7.0) |
 | Phase 6: CLI | Low | 📋 Planned (v0.8.0) |
 | Phase 7: Rust | High | 📋 Planned (v0.9.0) |
 
@@ -110,21 +103,7 @@ Enable `knot` to index Rust codebases with full semantic understanding of owners
 
 ## Breaking Changes & Backward Compatibility
 
-### Phases 1-3 (File Format & Schema)
-- ✅ **Backward compatible**: New languages integrate into existing Neo4j/Qdrant structure
-- ✅ **No database migration needed**: Add new entity types dynamically
-- ✅ **MCP tools unchanged**: Work seamlessly with new entity kinds
-
-### Phase 4 (Cross-Language Relationships)
-- ⚠️ **New relationship types**: `REFERENCES_DOM`, `USES_CSS_CLASS`, `IMPORTS_SCRIPT`, `IMPORTS_STYLESHEET`
-- ✅ **Optional**: Existing queries continue to work
-- ✅ **Gradual rollout**: Enable per-project basis
-
----
-
-## Breaking Changes & Backward Compatibility
-
-### Phases 1-3 (File Format & Schema)
+### Phases 1-5 (File Format & Schema)
 - ✅ **Backward compatible**: New languages integrate into existing Neo4j/Qdrant structure
 - ✅ **No database migration needed**: Add new entity types dynamically
 - ✅ **MCP tools unchanged**: Work seamlessly with new entity kinds
@@ -153,5 +132,16 @@ Contributions in any phase are welcome! Each phase is designed to be modular and
 - [Tree-sitter HTML Grammar](https://github.com/tree-sitter/tree-sitter-html)
 - [Tree-sitter CSS Grammar](https://github.com/tree-sitter/tree-sitter-css)
 - [Tree-sitter SCSS Grammar](https://github.com/tree-sitter/tree-sitter-scss)
-- [Tree-sitter Kotlin Grammar](https://github.com/fwcd/tree-sitter-kotlin)
+- [Tree-sitter Kotlin Grammar (kotlin-ng)](https://github.com/fwcd/tree-sitter-kotlin)
 - [Tree-sitter Rust Grammar](https://github.com/tree-sitter/tree-sitter-rust)
+
+## Changelog
+
+### v0.7.0 - Kotlin Support
+- ✅ Complete Kotlin language support with 7 entity types
+- ✅ tree-sitter-kotlin-ng v1.1.0 grammar compatibility
+- ✅ Comprehensive E2E test suite (10 test cases)
+- ✅ Full MCP server integration for Kotlin entities
+- ✅ Support for classes, interfaces, objects, companion objects, functions, methods, and properties
+- ✅ Extension functions and annotation extraction
+- See commit `1cb1880` for implementation details
