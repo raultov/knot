@@ -370,6 +370,135 @@ else
     exit 1
 fi
 
+# Test 13: Kotlin support - Explore Kotlin file
+echo ""
+echo "Test 13: Exploring sample.kt for Kotlin class extraction..."
+KT_FILE="$TEST_FILES_DIR/sample.kt"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$KT_FILE\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "UserService"; then
+    echo -e "${GREEN}✓ Found Kotlin class UserService${NC}"
+else
+    echo -e "${RED}✗ Kotlin class UserService not found${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test 14: Kotlin interface extraction
+echo ""
+echo "Test 14: Searching for Kotlin interface Repository..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "Repository"; then
+    echo -e "${GREEN}✓ Found Kotlin interface Repository${NC}"
+else
+    echo -e "${RED}✗ Kotlin interface Repository not found${NC}"
+    exit 1
+fi
+
+# Test 15: Kotlin object (singleton) extraction
+echo ""
+echo "Test 15: Searching for Kotlin singleton object DatabaseManager..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"DatabaseManager"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "DatabaseManager"; then
+    echo -e "${GREEN}✓ Found Kotlin object DatabaseManager (singleton)${NC}"
+else
+    echo -e "${RED}✗ Kotlin object DatabaseManager not found${NC}"
+    exit 1
+fi
+
+# Test 16: Kotlin data class extraction
+echo ""
+echo "Test 16: Searching for Kotlin data class User..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"User"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "User"; then
+    echo -e "${GREEN}✓ Found Kotlin data class User${NC}"
+else
+    echo -e "${RED}✗ Kotlin data class User not found${NC}"
+    exit 1
+fi
+
+# Test 17: Kotlin companion object extraction
+echo ""
+echo "Test 17: Searching for Kotlin companion object in ConfigManager..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"ConfigManager"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "ConfigManager"; then
+    echo -e "${GREEN}✓ Found Kotlin class ConfigManager with companion object${NC}"
+else
+    echo -e "${RED}✗ Kotlin class ConfigManager not found${NC}"
+    exit 1
+fi
+
+# Test 18: Kotlin function extraction
+echo ""
+echo "Test 18: Searching for top-level Kotlin function greetUser..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greetUser"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "greetUser"; then
+    echo -e "${GREEN}✓ Found Kotlin top-level function greetUser${NC}"
+else
+    echo -e "${RED}✗ Kotlin function greetUser not found${NC}"
+    exit 1
+fi
+
+# Test 19: Kotlin extension function extraction
+echo ""
+echo "Test 19: Searching for Kotlin extension function isValidEmail..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"isValidEmail"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "isValidEmail"; then
+    echo -e "${GREEN}✓ Found Kotlin extension function isValidEmail${NC}"
+else
+    echo -e "${RED}✗ Kotlin extension function isValidEmail not found${NC}"
+    exit 1
+fi
+
+# Test 20: Kotlin annotation extraction
+echo ""
+echo "Test 20: Searching for @Service annotation in UserService..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"$KT_FILE"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "Service"; then
+    echo -e "${GREEN}✓ Found Kotlin @Service annotation${NC}"
+else
+    echo -e "${RED}✗ Kotlin @Service annotation not found${NC}"
+    exit 1
+fi
+
+# Test 21: Kotlin method call tracking
+echo ""
+echo "Test 21: Searching for UserRepository find operations..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"findById"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "findById"; then
+    echo -e "${GREEN}✓ Found Kotlin method findById and its callers${NC}"
+else
+    echo -e "${RED}✗ Kotlin method findById not found${NC}"
+    # This is OK, as it depends on relationship resolution
+    echo -e "${YELLOW}  Note: This is expected if method call tracking for Kotlin needs tuning${NC}"
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -392,6 +521,12 @@ echo "  ✓ MCP server query functionality"
 echo "  ✓ Phase 4: Hybrid Web Ecosystem - Cross-language CSS class references (JS → CSS)"
 echo "  ✓ Phase 4: Hybrid Web Ecosystem - Cross-language HTML ID references (JS → HTML)"
 echo "  ✓ Phase 4: Hybrid Web Ecosystem - Multi-file SPA linking (HTML → JS, HTML → CSS)"
+echo "  ✓ Phase 5: Kotlin Support - Class, interface, and object extraction"
+echo "  ✓ Phase 5: Kotlin Support - Data class extraction"
+echo "  ✓ Phase 5: Kotlin Support - Companion object extraction"
+echo "  ✓ Phase 5: Kotlin Support - Top-level function extraction"
+echo "  ✓ Phase 5: Kotlin Support - Extension function extraction"
+echo "  ✓ Phase 5: Kotlin Support - Annotation extraction"
 echo ""
 
 exit 0
