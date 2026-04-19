@@ -15,7 +15,7 @@ This document outlines the detailed plan to implement comprehensive Rust support
 
 ## 2. Phase 1: Foundation & Grammar Setup
 
-**Version Target:** v0.8.1  
+**Version Target:** v0.8.2  
 **Objective:** Set up the parser, update core domain models, and prepare the testing environment.  
 **Deliverables:** Compiler passes, `.rs` files recognized, Rust entities defined in domain model.
 

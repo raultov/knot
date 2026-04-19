@@ -6,7 +6,7 @@ This document outlines the phased expansion of `knot` from a Java/TypeScript ind
 
 ## Overview
 
-**Current State (v0.8.1):**
+**Current State (v0.8.2):**
 - ✅ Java support (full AST extraction)
 - ✅ Kotlin support (v0.7.4+) - Complete with classes, interfaces, objects, functions, methods, properties
 - ✅ TypeScript/TSX/CTS support (modern JavaScript/TypeScript)
@@ -173,6 +173,11 @@ Contributions in any phase are welcome! Each phase is designed to be modular and
 - [Tree-sitter Rust Grammar](https://github.com/tree-sitter/tree-sitter-rust)
 
 ## Changelog
+
+### v0.8.2 - Documentation Refactoring and glama.ai Compliance
+- ✅ **MCP Description Enhancements**: Updated all tool descriptions to meet glama.ai quality standards (Behaviour, Conciseness, Completeness, Parameters, Purpose, Usage Guidelines).
+- ✅ **Token Efficiency**: Restructured `.knot-agent.md` into a modular index with on-demand skill loading in `docs/agent-skills/`.
+- ✅ **Improved Usage Guidance**: Added critical warnings and workflow patterns to the new modular documentation.
 
 ### v0.8.1 - CLI UX Improvements and E2E Coverage
 - ✅ **Silenced CLI Logs**: Default log level set to `error` for `knot` CLI to eliminate onnxruntime/fastembed noise in stdout.
