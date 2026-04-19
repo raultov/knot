@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y \
 # Copy binaries from builder
 COPY --from=builder /build/target/release/knot-indexer /usr/local/bin/knot-indexer
 COPY --from=builder /build/target/release/knot-mcp /usr/local/bin/knot-mcp
+COPY --from=builder /build/target/release/knot /usr/local/bin/knot
 
 # Create workspace directory
 RUN mkdir -p /workspace

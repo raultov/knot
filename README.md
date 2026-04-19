@@ -68,8 +68,10 @@ Go to the [Releases](https://github.com/raultov/knot/releases) page and download
 
 **Install via Shell Script (macOS & Linux):**
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh && curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md
 ```
+
+This one-liner installs the `knot` binary and downloads the `.knot-agent.md` skill file to your current directory for use with AI agents and LLM-based code analysis tools.
 
 **Linux Requirements:**
 - **Minimum glibc version**: 2.38+
