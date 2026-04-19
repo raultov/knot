@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust and C/C++.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -31,7 +31,8 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (Planned): Struct, trait, and macro analysis
+- **Rust** (Planned v0.8.x): Struct, trait, and macro analysis
+- **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
 - Captures docstrings (JavaDoc, JSDoc) preceding declarations
@@ -104,6 +105,17 @@ docker run --rm \
   knot-indexer
 ```
 
+**Run the CLI tool:**
+```bash
+docker run --rm \
+  -v /path/to/your/repo:/workspace \
+  -e KNOT_REPO_PATH=/workspace \
+  -e KNOT_NEO4J_PASSWORD=your-password \
+  --network host \
+  knot:latest \
+  knot search "user login flow"
+```
+
 **Run the MCP server:**
 ```bash
 docker run --rm \
@@ -147,7 +159,12 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 ./target/release/knot-indexer
 ```
 
-**5. Start the MCP server:**
+**5. Query via CLI:**
+```bash
+./target/release/knot search "your query"
+```
+
+**6. Start the MCP server:**
 ```bash
 ./target/release/knot-mcp
 ```
@@ -396,12 +413,18 @@ Place `java.scm` and/or `typescript.scm` in your custom directory. Missing files
 ./target/release/knot-indexer --repo-path /home/user/my-java-app --neo4j-password secret
 ```
 
-**Step 2: Start MCP server**
+**Step 2: Query via CLI (Instant search)**
+```bash
+./target/release/knot search "authentication logic"
+./target/release/knot callers "UserService.login"
+```
+
+**Step 3: Start MCP server (For AI Agents)**
 ```bash
 ./target/release/knot-mcp
 ```
 
-**Step 3: Use with Claude Desktop**
+**Step 4: Use with Claude Desktop**
 - Claude will list the three tools in its Tools menu
 - Ask: "Search for all authentication logic"
 - Ask: "Find who calls the login method"
@@ -437,96 +460,28 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.0 — CLI Interface & Unified Core) ✅
-- ✅ **CLI Tool**: Standalone `knot` command with `search`, `callers`, and `explore` subcommands
-- ✅ **Unified Architecture**: Shared core logic (`src/cli_tools/`) used by both CLI and MCP
-- ✅ **Agent Skill File**: `.knot-agent.md` teaches LLMs how to use CLI for autonomous analysis
-- ✅ **Full Parity**: CLI and MCP provide identical capabilities and output
-- ✅ **Documentation**: Comprehensive CLI guide and workflow examples
+### Current Release (v0.8.1 — CLI UX & Docker Integration) ✅
+- ✅ **Silenced CLI Logs**: Default log level set to `error` for `knot` CLI (cleaner Markdown output).
+- ✅ **100% E2E Dual-Testing**: All 35 integration tests simultaneously verify both MCP and CLI.
+- ✅ **Docker CLI Support**: Official Docker image now includes the `knot` binary.
+- ✅ **Agent Guidance**: Enhanced `.knot-agent.md` with signature-based search warnings.
 
-### Previous Release (v0.7.4 — Enhanced Search Precision) ✅
-- ✅ **Signature-based Search**: Enhanced `find_callers` and `find_references` to support searching by full method signatures (e.g., "method(Type param)").
-- ✅ **Improved Search Accuracy**: Fixed limitations when searching with complex receivers or fully qualified names.
-- ✅ **Cross-Language Parity**: Applied signature search improvements across Java, Kotlin, and TypeScript.
-- ✅ **Comprehensive E2E Testing**: Added new integration tests validating the signature-based search pipeline.
+### Phase 6 (v0.8.0 — CLI Interface & Unified Core) ✅
+- ✅ **CLI Tool**: Standalone `knot` command with `search`, `callers`, and `explore` subcommands.
+- ✅ **Unified Architecture**: Shared core logic (`src/cli_tools/`) used by both CLI and MCP.
+- ✅ **LLM Skill File**: `.knot-agent.md` teaches AI agents how to use CLI for autonomous analysis.
 
-### Previous Release (v0.7.3 — MCP UX Improvements)
-- ✅ **Refactored Architecture**: Modularized parser with language-specific modules for better maintainability.
-- ✅ **Improved Performance**: Reduced memory usage and faster parsing through better entity extraction.
-- ✅ **Enhanced Cross-Language Linking**: JavaScript DOM references (`getElementById`) link to HTML elements.
-- ✅ **Advanced CSS Class Tracking**: JavaScript `classList.add()` calls link to CSS class definitions.
-- ✅ **HTML-to-JS/CSS Imports**: `<script src="...">` and `<link rel="stylesheet" href="...">` create proper file references.
-- ✅ **Full-Stack SPA Analysis**: Query which HTML files import which JS/CSS, what JS manipulates what DOM elements, etc.
-
-### Previous Release (v0.6.5 — Hybrid Web Ecosystem)
-- ✅ **CSS Support**: Extraction of class and ID selectors, and CSS Custom Properties (variables).
-- ✅ **SCSS Support**: Extraction of mixins, functions, variables, and selectors from `.scss` and `.sass` files.
-- ✅ **Unified Indexing**: Cross-language discovery of CSS class/ID usage in HTML, JSX, and TSX.
-
-### Previous Release (v0.6.3 — HTML & JSX Attribute Indexing)
-- ✅ **HTML Support**: Full parsing of `.html` files for Angular templates and Web Components.
-- ✅ **JSX Attribute Indexing**: Extract `id` and `className` from React components for cross-language CSS search.
-- ✅ **CI/CD Pipeline**: Added GitHub Actions workflow with automated unit and E2E tests.
-
-### Previous Release (v0.6.2 — Angular/React Decorator & DI Support)
-- ✅ **Decorator Extraction**: Capture references inside `@Component`, `@NgModule`, and custom decorators.
-- ✅ **Native JavaScript Support**: Robust support for Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`) with entity deduplication.
-- ✅ **TypeScript Getter & Property Support**: Track `this.property` and `this.getter` patterns in TypeScript, creating proper `CALLS` relationships in the graph.
-
-### Previous Release (v0.6.1 — Multi-Language Support & Enhanced CLI)
-- ✅ **Native JavaScript Support**: Robust support for Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`) with entity deduplication.
-- ✅ **TypeScript Getter & Property Support**: Track `this.property` and `this.getter` patterns in TypeScript, creating proper `CALLS` relationships in the graph.
-- ✅ **Enhanced CLI & MCP UX**: Optional `--repo-path` (defaults to current directory) and cleaner `knot-mcp --help` output.
-- ✅ **Graph Metadata Persistence**: Fixed an issue where `fqn` and `enclosing_class` were not being persisted in Neo4j, improving incremental resolution accuracy.
-- ✅ **Watch Mode Bug Fix**: Resolved an infinite loop issue when using `--clear` and `--watch` together (v0.5.4).
-
-### Roadmap
-#### Completed: Phase 1 — JavaScript & TypeScript (v0.6.1)
-- ✅ Support `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx` files
-- ✅ Parallel indexing of hybrid projects
-- ✅ Call graph analysis for classes, functions, and methods
-- ✅ JSDoc / JavaDoc comment extraction
-- ✅ Entity deduplication across overlapping AST patterns
-
-#### Completed: Phase 2 — HTML & JSX Attributes (v0.6.3)
-- ✅ Support `.html` and `.htm` files
-- ✅ Extract custom HTML elements (Web Components, Angular components with hyphens)
-- ✅ Extract HTML `id` and `class` attributes for cross-language CSS search
-- ✅ Extract JSX/TSX `id` and `className` attributes from React components
-- ✅ Unified indexing: Find "which components use CSS class 'btn-primary'?" across HTML/JSX
-
-#### Completed: Phase 3 — CSS & SCSS Support (v0.6.4)
-- ✅ Support `.css`, `.scss`, `.sass` files
-- ✅ Index CSS/SCSS selectors, variables, and mixins
-- ✅ Track selector usage and definitions
-- ✅ SCSS function and mixin extraction
-
-#### Completed: Phase 4 — Hybrid Web Ecosystem (v0.6.5)
-- ✅ Cross-language dependency resolution (JS ↔ HTML ↔ CSS)
-- ✅ Link JavaScript DOM operations to HTML elements via `getElementById`, `querySelector`
-- ✅ Connect CSS class usage in JavaScript (`classList.add`, `className=`) to stylesheets
-- ✅ Enable full-stack SPA indexing with HTML-to-JS and HTML-to-CSS file linking
-- ✅ Support pattern detection for DOM manipulation and CSS class manipulation
-
-#### Completed: Phase 5 — Kotlin Support (v0.7.3)
-- ✅ Support `.kt` and `.kts` files
-- ✅ Extract classes, interfaces, objects, companion objects
-- ✅ Extract top-level and method functions
-- ✅ Extract properties (val/var declarations)
-- ✅ Support extension functions and type references
-- ✅ Full annotation and docstring extraction
-- ✅ tree-sitter-kotlin-ng v1.1.0 grammar compatibility
-- ✅ Comprehensive E2E testing with 10 test cases
-
-**See the [Detailed Multi-Language Roadmap](docs/specs/multilanguage_roadmap.md) for technical specifications.**
-
-### Upcoming (v0.9.0+)
-
+### Upcoming (v0.8.x+)
 #### Phase 7: Rust Support
 - [ ] Support `.rs` files
 - [ ] Struct, trait, and impl tracking
 - [ ] Macro invocation analysis
-- [ ] Ownership-aware call graph analysis
+
+### Upcoming (v0.9.x+)
+#### Phase 8: C/C++ Support
+- [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
+- [ ] Pointer and memory relationship tracking
+- [ ] Header inclusion graph analysis
 
 #### Long-Term Vision
 - [ ] Python support

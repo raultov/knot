@@ -5,7 +5,6 @@
 
 use clap::{Parser, Subcommand};
 use std::sync::{Arc, Mutex};
-use tracing::info;
 
 use knot::{
     cli_tools,
@@ -63,8 +62,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
-    utils::init_logging()?;
+    // Initialize logging (CLI-specific: defaults to error level, not info)
+    utils::init_logging_for_cli()?;
 
     // Parse CLI arguments
     let cli = Cli::parse();
@@ -72,15 +71,6 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration for CLI (.env takes precedence over environment variables)
     // Uses load_knot_cli() which properly handles the knot subcommand structure
     let cfg = Config::load_knot_cli().expect("Failed to load configuration");
-
-    info!("knot CLI starting");
-    info!("Repository path : {}", cfg.repo_path);
-    info!("Repository name : {}", cfg.repo_name);
-    info!(
-        "Qdrant          : {} / {}",
-        cfg.qdrant_url, cfg.qdrant_collection
-    );
-    info!("Neo4j           : {}", cfg.neo4j_uri);
 
     // Initialize database connections
     let vector_db = Arc::new(
@@ -95,8 +85,6 @@ async fn main() -> anyhow::Result<()> {
 
     let embedder = Arc::new(Mutex::new(Embedder::init()?));
 
-    info!("Databases initialized successfully");
-
     // Execute the appropriate command
     match cli.command {
         Commands::Search {
@@ -106,7 +94,6 @@ async fn main() -> anyhow::Result<()> {
         } => {
             // Use provided repo or default to current repository name
             let target_repo = repo.as_deref().unwrap_or(&cfg.repo_name);
-            info!("Executing search: '{}' in repo: '{}'", query, target_repo);
             let result = cli_tools::run_search_hybrid_context(
                 &query,
                 max_results,
@@ -122,10 +109,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::Callers { entity_name, repo } => {
             // Use provided repo or default to current repository name
             let target_repo = repo.as_deref().unwrap_or(&cfg.repo_name);
-            info!(
-                "Finding callers for: '{}' in repo: '{}'",
-                entity_name, target_repo
-            );
             let result =
                 cli_tools::run_find_callers(&entity_name, Some(target_repo), &graph_db).await?;
             println!("{}", result);
@@ -134,7 +117,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::Explore { file_path, repo } => {
             // Use provided repo or default to current repository name
             let target_repo = repo.as_deref().unwrap_or(&cfg.repo_name);
-            info!("Exploring file: '{}' in repo: '{}'", file_path, target_repo);
             let result =
                 cli_tools::run_explore_file(&file_path, Some(target_repo), &graph_db).await?;
             println!("{}", result);

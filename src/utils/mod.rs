@@ -19,3 +19,30 @@ pub fn init_logging() -> Result<()> {
 
     Ok(())
 }
+
+/// Initialise the global `tracing` subscriber for the CLI tool.
+///
+/// This is a specialized version for the `knot` CLI that:
+/// - Defaults to `error` level (not `info`) to minimize noise from dependencies
+/// - Can be overridden by the `RUST_LOG` environment variable
+/// - Sends logs to stderr to avoid contaminating stdout (which contains query results)
+///
+/// # Example
+/// ```text
+/// # Default (only errors shown)
+/// knot search "something"
+///
+/// # Override to show more detail
+/// RUST_LOG=debug knot search "something"
+/// ```
+pub fn init_logging_for_cli() -> Result<()> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error"));
+
+    fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr) // Ensure logs go to stderr, not stdout
+        .init();
+
+    Ok(())
+}
