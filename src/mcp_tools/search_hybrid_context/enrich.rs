@@ -115,8 +115,10 @@ pub(crate) async fn enrich_with_relationships(
     if let Some(entities) = enriched.as_array_mut() {
         for entity in entities.iter_mut() {
             if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
-                // Query for all references to this entity
-                if let Ok(references) = handler.graph_db.find_references(name, repo_name).await {
+                // Query for all references to this entity (only if graph_db is available)
+                if let Some(graph_db) = &handler.graph_db
+                    && let Ok(references) = graph_db.find_references(name, repo_name).await
+                {
                     enrich_single_entity(entity, &references);
                 }
             }

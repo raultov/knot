@@ -102,14 +102,35 @@ impl SearchHybridContextTool {
 
         let repo_name = args.get("repo_name").and_then(|v| v.as_str());
 
+        // Check if in offline mode
+        if let (None, None, None) = (&handler.vector_db, &handler.graph_db, &handler.embedder) {
+            return Err(CallToolError::from_message(
+                "Server running in offline mode - databases not available".to_string(),
+            ));
+        }
+
+        // Extract references (must be done before await to avoid Send issues)
+        let vector_db = handler
+            .vector_db
+            .as_ref()
+            .ok_or_else(|| CallToolError::from_message("Vector DB not available".to_string()))?;
+        let graph_db = handler
+            .graph_db
+            .as_ref()
+            .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
+        let embedder = handler
+            .embedder
+            .as_ref()
+            .ok_or_else(|| CallToolError::from_message("Embedder not available".to_string()))?;
+
         // Call the shared CLI tool logic
         let formatted = cli_tools::run_search_hybrid_context(
             query,
             max_results,
             repo_name,
-            &handler.vector_db,
-            &handler.graph_db,
-            &handler.embedder,
+            vector_db,
+            graph_db,
+            embedder,
         )
         .await
         .map_err(|e| CallToolError::from_message(format!("Search failed: {}", e)))?;

@@ -86,8 +86,21 @@ impl ExploreFileTool {
 
         let repo_name = args.get("repo_name").and_then(|v| v.as_str());
 
+        // Check if in offline mode
+        if handler.graph_db.is_none() {
+            return Err(CallToolError::from_message(
+                "Server running in offline mode - graph database not available".to_string(),
+            ));
+        }
+
+        // Extract reference (must be done before await to avoid Send issues)
+        let graph_db = handler
+            .graph_db
+            .as_ref()
+            .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
+
         // Call the shared CLI tool logic
-        let formatted = cli_tools::run_explore_file(file_path, repo_name, &handler.graph_db)
+        let formatted = cli_tools::run_explore_file(file_path, repo_name, graph_db)
             .await
             .map_err(|e| CallToolError::from_message(format!("Explore file failed: {}", e)))?;
 

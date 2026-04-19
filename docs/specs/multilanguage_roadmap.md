@@ -6,7 +6,7 @@ This document outlines the phased expansion of `knot` from a Java/TypeScript ind
 
 ## Overview
 
-**Current State (v0.8.2):**
+**Current State (v0.8.3):**
 - ✅ Java support (full AST extraction)
 - ✅ Kotlin support (v0.7.4+) - Complete with classes, interfaces, objects, functions, methods, properties
 - ✅ TypeScript/TSX/CTS support (modern JavaScript/TypeScript)
@@ -174,7 +174,13 @@ Contributions in any phase are welcome! Each phase is designed to be modular and
 
 ## Changelog
 
-### v0.8.2 - Documentation Refactoring and glama.ai Compliance
+### v0.8.3 - Dry-Run Mode for Deployment Platform Quality Checks
+- ✅ **Offline/Dry-Run Mode**: Added `KNOT_DRY_RUN` environment variable to enable MCP server to run without database dependencies.
+- ✅ **Platform Agnostic**: Removed all platform-specific references; code is now compatible with any deployment platform.
+- ✅ **Graceful Degradation**: MCP server responds to protocol requests (initialize, tools/list) but rejects query execution in dry-run mode with clear error messages.
+- ✅ **Quality Assurance**: Enables automated quality checks on deployment platforms without database setup.
+
+### v0.8.2 - Documentation Refactoring and Quality Enhancements
 - ✅ **MCP Description Enhancements**: Updated all tool descriptions to meet glama.ai quality standards (Behaviour, Conciseness, Completeness, Parameters, Purpose, Usage Guidelines).
 - ✅ **Token Efficiency**: Restructured `.knot-agent.md` into a modular index with on-demand skill loading in `docs/agent-skills/`.
 - ✅ **Improved Usage Guidance**: Added critical warnings and workflow patterns to the new modular documentation.

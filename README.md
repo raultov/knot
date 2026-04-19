@@ -460,12 +460,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.2 — glama.ai Quality & Doc Refactor) ✅
-- ✅ **glama.ai Compliance**: Enhanced MCP tool descriptions for better agent discovery and usage safety.
-- ✅ **Token-Efficient Docs**: Modularized agent skill guide into `docs/agent-skills/` for on-demand loading.
-- ✅ **Rust Phase 1 Prepared**: Infrastructure ready for Rust 2024 integration.
+### Current Release (v0.8.3 — Dry-Run Mode for Deployment Platforms) ✅
+- ✅ **Dry-Run Mode**: MCP server can run in offline mode for quality checks on deployment platforms.
+- ✅ **Platform-Agnostic**: Removed all platform-specific references; compatible with any deployment platform.
+- ✅ **Enhanced Reliability**: Graceful handling of missing database connections for validation scenarios.
 
-### Previous Release (v0.8.1 — CLI UX & Docker Integration) ✅
+### Previous Release (v0.8.2 — Quality & Doc Refactor) ✅
+- ✅ **MCP Quality**: Enhanced tool descriptions for better agent discovery and usage safety.
+- ✅ **Token-Efficient Docs**: Modularized agent skill guide into `docs/agent-skills/` for on-demand loading.
+- ✅ **Rust Phase 1**: Infrastructure prepared for Rust 2024 integration.
+
+### Earlier Release (v0.8.1 — CLI UX & Docker Integration) ✅
 - ✅ **Silenced CLI Logs**: Default log level set to `error` for `knot` CLI (cleaner Markdown output).
 - ✅ **100% E2E Dual-Testing**: All 35 integration tests simultaneously verify both MCP and CLI.
 - ✅ **Docker CLI Support**: Official Docker image now includes the `knot` binary.

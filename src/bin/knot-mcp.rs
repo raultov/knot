@@ -64,21 +64,27 @@ async fn main() -> SdkResult<()> {
     info!("Neo4j           : {}", cfg.neo4j_uri);
 
     // ------------------------------------------------------------------ //
-    // Initialize MCP handler with database connections                    //
+    // Initialize MCP handler                                              //
     // ------------------------------------------------------------------ //
 
-    let handler = KnotMcpHandler::new(
-        &cfg.qdrant_url,
-        &cfg.qdrant_collection,
-        &cfg.neo4j_uri,
-        &cfg.neo4j_user,
-        &cfg.neo4j_password,
-        cfg.embed_dim,
-    )
-    .await
-    .expect("Failed to initialize MCP handler");
+    let handler = if cfg.dry_run {
+        info!("Running in dry-run mode (no database connections)");
+        KnotMcpHandler::new_dry_run()
+    } else {
+        let h = KnotMcpHandler::new(
+            &cfg.qdrant_url,
+            &cfg.qdrant_collection,
+            &cfg.neo4j_uri,
+            &cfg.neo4j_user,
+            &cfg.neo4j_password,
+            cfg.embed_dim,
+        )
+        .await
+        .expect("Failed to initialize MCP handler");
 
-    info!("Databases initialized successfully");
+        info!("Databases initialized successfully");
+        h
+    };
 
     // ------------------------------------------------------------------ //
     // Create MCP server with stdio transport                              //

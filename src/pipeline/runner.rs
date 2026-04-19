@@ -288,6 +288,7 @@ mod tests {
             clean: false,
             dependency_repos: Vec::new(),
             watch: false,
+            dry_run: false,
         };
 
         // We need to mock DBs if we want to run the full pipeline,

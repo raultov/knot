@@ -109,7 +109,10 @@ mod tests {
             clean: true,
             dependency_repos: Vec::new(),
             watch: true,
+            dry_run: false,
         };
+
+        // Initially, clean should be true (from CLI/env)
 
         // Initially, clean should be true (from CLI/env)
         assert!(cfg.clean);
@@ -142,6 +145,7 @@ mod tests {
             clean: true,
             dependency_repos: Vec::new(),
             watch: false,
+            dry_run: false,
         };
 
         // Since watch is false, clean flag should not be modified
@@ -167,9 +171,10 @@ mod tests {
             custom_queries_path: None,
             embed_dim: 384,
             batch_size: 64,
-            clean: false,
+            clean: true,
             dependency_repos: Vec::new(),
             watch: true,
+            dry_run: false,
         };
 
         // clean is already false, so no change should occur
@@ -198,6 +203,7 @@ mod tests {
             clean: true,
             dependency_repos: Vec::new(),
             watch: true,
+            dry_run: false,
         };
 
         // Just verify the config is correctly initialized.

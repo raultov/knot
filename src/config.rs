@@ -128,6 +128,12 @@ pub struct McpCli {
     /// Embedding model dimension (must match the deployed fastembed model).
     #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384, hide = true)]
     pub embed_dim: u64,
+
+    /// Run in offline/dry-run mode (for quality checks on deployment platforms).
+    /// When enabled, skips all database and model initialization.
+    /// The server responds to protocol requests but cannot execute queries.
+    #[arg(long, env = "KNOT_DRY_RUN", default_value_t = false, hide = true)]
+    pub dry_run: bool,
 }
 
 /// Resolved, validated configuration used throughout the application.
@@ -148,6 +154,8 @@ pub struct Config {
     pub dependency_repos: Vec<String>,
     /// Whether to run in watch mode.
     pub watch: bool,
+    /// Whether to run in offline/dry-run mode.
+    pub dry_run: bool,
 }
 
 impl Config {
@@ -180,6 +188,7 @@ impl Config {
                     clean: cli.clean,
                     dependency_repos,
                     watch: cli.watch,
+                    dry_run: false, // Not applicable to indexer
                 }
             },
         )
@@ -203,6 +212,7 @@ impl Config {
                 clean: false,  // Not used by MCP
                 dependency_repos: Vec::new(),
                 watch: false, // Not used by MCP
+                dry_run: cli.dry_run,
             },
         )
     }
@@ -266,7 +276,8 @@ impl Config {
             batch_size: 0, // Not used by CLI
             clean: false,  // Not used by CLI
             dependency_repos: Vec::new(),
-            watch: false, // Not used by CLI
+            watch: false,   // Not used by CLI
+            dry_run: false, // Not used by CLI
         })
     }
 
