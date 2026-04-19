@@ -62,10 +62,12 @@ impl SearchHybridContextTool {
         Tool {
             name: "search_hybrid_context".to_string(),
             description: Some(
-                "Hybrid semantic + structural search combining AI understanding with code architecture. \
-                 Search by meaning ('user authentication'), class/method names, docstrings, comments, or architectural patterns. \
-                 Returns full context including signatures, documentation, inline comments, and dependencies. \
-                 Works with Java, Kotlin and TypeScript codebases. IMPORTANT: If you know the repository name, ALWAYS include the 'repo_name' parameter in your initial call to avoid mixed results from other indexed projects."
+                "Read-only semantic and structural code search. Use this for initial codebase discovery to find features by their meaning (e.g., 'user authentication'). \
+                 Locates code based on natural language descriptions instead of exact keywords, returning relevant files, signatures, and documentation. \
+                 \n\nUsage: Use as your FIRST step when exploring unfamiliar code or discovering architectural patterns. Do NOT use this to find all usages of a specific function—use the 'find_callers' tool for that instead. \
+                 \n\nBehaviour & Return: Performs a read-only query against vector and graph databases. Returns Markdown-formatted results with file paths, line numbers, and code snippets. No side effects. \
+                 \n\nParameter guidance: 'query' should be 2-5 words describing functionality. Increase 'max_results' to 10-20 for broad discovery, keep at 5 for focused search. Include 'repo_name' in your first query to avoid cross-repository pollution. \
+                 \n\nSupports Java, Kotlin, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(vec!["query".to_string()], Some(properties), None),

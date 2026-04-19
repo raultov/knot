@@ -48,11 +48,13 @@ impl FindCallersTool {
         Tool {
             name: "find_callers".to_string(),
             description: Some(
-                "Comprehensive reverse dependency lookup: finds all code that references a specific entity through \
-                 any relationship type (calls, inheritance, implementation, type usage). \
-                 Use this to: detect dead code, understand impact analysis, refactor safely, discover inheritance chains, \
-                 or track type usage. Returns results grouped by relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES). \
-                 Works with Java, Kotlin and TypeScript. IMPORTANT: If you know the repository name, ALWAYS include the 'repo_name' parameter in your initial call to avoid mixed results from other indexed projects."
+                "Read-only reverse dependency lookup. Use this to find all code that references, calls, extends, or implements a specific entity. \
+                 Answers 'who uses this code?' by querying the graph database. Differs from search tools by providing exact dependency tracking. \
+                 \n\nUsage: Use for impact analysis before refactoring or to detect dead code. Do NOT use this for semantic feature discovery—use 'search_hybrid_context' instead. \
+                 CRITICAL: For common method names (e.g., 'accept', 'process'), you MUST include a signature fragment (e.g., 'accept(List') to prevent thousands of irrelevant results. \
+                 \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References) with exact file paths and line numbers. \
+                 \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
+                 \n\nSupports Java, Kotlin, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(

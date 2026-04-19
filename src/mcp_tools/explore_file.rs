@@ -45,10 +45,12 @@ impl ExploreFileTool {
         Tool {
             name: "explore_file".to_string(),
             description: Some(
-                "Explore the complete anatomy of a source file: all classes, interfaces, methods, and functions \
-                 organized by type with signatures and documentation. Use this to understand file structure, \
-                 navigate large modules, or get a quick overview before diving into details. Works with Java, Kotlin and TypeScript. \
-                 IMPORTANT: If you know the repository name, ALWAYS include the 'repo_name' parameter in your initial call to avoid mixed results from other indexed projects."
+                "Read-only file anatomy inspection. Use this to list all classes, methods, and properties within a specific source file without reading its entire contents. \
+                 Provides a structural bird's-eye view of a file, showing entity signatures and docstrings to quickly grasp a module's layout. \
+                 \n\nUsage: Use AFTER identifying an interesting file via 'search_hybrid_context' to understand its available methods, or before modifying a file. Do NOT use this for searching across multiple files. \
+                 \n\nBehaviour & Return: Read-only operation. Returns a Markdown-formatted outline of the file's entities, grouped by type (Classes, Methods, Interfaces), including line numbers for direct editor navigation. No side effects. \
+                 \n\nParameter guidance: 'file_path' must be a relative or absolute path to a valid source file. Include 'repo_name' if the file path might be ambiguous across multiple indexed repositories. \
+                 \n\nSupports Java, Kotlin, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
