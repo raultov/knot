@@ -1,0 +1,45 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": [
+    "raultov"
+  ],
+  "docker": {
+    "source": "repository",
+    "file": "Dockerfile.clients"
+  },
+  "runtime": {
+    "command": "knot-mcp",
+    "args": [
+      {
+        "name": "--repo-path",
+        "description": "Absolute path to the indexed repository (e.g., /Users/name/workspace/my-project)",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "--neo4j-password",
+        "description": "Password for your local Neo4j database",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "--qdrant-url",
+        "description": "Qdrant server URL (e.g. http://host.docker.internal:6334)",
+        "type": "string",
+        "default": "http://host.docker.internal:6334"
+      },
+      {
+        "name": "--neo4j-uri",
+        "description": "Neo4j Bolt URI (e.g. bolt://host.docker.internal:7687)",
+        "type": "string",
+        "default": "bolt://host.docker.internal:7687"
+      },
+      {
+        "name": "--neo4j-user",
+        "description": "Neo4j username",
+        "type": "string",
+        "default": "neo4j"
+      }
+    ]
+  }
+}
