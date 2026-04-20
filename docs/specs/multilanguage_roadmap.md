@@ -6,7 +6,7 @@ This document outlines the phased expansion of `knot` from a Java/TypeScript ind
 
 ## Overview
 
-**Current State (v0.8.3):**
+**Current State (v0.8.4):**
 - ✅ Java support (full AST extraction)
 - ✅ Kotlin support (v0.7.4+) - Complete with classes, interfaces, objects, functions, methods, properties
 - ✅ TypeScript/TSX/CTS support (modern JavaScript/TypeScript)
@@ -19,6 +19,8 @@ This document outlines the phased expansion of `knot` from a Java/TypeScript ind
 - ✅ Three MCP tools (search_hybrid_context, find_callers, explore_file)
 - ✅ Standalone CLI Tool (`knot`) with full MCP parity (v0.8.0+)
 - ✅ Cross-language linking (JS/HTML/CSS)
+- ✅ Downloadable agent-skills documentation (v0.8.4+)
+- ✅ Lightweight clients mode for older systems (v0.8.4+)
 
 **Goal:** Extend `knot` to become the standard indexer for hybrid web projects (JS/HTML/CSS) with full cross-language dependency resolution and support for Kotlin, CLI tools, Rust, and C/C++.
 

@@ -259,7 +259,7 @@ For each entity:
 
 ## 4. Phase 3: Comment & Documentation Parsing
 
-**Version Target:** v0.8.3  
+**Version Target:** v0.8.4  
 **Objective:** Accurately extract and categorize all Rust documentation.  
 **Deliverables:** Comments properly attached to entities; semantic vectors include full context.
 
@@ -496,9 +496,9 @@ Create 20+ comprehensive tests covering:
 |-------|---------|--------------|-------|
 | Phase 1 | v0.8.1 | Domain model, file registration, test file | Compiler pass |
 | Phase 2 | v0.8.2 | `queries/rust.scm`, entity extraction | Parser test |
-| Phase 3 | v0.8.3 | Comment extraction, attribute capture | Doc parsing test |
-| Phase 4 | v0.8.4 | Graph relationships, FQN resolution | Neo4j integration test |
-| Phase 5 | v0.8.5 | Tool parity, E2E tests (20+ cases) | Dual testing (MCP & CLI) |
+| Phase 3 | v0.8.4 | Comment extraction, attribute capture | Doc parsing test |
+| Phase 4 | v0.8.5 | Graph relationships, FQN resolution | Neo4j integration test |
+| Phase 5 | v0.8.6 | Tool parity, E2E tests (20+ cases) | Dual testing (MCP & CLI) |
 
 ---
 

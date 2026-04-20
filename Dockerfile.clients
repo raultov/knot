@@ -1,0 +1,52 @@
+# Multi-stage build for lightweight knot clients (CLI + MCP server)
+# No indexer, no ONNX Runtime — compatible with older Linux distributions (glibc 2.35+)
+# Use case: Query existing Qdrant + Neo4j indexes without the heavy embedding dependencies
+# 
+# Build with: docker build -t knot:clients -f Dockerfile.clients .
+# Run MCP: docker run --rm knot:clients knot-mcp
+# Run CLI: docker run --rm knot:clients knot search "your query"
+
+# Build stage
+FROM rust:1.90-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build release binaries WITHOUT the indexer feature (only clients)
+# This skips onnxruntime and fastembed dependencies entirely
+RUN cargo build --release --no-default-features --features only-clients
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only the client binaries from builder (NO knot-indexer)
+COPY --from=builder /build/target/release/knot-mcp /usr/local/bin/knot-mcp
+COPY --from=builder /build/target/release/knot /usr/local/bin/knot
+
+# Create workspace directory
+RUN mkdir -p /workspace
+WORKDIR /workspace
+
+# Set environment variables with defaults
+ENV KNOT_QDRANT_URL=http://localhost:6334
+ENV KNOT_NEO4J_URI=bolt://localhost:7687
+ENV KNOT_NEO4J_USER=neo4j
+
+# Default command (MCP server)
+CMD ["knot-mcp"]

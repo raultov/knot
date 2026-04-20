@@ -75,20 +75,22 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/l
 This one-liner installs the `knot` binary and downloads the `.knot-agent.md` skill file to your current directory for use with AI agents and LLM-based code analysis tools.
 
 **Linux Requirements:**
-- **Minimum glibc version**: 2.38+
-- **Compatible distributions**:
+- **Full install (knot-indexer + CLI + MCP)**: glibc 2.38+
   - Ubuntu 24.04 LTS or later
   - Debian 13 (Trixie) or later
   - Fedora 39+ / RHEL 10+
   - Arch Linux (rolling release)
+- **Lightweight clients-only (knot CLI + MCP server, no indexing)**: glibc 2.35+ (even older systems like Debian 12 Bookworm work fine)
 
-**For older Linux distributions or Windows**, use Docker (see Option B) or build from source (see Option C).
+**For older Linux distributions or Windows**, see the **Lightweight Clients** section below or use Docker (Option B).
 
 ### Option B: Docker (Universal Compatibility)
 
-Docker images provide universal compatibility for **any Linux distribution** (including older versions with glibc < 2.38) and **Windows**.
+Docker images provide universal compatibility for **any Linux distribution** and **Windows**.
 
-**Build the image locally:**
+#### Full Install (All Binaries: knot-indexer, knot CLI, knot-mcp)
+
+**Build the image:**
 ```bash
 docker build -t knot:latest . --network=host
 ```
@@ -126,7 +128,44 @@ docker run --rm \
   knot-mcp
 ```
 
-**Note:** The `Dockerfile` uses a multi-stage build (`builder` stage with Rust, `runtime` stage with Debian Trixie) to ensure a minimal, high-performance image. Use `--network host` to allow the container to access Qdrant and Neo4j running on your host machine.
+**Note:** Uses Debian Trixie (glibc 2.38+) and includes ONNX Runtime for full functionality.
+
+---
+
+#### Lightweight Clients (Only knot CLI + knot-mcp, No Indexer)
+
+For older systems (Debian 12 Bookworm, Ubuntu 22.04) or production deployments that only need to **query existing indexes** without indexing new code:
+
+**Build the lightweight image:**
+```bash
+docker build -t knot:clients -f Dockerfile.clients . --network=host
+```
+
+Image size: ~100MB (vs ~160MB for full install)
+
+**Run the CLI tool (query existing index):**
+```bash
+docker run --rm \
+  --network host \
+  knot:clients \
+  knot callers "MyClass"
+```
+
+**Run the MCP server:**
+```bash
+docker run --rm \
+  --network host \
+  knot:clients \
+  knot-mcp
+```
+
+**Available tools in lightweight mode:**
+- ✅ `knot search` (structural only, no semantic search)
+- ✅ `knot callers` (reverse dependency lookup)
+- ✅ `knot explore` (file structure inspection)
+- ❌ Semantic search requires the full install
+
+**Note:** Uses Debian Bookworm (glibc 2.35+) and excludes ONNX Runtime, making it compatible with older Linux distributions.
 
 ### Option C: Install via Cargo
 
@@ -135,6 +174,8 @@ cargo install --git https://github.com/raultov/knot
 ```
 
 ### Option D: Build from Source
+
+**Full Install (All Binaries):**
 
 **1. Start infrastructure with Docker:**
 ```bash
@@ -164,6 +205,37 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 ./target/release/knot search "your query"
 ```
 
+### Option E: Lightweight Clients (No Indexing)
+
+For older Linux distributions (e.g. Debian 12 Bookworm, Ubuntu 22.04) or production deployments where you only need the **CLI and MCP server** (not the indexer), compile without the embedding dependencies:
+
+**Build lightweight clients:**
+```bash
+cargo build --release --no-default-features --features only-clients
+```
+
+This produces only `knot` and `knot-mcp` binaries (~8-10 MB each), excluding the 30+ MB of ONNX Runtime dependencies.
+
+**Available tools in lightweight mode:**
+- ✅ **`find_callers`**: Reverse dependency lookup (graph search)
+- ✅ **`explore_file`**: File structure inspection
+- ❌ **`search_hybrid_context`**: Semantic search (requires embeddings, not available in this mode)
+
+**Use case:** Query an existing Qdrant + Neo4j index that was built elsewhere, without needing the indexer on your machine.
+
+**Docker alternative (for lightweight mode):**
+```bash
+docker build -t knot:clients-only -f Dockerfile -f - . << 'EOF'
+FROM rust:1.90-slim-bookworm AS builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release --no-default-features --features only-clients
+FROM debian:bookworm-slim
+COPY --from=builder /build/target/release/knot* /usr/local/bin/
+CMD ["knot-mcp"]
+EOF
+```
+
 **6. Start the MCP server:**
 ```bash
 ./target/release/knot-mcp
@@ -172,6 +244,31 @@ $EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
 ---
 
 ## 📖 Usage
+
+### 📥 Download Agent-Skills Documentation
+
+Get comprehensive guides for using knot CLI:
+
+```bash
+# Install all agent-skills documentation in one command:
+bash scripts/install-agent-skills.sh
+
+# Or download and install directly:
+curl -fsSL https://raw.githubusercontent.com/user/knot/master/scripts/install-agent-skills.sh | bash
+
+# Specify custom location:
+bash scripts/install-agent-skills.sh ~/.config/knot/docs
+```
+
+This downloads:
+- **search.md** — Semantic code discovery guide with examples
+- **callers.md** — Reverse dependency lookup with critical usage rules
+- **explore.md** — File anatomy inspection guide
+- **workflows.md** — Common patterns and best practices
+
+For quick reference without downloading, see [`.knot-agent.md`](.knot-agent.md).
+
+---
 
 ### Using the CLI (v0.8.0+)
 
@@ -460,12 +557,18 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.3 — Dry-Run Mode for Deployment Platforms) ✅
+### Current Release (v0.8.4 — Agent-Skills Documentation Installer & Lightweight Clients) ✅
+- ✅ **Downloadable Agent-Skills**: Automated installer (`scripts/install-agent-skills.sh`) for agent-skills documentation via curl
+- ✅ **Lightweight Clients Mode**: `--features only-clients` compiles CLI + MCP without embedding dependencies (glibc 2.35+)
+- ✅ **Feature Flags**: Optional `indexer` feature for systems that only need query clients
+- ✅ **Docker Multi-Stage**: New `Dockerfile.clients` for minimal client-only images (103MB vs 163MB)
+
+### Previous Release (v0.8.3 — Dry-Run Mode for Deployment Platforms) ✅
 - ✅ **Dry-Run Mode**: MCP server can run in offline mode for quality checks on deployment platforms.
 - ✅ **Platform-Agnostic**: Removed all platform-specific references; compatible with any deployment platform.
 - ✅ **Enhanced Reliability**: Graceful handling of missing database connections for validation scenarios.
 
-### Previous Release (v0.8.2 — Quality & Doc Refactor) ✅
+### Earlier Release (v0.8.2 — Quality & Doc Refactor) ✅
 - ✅ **MCP Quality**: Enhanced tool descriptions for better agent discovery and usage safety.
 - ✅ **Token-Efficient Docs**: Modularized agent skill guide into `docs/agent-skills/` for on-demand loading.
 - ✅ **Rust Phase 1**: Infrastructure prepared for Rust 2024 integration.

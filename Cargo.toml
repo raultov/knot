@@ -1,6 +1,6 @@
 [package]
 name = "knot"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, and HTML codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
@@ -12,6 +12,16 @@ upgrade-guid = "92E1E683-D44D-4270-A4E6-4332677DC7B1"
 path-guid = "577497D8-48AD-474A-B0C7-FF85F4EB383E"
 license = false
 eula = false
+
+[features]
+default = ["indexer"]
+indexer = ["dep:fastembed", "dep:ort"]
+only-clients = []
+
+[[bin]]
+name = "knot-indexer"
+path = "src/bin/knot-indexer.rs"
+required-features = ["indexer"]
 
 [dependencies]
 # --- Async Runtime ---
@@ -37,8 +47,8 @@ tree-sitter-css = "0.23"
 tree-sitter-scss = "1.0"
 
 # --- Local Embeddings ---
-fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub", "image-models"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "copy-dylibs", "ndarray"] }
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub", "image-models"], optional = true }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
 
 # --- Vector Database ---
 qdrant-client = "1"
