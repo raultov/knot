@@ -2,6 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-2024-brightgreen.svg)](https://www.rust-lang.org)
+[![knot MCP server](https://glama.ai/mcp/servers/raultov/knot/badges/score.svg)](https://glama.ai/mcp/servers/raultov/knot)
+
+<div align="center">
+  <a href="https://glama.ai/mcp/servers/raultov/knot">
+    <img src="https://glama.ai/mcp/servers/raultov/knot/badges/card.svg" alt="knot MCP server" />
+  </a>
+</div>
 
 **knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust and C/C++.
 
