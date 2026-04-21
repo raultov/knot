@@ -74,12 +74,17 @@ This dual-database approach powers both:
 
 Go to the [Releases](https://github.com/raultov/knot/releases) page and download the native executable for your platform.
 
-**Install via Shell Script (macOS & Linux):**
+**Install knot binaries (CLI, MCP server, and indexer):**
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh && curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
 ```
 
-This one-liner installs the `knot` binary and downloads the `.knot-agent.md` skill file to your current directory for use with AI agents and LLM-based code analysis tools.
+**Download agent-skills guides separately (optional):**
+```bash
+curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md && curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/.knot-agent-skills.tar.gz | tar -xz
+```
+
+The first command installs the `knot` binary to your PATH. The second (optional) downloads the agent skill index (`.knot-agent.md`) and extracts comprehensive guides for using knot CLI with AI agents and code analysis tools.
 
 **Linux Requirements:**
 - **Full install (knot-indexer + CLI + MCP)**: glibc 2.38+
@@ -252,22 +257,21 @@ EOF
 
 ## 📖 Usage
 
-### 📥 Download Agent-Skills Documentation
+### 📥 Quick Downloads
 
-Get comprehensive guides for using knot CLI:
-
+**Download knot binaries (CLI + MCP server):**
 ```bash
-# Install all agent-skills documentation in one command:
-bash scripts/install-agent-skills.sh
-
-# Or download and install directly:
-curl -fsSL https://raw.githubusercontent.com/user/knot/master/scripts/install-agent-skills.sh | bash
-
-# Specify custom location:
-bash scripts/install-agent-skills.sh ~/.config/knot/docs
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
 ```
 
-This downloads:
+**Download agent-skills documentation (index + all guides):**
+```bash
+curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md && curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/.knot-agent-skills.tar.gz | tar -xz
+```
+
+### 📖 Agent-Skills Guides
+
+Comprehensive documentation for using knot tools. The download above extracts:
 - **search.md** — Semantic code discovery guide with examples
 - **callers.md** — Reverse dependency lookup with critical usage rules
 - **explore.md** — File anatomy inspection guide
@@ -592,16 +596,26 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **LLM Skill File**: `.knot-agent.md` teaches AI agents how to use CLI for autonomous analysis.
 
 ### Upcoming (v0.8.x+)
-#### Phase 7: Rust Support
+#### Phase 7: CLI UX Improvements
+- [ ] Human-friendly output formatting for CLI (replace raw Markdown with pretty-printed tables, colors, and summaries)
+- [ ] Interactive result navigation for terminal users
+- [ ] Configurable output formats (JSON, table, markdown)
+
+#### Phase 8: Rust Support
 - [ ] Support `.rs` files
 - [ ] Struct, trait, and impl tracking
 - [ ] Macro invocation analysis
 
 ### Upcoming (v0.9.x+)
-#### Phase 8: C/C++ Support
+#### Phase 9: C/C++ Support
 - [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
 - [ ] Pointer and memory relationship tracking
 - [ ] Header inclusion graph analysis
+
+#### Phase 10: YAML/Configuration Language Support
+- [ ] HELM chart indexing (`.yaml`, `.tpl`)
+- [ ] Kubernetes manifest analysis
+- [ ] Template variable tracking and resolution
 
 #### Long-Term Vision
 - [ ] Python support
