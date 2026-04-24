@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, HTML, and CSS/SCSS with full cross-language linking, with planned support for Rust and C/C++.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, **Rust** (v0.8.x), HTML, and CSS/SCSS with full cross-language linking, with planned support for C/C++.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -38,7 +38,7 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (Planned v0.8.x): Struct, trait, and macro analysis
+- **Rust** (v0.8.x): Struct, enum, union, trait, impl block, function, method, macro (definition & invocation), type alias, constant, static, module extraction with generic parameters and lifetime support
 - **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -583,6 +583,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **MCP Quality**: Enhanced tool descriptions for better agent discovery and usage safety.
 - ✅ **Token-Efficient Docs**: Modularized agent skill guide into `docs/agent-skills/` for on-demand loading.
 - ✅ **Rust Phase 1**: Infrastructure prepared for Rust 2024 integration.
+- ✅ **Rust Phase 2-5**: Complete Rust language support including entity extraction, macro tracking, and comprehensive E2E testing (v0.8.x).
 
 ### Earlier Release (v0.8.1 — CLI UX & Docker Integration) ✅
 - ✅ **Silenced CLI Logs**: Default log level set to `error` for `knot` CLI (cleaner Markdown output).
@@ -601,10 +602,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Interactive result navigation for terminal users
 - [ ] Configurable output formats (JSON, table, markdown)
 
-#### Phase 8: Rust Support
-- [ ] Support `.rs` files
-- [ ] Struct, trait, and impl tracking
-- [ ] Macro invocation analysis
+#### Phase 8: Rust Support ✅ (v0.8.x)
+- ✅ Support `.rs` files with tree-sitter-rust parser
+- ✅ Struct, enum, union, trait, and impl block extraction
+- ✅ Function, method, macro definition and invocation tracking
+- ✅ Type alias, constant, static, and module extraction
+- ✅ Generic parameters and lifetime parameter support
+- ✅ 17 unit tests for Rust entity and reference extraction
+- ✅ 22 end-to-end integration tests covering all Rust language constructs
 
 ### Upcoming (v0.9.x+)
 #### Phase 9: C/C++ Support
