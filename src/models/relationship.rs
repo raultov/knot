@@ -77,6 +77,14 @@ pub enum ReferenceIntent {
         /// Line number where this import occurs.
         line: usize,
     },
+    /// Rust macro invocation.
+    /// Example: `println!("hello")`, `vec![1, 2, 3]`
+    RustMacroCall {
+        /// The macro name being invoked (e.g., "println", "vec")
+        macro_name: String,
+        /// Line number where this macro invocation occurs.
+        line: usize,
+    },
 }
 
 /// Represents a typed relationship edge in the dependency graph.
@@ -99,6 +107,12 @@ pub enum RelationshipType {
     ImportsScript,
     /// HTML file imports a CSS stylesheet via <link> tag.
     ImportsStylesheet,
+    /// Rust: Code invokes a macro
+    MacroCalls,
+    /// Rust: Parent-child containment (module contains function, impl contains method)
+    Contains,
+    /// Rust: Generic type parameter bound (e.g., `T: Clone`)
+    GenericBound,
 }
 
 impl std::fmt::Display for RelationshipType {
@@ -112,6 +126,9 @@ impl std::fmt::Display for RelationshipType {
             RelationshipType::UsesCSSClass => write!(f, "USES_CSS_CLASS"),
             RelationshipType::ImportsScript => write!(f, "IMPORTS_SCRIPT"),
             RelationshipType::ImportsStylesheet => write!(f, "IMPORTS_STYLESHEET"),
+            RelationshipType::MacroCalls => write!(f, "MACRO_CALLS"),
+            RelationshipType::Contains => write!(f, "CONTAINS"),
+            RelationshipType::GenericBound => write!(f, "GENERIC_BOUND"),
         }
     }
 }

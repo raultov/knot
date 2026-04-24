@@ -25,6 +25,19 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::ScssVariable => "ScssVariable",
         EntityKind::ScssMixin => "ScssMixin",
         EntityKind::ScssFunction => "ScssFunction",
+        EntityKind::RustStruct => "RustStruct",
+        EntityKind::RustEnum => "RustEnum",
+        EntityKind::RustUnion => "RustUnion",
+        EntityKind::RustTrait => "RustTrait",
+        EntityKind::RustImpl => "RustImpl",
+        EntityKind::RustFunction => "RustFunction",
+        EntityKind::RustMethod => "RustMethod",
+        EntityKind::RustMacroDef => "RustMacroDef",
+        EntityKind::RustTypeAlias => "RustTypeAlias",
+        EntityKind::RustConstant => "RustConstant",
+        EntityKind::RustStatic => "RustStatic",
+        EntityKind::RustModule => "RustModule",
+        EntityKind::RustMacroInvoke => "RustMacroInvoke",
     }
 }
 
@@ -125,6 +138,19 @@ mod tests {
             EntityKind::ScssVariable,
             EntityKind::ScssMixin,
             EntityKind::ScssFunction,
+            EntityKind::RustStruct,
+            EntityKind::RustEnum,
+            EntityKind::RustUnion,
+            EntityKind::RustTrait,
+            EntityKind::RustImpl,
+            EntityKind::RustFunction,
+            EntityKind::RustMethod,
+            EntityKind::RustMacroDef,
+            EntityKind::RustTypeAlias,
+            EntityKind::RustConstant,
+            EntityKind::RustStatic,
+            EntityKind::RustModule,
+            EntityKind::RustMacroInvoke,
         ];
 
         let expected_labels = [
@@ -143,6 +169,19 @@ mod tests {
             "ScssVariable",
             "ScssMixin",
             "ScssFunction",
+            "RustStruct",
+            "RustEnum",
+            "RustUnion",
+            "RustTrait",
+            "RustImpl",
+            "RustFunction",
+            "RustMethod",
+            "RustMacroDef",
+            "RustTypeAlias",
+            "RustConstant",
+            "RustStatic",
+            "RustModule",
+            "RustMacroInvoke",
         ];
 
         for (variant, expected_label) in variants.iter().zip(expected_labels.iter()) {

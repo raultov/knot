@@ -62,6 +62,7 @@ pub(crate) fn collect_orphaned_references(
                 ReferenceIntent::CssClassUsage { line, .. } => *line,
                 ReferenceIntent::HtmlFileImport { line, .. } => *line,
                 ReferenceIntent::CssFileImport { line, .. } => *line,
+                ReferenceIntent::RustMacroCall { line, .. } => *line,
             };
             let target_idx = find_nearest_entity_by_line(entities, orphan_line);
             entities[target_idx].reference_intents.push(intent);

@@ -41,6 +41,7 @@ const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
 const DEFAULT_HTML_QUERY: &str = include_str!("../../../queries/html.scm");
 const DEFAULT_CSS_QUERY: &str = include_str!("../../../queries/css.scm");
 const DEFAULT_SCSS_QUERY: &str = include_str!("../../../queries/scss.scm");
+const DEFAULT_RUST_QUERY: &str = include_str!("../../../queries/rust.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -194,6 +195,17 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 tree_sitter_scss::language(),
                 &query_src,
                 "scss",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "rs" => {
+            let query_src = load_query_source("rust.scm", DEFAULT_RUST_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_rust::LANGUAGE.into(),
+                &query_src,
+                "rust",
                 &file_path,
                 &parse_cfg.repo_name,
             )?

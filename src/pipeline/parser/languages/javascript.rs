@@ -709,6 +709,11 @@ pub(crate) fn extract_jsx_html_attributes(
                     calls: Vec::new(),
                     relationships: Vec::new(),
                     embed_text: String::new(),
+                    rust_attributes: None,
+                    impl_trait: None,
+                    impl_target: None,
+                    generics: None,
+                    lifetimes: None,
                 });
             } else if attr_name == "className" {
                 // Split by whitespace and create HtmlClass entity for each class
@@ -732,6 +737,11 @@ pub(crate) fn extract_jsx_html_attributes(
                             calls: Vec::new(),
                             relationships: Vec::new(),
                             embed_text: String::new(),
+                            rust_attributes: None,
+                            impl_trait: None,
+                            impl_target: None,
+                            generics: None,
+                            lifetimes: None,
                         });
                     }
                 }

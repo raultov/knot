@@ -2,7 +2,7 @@
 name = "knot"
 version = "0.8.4"
 edition = "2024"
-description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, and HTML codebases"
+description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, and HTML codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
 license = "MIT"
 repository = "https://github.com/raultov/knot"
@@ -45,6 +45,7 @@ tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-html = "0.23"
 tree-sitter-css = "0.23"
 tree-sitter-scss = "1.0"
+tree-sitter-rust = "0.24"
 
 # --- Local Embeddings ---
 fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub", "image-models"], optional = true }

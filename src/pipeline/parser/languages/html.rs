@@ -73,6 +73,11 @@ fn extract_html_attribute(
             calls: Vec::new(),
             relationships: Vec::new(),
             embed_text: String::new(),
+            rust_attributes: None,
+            impl_trait: None,
+            impl_target: None,
+            generics: None,
+            lifetimes: None,
         });
     } else if attr_name == "class" && !attr_value.is_empty() {
         for class_name in attr_value.split_whitespace() {
@@ -95,6 +100,11 @@ fn extract_html_attribute(
                     calls: Vec::new(),
                     relationships: Vec::new(),
                     embed_text: String::new(),
+                    rust_attributes: None,
+                    impl_trait: None,
+                    impl_target: None,
+                    generics: None,
+                    lifetimes: None,
                 });
             }
         }
@@ -142,6 +152,11 @@ fn extract_html_elements(
                                     calls: Vec::new(),
                                     relationships: Vec::new(),
                                     embed_text: String::new(),
+                                    rust_attributes: None,
+                                    impl_trait: None,
+                                    impl_target: None,
+                                    generics: None,
+                                    lifetimes: None,
                                 });
                             }
                         }

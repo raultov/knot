@@ -52,6 +52,11 @@ pub(crate) mod test_utils {
             calls: vec![],
             relationships: vec![],
             embed_text: "test content".to_string(),
+            rust_attributes: None,
+            impl_trait: None,
+            impl_target: None,
+            generics: None,
+            lifetimes: None,
         }
     }
 

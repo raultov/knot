@@ -4,7 +4,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
-use super::languages::{css, html, java, javascript, kotlin, typescript};
+use super::languages::{css, html, java, javascript, kotlin, rust, typescript};
 use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
@@ -321,6 +321,17 @@ pub(crate) fn extract_entities(
                         entity_node = Some(node);
                     }
                 }
+                // Rust: Handle Rust entity captures
+                name_or_intent if name_or_intent.starts_with("rust.") => {
+                    if let Some((entity_name, entity_kind, entity_line, _rust_metadata)) =
+                        rust::handle_rust_capture(name_or_intent, &text, node)
+                    {
+                        name = Some(entity_name);
+                        kind = Some(entity_kind);
+                        start_line = entity_line;
+                        entity_node = Some(node);
+                    }
+                }
                 // DOM/CSS references: Delegate to JavaScript handler
                 name_or_intent
                     if name_or_intent.starts_with("dom.")
@@ -500,6 +511,17 @@ pub(crate) fn extract_entities(
             lang_name,
             &mut entities,
             &covered_ranges,
+            file_path,
+            repo_name,
+        );
+    }
+
+    // Rust: collect macro invocations as orphaned references
+    if lang_name == "rust" {
+        rust::collect_rust_macro_references(
+            tree.root_node(),
+            source_bytes,
+            &mut entities,
             file_path,
             repo_name,
         );

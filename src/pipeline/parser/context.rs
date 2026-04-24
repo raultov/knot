@@ -116,6 +116,26 @@ pub(crate) fn compute_fqn_and_context(
             // These are top-level entities, just use the name
             name.to_string()
         }
+        // Rust entities
+        EntityKind::RustStruct
+        | EntityKind::RustEnum
+        | EntityKind::RustUnion
+        | EntityKind::RustTrait
+        | EntityKind::RustImpl
+        | EntityKind::RustFunction
+        | EntityKind::RustMacroDef
+        | EntityKind::RustTypeAlias
+        | EntityKind::RustConstant
+        | EntityKind::RustStatic
+        | EntityKind::RustModule => name.to_string(),
+        EntityKind::RustMethod => {
+            if let Some(class_name) = &enclosing_class {
+                format!("{}::{}", class_name, name)
+            } else {
+                name.to_string()
+            }
+        }
+        EntityKind::RustMacroInvoke => format!("{}!", name),
     };
 
     (fqn, enclosing_class)

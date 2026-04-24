@@ -127,6 +127,12 @@ pub fn resolve_reference_intents_with_context(
                     fqn_to_uuid.get(file_path).copied(),
                     RelationshipType::ImportsStylesheet,
                 ),
+                ReferenceIntent::RustMacroCall { macro_name, .. } => (
+                    name_to_uuids
+                        .get(macro_name)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::MacroCalls,
+                ),
             };
 
             if let Some(uuid) = resolved_uuid

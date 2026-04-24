@@ -40,6 +40,20 @@ pub enum EntityKind {
     ScssVariable, // $my-var
     ScssMixin,    // @mixin my-mixin()
     ScssFunction, // @function my-function()
+    // Rust entities
+    RustStruct,      // struct definitions
+    RustEnum,        // enum definitions
+    RustUnion,       // union definitions
+    RustTrait,       // trait definitions
+    RustImpl,        // impl blocks (inherent and trait)
+    RustFunction,    // top-level functions
+    RustMethod,      // methods inside impl blocks
+    RustMacroDef,    // macro_rules! definitions
+    RustTypeAlias,   // type aliases
+    RustConstant,    // const definitions
+    RustStatic,      // static variable definitions
+    RustModule,      // module declarations
+    RustMacroInvoke, // macro invocations
 }
 
 impl std::fmt::Display for EntityKind {
@@ -67,6 +81,19 @@ impl std::fmt::Display for EntityKind {
             EntityKind::ScssVariable => "scss_variable",
             EntityKind::ScssMixin => "scss_mixin",
             EntityKind::ScssFunction => "scss_function",
+            EntityKind::RustStruct => "rust_struct",
+            EntityKind::RustEnum => "rust_enum",
+            EntityKind::RustUnion => "rust_union",
+            EntityKind::RustTrait => "rust_trait",
+            EntityKind::RustImpl => "rust_impl",
+            EntityKind::RustFunction => "rust_function",
+            EntityKind::RustMethod => "rust_method",
+            EntityKind::RustMacroDef => "rust_macro_def",
+            EntityKind::RustTypeAlias => "rust_type_alias",
+            EntityKind::RustConstant => "rust_constant",
+            EntityKind::RustStatic => "rust_static",
+            EntityKind::RustModule => "rust_module",
+            EntityKind::RustMacroInvoke => "rust_macro_invoke",
         };
         write!(f, "{s}")
     }
@@ -111,6 +138,26 @@ pub struct ParsedEntity {
     /// Examples: `@Override`, `@OnEvent('foo')`, `@GetMapping("/path")`, etc.
     /// Populated during the parse stage for methods, functions, classes, and constants.
     pub decorators: Vec<String>,
+
+    /// For Rust: list of attributes/decorators
+    /// e.g., vec!["derive(Clone)", "tokio::main"]
+    pub rust_attributes: Option<Vec<String>>,
+
+    /// For Rust `impl` blocks: the trait being implemented (if any)
+    /// e.g., Some("Debug") for `impl Debug for MyStruct`
+    pub impl_trait: Option<String>,
+
+    /// For Rust `impl` blocks: the target type being implemented for
+    /// e.g., "MyStruct" for `impl MyStruct { ... }`
+    pub impl_target: Option<String>,
+
+    /// For Rust generic types: the full generic signature
+    /// e.g., "<T: Clone, U: Default>" or "<'a, T>"
+    pub generics: Option<String>,
+
+    /// For Rust: lifetime parameters
+    /// e.g., vec!["'a", "'b"]
+    pub lifetimes: Option<Vec<String>>,
 
     /// Source language (`"java"` or `"typescript"`).
     pub language: String,
@@ -229,6 +276,11 @@ impl ParsedEntity {
             relationships: Vec::new(),
             inline_comments: Vec::new(),
             decorators: Vec::new(),
+            rust_attributes: None,
+            impl_trait: None,
+            impl_target: None,
+            generics: None,
+            lifetimes: None,
             embed_text: String::new(),
         }
     }
