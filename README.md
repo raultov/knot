@@ -38,7 +38,7 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (v0.8.x): Struct, enum, union, trait, impl block, function, method, macro (definition & invocation), type alias, constant, static, module extraction with generic parameters and lifetime support
+- **Rust** (v0.8.5): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references
 - **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -568,13 +568,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.4 — Agent-Skills Documentation Installer & Lightweight Clients) ✅
-- ✅ **Downloadable Agent-Skills**: Automated installer (`scripts/install-agent-skills.sh`) for agent-skills documentation via curl
-- ✅ **Lightweight Clients Mode**: `--features only-clients` compiles CLI + MCP without embedding dependencies (glibc 2.35+)
-- ✅ **Feature Flags**: Optional `indexer` feature for systems that only need query clients
-- ✅ **Docker Multi-Stage**: New `Dockerfile.clients` for minimal client-only images (103MB vs 163MB)
+### Current Release (v0.8.5 — Rust Module Refactoring & Clippy Fixes) ✅
+- ✅ **Rust Module Refactoring**: Extracted Rust parsing logic into dedicated `src/pipeline/parser/languages/rust.rs` for better maintainability and mirroring existing language module architecture.
+- ✅ **Clippy Compliance**: Fixed unused import (`uuid::Uuid`) and unnecessary `mut` warning in Rust module tests.
+- ✅ **Rust Support Complete**: Phase 8 implementation fully integrated with 17 unit tests and 22 E2E test cases passing.
 
-### Previous Release (v0.8.3 — Dry-Run Mode for Deployment Platforms) ✅
+### Previous Release (v0.8.4 — Agent-Skills Documentation Installer & Lightweight Clients) ✅
 - ✅ **Dry-Run Mode**: MCP server can run in offline mode for quality checks on deployment platforms.
 - ✅ **Platform-Agnostic**: Removed all platform-specific references; compatible with any deployment platform.
 - ✅ **Enhanced Reliability**: Graceful handling of missing database connections for validation scenarios.

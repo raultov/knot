@@ -3,6 +3,7 @@
 //! Lists all code entities (classes, methods, interfaces, functions)
 //! within a specific source file, organized by type.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::db::graph::{GraphDb, QueryExt};
@@ -13,8 +14,21 @@ pub async fn run_explore_file(
     repo_name: Option<&str>,
     graph_db: &Arc<GraphDb>,
 ) -> anyhow::Result<String> {
+    // Normalize file path: attempt to canonicalize, fall back to original if file doesn't exist
+    let normalized_path = if Path::new(file_path).exists() {
+        std::fs::canonicalize(file_path)?
+            .to_string_lossy()
+            .to_string()
+    } else {
+        // If file doesn't exist in current filesystem, use path as-is
+        // (it may exist in a different repo context or be an absolute path)
+        file_path.to_string()
+    };
+
     // Query Neo4j for all entities in the file
-    let entities = graph_db.get_file_entities(file_path, repo_name).await?;
+    let entities = graph_db
+        .get_file_entities(&normalized_path, repo_name)
+        .await?;
 
     let formatted = format_file_entities(file_path, &entities);
 
@@ -44,6 +58,18 @@ fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String
         let mut methods = Vec::new();
         let mut functions = Vec::new();
         let mut properties = Vec::new();
+        let mut rust_structs = Vec::new();
+        let mut rust_enums = Vec::new();
+        let mut rust_unions = Vec::new();
+        let mut rust_traits = Vec::new();
+        let mut rust_impls = Vec::new();
+        let mut rust_functions = Vec::new();
+        let mut rust_methods = Vec::new();
+        let mut rust_macros = Vec::new();
+        let mut rust_type_aliases = Vec::new();
+        let mut rust_constants = Vec::new();
+        let mut rust_statics = Vec::new();
+        let mut rust_modules = Vec::new();
 
         for entity in entities_array {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
@@ -55,6 +81,18 @@ fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String
                     "method" | "kotlin_method" => methods.push(entity),
                     "function" | "kotlin_function" => functions.push(entity),
                     "kotlin_property" => properties.push(entity),
+                    "rust_struct" => rust_structs.push(entity),
+                    "rust_enum" => rust_enums.push(entity),
+                    "rust_union" => rust_unions.push(entity),
+                    "rust_trait" => rust_traits.push(entity),
+                    "rust_impl" => rust_impls.push(entity),
+                    "rust_function" => rust_functions.push(entity),
+                    "rust_method" => rust_methods.push(entity),
+                    "rust_macro_def" | "rust_macro_invoke" => rust_macros.push(entity),
+                    "rust_type_alias" => rust_type_aliases.push(entity),
+                    "rust_constant" => rust_constants.push(entity),
+                    "rust_static" => rust_statics.push(entity),
+                    "rust_module" => rust_modules.push(entity),
                     _ => {}
                 }
             }
@@ -106,6 +144,91 @@ fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String
         if !properties.is_empty() {
             output.push_str("## Properties\n\n");
             for entity in properties {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        // Rust entities
+        if !rust_structs.is_empty() {
+            output.push_str("## Structs (Rust)\n\n");
+            for entity in rust_structs {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_enums.is_empty() {
+            output.push_str("## Enums (Rust)\n\n");
+            for entity in rust_enums {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_unions.is_empty() {
+            output.push_str("## Unions (Rust)\n\n");
+            for entity in rust_unions {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_traits.is_empty() {
+            output.push_str("## Traits (Rust)\n\n");
+            for entity in rust_traits {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_impls.is_empty() {
+            output.push_str("## Impl Blocks (Rust)\n\n");
+            for entity in rust_impls {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_functions.is_empty() {
+            output.push_str("## Functions (Rust)\n\n");
+            for entity in rust_functions {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_methods.is_empty() {
+            output.push_str("## Methods (Rust)\n\n");
+            for entity in rust_methods {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_macros.is_empty() {
+            output.push_str("## Macros (Rust)\n\n");
+            for entity in rust_macros {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_type_aliases.is_empty() {
+            output.push_str("## Type Aliases (Rust)\n\n");
+            for entity in rust_type_aliases {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_constants.is_empty() {
+            output.push_str("## Constants (Rust)\n\n");
+            for entity in rust_constants {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_statics.is_empty() {
+            output.push_str("## Statics (Rust)\n\n");
+            for entity in rust_statics {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !rust_modules.is_empty() {
+            output.push_str("## Modules (Rust)\n\n");
+            for entity in rust_modules {
                 output.push_str(&format_entity_summary(entity));
             }
         }

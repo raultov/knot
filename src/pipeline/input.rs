@@ -13,7 +13,7 @@ use tracing::info;
 /// This is the single source of truth for all supported languages across the indexing pipeline.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "html", "htm", "css",
-    "scss", "sass",
+    "scss", "sass", "rs",
 ];
 
 /// Recursively discover all supported source files under `repo_path`.

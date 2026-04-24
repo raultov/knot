@@ -237,9 +237,9 @@ mod tests {
         assert!(is_supported_file(Path::new("test.mjs")));
         assert!(is_supported_file(Path::new("test.cjs")));
         assert!(is_supported_file(Path::new("test.jsx")));
+        assert!(is_supported_file(Path::new("test.rs")));
 
         assert!(!is_supported_file(Path::new("test.txt")));
-        assert!(!is_supported_file(Path::new("test.rs")));
         assert!(!is_supported_file(Path::new("test")));
         assert!(!is_supported_file(Path::new("test.java.bak")));
     }

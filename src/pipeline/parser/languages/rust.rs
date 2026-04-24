@@ -88,6 +88,148 @@ pub(crate) fn collect_rust_macro_references(
     }
 }
 
+/// Reclassify functions inside impl blocks as methods.
+///
+/// Tree-sitter captures all function_item nodes as RustFunction initially.
+/// This function identifies which functions are actually methods (inside impl_item)
+/// and changes their kind to RustMethod.
+pub(crate) fn reclassify_methods_in_impl_blocks(root: Node<'_>, entities: &mut [ParsedEntity]) {
+    // Collect line numbers of all functions inside impl blocks
+    let mut method_lines = std::collections::HashSet::new();
+    collect_method_lines(&root, &mut method_lines);
+
+    // Reclassify entities at those line numbers from RustFunction to RustMethod
+    for entity in entities.iter_mut() {
+        if entity.kind == EntityKind::RustFunction && method_lines.contains(&entity.start_line) {
+            entity.kind = EntityKind::RustMethod;
+        }
+    }
+}
+
+/// Recursively collect line numbers of function_item nodes inside impl_item.
+fn collect_method_lines(node: &Node<'_>, method_lines: &mut std::collections::HashSet<usize>) {
+    if node.kind() == "impl_item" {
+        // Inside an impl block - collect all function_item children
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "function_item" {
+                let line = c.start_position().row + 1;
+                method_lines.insert(line);
+            } else {
+                // Recurse to find nested function_items
+                collect_method_lines_in_scope(&c, method_lines);
+            }
+            child = c.next_sibling();
+        }
+    } else {
+        // Not in impl block yet - keep searching
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            collect_method_lines(&c, method_lines);
+            child = c.next_sibling();
+        }
+    }
+}
+
+/// Helper to collect function_items within a specific scope (e.g., declaration_list).
+fn collect_method_lines_in_scope(
+    node: &Node<'_>,
+    method_lines: &mut std::collections::HashSet<usize>,
+) {
+    if node.kind() == "function_item" {
+        let line = node.start_position().row + 1;
+        method_lines.insert(line);
+    }
+
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_method_lines_in_scope(&c, method_lines);
+        child = c.next_sibling();
+    }
+}
+
+/// Collect trait implementations from Rust impl blocks and attach to target structs/enums.
+pub(crate) fn collect_rust_trait_implementations(
+    root: Node<'_>,
+    source: &[u8],
+    entities: &mut [ParsedEntity],
+    _file_path: &str,
+    _repo_name: &str,
+) {
+    let mut implementations: Vec<(usize, String, String)> = Vec::new();
+
+    // Start from root, not first child
+    collect_impl_nodes(&root, source, &mut implementations);
+
+    // Attach IMPLEMENTS relationships to target entities
+    for (line, target_type, trait_name) in implementations {
+        // Find the struct/enum that is the target of the impl
+        if let Some(target_entity) = entities.iter_mut().find(|e| {
+            e.name == target_type
+                && matches!(
+                    e.kind,
+                    EntityKind::RustStruct | EntityKind::RustEnum | EntityKind::RustUnion
+                )
+        }) {
+            target_entity
+                .reference_intents
+                .push(ReferenceIntent::Implements {
+                    interface: trait_name,
+                    line,
+                });
+        }
+    }
+}
+
+/// Recursively collect impl_item nodes that implement traits.
+fn collect_impl_nodes(
+    node: &Node<'_>,
+    source: &[u8],
+    implementations: &mut Vec<(usize, String, String)>,
+) {
+    if node.kind() == "impl_item" {
+        let line = node.start_position().row + 1;
+        let impl_text = node_text(*node, source);
+
+        // Simple pattern matching for "impl Trait for Type"
+        // This handles the common case: impl TraitName for TypeName { ... }
+        if impl_text.contains(" for ") {
+            let mut type_identifiers: Vec<String> = Vec::new();
+
+            // Collect all type_identifier nodes in order
+            let mut child = node.child(0);
+            while let Some(c) = child {
+                if c.kind() == "type_identifier" {
+                    type_identifiers.push(node_text(c, source).to_string());
+                } else if c.kind() == "generic_type" {
+                    // For generic types like Container<T>, extract just the base name
+                    if let Some(name_node) = c.child_by_field_name("type")
+                        && name_node.kind() == "type_identifier"
+                    {
+                        type_identifiers.push(node_text(name_node, source).to_string());
+                    }
+                }
+                child = c.next_sibling();
+            }
+
+            // In "impl Trait for Type", we get [Trait, Type] as type_identifiers
+            if type_identifiers.len() >= 2 {
+                let trait_name = type_identifiers[0].clone();
+                let target_type = type_identifiers[1].clone();
+                implementations.push((line, target_type, trait_name));
+            }
+        }
+        // Note: We ignore inherent impls (impl Type without trait) for now
+    }
+
+    // Recurse into children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_impl_nodes(&c, source, implementations);
+        child = c.next_sibling();
+    }
+}
+
 /// Recursively collect macro invocation nodes from Rust AST.
 fn collect_macro_nodes(
     node: &Node<'_>,
@@ -124,7 +266,6 @@ fn find_nearest_entity_by_line(entities: &[ParsedEntity], line: usize) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
 
     fn create_test_entity(name: &str, line: usize) -> ParsedEntity {
         ParsedEntity::new(
@@ -279,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_find_nearest_entity_by_line_exact_match() {
-        let mut entities = vec![
+        let entities = vec![
             create_test_entity("func1", 10),
             create_test_entity("func2", 20),
             create_test_entity("func3", 30),
@@ -443,5 +584,62 @@ fn func2() {
 
         let result = handle_rust_capture("rust.generics", "some_generic", node);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_collect_rust_trait_implementations() {
+        let code = r#"
+trait Incrementable {
+    fn increment(&mut self);
+}
+
+struct Counter {
+    count: u32,
+}
+
+impl Incrementable for Counter {
+    fn increment(&mut self) {
+        self.count += 1;
+    }
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        // Create a Counter entity using the new() constructor
+        let mut entities = vec![ParsedEntity::new(
+            "Counter",
+            EntityKind::RustStruct,
+            "Counter",
+            None,
+            None,
+            "rust",
+            "test.rs",
+            6,
+            None,
+            "test_repo",
+        )];
+
+        collect_rust_trait_implementations(
+            tree.root_node(),
+            code.as_bytes(),
+            &mut entities,
+            "test.rs",
+            "test_repo",
+        );
+
+        // Check that Counter now has an IMPLEMENTS relationship
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].reference_intents.len(), 1);
+
+        if let ReferenceIntent::Implements { interface, line } = &entities[0].reference_intents[0] {
+            assert_eq!(interface, "Incrementable");
+            assert_eq!(*line, 10); // Line where impl starts
+        } else {
+            panic!("Expected Implements reference intent");
+        }
     }
 }
