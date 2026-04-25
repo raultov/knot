@@ -1389,14 +1389,6 @@ impl Default for ImportedType {
         // 1. knot-indexer --repo-path /path/to/knot --repo-name knot --neo4j-password PASSWORD
         // 2. knot callers Config --repo knot
         // Expected: Should show functions from knot-mcp.rs and knot-indexer.rs with Config references
-
-        assert!(
-            true,
-            "collect_type_nodes() enhancement is in place: \
-             - struct_expression nodes are processed \
-             - scoped_identifier nodes are processed (with pattern match filtering) \
-             - type_identifier nodes still work as before"
-        );
     }
 
     #[test]
