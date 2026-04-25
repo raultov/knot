@@ -531,9 +531,23 @@ pub(crate) fn extract_entities(
         );
     }
 
-    // Rust: collect macro invocations as orphaned references
+    // Rust: collect macro invocations, function calls, type references, and trait implementations
     if lang_name == "rust" {
         rust::collect_rust_macro_references(
+            tree.root_node(),
+            source_bytes,
+            &mut entities,
+            file_path,
+            repo_name,
+        );
+        rust::collect_rust_call_references(
+            tree.root_node(),
+            source_bytes,
+            &mut entities,
+            file_path,
+            repo_name,
+        );
+        rust::collect_rust_type_references(
             tree.root_node(),
             source_bytes,
             &mut entities,

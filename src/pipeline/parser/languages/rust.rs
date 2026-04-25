@@ -55,7 +55,8 @@ pub(crate) fn handle_rust_capture(
         "rust.static.name" => Some((text.to_string(), EntityKind::RustStatic, start_line, None)),
         "rust.module.name" => Some((text.to_string(), EntityKind::RustModule, start_line, None)),
         "rust.method.name" => Some((text.to_string(), EntityKind::RustMethod, start_line, None)),
-        "rust.generics"
+        "rust.call.name"
+        | "rust.generics"
         | "rust.signature"
         | "rust.return_type"
         | "rust.lifetime"
@@ -248,6 +249,187 @@ fn collect_macro_nodes(
     if let Some(sibling) = node.next_sibling() {
         collect_macro_nodes(&sibling, source, macro_invocations);
     }
+}
+
+/// Collect type references from Rust source code (parameter types, return types, field types).
+///
+/// This function walks through function_item, struct_item, and enum_item nodes
+/// to extract type references from their signatures and fields.
+pub(crate) fn collect_rust_type_references(
+    root: Node<'_>,
+    source: &[u8],
+    entities: &mut [ParsedEntity],
+    _file_path: &str,
+    _repo_name: &str,
+) {
+    let mut type_refs: Vec<(usize, String)> = Vec::new();
+
+    if let Some(first_child) = root.child(0) {
+        collect_type_nodes(&first_child, source, &mut type_refs);
+    }
+
+    for (line, type_name) in type_refs {
+        let target_idx = find_nearest_entity_by_line(entities, line);
+        if target_idx < entities.len() {
+            entities[target_idx]
+                .reference_intents
+                .push(ReferenceIntent::TypeReference { type_name, line });
+        }
+    }
+}
+
+/// Recursively collect type references from function parameters and return types.
+fn collect_type_nodes(node: &Node<'_>, source: &[u8], type_refs: &mut Vec<(usize, String)>) {
+    // Look for type_identifier nodes in function parameters and return types
+    if node.kind() == "type_identifier" {
+        let line = node.start_position().row + 1;
+        let type_name = node_text(*node, source).to_string();
+        type_refs.push((line, type_name));
+    }
+
+    // Recurse to children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_type_nodes(&c, source, type_refs);
+        child = c.next_sibling();
+    }
+}
+
+/// Collect function calls from Rust source and attach to nearest entities.
+///
+/// Handles:
+/// - Direct function calls: `function_name()`
+/// - Method calls: `obj.method()`
+/// - Scoped calls: `module::function()` or `Type::method()`
+pub(crate) fn collect_rust_call_references(
+    root: Node<'_>,
+    source: &[u8],
+    entities: &mut [ParsedEntity],
+    _file_path: &str,
+    _repo_name: &str,
+) {
+    let mut call_intents: Vec<(usize, String, Option<String>)> = Vec::new();
+
+    if let Some(first_child) = root.child(0) {
+        collect_call_nodes(&first_child, source, &mut call_intents);
+    }
+
+    for (line, func_name, receiver) in call_intents {
+        let target_idx = find_nearest_entity_by_line(entities, line);
+        if target_idx < entities.len() {
+            entities[target_idx]
+                .reference_intents
+                .push(ReferenceIntent::Call {
+                    method: func_name,
+                    receiver,
+                    line,
+                });
+        }
+    }
+}
+
+/// Recursively collect call_expression nodes from the AST.
+fn collect_call_nodes(
+    node: &Node<'_>,
+    source: &[u8],
+    calls: &mut Vec<(usize, String, Option<String>)>,
+) {
+    if node.kind() == "call_expression" {
+        let line = node.start_position().row + 1;
+
+        // Try to extract function name and optional receiver
+        if let Some((func_name, receiver)) = extract_call_details(*node, source) {
+            calls.push((line, func_name, receiver));
+        }
+    }
+
+    // Recurse to children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_call_nodes(&c, source, calls);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract function name and receiver from a call_expression node.
+fn extract_call_details(node: Node<'_>, source: &[u8]) -> Option<(String, Option<String>)> {
+    // Find the function part of the call_expression
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            // Direct function call: identifier
+            "identifier" => {
+                let func_name = node_text(c, source).to_string();
+                return Some((func_name, None));
+            }
+            // Method call: field_expression (receiver.method)
+            "field_expression" => {
+                if let Some((method_name, receiver)) = extract_from_field_expression(c, source) {
+                    return Some((method_name, Some(receiver)));
+                }
+            }
+            // Scoped call: scoped_identifier (Module::function or Type::method)
+            "scoped_identifier" => {
+                if let Some(func_name) = extract_from_scoped_identifier(c, source) {
+                    return Some((func_name, None));
+                }
+            }
+            _ => {}
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
+/// Extract method name and receiver from field_expression (e.g., obj.method)
+fn extract_from_field_expression(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
+    let mut method_name = String::new();
+    let mut receiver = String::new();
+    let mut found_method = false;
+    let mut found_receiver = false;
+
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "field_identifier" => {
+                method_name = node_text(c, source).to_string();
+                found_method = true;
+            }
+            "identifier" => {
+                receiver = node_text(c, source).to_string();
+                found_receiver = true;
+            }
+            _ => {}
+        }
+        child = c.next_sibling();
+    }
+
+    if found_method && found_receiver {
+        Some((method_name, receiver))
+    } else {
+        None
+    }
+}
+
+/// Extract function name from scoped_identifier (e.g., Module::function)
+fn extract_from_scoped_identifier(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "identifier" {
+            // The last identifier in the scope is the function name
+            let mut last_identifier = node_text(c, source).to_string();
+            let mut next = c.next_sibling();
+            while let Some(n) = next {
+                if n.kind() == "identifier" {
+                    last_identifier = node_text(n, source).to_string();
+                }
+                next = n.next_sibling();
+            }
+            return Some(last_identifier);
+        }
+        child = c.next_sibling();
+    }
+    None
 }
 
 /// Find the entity index nearest to the given line number.

@@ -34,7 +34,15 @@
 ;; Note: All function_item nodes are captured here.
 ;; Post-processing in rust.rs will reclassify functions inside
 ;; impl blocks as RustMethod entities.
+;; Captures: name + optional parameters and return type as signature
 ;; ============================================================
+(function_item
+  name: (identifier) @rust.function.name
+  parameters: (parameters) @signature
+  (#set! "kind" "RustFunction"))
+
+;; Fallback: function_item without explicit parameters child
+;; (some tree-sitter versions may parse differently)
 (function_item
   name: (identifier) @rust.function.name
   (#set! "kind" "RustFunction"))
@@ -95,4 +103,24 @@
       name: (identifier) @rust.macro_invoke.name
       (#set! "kind" "RustMacroInvoke"))
   ])
+
+;; ============================================================
+;; CALL EXPRESSIONS (Function invocations)
+;; ============================================================
+;; Direct function calls: function_name()
+(call_expression
+  function: (identifier) @rust.call.name
+  (#set! "kind" "RustFunctionCall"))
+
+;; Method calls: obj.method() or receiver.method()
+(call_expression
+  function: (field_expression
+    field: (field_identifier) @rust.call.name)
+  (#set! "kind" "RustMethodCall"))
+
+;; Scoped function calls: module::function() or Type::method()
+(call_expression
+  function: (scoped_identifier
+    name: (identifier) @rust.call.name)
+  (#set! "kind" "RustFunctionCall"))
 
