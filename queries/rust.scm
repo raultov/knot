@@ -1,5 +1,5 @@
 ;; Tree-sitter query file for Rust entity extraction
-;; Version: 0.3 (minimal - based on tree-sitter-rust 0.24)
+;; Version: 0.4 (adds type_alias, constant, static, macro_def, macro_invoke)
 
 ;; ============================================================
 ;; STRUCTS
@@ -52,4 +52,47 @@
 (union_item
   name: (type_identifier) @rust.union.name
   (#set! "kind" "RustUnion"))
+
+;; ============================================================
+;; TYPE ALIASES
+;; ============================================================
+(type_item
+  name: (type_identifier) @rust.type_alias.name
+  type: (_) @signature
+  (#set! "kind" "RustTypeAlias"))
+
+;; ============================================================
+;; CONSTANTS
+;; ============================================================
+(const_item
+  name: (identifier) @rust.constant.name
+  type: (_) @signature
+  (#set! "kind" "RustConstant"))
+
+;; ============================================================
+;; STATICS
+;; ============================================================
+(static_item
+  name: (identifier) @rust.static.name
+  type: (_) @signature
+  (#set! "kind" "RustStatic"))
+
+;; ============================================================
+;; MACRO DEFINITIONS
+;; ============================================================
+(macro_definition
+  name: (identifier) @rust.macro_def.name
+  (#set! "kind" "RustMacroDef"))
+
+;; ============================================================
+;; MACRO INVOCATIONS
+;; ============================================================
+(macro_invocation
+  macro: [
+    ((identifier) @rust.macro_invoke.name
+      (#set! "kind" "RustMacroInvoke"))
+    (scoped_identifier
+      name: (identifier) @rust.macro_invoke.name
+      (#set! "kind" "RustMacroInvoke"))
+  ])
 

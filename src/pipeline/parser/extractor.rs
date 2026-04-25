@@ -326,10 +326,23 @@ pub(crate) fn extract_entities(
                     if let Some((entity_name, entity_kind, entity_line, _rust_metadata)) =
                         rust::handle_rust_capture(name_or_intent, &text, node)
                     {
+                        let rust_kind = entity_kind.clone();
                         name = Some(entity_name);
                         kind = Some(entity_kind);
                         start_line = entity_line;
-                        entity_node = Some(node);
+                        
+                        // For Rust type aliases, constants, and statics, the captured node is the
+                        // identifier (type_identifier, identifier, identifier), but comments are
+                        // preceding siblings of the parent entity node (type_item, const_item, static_item).
+                        // Get the parent to properly extract preceding comments.
+                        entity_node = if matches!(
+                            rust_kind,
+                            EntityKind::RustTypeAlias | EntityKind::RustConstant | EntityKind::RustStatic
+                        ) {
+                            node.parent()
+                        } else {
+                            Some(node)
+                        };
                     }
                 }
                 // DOM/CSS references: Delegate to JavaScript handler
