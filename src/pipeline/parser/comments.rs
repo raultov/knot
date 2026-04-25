@@ -26,7 +26,7 @@ pub(crate) fn extract_comments(
     let mut docstring: Option<String> = None;
     let mut inline_comments: Vec<String> = Vec::new();
 
-    // **Pase hacia arriba (Docstring):** Find preceding comments
+    // **Upward pass (Docstring):** Find preceding comments
     if let Some(_parent) = entity_node.parent() {
         let mut current = entity_node.prev_sibling();
         let mut comment_buffer: Vec<String> = Vec::new();
@@ -87,7 +87,7 @@ pub(crate) fn extract_comments(
         }
     }
 
-    // **Pase hacia abajo (Inline Comments):** Find comments within the entity body
+    // **Downward pass (Inline Comments):** Find comments within the entity body
     // Build a set of extracted entity nodes to avoid capturing their comments
     let extracted_child_entities = extract_child_entity_nodes(entity_node, lang_name);
 
