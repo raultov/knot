@@ -355,11 +355,14 @@ Use `--clean` when:
 To ensure indexer stability, run the E2E integration test suite:
 
 ```bash
-# Run all language E2E tests (Java, TS, JS, HTML, CSS, Kotlin)
+# Run all language E2E tests (Java, TS, JS, HTML, CSS, Kotlin, Rust)
 ./tests/run_e2e.sh
 
 # Run only Kotlin E2E tests
 ./tests/run_kotlin_e2e.sh
+
+# Run only Rust E2E tests
+./tests/run_rust_e2e.sh
 ```
 
 See `tests/KOTLIN_E2E_TESTS.md` for detailed coverage and troubleshooting.
@@ -603,10 +606,11 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **LLM Skill File**: `.knot-agent.md` teaches AI agents how to use CLI for autonomous analysis.
 
 ### Upcoming (v0.8.x+)
-#### Phase 7: CLI UX Improvements
+#### Phase 7: CLI UX Improvements & Corporate Network Support
 - [ ] Human-friendly output formatting for CLI (replace raw Markdown with pretty-printed tables, colors, and summaries)
 - [ ] Interactive result navigation for terminal users
 - [ ] Configurable output formats (JSON, table, markdown)
+- [ ] **Custom CA Certificates for Corporate Networks**: Support for user-provided SSL/TLS certificates to enable model downloads in restricted corporate environments where standard certificate authorities are not available
 
 #### Phase 8: Rust Support ✅ (v0.8.6)
 - ✅ Support `.rs` files with tree-sitter-rust parser
@@ -619,18 +623,23 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 22 end-to-end integration tests covering all Rust language constructs
 
 ### Upcoming (v0.9.x+)
-#### Phase 9: C/C++ Support
+#### Phase 9: Python Support
+- [ ] Support `.py` files with full AST extraction
+- [ ] Class, function, method, and decorator tracking
+- [ ] Import resolution and module dependency graph
+
+#### Phase 10: C/C++ Support
 - [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
 - [ ] Pointer and memory relationship tracking
 - [ ] Header inclusion graph analysis
 
-#### Phase 10: YAML/Configuration Language Support
+#### Phase 11: YAML/Configuration Language Support
 - [ ] HELM chart indexing (`.yaml`, `.tpl`)
 - [ ] Kubernetes manifest analysis
 - [ ] Template variable tracking and resolution
 
 #### Long-Term Vision
-- [ ] Python support
+- [ ] Markdown documentation indexing
 - [ ] Go support
 - [ ] C# support
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)
