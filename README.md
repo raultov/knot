@@ -26,7 +26,7 @@ This dual-database approach powers both:
 
 **🔍 Code Intelligence Tools**
 - **`search_hybrid_context`**: Semantic + structural search. Find code by meaning, class name, method signature, docstrings, or comments. Returns full context including dependencies.
-- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method.
+- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
 
 **🏗️ Multi-Language Support**
@@ -38,7 +38,7 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (v0.8.6): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support.
+- **Rust** (v0.8.7): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling.
 - **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -229,7 +229,7 @@ cargo build --release --no-default-features --features only-clients
 This produces only `knot` and `knot-mcp` binaries (~8-10 MB each), excluding the 30+ MB of ONNX Runtime dependencies.
 
 **Available tools in lightweight mode:**
-- ✅ **`find_callers`**: Reverse dependency lookup (graph search)
+- ✅ **`find_callers`**: Reverse dependency lookup (graph search). Automatically groups results by target when multiple entities share the same name.
 - ✅ **`explore_file`**: File structure inspection
 - ❌ **`search_hybrid_context`**: Semantic search (requires embeddings, not available in this mode)
 
@@ -301,7 +301,7 @@ Find code entities by meaning, class names, docstrings, or comments.
 ```bash
 knot callers "LoginService" --repo my-app
 ```
-Find all code that references a specific entity (dead code detection, impact analysis, call chains).
+Find all code that references a specific entity (dead code detection, impact analysis, call chains). When multiple entities share the same name in different files, results are automatically grouped by target with file locations and signatures.
 
 #### `knot explore` — File Structure Inspection
 ```bash
@@ -571,7 +571,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.6 — Rust Type Aliases, Constants, and Docstrings) ✅
+### Current Release (v0.8.7 — Enhanced Rust Type Reference Detection in Macros) ✅
+- ✅ **Macro Type Reference Extraction**: Type references inside macro invocations (`vec![]`, `println!()`, `assert!()`, `format!()`, etc.) are now correctly captured
+- ✅ **Intelligent String Filtering**: Filters out false positives from string literals using quote-counting heuristics
+- ✅ **Comprehensive Edge Case Handling**: Validates identifiers, handles nested macros, supports `macro_rules!` definitions
+- ✅ **Improved Accuracy**: EntityKind references increased by +95.7% (46→90 references), now captures test function usage
+- ✅ **Enhanced Test Coverage**: Added 4 new tests for token_tree extraction covering various macro types and edge cases
+
+### Previous Release (v0.8.6 — Rust Type Aliases, Constants, and Docstrings) ✅
 - ✅ **Rust Type Alias Extraction**: Extracts type alias declarations with full signature (e.g., `type Callback = fn(u32) -> u32`)
 - ✅ **Rust Constant/Static Extraction**: Captures `const` and `static mut` declarations with type signatures
 - ✅ **Rust Docstring Support**: Full doc comment extraction for Rust entities (handles nested `doc_comment` nodes in tree-sitter-rust)
@@ -611,6 +618,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Interactive result navigation for terminal users
 - [ ] Configurable output formats (JSON, table, markdown)
 - [ ] **Custom CA Certificates for Corporate Networks**: Support for user-provided SSL/TLS certificates to enable model downloads in restricted corporate environments where standard certificate authorities are not available
+- [ ] **Performance Optimization**: Implement token_tree result caching if performance becomes an issue with large codebases containing many macro invocations
 
 #### Phase 8: Rust Support ✅ (v0.8.6)
 - ✅ Support `.rs` files with tree-sitter-rust parser

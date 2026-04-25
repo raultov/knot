@@ -40,6 +40,11 @@ enum Commands {
     },
 
     /// Find all references to an entity (reverse dependency lookup)
+    ///
+    /// Returns callers grouped by relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
+    /// When multiple entities with the same name exist (e.g., 'find_nearest_entity_by_line'
+    /// in orphans.rs vs rust.rs), results are grouped by target entity showing which specific
+    /// target each caller references. Each group displays the target's file location and signature.
     Callers {
         /// Entity name to find references for
         entity_name: String,

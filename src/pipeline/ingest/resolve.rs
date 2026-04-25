@@ -50,6 +50,12 @@ pub fn resolve_reference_intents_with_context(
     mut fqn_to_uuid: HashMap<String, Uuid>,
     mut name_to_uuids: HashMap<String, Vec<Uuid>>,
 ) {
+    // Build uuid -> file_path mapping for same-file entity resolution
+    let uuid_to_file: HashMap<Uuid, String> = entities
+        .iter()
+        .map(|e| (e.uuid, e.file_path.clone()))
+        .collect();
+
     // Merge current entities into the resolution context.
     for e in entities.iter() {
         fqn_to_uuid.insert(e.fqn.clone(), e.uuid);
@@ -82,9 +88,11 @@ pub fn resolve_reference_intents_with_context(
                         resolve_single_call_intent(
                             &call_intent,
                             entity.fqn.clone(),
+                            entity.file_path.clone(),
                             entity.enclosing_class.clone(),
                             &fqn_to_uuid,
                             &name_to_uuids,
+                            &uuid_to_file,
                         ),
                         RelationshipType::Calls,
                     )
@@ -148,9 +156,11 @@ pub fn resolve_reference_intents_with_context(
 fn resolve_single_call_intent(
     intent: &crate::models::CallIntent,
     _caller_fqn: String,
+    caller_file_path: String,
     caller_enclosing_class: Option<String>,
     fqn_to_uuid: &HashMap<String, Uuid>,
     name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    uuid_to_file: &HashMap<Uuid, String>,
 ) -> Option<Uuid> {
     // Strategy 1: Local call (no receiver or receiver is "this")
     if (intent.receiver.is_none() || intent.receiver.as_deref() == Some("this"))
@@ -215,6 +225,12 @@ fn resolve_single_call_intent(
 
         // Fallback: just match on method name.
         if let Some(uuids) = name_to_uuids.get(&intent.method) {
+            // Prioritize entities in the same file (for Rust private functions)
+            if let Some(same_file_uuid) =
+                find_entity_in_same_file(uuids, &caller_file_path, uuid_to_file)
+            {
+                return Some(same_file_uuid);
+            }
             return uuids.first().copied();
         }
     }
@@ -223,9 +239,32 @@ fn resolve_single_call_intent(
     if intent.receiver.is_none()
         && let Some(uuids) = name_to_uuids.get(&intent.method)
     {
+        // Prioritize entities in the same file (for Rust private functions)
+        if let Some(same_file_uuid) =
+            find_entity_in_same_file(uuids, &caller_file_path, uuid_to_file)
+        {
+            return Some(same_file_uuid);
+        }
         return uuids.first().copied();
     }
 
+    None
+}
+
+/// Helper function to find an entity in the same file as the caller.
+/// Used for Rust to prioritize local private functions over imported ones.
+fn find_entity_in_same_file(
+    candidate_uuids: &[Uuid],
+    caller_file_path: &str,
+    uuid_to_file: &HashMap<Uuid, String>,
+) -> Option<Uuid> {
+    for &uuid in candidate_uuids {
+        if let Some(file_path) = uuid_to_file.get(&uuid)
+            && file_path == caller_file_path
+        {
+            return Some(uuid);
+        }
+    }
     None
 }
 
@@ -255,6 +294,7 @@ mod tests {
             uuid: Uuid::new_v4(),
             name: name.to_string(),
             fqn: fqn.to_string(),
+            file_path: "test/file.java".to_string(),
             enclosing_class: enclosing.map(|s| s.to_string()),
             reference_intents: Vec::new(),
             relationships: Vec::new(),
@@ -386,5 +426,100 @@ mod tests {
         resolve_reference_intents(&mut entities);
 
         assert_eq!(entities[0].relationships.len(), 1);
+    }
+
+    /// E2E test reproducing the exact bug: two functions with same name in different files.
+    /// Verifies that calls resolve to the same-file function (Rust scope rules).
+    ///
+    /// Scenario:
+    /// - orphans.rs has `pub(crate) fn find_nearest_entity_by_line()`
+    /// - rust.rs has `fn find_nearest_entity_by_line()` (private, local)
+    /// - Functions in rust.rs call `find_nearest_entity_by_line`
+    /// - Expected: calls should resolve to rust.rs:445 (local function), not orphans.rs:92
+    #[test]
+    fn test_e2e_rust_same_file_function_resolution() {
+        // Create the two target functions with identical names
+        let orphans_fn = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "find_nearest_entity_by_line".to_string(),
+            fqn: "knot::pipeline::parser::orphans::find_nearest_entity_by_line".to_string(),
+            file_path: "src/pipeline/parser/orphans.rs".to_string(),
+            enclosing_class: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+
+        let rust_fn = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "find_nearest_entity_by_line".to_string(),
+            fqn: "knot::pipeline::parser::languages::rust::find_nearest_entity_by_line".to_string(),
+            file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
+            enclosing_class: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+
+        // Create a caller function in rust.rs that calls find_nearest_entity_by_line
+        let rust_caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "collect_rust_type_references".to_string(),
+            fqn: "knot::pipeline::parser::languages::rust::collect_rust_type_references"
+                .to_string(),
+            file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
+            enclosing_class: None,
+            reference_intents: vec![ReferenceIntent::Call {
+                method: "find_nearest_entity_by_line".to_string(),
+                receiver: None,
+                line: 258,
+            }],
+            relationships: Vec::new(),
+        };
+
+        // Create a caller function in orphans.rs that calls find_nearest_entity_by_line
+        let orphans_caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "collect_orphaned_references".to_string(),
+            fqn: "knot::pipeline::parser::orphans::collect_orphaned_references".to_string(),
+            file_path: "src/pipeline/parser/orphans.rs".to_string(),
+            enclosing_class: None,
+            reference_intents: vec![ReferenceIntent::Call {
+                method: "find_nearest_entity_by_line".to_string(),
+                receiver: None,
+                line: 8,
+            }],
+            relationships: Vec::new(),
+        };
+
+        let orphans_fn_uuid = orphans_fn.uuid;
+        let rust_fn_uuid = rust_fn.uuid;
+
+        let mut entities = vec![orphans_fn, rust_fn, rust_caller, orphans_caller];
+        resolve_reference_intents(&mut entities);
+
+        // Verify rust_caller (from rust.rs) calls the LOCAL rust.rs function
+        let rust_caller_rels = &entities[2].relationships;
+        assert_eq!(
+            rust_caller_rels.len(),
+            1,
+            "rust_caller should have exactly 1 CALLS relationship"
+        );
+        assert_eq!(
+            rust_caller_rels[0],
+            (rust_fn_uuid, RelationshipType::Calls),
+            "rust_caller should call the LOCAL rust.rs function, not orphans.rs"
+        );
+
+        // Verify orphans_caller (from orphans.rs) calls the LOCAL orphans.rs function
+        let orphans_caller_rels = &entities[3].relationships;
+        assert_eq!(
+            orphans_caller_rels.len(),
+            1,
+            "orphans_caller should have exactly 1 CALLS relationship"
+        );
+        assert_eq!(
+            orphans_caller_rels[0],
+            (orphans_fn_uuid, RelationshipType::Calls),
+            "orphans_caller should call the LOCAL orphans.rs function"
+        );
     }
 }

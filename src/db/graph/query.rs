@@ -124,19 +124,21 @@ impl QueryExt for GraphDb {
                     "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
                      WHERE target.repo_name = $repo_name
                        AND (target.name = $name 
-                        OR target.fqn = $name 
-                        OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
-                        OR (target.fqn + COALESCE(target.signature, '')) CONTAINS $name)
-                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature"
+                        OR target.fqn = $name
+                        OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
+                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                            target.name as target_name, target.file_path as target_file_path,
+                            target.start_line as target_start_line, target.signature as target_signature"
                 )
             } else {
                 format!(
                     "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
-                     WHERE target.name = $name 
-                        OR target.fqn = $name 
+                     WHERE target.name = $name
+                        OR target.fqn = $name
                         OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
-                        OR (target.fqn + COALESCE(target.signature, '')) CONTAINS $name
-                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature"
+                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                            target.name as target_name, target.file_path as target_file_path,
+                            target.start_line as target_start_line, target.signature as target_signature"
                 )
             };
 
@@ -157,6 +159,10 @@ impl QueryExt for GraphDb {
                     "file_path": row.get::<String>("entity.file_path").ok(),
                     "start_line": row.get::<i64>("entity.start_line").ok(),
                     "signature": row.get::<String>("entity.signature").ok(),
+                    "target_name": row.get::<String>("target_name").ok(),
+                    "target_file_path": row.get::<String>("target_file_path").ok(),
+                    "target_start_line": row.get::<i64>("target_start_line").ok(),
+                    "target_signature": row.get::<String>("target_signature").ok(),
                 });
                 type_results.push(entity_json);
             }
@@ -182,17 +188,13 @@ impl QueryExt for GraphDb {
             "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
              WHERE callee.repo_name = $repo_name
                AND (callee.name = $name 
-                OR callee.fqn = $name 
-                OR (callee.name + COALESCE(callee.signature, '')) CONTAINS $name
-                OR (callee.fqn + COALESCE(callee.signature, '')) CONTAINS $name)
+                OR callee.fqn = $name)
              RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
                 .to_string()
         } else {
             "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
              WHERE callee.name = $name 
-                OR callee.fqn = $name 
-                OR (callee.name + COALESCE(callee.signature, '')) CONTAINS $name
-                OR (callee.fqn + COALESCE(callee.signature, '')) CONTAINS $name
+                OR callee.fqn = $name
              RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
                 .to_string()
         };

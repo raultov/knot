@@ -53,8 +53,10 @@ impl FindCallersTool {
                  \n\nUsage: Use for impact analysis before refactoring or to detect dead code. Do NOT use this for semantic feature discovery—use 'search_hybrid_context' instead. \
                  CRITICAL: For common method names (e.g., 'accept', 'process'), you MUST include a signature fragment (e.g., 'accept(List') to prevent thousands of irrelevant results. \
                  \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References) with exact file paths and line numbers. \
+                 When multiple entities with the same name exist (e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references. \
+                 Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
                  \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
-                 \n\nSupports Java, Kotlin, and TypeScript codebases."
+                 \n\nSupports Java, Kotlin, Rust, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
