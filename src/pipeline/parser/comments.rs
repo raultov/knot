@@ -33,7 +33,28 @@ pub(crate) fn extract_comments(
 
         while let Some(node) = current {
             match node.kind() {
-                "comment" | "line_comment" | "block_comment" => {
+                "line_comment" => {
+                    // For Rust, the actual doc text is in a child `doc_comment` node
+                    let text = if lang_name == "rust" {
+                        // Try to find the doc_comment child node by iterating through children
+                        let mut doc_text = None;
+                        for i in 0..node.child_count() {
+                            if let Some(child) = node.child(i as u32)
+                                && child.kind() == "doc_comment"
+                            {
+                                doc_text = Some(node_text(child, source));
+                                break;
+                            }
+                        }
+                        // If found, use the doc_comment text; otherwise fallback to full node
+                        doc_text.unwrap_or_else(|| node_text(node, source))
+                    } else {
+                        node_text(node, source)
+                    };
+                    comment_buffer.insert(0, strip_comment_markers(&text));
+                    current = node.prev_sibling();
+                }
+                "comment" | "block_comment" => {
                     let text = node_text(node, source);
                     comment_buffer.insert(0, strip_comment_markers(&text));
                     current = node.prev_sibling();

@@ -239,11 +239,50 @@ else
     exit 1
 fi
 
-# Test 8: Skip type alias (not in simplified query)
+# Test 8: Rust type alias
+echo ""
+echo "Test 8: Searching for Rust type alias Callback..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Callback type alias\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
-# Test 9: Skip constant (not in simplified query)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Callback" 2>/dev/null)
 
-# Test 10: Skip static (not in simplified query)
+if echo "$MCP_RESPONSE" | grep -q "Callback" && echo "$CLI_RESPONSE" | grep -q "Callback"; then
+    echo -e "${GREEN}✓ Found Rust type alias Callback (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Rust type alias Callback not found${NC}"
+    exit 1
+fi
+
+# Test 9: Rust constant
+echo ""
+echo "Test 9: Searching for Rust constant MAX_SIZE..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"MAX_SIZE constant\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "MAX_SIZE" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "MAX_SIZE" && echo "$CLI_RESPONSE" | grep -q "MAX_SIZE"; then
+    echo -e "${GREEN}✓ Found Rust constant MAX_SIZE (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Rust constant MAX_SIZE not found${NC}"
+    exit 1
+fi
+
+# Test 10: Rust static
+echo ""
+echo "Test 10: Searching for Rust static COUNTER..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"COUNTER static\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "COUNTER" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "COUNTER" && echo "$CLI_RESPONSE" | grep -q "COUNTER"; then
+    echo -e "${GREEN}✓ Found Rust static COUNTER (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Rust static COUNTER not found${NC}"
+    exit 1
+fi
 
 # Test 11: Already tested longest in Test 5
 

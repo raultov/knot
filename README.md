@@ -38,7 +38,7 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (v0.8.5): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references
+- **Rust** (v0.8.6): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support.
 - **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -568,7 +568,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.5 — Rust Module Refactoring & Clippy Fixes) ✅
+### Current Release (v0.8.6 — Rust Type Aliases, Constants, and Docstrings) ✅
+- ✅ **Rust Type Alias Extraction**: Extracts type alias declarations with full signature (e.g., `type Callback = fn(u32) -> u32`)
+- ✅ **Rust Constant/Static Extraction**: Captures `const` and `static mut` declarations with type signatures
+- ✅ **Rust Docstring Support**: Full doc comment extraction for Rust entities (handles nested `doc_comment` nodes in tree-sitter-rust)
+- ✅ **Rich Vector Embeddings**: Type signatures and documentation are now included in embeddings for better semantic search
+- ✅ **Improved Search Ranking**: Rust entities like `Callback` now rank in top 5 search results when querying by name
+
+### Previous Release (v0.8.5 — Rust Module Refactoring & Clippy Fixes) ✅
 - ✅ **Rust Module Refactoring**: Extracted Rust parsing logic into dedicated `src/pipeline/parser/languages/rust.rs` for better maintainability and mirroring existing language module architecture.
 - ✅ **Clippy Compliance**: Fixed unused import (`uuid::Uuid`) and unnecessary `mut` warning in Rust module tests.
 - ✅ **Rust Support Complete**: Phase 8 implementation fully integrated with 17 unit tests and 22 E2E test cases passing.
@@ -601,11 +608,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Interactive result navigation for terminal users
 - [ ] Configurable output formats (JSON, table, markdown)
 
-#### Phase 8: Rust Support ✅ (v0.8.x)
+#### Phase 8: Rust Support ✅ (v0.8.6)
 - ✅ Support `.rs` files with tree-sitter-rust parser
 - ✅ Struct, enum, union, trait, and impl block extraction
 - ✅ Function, method, macro definition and invocation tracking
-- ✅ Type alias, constant, static, and module extraction
+- ✅ **NEW**: Type alias, constant, static, and module extraction with signatures
+- ✅ **NEW**: Docstring extraction for all Rust entity types
 - ✅ Generic parameters and lifetime parameter support
 - ✅ 17 unit tests for Rust entity and reference extraction
 - ✅ 22 end-to-end integration tests covering all Rust language constructs
