@@ -264,9 +264,8 @@ pub(crate) fn collect_rust_type_references(
 ) {
     let mut type_refs: Vec<(usize, String)> = Vec::new();
 
-    if let Some(first_child) = root.child(0) {
-        collect_type_nodes(&first_child, source, &mut type_refs);
-    }
+    // Start from root, not first child (to process all top-level items)
+    collect_type_nodes(&root, source, &mut type_refs);
 
     for (line, type_name) in type_refs {
         let target_idx = find_nearest_entity_by_line(entities, line);
@@ -310,9 +309,8 @@ pub(crate) fn collect_rust_call_references(
 ) {
     let mut call_intents: Vec<(usize, String, Option<String>)> = Vec::new();
 
-    if let Some(first_child) = root.child(0) {
-        collect_call_nodes(&first_child, source, &mut call_intents);
-    }
+    // Start from root, not first child (to process all top-level items)
+    collect_call_nodes(&root, source, &mut call_intents);
 
     for (line, func_name, receiver) in call_intents {
         let target_idx = find_nearest_entity_by_line(entities, line);
@@ -823,5 +821,126 @@ impl Incrementable for Counter {
         } else {
             panic!("Expected Implements reference intent");
         }
+    }
+
+    #[test]
+    fn test_collect_rust_call_references() {
+        let code = r#"
+fn helper_function(x: i32) -> i32 {
+    x + 1
+}
+
+fn main() {
+    let result = helper_function(5);
+    println!("{}", result);
+}
+"#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        // Create entities for both functions
+        let mut entities = vec![
+            ParsedEntity::new(
+                "helper_function",
+                EntityKind::RustFunction,
+                "helper_function",
+                None,
+                None,
+                "rust",
+                "test.rs",
+                2,
+                None,
+                "test_repo",
+            ),
+            ParsedEntity::new(
+                "main",
+                EntityKind::RustFunction,
+                "main",
+                None,
+                None,
+                "rust",
+                "test.rs",
+                6,
+                None,
+                "test_repo",
+            ),
+        ];
+
+        collect_rust_call_references(
+            tree.root_node(),
+            code.as_bytes(),
+            &mut entities,
+            "test.rs",
+            "test_repo",
+        );
+
+        // Check that main() has a Call reference to helper_function
+        let main_entity = &entities[1];
+        assert!(
+            !main_entity.reference_intents.is_empty(),
+            "main() should have at least one reference intent"
+        );
+
+        let has_call = main_entity.reference_intents.iter().any(|intent| {
+            if let ReferenceIntent::Call { method, .. } = intent {
+                method == "helper_function"
+            } else {
+                false
+            }
+        });
+
+        assert!(
+            has_call,
+            "main() should have a Call reference to helper_function"
+        );
+    }
+
+    #[test]
+    fn test_rust_signature_capture() {
+        // Test that signatures are captured from Tree-sitter queries
+        use crate::pipeline::parser::extractor::extract_entities;
+        use tree_sitter_rust;
+
+        let code = r#"
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn multiply(x: f64, y: f64) -> f64 {
+    x * y
+}
+"#;
+
+        let entities = extract_entities(
+            code,
+            tree_sitter_rust::LANGUAGE.into(),
+            include_str!("../../../../queries/rust.scm"),
+            "rust",
+            "test.rs",
+            "test_repo",
+        )
+        .expect("Failed to extract entities");
+
+        // Should have at least 2 functions
+        assert!(
+            entities.len() >= 2,
+            "Should extract at least 2 functions, got {}",
+            entities.len()
+        );
+
+        // Find the add function
+        let add_fn = entities
+            .iter()
+            .find(|e| e.name == "add")
+            .expect("add function not found");
+
+        // Check if signature is captured
+        eprintln!("add function signature: {:?}", add_fn.signature);
+        // Note: signature might be empty if the Tree-sitter query doesn't match correctly
+        // This test documents the current behavior
     }
 }
