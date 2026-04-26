@@ -170,10 +170,10 @@ fi
 # Test 2: PythonClass extraction (Admin)
 echo ""
 echo "Test 2: Searching for Python class Admin..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Admin"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Admin","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Admin" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Admin" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Admin" && echo "$CLI_RESPONSE" | grep -q "Admin"; then
     echo -e "${GREEN}✓ Found Python class Admin (MCP & CLI)${NC}"
@@ -185,10 +185,10 @@ fi
 # Test 3: PythonFunction extraction (process_data)
 echo ""
 echo "Test 3: Searching for Python function process_data..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"process_data"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"process_data","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "process_data" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "process_data" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "process_data" && echo "$CLI_RESPONSE" | grep -q "process_data"; then
     echo -e "${GREEN}✓ Found Python function process_data (MCP & CLI)${NC}"
@@ -200,10 +200,10 @@ fi
 # Test 4: PythonFunction extraction (fetch_users)
 echo ""
 echo "Test 4: Searching for Python function fetch_users..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"fetch_users"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"fetch_users","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "fetch_users" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "fetch_users" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "fetch_users" && echo "$CLI_RESPONSE" | grep -q "fetch_users"; then
     echo -e "${GREEN}✓ Found Python function fetch_users (MCP & CLI)${NC}"
@@ -215,10 +215,10 @@ fi
 # Test 5: PythonFunction extraction (main)
 echo ""
 echo "Test 5: Searching for Python function main..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"main"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"main","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "main" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "main" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "main" && echo "$CLI_RESPONSE" | grep -q "main"; then
     echo -e "${GREEN}✓ Found Python function main (MCP & CLI)${NC}"
@@ -230,10 +230,10 @@ fi
 # Test 6: PythonMethod extraction (greet)
 echo ""
 echo "Test 6: Searching for Python method greet..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greet"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greet","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "greet" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "greet" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "greet" && echo "$CLI_RESPONSE" | grep -q "greet"; then
     echo -e "${GREEN}✓ Found Python method greet (MCP & CLI)${NC}"
@@ -245,10 +245,10 @@ fi
 # Test 7: PythonMethod extraction (manage_users)
 echo ""
 echo "Test 7: Searching for Python method manage_users..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"manage_users"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"manage_users","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "manage_users" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "manage_users" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "manage_users" && echo "$CLI_RESPONSE" | grep -q "manage_users"; then
     echo -e "${GREEN}✓ Found Python method manage_users (MCP & CLI)${NC}"
@@ -334,7 +334,7 @@ echo -e "${BLUE}--- Phase 4: Python REFERENCES and Constants ---${NC}"
 # Test 12: PythonConstant extraction (MAX_RETRIES)
 echo ""
 echo "Test 12: Searching for Python constant MAX_RETRIES..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"MAX_RETRIES"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"MAX_RETRIES","repo_name":"python_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -467,7 +467,7 @@ echo -e "${BLUE}--- Phase 6: Advanced Type Hints and Variable Arguments ---${NC}
 # Test 20: Type hints in function signatures (search for process_items with List[str])
 echo ""
 echo "Test 20: Searching for function with type hints (process_items)..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"process_items\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"process_items\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -482,7 +482,7 @@ fi
 # Test 21: Optional return type annotation (find_user)
 echo ""
 echo "Test 21: Searching for function with Optional return type (find_user)..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"find_user\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"find_user\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -497,7 +497,7 @@ fi
 # Test 22: *args and **kwargs parameter extraction (log_message)
 echo ""
 echo "Test 22: Searching for function with *args/**kwargs (log_message)..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"log_message\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"log_message\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -512,7 +512,7 @@ fi
 # Test 23: Py2 exception syntax doesn't crash (handle_exception_py2_style)
 echo ""
 echo "Test 23: Verifying Py2 exception syntax is handled (handle_exception_py2_style)..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"handle_exception_py2_style\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"handle_exception_py2_style\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 

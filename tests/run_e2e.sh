@@ -206,7 +206,7 @@ fi
 # Test 2: Find callers of AppComponent (should be referenced by AppModule decorator)
 echo ""
 echo "Test 2: Finding callers of AppComponent (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"AppComponent"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"AppComponent\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "AppComponent" 2>/dev/null)
@@ -230,7 +230,7 @@ fi
 # Test 3: Search for UserService in Java
 echo ""
 echo "Test 3: Searching for UserService in Java files (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"UserService"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"UserService\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "UserService" 2>/dev/null)
@@ -275,7 +275,7 @@ fi
 # Test 5: Search for HTML elements and attributes from Angular file
 echo ""
 echo "Test 5: Searching for HTML elements and attributes in test_angular.html (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"app-header"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"app-header\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "app-header" 2>/dev/null)
@@ -295,7 +295,7 @@ else
 fi
 
 # Test for HTML id attribute
-MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"dashboard"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"dashboard\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "dashboard" 2>/dev/null)
 
@@ -307,7 +307,7 @@ else
 fi
 
 # Test for HTML class attribute
-MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"navbar"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"navbar\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "navbar" 2>/dev/null)
 
@@ -322,7 +322,7 @@ fi
 echo ""
 echo "Test 6: Searching for JSX attributes in test_javascript.jsx..."
 # Search for id attribute
-MCP_REQUEST='{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"chart-toolbar"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"chart-toolbar\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "chart-toolbar" 2>/dev/null)
 
@@ -334,7 +334,7 @@ else
 fi
 
 # Search for className attribute
-MCP_REQUEST='{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"btn-primary\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "btn-primary" 2>/dev/null)
 
@@ -346,7 +346,7 @@ else
 fi
 
 # Test for multiple classes in JSX
-MCP_REQUEST='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"profile-card"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"profile-card\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "profile-card" 2>/dev/null)
 
@@ -360,7 +360,7 @@ fi
 # Test 7: Search for CSS classes
 echo ""
 echo "Test 7: Searching for CSS classes in test_styles.css..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"btn-primary\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "btn-primary" 2>/dev/null)
 
@@ -372,7 +372,7 @@ else
 fi
 
 # Test CSS ID
-MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"header-container"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"header-container\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "header-container" 2>/dev/null)
 
@@ -386,7 +386,7 @@ fi
 # Test 8: Search for SCSS classes (uses card selector from test_styles.scss)
 echo ""
 echo "Test 8: Searching for SCSS classes in test_styles.scss..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"responsive-grid"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"responsive-grid\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "responsive-grid" 2>/dev/null)
 
@@ -400,7 +400,7 @@ fi
 # Test 9: Phase 4 - Search for CSS class referenced in JavaScript (hybrid web ecosystem)
 echo ""
 echo "Test 9: Searching for CSS class 'btn-primary' referenced in spa_app.js..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"btn-primary"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"btn-primary\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "btn-primary" 2>/dev/null)
 
@@ -414,7 +414,7 @@ fi
 # Test 10: Phase 4 - Search for HTML element ID referenced in JavaScript
 echo ""
 echo "Test 10: Searching for HTML id 'app-container' referenced in spa_app.js..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"app-container"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"app-container\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "app-container" 2>/dev/null)
 
@@ -428,7 +428,7 @@ fi
 # Test 11: Phase 4 - Search for dashboard element referenced in JavaScript
 echo ""
 echo "Test 11: Searching for HTML id 'dashboard' referenced in spa_app.js..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"dashboard"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"dashboard\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "dashboard" 2>/dev/null)
 
@@ -442,7 +442,7 @@ fi
 # Test 12: Phase 4 - Search for toggle button element
 echo ""
 echo "Test 12: Searching for HTML id 'toggle-btn' used in theme switching..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"toggle-btn"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"toggle-btn\",\"repo_name\":\"$REPO_NAME\"}}}"
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "toggle-btn" 2>/dev/null)
 
@@ -472,7 +472,7 @@ fi
 # Test 14: Kotlin interface extraction
 echo ""
 echo "Test 14: Searching for Kotlin interface Repository..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Repository\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" 2>/dev/null)
@@ -487,7 +487,7 @@ fi
 # Test 15: Kotlin object (singleton) extraction
 echo ""
 echo "Test 15: Searching for Kotlin singleton object DatabaseManager..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"DatabaseManager"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"DatabaseManager\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "DatabaseManager" 2>/dev/null)
@@ -502,7 +502,7 @@ fi
 # Test 16: Kotlin data class extraction
 echo ""
 echo "Test 16: Searching for Kotlin data class User..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"User"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"User\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "User" 2>/dev/null)
@@ -517,7 +517,7 @@ fi
 # Test 17: Kotlin companion object extraction
 echo ""
 echo "Test 17: Searching for Kotlin companion object in ConfigManager..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"ConfigManager"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"ConfigManager\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "ConfigManager" 2>/dev/null)
@@ -532,7 +532,7 @@ fi
 # Test 18: Kotlin function extraction
 echo ""
 echo "Test 18: Searching for top-level Kotlin function greetUser..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greetUser"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"greetUser\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "greetUser" 2>/dev/null)
@@ -547,7 +547,7 @@ fi
 # Test 19: Kotlin extension function extraction
 echo ""
 echo "Test 19: Searching for Kotlin extension function isValidEmail..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"isValidEmail"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"isValidEmail\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "isValidEmail" 2>/dev/null)
@@ -577,7 +577,7 @@ fi
 # Test 21: Kotlin method call tracking
 echo ""
 echo "Test 21: Searching for UserRepository find operations (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"findById"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"findById\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "findById" 2>/dev/null)
@@ -592,7 +592,7 @@ fi
 # Test 22: Java field_access and FQN resolution for method calls
 echo ""
 echo "Test 22: Searching for callers of ChatMemory.add (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"ChatMemory.add"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"ChatMemory.add\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "ChatMemory.add" 2>/dev/null)
@@ -607,7 +607,7 @@ fi
 # Test 23: Java method signature search with parameter types
 echo ""
 echo "Test 23: Searching for Java method by full signature registerUser(String... (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"registerUser(String"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"registerUser(String\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "registerUser(String" 2>/dev/null)
@@ -622,7 +622,7 @@ fi
 # Test 24: Kotlin method signature search with parameter type
 echo ""
 echo "Test 24: Searching for Kotlin method by signature fragment : Int... (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":": Int"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\": Int\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers ": Int" 2>/dev/null)
@@ -637,7 +637,7 @@ fi
 # Test 25: TypeScript method signature search with parameter type
 echo ""
 echo "Test 25: Searching for TypeScript method by parameter type EventData... (via MCP and CLI)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"EventData"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"EventData\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "EventData" 2>/dev/null)

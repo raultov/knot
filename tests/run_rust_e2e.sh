@@ -167,7 +167,7 @@ fi
 # Test 2: Rust trait extraction
 echo ""
 echo "Test 2: Searching for Rust trait Incrementable..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Incrementable"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Incrementable","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Incrementable" -r "$REPO_NAME" 2>/dev/null)
@@ -182,7 +182,7 @@ fi
 # Test 3: Rust enum extraction
 echo ""
 echo "Test 3: Searching for Rust enum Color..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Color"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Color","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Color" -r "$REPO_NAME" 2>/dev/null)
@@ -244,7 +244,7 @@ fi
 # Test 7: Rust impl block detection
 echo ""
 echo "Test 7: Searching for Rust impl blocks on Counter..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Counter"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Counter","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Counter" -r "$REPO_NAME" 2>/dev/null)
@@ -398,7 +398,7 @@ fi
 # Test 18: Rust find_callers for trait implementation
 echo ""
 echo "Test 18: Testing find_callers for Incrementable trait implementations..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"Incrementable"}}}'
+MCP_REQUEST='{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"Incrementable","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Incrementable" -r "$REPO_NAME" 2>/dev/null)
