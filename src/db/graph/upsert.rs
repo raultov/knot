@@ -114,6 +114,7 @@ impl UpsertExt for GraphDb {
                      n.repo_name   = $repo_name,
                      n.file_path   = $file_path,
                      n.start_line  = $start_line,
+                     n.end_line    = $end_line,
                      n.signature   = $signature,
                      n.docstring   = $docstring,
                      n.inline_comments = $inline_comments,
@@ -133,6 +134,7 @@ impl UpsertExt for GraphDb {
                         .param("repo_name", e.entity.repo_name.clone())
                         .param("file_path", e.entity.file_path.clone())
                         .param("start_line", e.entity.start_line as i64)
+                        .param("end_line", e.entity.end_line as i64)
                         .param("signature", e.entity.signature.clone().unwrap_or_default())
                         .param("docstring", e.entity.docstring.clone().unwrap_or_default())
                         .param("inline_comments", e.entity.inline_comments.clone())

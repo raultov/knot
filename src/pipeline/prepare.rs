@@ -98,6 +98,7 @@ mod tests {
             "java",
             "com/example/MyClass.java",
             10,
+            20,
             None,
             "test-repo",
         );
@@ -121,6 +122,7 @@ mod tests {
             "java",
             "UserService.java",
             42,
+            50,
             Some("UserService".to_string()),
             "test-repo",
         );
@@ -154,6 +156,7 @@ mod tests {
             "java",
             "file1.java",
             1,
+            10,
             None,
             "test-repo",
         );
@@ -166,6 +169,7 @@ mod tests {
             "java",
             "file2.java",
             1,
+            10,
             None,
             "test-repo",
         );

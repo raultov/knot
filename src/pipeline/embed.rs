@@ -172,6 +172,7 @@ mod tests {
             "java",
             "Test.java",
             1,
+            10,
             None,
             "test-repo",
         );

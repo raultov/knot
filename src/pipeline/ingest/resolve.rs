@@ -115,6 +115,12 @@ pub fn resolve_reference_intents_with_context(
                         .and_then(|uuids| uuids.first().copied()),
                     RelationshipType::References,
                 ),
+                ReferenceIntent::ValueReference { value_name, .. } => (
+                    name_to_uuids
+                        .get(value_name)
+                        .and_then(|uuids| uuids.first().copied()),
+                    RelationshipType::References,
+                ),
                 ReferenceIntent::DomElementReference { element_id, .. } => (
                     name_to_uuids
                         .get(element_id)

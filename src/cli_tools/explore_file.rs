@@ -51,6 +51,11 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         let mut methods = Vec::new();
         let mut functions = Vec::new();
         let mut properties = Vec::new();
+        let mut python_classes = Vec::new();
+        let mut python_constants = Vec::new();
+        let mut python_functions = Vec::new();
+        let mut python_methods = Vec::new();
+        let mut python_modules = Vec::new();
         let mut rust_structs = Vec::new();
         let mut rust_enums = Vec::new();
         let mut rust_unions = Vec::new();
@@ -74,6 +79,11 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
                     "method" | "kotlin_method" => methods.push(entity),
                     "function" | "kotlin_function" => functions.push(entity),
                     "kotlin_property" => properties.push(entity),
+                    "python_class" => python_classes.push(entity),
+                    "python_constant" => python_constants.push(entity),
+                    "python_function" => python_functions.push(entity),
+                    "python_method" => python_methods.push(entity),
+                    "python_module" => python_modules.push(entity),
                     "rust_struct" => rust_structs.push(entity),
                     "rust_enum" => rust_enums.push(entity),
                     "rust_union" => rust_unions.push(entity),
@@ -137,6 +147,42 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         if !properties.is_empty() {
             output.push_str("## Properties\n\n");
             for entity in properties {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        // Python entities
+        if !python_classes.is_empty() {
+            output.push_str("## Python Classes\n\n");
+            for entity in python_classes {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !python_constants.is_empty() {
+            output.push_str("## Python Constants\n\n");
+            for entity in python_constants {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !python_functions.is_empty() {
+            output.push_str("## Python Functions\n\n");
+            for entity in python_functions {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !python_methods.is_empty() {
+            output.push_str("## Python Methods\n\n");
+            for entity in python_methods {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !python_modules.is_empty() {
+            output.push_str("## Python Modules\n\n");
+            for entity in python_modules {
                 output.push_str(&format_entity_summary(entity));
             }
         }

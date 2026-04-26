@@ -41,6 +41,8 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::PythonClass => "PythonClass",
         EntityKind::PythonFunction => "PythonFunction",
         EntityKind::PythonMethod => "PythonMethod",
+        EntityKind::PythonModule => "PythonModule",
+        EntityKind::PythonConstant => "PythonConstant",
     }
 }
 
@@ -157,6 +159,8 @@ mod tests {
             EntityKind::PythonClass,
             EntityKind::PythonFunction,
             EntityKind::PythonMethod,
+            EntityKind::PythonModule,
+            EntityKind::PythonConstant,
         ];
 
         let expected_labels = [
@@ -191,6 +195,8 @@ mod tests {
             "PythonClass",
             "PythonFunction",
             "PythonMethod",
+            "PythonModule",
+            "PythonConstant",
         ];
 
         for (variant, expected_label) in variants.iter().zip(expected_labels.iter()) {

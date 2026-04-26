@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, **Rust** (v0.8.x), **Python** (v0.9.0), HTML, and CSS/SCSS with full cross-language linking, with planned support for C/C++.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, **Kotlin** (v0.7.4+), TypeScript, JavaScript/Node.js, **Rust** (v0.8.x), **Python** (v0.9.1), HTML, and CSS/SCSS with full cross-language linking, with planned support for Groovy and C/C++.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -39,8 +39,9 @@ This dual-database approach powers both:
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
 - **Rust** (v0.8.11): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.11**: O(N) nested macro traversal optimization for large Rust codebases with deeply nested `token_tree` nodes.
-- **Python** (v0.9.0): **NEW in v0.9.0**: Full Python extraction with class, function, and method support. Captures `class_definition`, `function_definition` (including async functions via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
-- **C/C++** (Planned v0.10.x): Pointer relationships and macro analysis
+- **Python** (v0.9.1): Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), and Py2/Py3 exception syntax compatibility. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
+- **C/C++** (Planned v0.11.x): Pointer relationships and macro analysis
+- **Groovy** (Planned v0.10.x): Gradle build scripts and Jenkins pipeline indexing
 
 **📚 Rich Comment Extraction**
 - Captures docstrings (JavaDoc, JSDoc) preceding declarations
@@ -601,13 +602,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.9.0 — Python Support) ✅
+### Current Release (v0.9.1 — Python Complete) ✅
 - ✅ **Python Extraction (Phase 1)**: tree-sitter-python integration with EntityKind variants for `PythonClass`, `PythonFunction`, `PythonMethod`
-- ✅ **Python Structural Extraction (Phase 2)**: `class_definition`, `function_definition` (top-level), `async_function_definition` (via optional `async` modifier), and lambda assignment captures
-- ✅ **Method vs Function Detection**: `is_inside_class_body()` parent walk distinguishes methods from functions without separate query patterns
-- ✅ **Python FQN Support**: `PythonClass`, `PythonFunction`, and `PythonMethod` fully integrated into FQN computation pipeline
+- ✅ **Python Structural Extraction (Phase 2)**: `class_definition`, `function_definition` (top-level), lambda assignment captures
+- ✅ **Python References & Calls (Phase 3)**: Direct call (`identifier()`) and method call (`object.method()`) resolution, `print_statement` (Py2) support. `CALLS` edges in the dependency graph.
+- ✅ **Python Imports & Module Graph (Phase 4)**: `import os` and `from django.db import models` detection via `TypeReference`. `PythonConstant` extraction (UPPER_CASE identifiers). `PythonModule` synthetic entity for module-level orphans.
+- ✅ **Python ValueReferences (Phase 4.5)**: `action=EnumAction` patterns via `keyword_argument` detection. Creates `REFERENCES` edges for classes/functions used as argument values.
+- ✅ **Python Inheritance & Decorators (Phase 5)**: `EXTENDS` relationships from class inheritance (`class Dog(Animal)`). Decorator `CALLS` from `@staticmethod`, `@property`, `@dataclass`, `@route(...)`. Decorator names exposed in `explore_file` output.
+- ✅ **Python Advanced Testing (Phase 6)**: Generic type hints (`List[str]`, `Optional[Dict]`), `*args`/`**kwargs` parameter extraction, Py2/Py3 exception syntax compatibility, 5 additional unit tests, 4 additional E2E tests.
+- ✅ **Method vs Function Detection**: `is_inside_class_body()` parent walk distinguishes methods from functions
 - ✅ **Signature Extraction**: Parameter signatures captured for Python functions and methods
-- ✅ **5 Integration Tests**: Full test coverage for Python class, function, async function, and signature extraction
+- ✅ **375 unit tests | 23 Python E2E Tests | 22 Rust E2E | 10 Kotlin E2E**
 
 ### Previous Release (v0.8.11 — CLI UX Enhancements & Rust Performance) ✅
 
@@ -665,7 +670,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 22 end-to-end integration tests covering all Rust language constructs
 
 ### Upcoming (v0.10.x+)
-#### Phase 10: C/C++ Support
+#### Phase 9: Groovy Support (v0.10.x)
+- [ ] Support `.groovy`, `.gradle`, `.jenkinsfile` files
+- [ ] Gradle build script entity extraction
+- [ ] Jenkins pipeline stage and step tracking
+- [ ] Closure and DSL method call resolution
+
+#### Phase 10: C/C++ Support (v0.11.x)
 - [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
 - [ ] Pointer and memory relationship tracking
 - [ ] Header inclusion graph analysis

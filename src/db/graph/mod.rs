@@ -45,6 +45,7 @@ pub(crate) mod test_utils {
             language: "java".to_string(),
             file_path: "/test/path/Test.java".to_string(),
             start_line: 10,
+            end_line: 20,
             enclosing_class: Some("TestClass".to_string()),
             repo_name: "test-repo".to_string(),
             reference_intents: vec![],

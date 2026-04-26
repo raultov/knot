@@ -67,6 +67,7 @@ fn extract_html_attribute(
             language: "html".to_string(),
             file_path: file_path.to_string(),
             start_line: line,
+            end_line: line,
             enclosing_class: None,
             repo_name: repo_name.to_string(),
             reference_intents: Vec::new(),
@@ -94,6 +95,7 @@ fn extract_html_attribute(
                     language: "html".to_string(),
                     file_path: file_path.to_string(),
                     start_line: line,
+                    end_line: line,
                     enclosing_class: None,
                     repo_name: repo_name.to_string(),
                     reference_intents: Vec::new(),
@@ -146,6 +148,7 @@ fn extract_html_elements(
                                     language: "html".to_string(),
                                     file_path: file_path.to_string(),
                                     start_line: line,
+                                    end_line: line,
                                     enclosing_class: None,
                                     repo_name: repo_name.to_string(),
                                     reference_intents: Vec::new(),
@@ -283,6 +286,7 @@ fn extract_html_file_imports(
 
                         if attr_name == "src" && !attr_value.is_empty() {
                             // Create a reference intent for the script import
+                            let line = attr_child.start_position().row + 1;
                             let mut entity = ParsedEntity::new(
                                 format!("import({})", attr_value),
                                 EntityKind::Function,
@@ -291,7 +295,8 @@ fn extract_html_file_imports(
                                 None,
                                 "html",
                                 file_path,
-                                attr_child.start_position().row + 1,
+                                line,
+                                line,
                                 None,
                                 repo_name,
                             );
@@ -377,6 +382,7 @@ fn extract_html_file_imports(
 
             if is_stylesheet && !href_value.is_empty() {
                 // Create a reference intent for the stylesheet import
+                let line = node.start_position().row + 1;
                 let mut entity = ParsedEntity::new(
                     format!("import({})", href_value),
                     EntityKind::Constant,
@@ -385,7 +391,8 @@ fn extract_html_file_imports(
                     None,
                     "html",
                     file_path,
-                    node.start_position().row + 1,
+                    line,
+                    line,
                     None,
                     repo_name,
                 );

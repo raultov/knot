@@ -765,6 +765,7 @@ mod tests {
             "rust",
             "/test.rs",
             line,
+            line + 10,
             None,
             "test-repo",
         )
@@ -1107,6 +1108,7 @@ impl Incrementable for Counter {
             "rust",
             "test.rs",
             6,
+            8,
             None,
             "test_repo",
         )];
@@ -1161,6 +1163,7 @@ fn main() {
                 "rust",
                 "test.rs",
                 2,
+                4,
                 None,
                 "test_repo",
             ),
@@ -1173,6 +1176,7 @@ fn main() {
                 "rust",
                 "test.rs",
                 6,
+                9,
                 None,
                 "test_repo",
             ),

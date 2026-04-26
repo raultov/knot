@@ -138,7 +138,7 @@ KT_FILE="$TEST_FILES_DIR/sample.kt"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$KT_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "UserService" && echo "$CLI_RESPONSE" | grep -q "UserService"; then
     echo -e "${GREEN}✓ Found Kotlin class UserService (MCP & CLI)${NC}"
@@ -264,7 +264,7 @@ echo "Test 9: Verifying Kotlin annotation extraction (@Service, @Repository)..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$KT_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Service\|Repository" && echo "$CLI_RESPONSE" | grep -q "Service\|Repository"; then
     echo -e "${GREEN}✓ Found Kotlin annotations (@Service, @Repository, MCP & CLI)${NC}"

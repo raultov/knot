@@ -45,6 +45,16 @@ pub enum ReferenceIntent {
         /// Line number where the reference appears.
         line: usize,
     },
+    /// A class, function, or value is used as an argument in a keyword argument.
+    /// Examples: `parser.add_argument(..., action=EnumAction)`, `callback=my_handler`
+    /// This distinguishes from TypeReference (imports) to enable tracking
+    /// "class/function passed as parameter" patterns.
+    ValueReference {
+        /// The value name being referenced (class, function, or variable).
+        value_name: String,
+        /// Line number where the reference appears.
+        line: usize,
+    },
     /// JavaScript references an HTML element by ID.
     /// Example: `document.getElementById('app')`, `querySelector('#main')`
     DomElementReference {

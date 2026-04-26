@@ -46,3 +46,12 @@
 (assignment
   left: (identifier) @python.function.name
   right: (lambda))
+
+; ============================================================
+; CONSTANTS (Phase 4)
+; UPPER_CASE identifiers that are simple assignments at module level
+; ============================================================
+(assignment
+  left: (identifier) @python.constant.name
+  right: (_)
+  (#match? @python.constant.name "^[A-Z][A-Z0-9_]*$"))

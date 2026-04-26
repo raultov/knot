@@ -56,6 +56,8 @@ pub(crate) fn extract_entities(
         let mut kind: Option<EntityKind> = None;
         let mut signature: Option<String> = None;
         let mut start_line: usize = 0;
+        #[allow(unused_assignments)]
+        let mut end_line: usize = 0;
         let mut entity_node: Option<Node> = None;
         let mut reference_intents: Vec<ReferenceIntent> = Vec::new();
 
@@ -353,9 +355,47 @@ pub(crate) fn extract_entities(
                         python::handle_python_capture(name_or_intent, &text, node)
                     {
                         name = Some(entity_name);
-                        kind = Some(entity_kind);
+                        kind = Some(entity_kind.clone());
                         start_line = entity_line;
-                        entity_node = Some(node);
+                        // Use parent to get the full definition node for proper scope tracking
+                        // (captures always point to identifiers, not the full definition)
+                        entity_node = node.parent();
+
+                        // Extract call reference intents from Python function/method bodies
+                        let is_callable = matches!(
+                            entity_kind,
+                            EntityKind::PythonFunction | EntityKind::PythonMethod
+                        );
+                        #[allow(clippy::collapsible_if)]
+                        if is_callable {
+                            if let Some(entity_n) = entity_node {
+                                python::extract_reference_intents_python(
+                                    entity_n,
+                                    source_bytes,
+                                    &mut reference_intents,
+                                );
+                            }
+                        }
+
+                        // Phase 5: Extract decorators for ALL Python entities
+                        if let Some(entity_n) = entity_node {
+                            python::extract_decorator_intents_python(
+                                entity_n,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
+
+                        // Phase 5: Extract inheritance (EXTENDS) for Python classes
+                        if entity_kind == EntityKind::PythonClass
+                            && let Some(entity_n) = entity_node
+                        {
+                            python::extract_inheritance_intents_python(
+                                entity_n,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
                     }
                 }
                 // DOM/CSS references: Delegate to JavaScript handler
@@ -390,11 +430,18 @@ pub(crate) fn extract_entities(
             };
 
             // Extract decorators/annotations from the entity node
-            let decorators = if let Some(node) = entity_node {
+            let mut decorators = if let Some(node) = entity_node {
                 extract_decorators(node, source_bytes, lang_name)
             } else {
                 Vec::new()
             };
+
+            // Phase 5: For Python entities, extract decorator names for display
+            if lang_name == "python"
+                && let Some(entity_n) = entity_node
+            {
+                python::extract_decorator_names_python(entity_n, source_bytes, &mut decorators);
+            }
 
             // Determine FQN and enclosing class based on context
             let (fqn, enclosing_class) =
@@ -474,6 +521,14 @@ pub(crate) fn extract_entities(
                 }
             }
 
+            // Calculate end_line from entity_node if available
+            if let Some(node) = entity_node {
+                end_line = node.end_position().row + 1;
+            } else {
+                // If no entity_node, use start_line as a fallback
+                end_line = start_line;
+            }
+
             let mut entity = ParsedEntity::new(
                 name,
                 kind,
@@ -483,6 +538,7 @@ pub(crate) fn extract_entities(
                 lang_name,
                 file_path,
                 start_line,
+                end_line,
                 enclosing_class,
                 repo_name,
             );
@@ -530,6 +586,7 @@ pub(crate) fn extract_entities(
         || lang_name == "java"
         || lang_name == "javascript"
         || lang_name == "kotlin"
+        || lang_name == "python"
     {
         collect_orphaned_references(
             tree.root_node(),
@@ -1096,9 +1153,9 @@ mod tests {
         assert!(result.is_ok());
         let entities = result.unwrap();
 
-        // Should have 1 class entity
-        assert_eq!(entities.len(), 1);
-        let app_component = &entities[0];
+        // Should have 1 class entity + 1 module entity
+        assert_eq!(entities.len(), 2);
+        let app_component = entities.iter().find(|e| e.name == "AppComponent").unwrap();
         assert_eq!(app_component.name, "AppComponent");
 
         // Should have captured decorator references
@@ -1165,9 +1222,9 @@ mod tests {
         assert!(result.is_ok());
         let entities = result.unwrap();
 
-        // Should have 1 class entity
-        assert_eq!(entities.len(), 1);
-        let app_module = &entities[0];
+        // Should have 1 class entity + 1 module entity
+        assert_eq!(entities.len(), 2);
+        let app_module = entities.iter().find(|e| e.name == "AppModule").unwrap();
         assert_eq!(app_module.name, "AppModule");
 
         // Should capture NgModule decorator reference
@@ -1681,5 +1738,1047 @@ mod tests {
         assert!(!entities.is_empty());
         assert_eq!(entities[0].name, "greet");
         assert!(entities[0].signature.is_some());
+    }
+
+    // ============================================================
+    // Python call extraction tests (Phase 3)
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_direct_function_call() {
+        let source = "def caller():\n    fetch_data()";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/calls.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        let caller = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert!(!caller.reference_intents.is_empty());
+        let call = &caller.reference_intents[0];
+        match call {
+            ReferenceIntent::Call {
+                method,
+                receiver,
+                line,
+            } => {
+                assert_eq!(method, "fetch_data");
+                assert!(receiver.is_none());
+                assert_eq!(*line, 2);
+            }
+            _ => panic!("Expected Call intent, got {:?}", call),
+        }
+    }
+
+    #[test]
+    fn test_extract_python_method_call() {
+        let source = "def caller():\n    user.get_email()";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/method_calls.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        let caller = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert!(!caller.reference_intents.is_empty());
+        let call = &caller.reference_intents[0];
+        match call {
+            ReferenceIntent::Call {
+                method,
+                receiver,
+                line,
+            } => {
+                assert_eq!(method, "get_email");
+                assert_eq!(receiver.as_deref(), Some("user"));
+                assert_eq!(*line, 2);
+            }
+            _ => panic!("Expected Call intent, got {:?}", call),
+        }
+    }
+
+    #[test]
+    fn test_extract_python_builtin_call() {
+        let source = "def caller():\n    length = len(items)";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/builtin_calls.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        let caller = entities.iter().find(|e| e.name == "caller").unwrap();
+        let call = caller
+            .reference_intents
+            .iter()
+            .find(|c| matches!(c, ReferenceIntent::Call { method, .. } if method == "len"));
+        assert!(call.is_some(), "Should have len() call intent");
+    }
+
+    #[test]
+    fn test_extract_python_method_within_class() {
+        let source = "class User:\n    def greet(self):\n        print(self.name)";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/class_method.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let method = entities.iter().find(|e| e.name == "greet").unwrap();
+        assert_eq!(method.kind, EntityKind::PythonMethod);
+        let print_call = method
+            .reference_intents
+            .iter()
+            .find(|c| matches!(c, ReferenceIntent::Call { method, .. } if method == "print"));
+        assert!(print_call.is_some(), "Should have print() call in method");
+    }
+
+    #[test]
+    fn test_extract_python_multiple_calls_in_function() {
+        let source =
+            "def main():\n    users = fetch_users()\n    for u in users:\n        print(u)";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/multi_calls.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let main_func = entities.iter().find(|e| e.name == "main").unwrap();
+        assert!(main_func.reference_intents.len() >= 2);
+        let methods: Vec<_> = main_func
+            .reference_intents
+            .iter()
+            .filter_map(|c| {
+                if let ReferenceIntent::Call { method, .. } = c {
+                    Some(method.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(methods.contains(&"fetch_users"));
+        assert!(methods.contains(&"print"));
+    }
+
+    // ============================================================
+    // Python constants and imports tests (Phase 4)
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_constant() {
+        let source = "MAX_RETRIES = 5\nLOCAL_VAR = 10\nlowercase = 20";
+        let query = include_str!("../../../queries/python.scm");
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/constants.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let names: Vec<_> = entities.iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains(&"MAX_RETRIES".to_string()));
+        assert!(names.contains(&"LOCAL_VAR".to_string()));
+        assert!(!names.contains(&"lowercase".to_string()));
+        let constant = entities.iter().find(|e| e.name == "MAX_RETRIES").unwrap();
+        assert_eq!(constant.kind, EntityKind::PythonConstant);
+    }
+
+    #[test]
+    fn test_extract_python_import_statement() {
+        let source = "import os, sys\ndef main():\n    pass";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/imports.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let main_func = entities.iter().find(|e| e.name == "<module>").unwrap();
+        let type_refs: Vec<_> = main_func
+            .reference_intents
+            .iter()
+            .filter_map(|c| {
+                if let ReferenceIntent::TypeReference { type_name, .. } = c {
+                    Some(type_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(type_refs.contains(&"os"), "Should have os import reference");
+        assert!(
+            type_refs.contains(&"sys"),
+            "Should have sys import reference"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_import_from_statement() {
+        let source = "from django.db import models, views\ndef get_data():\n    pass";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/import_from.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let func = entities.iter().find(|e| e.name == "<module>").unwrap();
+        let type_refs: Vec<_> = func
+            .reference_intents
+            .iter()
+            .filter_map(|c| {
+                if let ReferenceIntent::TypeReference { type_name, .. } = c {
+                    Some(type_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            type_refs.contains(&"django.db"),
+            "Should have django.db module reference"
+        );
+        assert!(
+            type_refs.contains(&"models"),
+            "Should have models import reference"
+        );
+        assert!(
+            type_refs.contains(&"views"),
+            "Should have views import reference"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_import_with_alias() {
+        let source = "from django.db import models as db_models\ndef query():\n    pass";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/alias_import.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let func = entities.iter().find(|e| e.name == "<module>").unwrap();
+        let type_refs: Vec<_> = func
+            .reference_intents
+            .iter()
+            .filter_map(|c| {
+                if let ReferenceIntent::TypeReference { type_name, .. } = c {
+                    Some(type_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            type_refs.contains(&"db_models"),
+            "Should have aliased import name"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_module_synthetic_entity() {
+        let source = "import os\nimport sys";
+        let query = ""; // No entities to extract
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/module_only.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        let module_entity = entities.iter().find(|e| e.name == "<module>").unwrap();
+        assert_eq!(module_entity.kind, EntityKind::PythonModule);
+        let type_refs: Vec<_> = module_entity
+            .reference_intents
+            .iter()
+            .filter_map(|c| {
+                if let ReferenceIntent::TypeReference { type_name, .. } = c {
+                    Some(type_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(type_refs.contains(&"os"), "Should have os import in module");
+        assert!(
+            type_refs.contains(&"sys"),
+            "Should have sys import in module"
+        );
+    }
+
+    // ============================================================
+    // Python ValueReference tests (Phase 4.5)
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_value_reference_keyword_arg() {
+        let source = "parser.add_argument('--flag', action=EnumAction)\n";
+        let query = "";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/test.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        let module = entities.iter().find(|e| e.name == "<module>").unwrap();
+
+        let value_refs: Vec<_> = module
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::ValueReference { value_name, .. } = r {
+                    Some(value_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            value_refs.contains(&"EnumAction"),
+            "Should find EnumAction as ValueReference"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_multiple_value_references() {
+        let source = "result = func(handler=MyHandler, callback=my_callback)\n";
+        let query = "";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/test.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let module = entities.iter().find(|e| e.name == "<module>").unwrap();
+
+        let value_refs: Vec<_> = module
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::ValueReference { value_name, .. } = r {
+                    Some(value_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(value_refs.contains(&"MyHandler"));
+        assert!(value_refs.contains(&"my_callback"));
+        assert_eq!(value_refs.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_python_value_reference_filters_keywords() {
+        let source = "result = func(active=True, empty=None, context=self)\n";
+        let query = "";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/test.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let module = entities.iter().find(|e| e.name == "<module>").unwrap();
+
+        let value_refs: Vec<_> = module
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::ValueReference { value_name, .. } = r {
+                    Some(value_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(!value_refs.contains(&"True"));
+        assert!(!value_refs.contains(&"None"));
+        assert!(!value_refs.contains(&"self"));
+        assert_eq!(value_refs.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_python_value_reference_with_calls() {
+        let source = r#"
+def main():
+    parser = ArgumentParser()
+    parser.add_argument("--action", action=MyAction)
+"#;
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/test.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let main = entities.iter().find(|e| e.name == "main").unwrap();
+
+        let calls: Vec<_> = main
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call { method, .. } = r {
+                    Some(method.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(calls.contains(&"ArgumentParser"));
+        assert!(calls.contains(&"add_argument"));
+
+        let value_refs: Vec<_> = main
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::ValueReference { value_name, .. } = r {
+                    Some(value_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(value_refs.contains(&"MyAction"));
+    }
+
+    // ============================================================
+    // Phase 5: Python inheritance (EXTENDS) tests
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_single_inheritance() {
+        let source = "class Admin(User):\n    pass";
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/Admin.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert_eq!(entities[0].name, "Admin");
+
+        let extends: Vec<_> = entities[0]
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends {
+                    parent: parent_name,
+                    ..
+                } = r
+                {
+                    Some(parent_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(extends.contains(&"User"), "Should extend User");
+    }
+
+    #[test]
+    fn test_extract_python_multiple_inheritance() {
+        let source = "class C(A, B):\n    pass";
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/C.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let extends: Vec<_> = entities[0]
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends {
+                    parent: parent_name,
+                    ..
+                } = r
+                {
+                    Some(parent_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(extends.contains(&"A"));
+        assert!(extends.contains(&"B"));
+        assert_eq!(extends.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_python_no_inheritance() {
+        let source = "class Simple:\n    pass";
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/Simple.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let extends: Vec<_> = entities[0]
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends { .. } = r {
+                    Some(())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            extends.is_empty(),
+            "Class without inheritance should not have EXTENDS"
+        );
+    }
+
+    // ============================================================
+    // Phase 5: Python decorator (CALLS) tests
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_decorator_staticmethod() {
+        let source = "class MyClass:\n    @staticmethod\n    def my_method():\n        pass";
+        let query = "(class_definition name: (identifier) @python.class.name) (function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/MyClass.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let method = entities.iter().find(|e| e.name == "my_method").unwrap();
+
+        let decorator_calls: Vec<_> = method
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = r
+                {
+                    if receiver.is_none() {
+                        Some(method.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            decorator_calls.contains(&"staticmethod"),
+            "Should have staticmethod decorator call, got: {:?}",
+            decorator_calls
+        );
+    }
+
+    #[test]
+    fn test_extract_python_decorator_property() {
+        let source = "class C:\n    @property\n    def value(self):\n        return 42";
+        let query = "(class_definition name: (identifier) @python.class.name) (function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/C.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let method = entities.iter().find(|e| e.name == "value").unwrap();
+
+        let decorator_calls: Vec<_> = method
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = r
+                {
+                    if receiver.is_none() {
+                        Some(method.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(decorator_calls.contains(&"property"));
+    }
+
+    #[test]
+    fn test_extract_python_decorator_class() {
+        let source =
+            "from dataclasses import dataclass\n\n@dataclass\nclass Point:\n    x: int\n    y: int";
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/Point.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let class_entity = entities.iter().find(|e| e.name == "Point").unwrap();
+
+        let decorator_calls: Vec<_> = class_entity
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = r
+                {
+                    if receiver.is_none() {
+                        Some(method.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            decorator_calls.contains(&"dataclass"),
+            "Should have @dataclass decorator call, got: {:?}",
+            decorator_calls
+        );
+    }
+
+    #[test]
+    fn test_extract_python_decorator_with_arguments() {
+        let source = r#"
+from flask import Flask
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "hello"
+"#;
+        let query = "(class_definition name: (identifier) @python.class.name) (function_definition name: (identifier) @python.function.name) (assignment left: (identifier) @python.constant.name right: (_) (#match? @python.constant.name \"^[A-Z][A-Z0-9_]*$\"))";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/app.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let func = entities.iter().find(|e| e.name == "index").unwrap();
+
+        let decorator_calls: Vec<_> = func
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = r
+                {
+                    Some((method.as_str(), receiver.as_deref()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            decorator_calls.iter().any(|(m, _)| *m == "route"),
+            "Should have @app.route decorator, got: {:?}",
+            decorator_calls
+        );
+    }
+
+    #[test]
+    fn test_extract_python_decorator_multiple() {
+        let source = r#"
+class Service:
+    @staticmethod
+    @route("/api")
+    def handle():
+        pass
+"#;
+        let query = "(class_definition name: (identifier) @python.class.name) (function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/Service.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let method = entities.iter().find(|e| e.name == "handle").unwrap();
+
+        let decorator_calls: Vec<_> = method
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = r
+                {
+                    if receiver.is_none() {
+                        Some(method.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(decorator_calls.contains(&"staticmethod"));
+        assert!(decorator_calls.contains(&"route"));
+    }
+
+    #[test]
+    fn test_extract_python_class_inheritance_with_decorator() {
+        let source = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Employee(Person):
+    id: int
+"#;
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/Employee.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let class_entity = entities.iter().find(|e| e.name == "Employee").unwrap();
+
+        let extends: Vec<_> = class_entity
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends {
+                    parent: parent_name,
+                    ..
+                } = r
+                {
+                    Some(parent_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(extends.contains(&"Person"), "Should extend Person");
+
+        let decorator_calls: Vec<_> = class_entity
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = r
+                {
+                    if receiver.is_none() {
+                        Some(method.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            decorator_calls.contains(&"dataclass"),
+            "Should have @dataclass decorator"
+        );
+    }
+
+    // ============================================================
+    // Phase 6: Type hints, *args/**kwargs, and Py2 syntax tests
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_type_hints_in_signature() {
+        let source = "def process(items: List[str], config: Dict[str, int]) -> Dict[str, int]:\n    return {}";
+        let query = "(function_definition name: (identifier) @python.function.name parameters: (parameters) @python.signature)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/typed.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert_eq!(entities[0].name, "process");
+        assert!(entities[0].signature.is_some());
+        let sig = entities[0].signature.as_ref().unwrap();
+        assert!(
+            sig.contains("List[str]"),
+            "Signature should contain List[str]"
+        );
+        assert!(
+            sig.contains("Dict[str, int]"),
+            "Signature should contain Dict[str, int]"
+        );
+    }
+
+    #[test]
+    fn test_extract_python_var_args_kwargs() {
+        let source = "def log(msg: str, *args, level: str = \"INFO\", **kwargs):\n    pass";
+        let query = "(function_definition name: (identifier) @python.function.name parameters: (parameters) @python.signature)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/log.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert_eq!(entities[0].name, "log");
+        assert!(entities[0].signature.is_some());
+        let sig = entities[0].signature.as_ref().unwrap();
+        assert!(
+            sig.contains("*args"),
+            "Signature should contain *args, got: {}",
+            sig
+        );
+        assert!(
+            sig.contains("**kwargs"),
+            "Signature should contain **kwargs, got: {}",
+            sig
+        );
+    }
+
+    #[test]
+    fn test_extract_python_optional_return_type() {
+        let source = "def find_user(user_id: int) -> Optional[Dict[str, str]]:\n    return None";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/find.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert_eq!(entities[0].name, "find_user");
+        assert!(entities[0].kind == EntityKind::PythonFunction);
+    }
+
+    #[test]
+    fn test_extract_python_py2_exception_syntax() {
+        // Python 2 style exception: except ValueError, e:
+        // tree-sitter-python handles this via the except_clause node
+        let source = r#"
+def handler():
+    try:
+        raise ValueError("boom")
+    except ValueError, e:
+        pass
+"#;
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/py2.py",
+            "test-repo",
+        );
+
+        // Should not panic or error — the function should still be extracted
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let handler = entities.iter().find(|e| e.name == "handler").unwrap();
+        assert_eq!(handler.kind, EntityKind::PythonFunction);
+    }
+
+    #[test]
+    fn test_extract_python_py3_exception_syntax() {
+        // Python 3 style exception: except ValueError as e:
+        let source = r#"
+def handler():
+    try:
+        raise ValueError("boom")
+    except ValueError as e:
+        pass
+"#;
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/py3.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let handler = entities.iter().find(|e| e.name == "handler").unwrap();
+        assert_eq!(handler.kind, EntityKind::PythonFunction);
     }
 }

@@ -58,6 +58,8 @@ pub enum EntityKind {
     PythonClass,    // class definitions
     PythonFunction, // top-level functions
     PythonMethod,   // methods inside classes
+    PythonModule,   // module-level entities (docstrings, constants)
+    PythonConstant, // module-level constants (UPPER_CASE)
 }
 
 impl std::fmt::Display for EntityKind {
@@ -101,6 +103,8 @@ impl std::fmt::Display for EntityKind {
             EntityKind::PythonClass => "python_class",
             EntityKind::PythonFunction => "python_function",
             EntityKind::PythonMethod => "python_method",
+            EntityKind::PythonModule => "python_module",
+            EntityKind::PythonConstant => "python_constant",
         };
         write!(f, "{s}")
     }
@@ -174,6 +178,10 @@ pub struct ParsedEntity {
 
     /// 1-based line number where the entity declaration starts.
     pub start_line: usize,
+
+    /// 1-based line number where the entity declaration ends.
+    /// Used to determine if an orphaned reference is contained within this entity.
+    pub end_line: usize,
 
     /// Enclosing class name for methods. Used to resolve local calls.
     /// `None` for class/interface entities and top-level functions.
@@ -256,6 +264,7 @@ impl ParsedEntity {
         language: impl Into<String>,
         file_path: impl Into<String>,
         start_line: usize,
+        end_line: usize,
         enclosing_class: Option<String>,
         repo_name: impl Into<String>,
     ) -> Self {
@@ -278,6 +287,7 @@ impl ParsedEntity {
             language: language.into(),
             file_path,
             start_line,
+            end_line,
             enclosing_class,
             repo_name,
             reference_intents: Vec::new(),

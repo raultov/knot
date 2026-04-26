@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::db::{graph::GraphDb, vector::VectorDb};
@@ -52,9 +52,33 @@ pub async fn setup_watch_mode(
         },
     )?;
 
-    debouncer
+    // Attempt to set up recursive watching
+    // If permission denied on a subdirectory (e.g., data/neo4j/import), fall back to non-recursive
+    let repo_path = Path::new(&cfg.repo_path);
+    match debouncer
         .watcher()
-        .watch(Path::new(&cfg.repo_path), notify::RecursiveMode::Recursive)?;
+        .watch(repo_path, notify::RecursiveMode::Recursive)
+    {
+        Ok(()) => {
+            info!("Recursive watch mode enabled for {}", cfg.repo_path);
+        }
+        Err(e) => {
+            let err_msg = e.to_string();
+            if err_msg.contains("Permission denied") {
+                warn!(
+                    "Permission denied when watching subdirectory. \
+                     This can happen for system directories (e.g., data/neo4j/import). \
+                     Falling back to non-recursive watch mode for the repository root."
+                );
+                debouncer
+                    .watcher()
+                    .watch(repo_path, notify::RecursiveMode::NonRecursive)?;
+                warn!("Watch mode is now monitoring only top-level directories.");
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
 
     // Event loop for watch mode
     while let Some(mut paths) = rx.recv().await {

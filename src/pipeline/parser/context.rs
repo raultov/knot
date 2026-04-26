@@ -137,7 +137,10 @@ pub(crate) fn compute_fqn_and_context(
         }
         EntityKind::RustMacroInvoke => format!("{}!", name),
         // Python entities
-        EntityKind::PythonClass | EntityKind::PythonFunction => name.to_string(),
+        EntityKind::PythonClass
+        | EntityKind::PythonFunction
+        | EntityKind::PythonModule
+        | EntityKind::PythonConstant => name.to_string(),
         EntityKind::PythonMethod => {
             if let Some(class_name) = &enclosing_class {
                 format!("{}.{}", class_name, name)

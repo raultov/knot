@@ -138,7 +138,7 @@ RS_FILE="$TEST_FILES_DIR/sample.rs"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$RS_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Counter" && echo "$CLI_RESPONSE" | grep -q "Counter"; then
     echo -e "${GREEN}✓ Found Rust struct Counter (MCP & CLI)${NC}"
@@ -184,7 +184,7 @@ RS_FILE="$TEST_FILES_DIR/sample.rs"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$RS_FILE\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 # Check for Functions (Rust) header and specific function names
 if (echo "$MCP_RESPONSE" | grep -q "## Functions (Rust)" && echo "$MCP_RESPONSE" | grep -qE "add|longest|fetch_data") && (echo "$CLI_RESPONSE" | grep -q "## Functions (Rust)"); then
@@ -368,7 +368,7 @@ RS_FILE="$TEST_FILES_DIR/sample.rs"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$RS_FILE\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 # Check for Methods (Rust) header and specific method names like get_count, increment
 if (echo "$MCP_RESPONSE" | grep -q "## Methods (Rust)" && echo "$MCP_RESPONSE" | grep -qE "get_count|increment|with_label") && (echo "$CLI_RESPONSE" | grep -q "## Methods (Rust)"); then
@@ -384,7 +384,7 @@ echo "Test 18: Testing find_callers for Incrementable trait implementations..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"Incrementable"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Incrementable" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Incrementable" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Counter" || echo "$CLI_RESPONSE" | grep -q "Counter"; then
     echo -e "${GREEN}✓ Found callers of Incrementable trait (MCP & CLI)${NC}"
