@@ -182,10 +182,10 @@ fi
 # Test 3: Rust enum extraction
 echo ""
 echo "Test 3: Searching for Rust enum Color..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Color","repo_name":"rust_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"enum Color\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Color" -r "$REPO_NAME" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "enum Color" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Color" && echo "$CLI_RESPONSE" | grep -q "Color"; then
     echo -e "${GREEN}✓ Found Rust enum Color (MCP & CLI)${NC}"
