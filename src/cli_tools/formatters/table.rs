@@ -35,9 +35,9 @@ pub fn format_search_table(results: &Value) -> String {
                 .unwrap_or_else(|| "-".to_string());
 
             let kind_color = match kind {
-                "class" => Color::Yellow,
+                "class" | "python_class" => Color::Yellow,
                 "interface" => Color::Cyan,
-                "method" | "function" => Color::Blue,
+                "method" | "function" | "python_method" | "python_function" => Color::Blue,
                 "variable" | "field" => Color::Magenta,
                 _ => Color::White,
             };
@@ -169,9 +169,9 @@ pub fn format_explore_table(file_path: &str, entities: &Value) -> String {
                 .unwrap_or_else(|| "-".to_string());
 
             let kind_color = match kind {
-                "class" => Color::Yellow,
+                "class" | "python_class" => Color::Yellow,
                 "interface" => Color::Cyan,
-                "method" | "function" => Color::Blue,
+                "method" | "function" | "python_method" | "python_function" => Color::Blue,
                 "variable" | "field" => Color::Magenta,
                 _ => Color::White,
             };

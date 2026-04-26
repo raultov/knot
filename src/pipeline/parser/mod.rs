@@ -42,6 +42,7 @@ const DEFAULT_HTML_QUERY: &str = include_str!("../../../queries/html.scm");
 const DEFAULT_CSS_QUERY: &str = include_str!("../../../queries/css.scm");
 const DEFAULT_SCSS_QUERY: &str = include_str!("../../../queries/scss.scm");
 const DEFAULT_RUST_QUERY: &str = include_str!("../../../queries/rust.scm");
+const DEFAULT_PYTHON_QUERY: &str = include_str!("../../../queries/python.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -195,6 +196,17 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 tree_sitter_scss::language(),
                 &query_src,
                 "scss",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "py" | "pyi" | "pyw" => {
+            let query_src = load_query_source("python.scm", DEFAULT_PYTHON_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_python::LANGUAGE.into(),
+                &query_src,
+                "python",
                 &file_path,
                 &parse_cfg.repo_name,
             )?

@@ -38,6 +38,9 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::RustStatic => "RustStatic",
         EntityKind::RustModule => "RustModule",
         EntityKind::RustMacroInvoke => "RustMacroInvoke",
+        EntityKind::PythonClass => "PythonClass",
+        EntityKind::PythonFunction => "PythonFunction",
+        EntityKind::PythonMethod => "PythonMethod",
     }
 }
 
@@ -151,6 +154,9 @@ mod tests {
             EntityKind::RustStatic,
             EntityKind::RustModule,
             EntityKind::RustMacroInvoke,
+            EntityKind::PythonClass,
+            EntityKind::PythonFunction,
+            EntityKind::PythonMethod,
         ];
 
         let expected_labels = [
@@ -182,6 +188,9 @@ mod tests {
             "RustStatic",
             "RustModule",
             "RustMacroInvoke",
+            "PythonClass",
+            "PythonFunction",
+            "PythonMethod",
         ];
 
         for (variant, expected_label) in variants.iter().zip(expected_labels.iter()) {

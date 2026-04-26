@@ -4,7 +4,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
-use super::languages::{css, html, java, javascript, kotlin, rust, typescript};
+use super::languages::{css, html, java, javascript, kotlin, python, rust, typescript};
 use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
@@ -345,6 +345,17 @@ pub(crate) fn extract_entities(
                         } else {
                             Some(node)
                         };
+                    }
+                }
+                // Python: Handle Python entity captures
+                name_or_intent if name_or_intent.starts_with("python.") => {
+                    if let Some((entity_name, entity_kind, entity_line)) =
+                        python::handle_python_capture(name_or_intent, &text, node)
+                    {
+                        name = Some(entity_name);
+                        kind = Some(entity_kind);
+                        start_line = entity_line;
+                        entity_node = Some(node);
                     }
                 }
                 // DOM/CSS references: Delegate to JavaScript handler

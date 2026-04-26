@@ -46,6 +46,7 @@ tree-sitter-html = "0.23"
 tree-sitter-css = "0.23"
 tree-sitter-scss = "1.0"
 tree-sitter-rust = "0.24"
+tree-sitter-python = "0.23"
 
 # --- Local Embeddings ---
 fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub", "image-models"], optional = true }

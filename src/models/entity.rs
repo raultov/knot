@@ -54,6 +54,10 @@ pub enum EntityKind {
     RustStatic,      // static variable definitions
     RustModule,      // module declarations
     RustMacroInvoke, // macro invocations
+    // Python entities
+    PythonClass,    // class definitions
+    PythonFunction, // top-level functions
+    PythonMethod,   // methods inside classes
 }
 
 impl std::fmt::Display for EntityKind {
@@ -94,6 +98,9 @@ impl std::fmt::Display for EntityKind {
             EntityKind::RustStatic => "rust_static",
             EntityKind::RustModule => "rust_module",
             EntityKind::RustMacroInvoke => "rust_macro_invoke",
+            EntityKind::PythonClass => "python_class",
+            EntityKind::PythonFunction => "python_function",
+            EntityKind::PythonMethod => "python_method",
         };
         write!(f, "{s}")
     }
