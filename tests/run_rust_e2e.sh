@@ -85,10 +85,29 @@ echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
 wait_for_port() {
     local port=$1
     local service=$2
+    local container=$3
     local elapsed=0
-
-    while ! nc -z localhost "$port" 2>/dev/null; do
+    
+    echo -n "Waiting for $service"
+    while true; do
+        if [ "$service" = "Neo4j" ]; then
+            local status
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "starting")
+            if [ "$status" = "healthy" ]; then
+                echo ""
+                echo -e "${GREEN}✓ $service is ready (healthy)${NC}"
+                return 0
+            fi
+        else
+            if nc -z localhost "$port" 2>/dev/null; then
+                echo ""
+                echo -e "${GREEN}✓ $service is ready on port $port${NC}"
+                return 0
+            fi
+        fi
+        
         if [ $elapsed -ge $TIMEOUT_SECONDS ]; then
+            echo ""
             echo -e "${RED}ERROR: $service did not start within ${TIMEOUT_SECONDS}s${NC}"
             return 1
         fi
@@ -96,12 +115,10 @@ wait_for_port() {
         elapsed=$((elapsed + HEALTH_CHECK_INTERVAL))
         echo -n "."
     done
-    echo ""
-    echo -e "${GREEN}✓ $service is ready${NC}"
 }
 
-wait_for_port 17687 "Neo4j"
-wait_for_port 16334 "Qdrant"
+wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
+wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
 
 # Step 3: Index Rust test file
