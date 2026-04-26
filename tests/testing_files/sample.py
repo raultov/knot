@@ -205,3 +205,23 @@ def handle_exception_py2_style():
         raise ValueError("bad value")
     except ValueError, e:
         pass
+
+
+# ============================================================
+# Python bug-fix: self.method() resolution (resolves locally first)
+# ============================================================
+
+class Calculator:
+    """A calculator with self-calling methods."""
+
+    def add(self, a: int, b: int) -> int:
+        return a + b
+
+    def multiply(self, a: int, b: int) -> int:
+        return a * b
+
+    def compute_sum_product(self, a: int, b: int) -> tuple:
+        """Calls self.add() and self.multiply() — should resolve locally."""
+        s = self.add(a, b)
+        p = self.multiply(a, b)
+        return (s, p)

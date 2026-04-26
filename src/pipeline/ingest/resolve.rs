@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::db::graph::{GraphDb, UpsertExt};
-use crate::models::{RelationshipType, ResolutionEntity};
+use crate::models::{ReferenceIntent, RelationshipType, ResolutionEntity};
 
 /// Resolve cross-repository relationships and persist them to Neo4j.
 pub async fn resolve_and_save_relationships(
@@ -56,6 +56,29 @@ pub fn resolve_reference_intents_with_context(
         .map(|e| (e.uuid, e.file_path.clone()))
         .collect();
 
+    // Build class_name → parent_class_names map from EXTENDS intents for inherited self.method() resolution
+    let extends_map: HashMap<String, Vec<String>> = entities
+        .iter()
+        .filter_map(|e| {
+            let parents: Vec<String> = e
+                .reference_intents
+                .iter()
+                .filter_map(|i| {
+                    if let ReferenceIntent::Extends { parent, .. } = i {
+                        Some(parent.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if parents.is_empty() {
+                None
+            } else {
+                Some((e.name.clone(), parents))
+            }
+        })
+        .collect();
+
     // Merge current entities into the resolution context.
     for e in entities.iter() {
         fqn_to_uuid.insert(e.fqn.clone(), e.uuid);
@@ -93,6 +116,7 @@ pub fn resolve_reference_intents_with_context(
                             &fqn_to_uuid,
                             &name_to_uuids,
                             &uuid_to_file,
+                            &extends_map,
                         ),
                         RelationshipType::Calls,
                     )
@@ -159,6 +183,7 @@ pub fn resolve_reference_intents_with_context(
 }
 
 /// Resolve a single CallIntent to a UUID using available context.
+#[allow(clippy::too_many_arguments)]
 fn resolve_single_call_intent(
     intent: &crate::models::CallIntent,
     _caller_fqn: String,
@@ -167,14 +192,29 @@ fn resolve_single_call_intent(
     fqn_to_uuid: &HashMap<String, Uuid>,
     name_to_uuids: &HashMap<String, Vec<Uuid>>,
     uuid_to_file: &HashMap<Uuid, String>,
+    extends_map: &HashMap<String, Vec<String>>,
 ) -> Option<Uuid> {
-    // Strategy 1: Local call (no receiver or receiver is "this")
-    if (intent.receiver.is_none() || intent.receiver.as_deref() == Some("this"))
+    // Strategy 1: Local call (no receiver or receiver is "this"/"self")
+    if (intent.receiver.is_none()
+        || intent.receiver.as_deref() == Some("this")
+        || intent.receiver.as_deref() == Some("self"))
         && let Some(enclosing_class) = &caller_enclosing_class
     {
         let fqn = format!("{}.{}", enclosing_class, intent.method);
         if let Some(&uuid) = fqn_to_uuid.get(&fqn) {
             return Some(uuid);
+        }
+
+        // Check parent classes via EXTENDS (for inherited self.method() calls)
+        if intent.receiver.as_deref() == Some("self")
+            && let Some(parents) = extends_map.get(enclosing_class)
+        {
+            for parent in parents {
+                let parent_fqn = format!("{}.{}", parent, intent.method);
+                if let Some(&uuid) = fqn_to_uuid.get(&parent_fqn) {
+                    return Some(uuid);
+                }
+            }
         }
     }
 
@@ -526,6 +566,70 @@ mod tests {
             orphans_caller_rels[0],
             (orphans_fn_uuid, RelationshipType::Calls),
             "orphans_caller should call the LOCAL orphans.rs function"
+        );
+    }
+
+    #[test]
+    fn test_resolve_self_method_inherited_from_parent_class() {
+        // Scenario: Dog extends Animal. Dog.compute calls self.speak().
+        // speak() is defined in Animal (parent), not Dog.
+        // The resolver should follow EXTENDS to find Animal.speak.
+
+        let animal_speak = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "Animal".to_string(),
+            fqn: "Animal".to_string(),
+            file_path: "animals.py".to_string(),
+            enclosing_class: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+        let animal_speak_method = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "speak".to_string(),
+            fqn: "Animal.speak".to_string(),
+            file_path: "animals.py".to_string(),
+            enclosing_class: Some("Animal".to_string()),
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+
+        let dog_class = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "Dog".to_string(),
+            fqn: "Dog".to_string(),
+            file_path: "animals.py".to_string(),
+            enclosing_class: None,
+            reference_intents: vec![ReferenceIntent::Extends {
+                parent: "Animal".to_string(),
+                line: 10,
+            }],
+            relationships: Vec::new(),
+        };
+        let dog_compute = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "compute".to_string(),
+            fqn: "Dog.compute".to_string(),
+            file_path: "animals.py".to_string(),
+            enclosing_class: Some("Dog".to_string()),
+            reference_intents: vec![ReferenceIntent::Call {
+                method: "speak".to_string(),
+                receiver: Some("self".to_string()),
+                line: 15,
+            }],
+            relationships: Vec::new(),
+        };
+
+        let mut entities = vec![animal_speak, animal_speak_method, dog_class, dog_compute];
+        resolve_reference_intents(&mut entities);
+
+        // Dog.compute should have a CALLS relationship to Animal.speak
+        let dog = entities.iter().find(|e| e.name == "compute").unwrap();
+        let speak_method = entities.iter().find(|e| e.fqn == "Animal.speak").unwrap();
+        assert!(
+            dog.relationships
+                .contains(&(speak_method.uuid, RelationshipType::Calls)),
+            "Dog.compute should call Animal.speak via self.speak()"
         );
     }
 }

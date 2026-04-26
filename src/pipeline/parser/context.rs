@@ -18,7 +18,10 @@ pub(crate) fn extract_class_contexts(
 ) {
     if matches!(
         node.kind(),
-        "class_declaration" | "interface_declaration" | "abstract_class_declaration"
+        "class_declaration"
+            | "interface_declaration"
+            | "abstract_class_declaration"
+            | "class_definition" // Python
     ) {
         // Find the name child
         let mut child = node.child(0);

@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.9.1):**
+**Current State (v0.9.2):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
 - Python Phases 1-6 complete: full extraction, calls, imports, constants, value references, inheritance, decorators, type hints, *args/**kwargs, Py2/Py3 syntax
@@ -73,7 +73,7 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 |-------|-----------|--------|
 | Phase 1-6: JS/HTML/CSS/Kotlin/CLI | - | ✅ Completed |
 | Phase 7: Rust | High | ✅ Completed (v0.8.11) |
-| Phase 8: Python | High | ✅ Completed (v0.9.1) |
+| Phase 8: Python | High | ✅ Completed (v0.9.2) |
 | Phase 9: Groovy | Medium | 📋 Planned (v0.10.x) |
 | Phase 10: C/C++ | High | 📋 Planned (v0.11.x) |
 
@@ -88,6 +88,15 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 ---
 
 ## Changelog
+
+### v0.9.2 - Python self.method() Resolution & CI Fixes
+- ✅ `class_definition` recognized by `extract_class_contexts` → `enclosing_class` now set for Python methods
+- ✅ `"self"` receiver handled in Strategy 1 (local call resolution) alongside `"this"`
+- ✅ EXTENDS walking: inherited `self.method()` calls resolve through parent class chain
+- ✅ Unit test: `test_resolve_self_method_inherited_from_parent_class`
+- ✅ CI: Python E2E added to GitHub Actions workflow
+- ✅ CI: Docker cleanup + sleep 5s between E2E test suites to prevent `Connection reset by peer`
+- ✅ 376 unit tests | 23 Python E2E | 22 Rust E2E | 10 Kotlin E2E
 
 ### v0.9.1 - Python Phase 6: Advanced Testing & Type Hints
 - ✅ Phase 6: Generic type hints (`List[str]`, `Optional[Dict]`), `*args`/`**kwargs` parameter extraction
