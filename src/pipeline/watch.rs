@@ -127,7 +127,9 @@ mod tests {
         assert!(is_supported_file(Path::new("test.rs")));
 
         assert!(!is_supported_file(Path::new("test.txt")));
-        assert!(!is_supported_file(Path::new("test.py")));
+        assert!(is_supported_file(Path::new("test.py")));
+        assert!(is_supported_file(Path::new("test.pyi")));
+        assert!(is_supported_file(Path::new("test.pyw")));
     }
 
     #[test]
@@ -206,14 +208,16 @@ mod tests {
 
     #[test]
     fn test_unsupported_file_extensions() {
-        // Test common unsupported extensions (JavaScript, JSX, CSS, HTML, Kotlin, and Rust are now supported)
+        // Test common unsupported extensions (JS/TS, CSS, HTML, Kotlin, Rust, Python are now supported)
         let unsupported = vec![
             "readme.md",
             "config.json",
             "data.xml",
             "document.txt",
             "image.png",
-            "script.py",
+            "script.pyc",
+            "script.pyo",
+            "script.py.bak",
             "styles.less",
         ];
 

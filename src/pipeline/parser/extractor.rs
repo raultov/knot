@@ -288,7 +288,7 @@ pub(crate) fn extract_entities(
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "enum_declaration");
                 }
-                "signature" => signature = Some(text.clone()),
+                "signature" | "python.signature" => signature = Some(text.clone()),
                 "type.reference" => {
                     // Type annotations in signatures, variables, etc.
                     reference_intents.push(ReferenceIntent::TypeReference {
@@ -1565,5 +1565,121 @@ mod tests {
             .iter()
             .any(|e| e.name == "container" && e.kind == crate::models::EntityKind::HtmlClass);
         assert!(has_html_class, "Should capture HTML class 'container'");
+    }
+
+    // ============================================================
+    // Python extraction tests (Phase 2)
+    // ============================================================
+
+    #[test]
+    fn test_extract_python_class() {
+        let source = "class User:\n    pass";
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/User.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].kind, EntityKind::PythonClass);
+        assert_eq!(entities[0].name, "User");
+    }
+
+    #[test]
+    fn test_extract_python_function() {
+        let source = "def process_data():\n    pass";
+        let query = "(function_definition name: (identifier) @python.function.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/utils.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].kind, EntityKind::PythonFunction);
+        assert_eq!(entities[0].name, "process_data");
+    }
+
+    #[test]
+    fn test_extract_python_multiple_classes() {
+        let source = "class Foo:\n    pass\nclass Bar:\n    pass";
+        let query = "(class_definition name: (identifier) @python.class.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/multi.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert_eq!(entities.len(), 2);
+        let names: Vec<_> = entities.iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains(&"Foo".to_string()));
+        assert!(names.contains(&"Bar".to_string()));
+    }
+
+    #[test]
+    fn test_extract_python_async_function() {
+        let source = "async def fetch_data():\n    pass";
+        let query = include_str!("../../../queries/python.scm");
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/async_example.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok(), "Failed to extract: {:?}", result.err());
+        let entities = result.unwrap();
+        assert!(
+            !entities.is_empty(),
+            "No entities extracted from async function"
+        );
+        let async_entity = entities
+            .iter()
+            .find(|e| e.name == "fetch_data")
+            .expect("Should have fetch_data function");
+        assert_eq!(async_entity.kind, EntityKind::PythonFunction);
+    }
+
+    #[test]
+    fn test_extract_python_with_signature() {
+        let source = "def greet(name: str) -> str:\n    return f\"Hello {name}\"";
+        let query = "(function_definition name: (identifier) @python.function.name parameters: (parameters) @python.signature)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/with_sig.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        assert_eq!(entities[0].name, "greet");
+        assert!(entities[0].signature.is_some());
     }
 }
