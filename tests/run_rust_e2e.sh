@@ -170,7 +170,7 @@ echo "Test 2: Searching for Rust trait Incrementable..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Incrementable"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Incrementable" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Incrementable" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Incrementable" && echo "$CLI_RESPONSE" | grep -q "Incrementable"; then
     echo -e "${GREEN}✓ Found Rust trait Incrementable (MCP & CLI)${NC}"
@@ -185,7 +185,7 @@ echo "Test 3: Searching for Rust enum Color..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Color"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Color" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Color" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Color" && echo "$CLI_RESPONSE" | grep -q "Color"; then
     echo -e "${GREEN}✓ Found Rust enum Color (MCP & CLI)${NC}"
@@ -217,7 +217,7 @@ echo "Test 5: Searching for Rust function longest..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"longest\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "longest" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "longest" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "longest" && echo "$CLI_RESPONSE" | grep -q "longest"; then
     echo -e "${GREEN}✓ Found Rust function longest (MCP & CLI)${NC}"
@@ -232,7 +232,7 @@ echo "Test 6: Searching for Rust module inner..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"module inner\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "module inner" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "module inner" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "inner" && echo "$CLI_RESPONSE" | grep -q "inner"; then
     echo -e "${GREEN}✓ Found Rust module inner (MCP & CLI)${NC}"
@@ -247,7 +247,7 @@ echo "Test 7: Searching for Rust impl blocks on Counter..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Counter"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Counter" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Counter" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Counter" && echo "$CLI_RESPONSE" | grep -q "Counter"; then
     echo -e "${GREEN}✓ Found Rust struct Counter with impl blocks (MCP & CLI)${NC}"
@@ -262,7 +262,7 @@ echo "Test 8: Searching for Rust type alias Callback..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Callback type alias\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Callback" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Callback" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Callback" && echo "$CLI_RESPONSE" | grep -q "Callback"; then
     echo -e "${GREEN}✓ Found Rust type alias Callback (MCP & CLI)${NC}"
@@ -277,7 +277,7 @@ echo "Test 9: Searching for Rust constant MAX_SIZE..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"MAX_SIZE constant\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "MAX_SIZE" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "MAX_SIZE" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "MAX_SIZE" && echo "$CLI_RESPONSE" | grep -q "MAX_SIZE"; then
     echo -e "${GREEN}✓ Found Rust constant MAX_SIZE (MCP & CLI)${NC}"
@@ -292,7 +292,7 @@ echo "Test 10: Searching for Rust static COUNTER..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"COUNTER static\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "COUNTER" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "COUNTER" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "COUNTER" && echo "$CLI_RESPONSE" | grep -q "COUNTER"; then
     echo -e "${GREEN}✓ Found Rust static COUNTER (MCP & CLI)${NC}"
@@ -309,7 +309,7 @@ echo "Test 12: Searching for Rust generic struct Container..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Container\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Container" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Container" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Container" && echo "$CLI_RESPONSE" | grep -q "Container"; then
     echo -e "${GREEN}✓ Found Rust generic struct Container (MCP & CLI)${NC}"
@@ -324,7 +324,7 @@ echo "Test 13: Searching for Rust trait Repository with associated type..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Repository\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Repository" && echo "$CLI_RESPONSE" | grep -q "Repository"; then
     echo -e "${GREEN}✓ Found Rust trait Repository with associated type (MCP & CLI)${NC}"
@@ -339,7 +339,7 @@ echo "Test 14: Searching for Rust async function fetch_data..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"fetch_data\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "fetch_data" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "fetch_data" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "fetch_data" && echo "$CLI_RESPONSE" | grep -q "fetch_data"; then
     echo -e "${GREEN}✓ Found Rust async function fetch_data (MCP & CLI)${NC}"
@@ -354,7 +354,7 @@ echo "Test 15: Searching for Rust struct Config with derive..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Config\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Config" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Config" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Config" && echo "$CLI_RESPONSE" | grep -q "Config"; then
     echo -e "${GREEN}✓ Found Rust struct Config with derive macros (MCP & CLI)${NC}"
@@ -369,7 +369,7 @@ echo "Test 16: Searching for Rust union MaybeFloat..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"MaybeFloat union\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "MaybeFloat" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "MaybeFloat" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "MaybeFloat" && echo "$CLI_RESPONSE" | grep -q "MaybeFloat"; then
     echo -e "${GREEN}✓ Found Rust union MaybeFloat (MCP & CLI)${NC}"
@@ -416,7 +416,7 @@ echo "Test 19: Searching for Rust function process_value..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"process_value","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "process_value" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "process_value" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "process_value" && echo "$CLI_RESPONSE" | grep -q "process_value"; then
     echo -e "${GREEN}✓ Found Rust function process_value (MCP & CLI)${NC}"
@@ -431,7 +431,7 @@ echo "Test 20: Searching for re-exported function inner_function..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"inner_function","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "inner_function" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "inner_function" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "inner_function" && echo "$CLI_RESPONSE" | grep -q "inner_function"; then
     echo -e "${GREEN}✓ Found re-exported function inner_function (MCP & CLI)${NC}"
@@ -459,7 +459,7 @@ echo "Test 22: Searching for macro invocation println..."
 MCP_REQUEST='{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"println","repo_name":"rust_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "println" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "println" -r "$REPO_NAME" 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "println" && echo "$CLI_RESPONSE" | grep -q "println"; then
     echo -e "${GREEN}✓ Found macro invocation println (MCP & CLI)${NC}"

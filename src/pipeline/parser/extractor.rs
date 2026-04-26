@@ -2781,4 +2781,38 @@ def handler():
         let handler = entities.iter().find(|e| e.name == "handler").unwrap();
         assert_eq!(handler.kind, EntityKind::PythonFunction);
     }
+
+    #[test]
+    fn test_extract_python_method_enclosing_class_is_set() {
+        // Verify that Python methods get their enclosing_class from class_definition contexts
+        let source = r#"
+class MyService:
+    def handle(self):
+        pass
+"#;
+        let query = include_str!("../../../queries/python.scm");
+
+        let result = extract_entities(
+            source,
+            tree_sitter_python::LANGUAGE.into(),
+            query,
+            "python",
+            "/service.py",
+            "test-repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        let method = entities.iter().find(|e| e.name == "handle").unwrap();
+        assert_eq!(method.kind, EntityKind::PythonMethod);
+        assert_eq!(
+            method.enclosing_class.as_deref(),
+            Some("MyService"),
+            "PythonMethod should have enclosing_class set"
+        );
+        assert_eq!(
+            method.fqn, "MyService.handle",
+            "PythonMethod FQN should be ClassName.methodName"
+        );
+    }
 }

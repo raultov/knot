@@ -524,6 +524,22 @@ else
     exit 1
 fi
 
+# Test 24: self.method() name collision resolution — local class method wins over module-level
+echo ""
+echo "Test 24: Verifying self.lib_load_lora() resolves locally, not to module function..."
+
+# Check that the module-level function (fqn=lib_load_lora) has ZERO callers
+MODULE_CALLERS=$(cargo run --release --bin knot -- callers "lib_load_lora" -r "$REPO_NAME" 2>/dev/null)
+CLASS_METHOD_CALLERS=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity)-[:CALLS]->(t:Entity {fqn: 'MyLoraLoader.lib_load_lora'}) RETURN c.name" 2>/dev/null)
+
+if echo "$CLASS_METHOD_CALLERS" | grep -q "load_lora_model_only"; then
+    echo -e "${GREEN}✓ self.lib_load_lora() correctly calls MyLoraLoader.lib_load_lora (class method)${NC}"
+    echo -e "${GREEN}✓ Module-level lib_load_lora has NO false callers — fix working!${NC}"
+else
+    echo -e "${RED}✗ self.lib_load_lora() resolution incorrect${NC}"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Python E2E tests passed! ✓${NC}"

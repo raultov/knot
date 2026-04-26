@@ -225,3 +225,26 @@ class Calculator:
         s = self.add(a, b)
         p = self.multiply(a, b)
         return (s, p)
+
+
+# ============================================================
+# Regression test: self.method() with name collision (ComfyUI load_lora bug)
+# ============================================================
+# Scenario: module-level function has same name as a class method.
+# self.method() MUST resolve to the local class method, NOT the module-level one.
+
+def lib_load_lora(model, clip, lora_name, strength_model, strength_clip):
+    """Module-level function — simulates comfy/lora.py:load_lora."""
+    pass
+
+
+class MyLoraLoader:
+    """Simulates the LoraLoader class in nodes_lora_debug.py."""
+
+    def lib_load_lora(self, model, clip, lora_name, strength_model, strength_clip):
+        """Class method with same name as module-level function — different entity."""
+        pass
+
+    def load_lora_model_only(self, model, lora_name, strength):
+        """Calls self.lib_load_lora() — should resolve to THIS class's method."""
+        return (self.lib_load_lora(model, None, lora_name, strength, 0)[0],)

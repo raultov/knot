@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.9.2):**
+**Current State (v0.9.3):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
 - Python Phases 1-6 complete: full extraction, calls, imports, constants, value references, inheritance, decorators, type hints, *args/**kwargs, Py2/Py3 syntax
@@ -73,7 +73,7 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 |-------|-----------|--------|
 | Phase 1-6: JS/HTML/CSS/Kotlin/CLI | - | ✅ Completed |
 | Phase 7: Rust | High | ✅ Completed (v0.8.11) |
-| Phase 8: Python | High | ✅ Completed (v0.9.2) |
+| Phase 8: Python | High | ✅ Completed (v0.9.3) |
 | Phase 9: Groovy | Medium | 📋 Planned (v0.10.x) |
 | Phase 10: C/C++ | High | 📋 Planned (v0.11.x) |
 
@@ -88,6 +88,12 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 ---
 
 ## Changelog
+
+### v0.9.3 - Python Search Stability & CI Enhancements
+- ✅ Fixed Rust/Kotlin CLI `explore` & `search` queries that queried the default collection instead of test collection by appending `-r "$REPO_NAME"`
+- ✅ Python CLI search bug handled; resolved `knot search` queries failing in specific collection bounds
+- ✅ Replaced unreliable `nc -z` network checks with Neo4j-specific Docker health checks (`docker inspect`) in CI scripts, eliminating `Connection reset by peer` errors
+- ✅ Enforced strict separation and 5s sleep between consecutive container suites in CI
 
 ### v0.9.2 - Python self.method() Resolution & CI Fixes
 - ✅ `class_definition` recognized by `extract_class_contexts` → `enclosing_class` now set for Python methods

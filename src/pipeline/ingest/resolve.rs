@@ -632,4 +632,78 @@ mod tests {
             "Dog.compute should call Animal.speak via self.speak()"
         );
     }
+
+    #[test]
+    fn test_resolve_self_method_same_class_name_collision() {
+        // Bug: module-level function has same name as class method.
+        // self.method() MUST resolve to local class method, NOT module function.
+        // This replicates ComfyUI bug: self.load_lora() → class method, not lora.py:load_lora.
+
+        // Module-level function (simulates lora.py:load_lora)
+        let module_func = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "do_thing".to_string(),
+            fqn: "do_thing".to_string(),
+            file_path: "lora.py".to_string(),
+            enclosing_class: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+
+        // Class with method of same name
+        let my_class = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "MyLoader".to_string(),
+            fqn: "MyLoader".to_string(),
+            file_path: "nodes.py".to_string(),
+            enclosing_class: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+        // Class method with same name as module function (different file, different FQN)
+        let class_method = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "do_thing".to_string(),
+            fqn: "MyLoader.do_thing".to_string(),
+            file_path: "nodes.py".to_string(),
+            enclosing_class: Some("MyLoader".to_string()),
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        };
+        // Another method in same class calling self.do_thing()
+        let caller_method = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: "caller".to_string(),
+            fqn: "MyLoader.caller".to_string(),
+            file_path: "nodes.py".to_string(),
+            enclosing_class: Some("MyLoader".to_string()),
+            reference_intents: vec![ReferenceIntent::Call {
+                method: "do_thing".to_string(),
+                receiver: Some("self".to_string()),
+                line: 20,
+            }],
+            relationships: Vec::new(),
+        };
+
+        let module_uuid = module_func.uuid;
+        let class_method_uuid = class_method.uuid;
+
+        let mut entities = vec![module_func, my_class, class_method, caller_method];
+        resolve_reference_intents(&mut entities);
+
+        // caller_method should call class_method (local), NOT module_func
+        let caller = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert!(
+            caller
+                .relationships
+                .contains(&(class_method_uuid, RelationshipType::Calls)),
+            "self.do_thing() should resolve to MyLoader.do_thing (class method), not module function"
+        );
+        assert!(
+            !caller
+                .relationships
+                .contains(&(module_uuid, RelationshipType::Calls)),
+            "self.do_thing() should NOT resolve to module-level do_thing"
+        );
+    }
 }
