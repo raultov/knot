@@ -38,7 +38,7 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (v0.8.10): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.10**: O(N) nested macro traversal optimization for large Rust codebases.
+- **Rust** (v0.8.11): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.11**: O(N) nested macro traversal optimization for large Rust codebases with deeply nested `token_tree` nodes.
 - **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -600,11 +600,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.10 — CLI UX Enhancements) ✅
+### Current Release (v0.8.11 — CLI UX Enhancements & Rust Performance) ✅
 - ✅ **Colorized Table Output**: Default `--output table` format with ANSI-colored headers and per-entity-kind colors for optimal terminal readability
 - ✅ **Interactive Pager Support**: Long results automatically pipe through `less -R -e` for smooth scrolling; auto-exits at end of content
 - ✅ **Configurable Output Formats**: `--output` flag supports `table` (default), `json`, and `markdown`; MCP always receives Markdown for backward compatibility
 - ✅ **Custom CA Certificates**: `--custom-ca-certs` / `KNOT_CUSTOM_CA_CERTS` for corporate SSL-inspecting proxies
+- ✅ **O(N) Macro Traversal**: Substring skipping eliminates redundant string operations for deeply nested `token_tree` nodes in Rust macros (e.g., `vec![vec![vec![...]]]`)
 
 ### Previous Release (v0.8.7 — Enhanced Rust Type Reference Detection in Macros) ✅
 - ✅ **Macro Type Reference Extraction**: Type references inside macro invocations (`vec![]`, `println!()`, `assert!()`, `format!()`, etc.) are now correctly captured
@@ -642,26 +643,20 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Docker CLI Support**: Official Docker image now includes the `knot` binary.
 - ✅ **Agent Guidance**: Enhanced `.knot-agent.md` with signature-based search warnings.
 
-### Phase 6 (v0.8.0 — CLI Interface & Unified Core) ✅
-- ✅ **CLI Tool**: Standalone `knot` command with `search`, `callers`, and `explore` subcommands.
-- ✅ **Unified Architecture**: Shared core logic (`src/cli_tools/`) used by both CLI and MCP.
-- ✅ **LLM Skill File**: `.knot-agent.md` teaches AI agents how to use CLI for autonomous analysis.
+### Phase 7 (v0.8.10 — CLI UX & Corporate Network Support) ✅
+- ✅ **Human-friendly output formatting**: Colorized table output as default with per-entity-kind ANSI colors
+- ✅ **Interactive result navigation**: Pager support via `less -R -e` with auto-exit at end of content
+- ✅ **Configurable output formats**: `--output` flag supports `table` (default), `json`, and `markdown`
+- ✅ **Custom CA Certificates**: `--custom-ca-certs` / `KNOT_CUSTOM_CA_CERTS` for corporate SSL-inspecting proxies
+- ✅ **O(N) Macro Traversal Optimization** (v0.8.11): Substring skipping for deeply nested `token_tree` nodes
 
-### Upcoming (v0.8.x+)
-#### Phase 7: CLI UX Improvements & Corporate Network Support (v0.8.10) ✅
-- ✅ **Human-friendly output formatting** (v0.8.10): Colorized table output as default with per-entity-kind ANSI colors
-- ✅ **Interactive result navigation** (v0.8.10): Pager support via `less -R -e` with auto-exit at end of content
-- ✅ **Configurable output formats** (v0.8.10): `--output` flag supports `table` (default), `json`, and `markdown`
-- ✅ **Custom CA Certificates for Corporate Networks** (v0.8.8): Support for user-provided SSL/TLS certificates
-- ✅ **O(N) Macro Traversal Optimization** (v0.8.10): Substring skipping eliminates redundant string operations for nested token_tree nodes in Rust macros
-
-#### Phase 8: Rust Support ✅ (v0.8.6)
+### Phase 8 (v0.8.11 — Rust Support) ✅
 - ✅ Support `.rs` files with tree-sitter-rust parser
 - ✅ Struct, enum, union, trait, and impl block extraction
 - ✅ Function, method, macro definition and invocation tracking
-- ✅ **NEW**: Type alias, constant, static, and module extraction with signatures
-- ✅ **NEW**: Docstring extraction for all Rust entity types
-- ✅ Generic parameters and lifetime parameter support
+- ✅ Type alias, constant, static, and module extraction with signatures
+- ✅ Docstring extraction for all Rust entity types
+- ✅ O(N) nested macro traversal optimization for large Rust codebases
 - ✅ 17 unit tests for Rust entity and reference extraction
 - ✅ 22 end-to-end integration tests covering all Rust language constructs
 
@@ -670,6 +665,11 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Support `.py` files with full AST extraction
 - [ ] Class, function, method, and decorator tracking
 - [ ] Import resolution and module dependency graph
+
+#### Phase 10: C/C++ Support
+- [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
+- [ ] Pointer and memory relationship tracking
+- [ ] Header inclusion graph analysis
 
 #### Phase 10: C/C++ Support
 - [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files

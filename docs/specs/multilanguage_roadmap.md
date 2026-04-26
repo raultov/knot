@@ -1,13 +1,13 @@
 # Multi-Language Roadmap for Knot
 
-This document outlines the planned expansion of `knot` to support Rust and C/C++ codebases, building on the existing foundation for Java, TypeScript, JavaScript, HTML, CSS, and SCSS.
+This document outlines the planned expansion of `knot` to support Python and C/C++ codebases, building on the existing foundation for Java, TypeScript, JavaScript, Kotlin, Rust, HTML, CSS, and SCSS.
 
 ---
 
 ## Overview
 
-**Current State (v0.8.10):**
-- Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, HTML, CSS, SCSS support
+**Current State (v0.8.11):**
+- Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file)
@@ -16,33 +16,24 @@ This document outlines the planned expansion of `knot` to support Rust and C/C++
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
 
-**Goal:** Extend `knot` to become the standard indexer for hybrid web projects with full cross-language dependency resolution and support for Rust and C/C++.
+**Goal:** Extend `knot` to become the standard indexer for hybrid web projects with full cross-language dependency resolution and support for Python and C/C++.
 
 ---
 
-## Phase 7: Rust Support (v0.8.x) ✅
+## Phase 8: Python Support (v0.9.x)
 
 ### Objective
-Enable `knot` to index Rust codebases with full semantic understanding of ownership, traits, and macro expansion.
+Enable `knot` to index Python codebases with full semantic understanding of AST, classes, decorators, and module dependencies.
 
-### Implementation Status
-
-#### Completed (v0.8.10)
-- ✅ **Rust Parser**: tree-sitter-rust integration for AST extraction
-- ✅ **Entity Types**: RustStruct, RustEnum, RustTrait, RustFunction, RustMacro, RustMethod
-- ✅ **Macro Expansion**: token_tree extraction for `vec!`, `println!`, `assert!`, and custom macros
-- ✅ **Type Reference Detection**: Enhanced detection of `Type::Variant` patterns in macro bodies
-- ✅ **Trait relationship tracking**: EXTENDS for traits, IMPLEMENTS for impl blocks
-- ✅ **Lifetime annotation support**: Full lifetime parameter extraction
-- ✅ **Docstring support**: Full doc comment extraction for all Rust entity types
-- ✅ **O(N) Macro Traversal Optimization**: Substring skipping eliminates redundant string operations for deeply nested token_tree nodes
-
-#### Planned (Future)
-- Cross-crate reference resolution via Cargo.toml analysis
+#### Planned
+- tree-sitter-python integration
+- Class, function, method, and decorator extraction
+- Import resolution and cross-module dependency graph
+- Type annotation support (PEP 484)
 
 ---
 
-## Phase 8: C/C++ Support (v0.9.x)
+## Phase 9: C/C++ Support (v0.10.x)
 
 ### Objective
 Enable `knot` to index C and C++ codebases, focusing on pointer relationships, header inclusion graphs, and macro analysis.
@@ -60,8 +51,9 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 | Phase | Complexity | Status |
 |-------|-----------|--------|
 | Phase 1-6: JS/HTML/CSS/Kotlin/CLI | - | ✅ Completed |
-| Phase 7: Rust | High | ✅ Completed (v0.8.10) |
-| Phase 8: C/C++ | High | 📋 Planned (v0.9.x) |
+| Phase 7: Rust | High | ✅ Completed (v0.8.11) |
+| Phase 8: Python | High | 📋 Planned (v0.9.x) |
+| Phase 9: C/C++ | High | 📋 Planned (v0.10.x) |
 
 ---
 
@@ -75,11 +67,14 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 
 ## Changelog
 
-### v0.8.10 - CLI UX Enhancements & Rust Performance Optimization
+### v0.8.11 - Rust Performance Optimization (O(N) Macro Traversal)
+- ✅ O(N) nested macro traversal: Substring skipping eliminates redundant string operations for deeply nested `token_tree` nodes in Rust macros
+
+### v0.8.10 - CLI UX Enhancements & Custom CA Certificates
 - ✅ Colorized table output as default format with per-entity-kind ANSI colors
 - ✅ Interactive pager support via `less -R -e` with auto-exit at end of content
 - ✅ Configurable output formats via `--output` flag (`table` default, `json`, `markdown`)
-- ✅ O(N) nested macro traversal optimization for large Rust codebases with deeply nested token_tree nodes
+- ✅ Custom CA certificates support for corporate SSL-inspecting proxies
 
 ### v0.8.8 - Corporate Network Support
 - ✅ Custom CA certificates support for corporate SSL-inspecting proxies

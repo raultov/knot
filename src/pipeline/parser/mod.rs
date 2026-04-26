@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 mod comments;
 mod context;
 mod extractor;
-mod languages;
+pub mod languages;
 mod orphans;
 mod utils;
 

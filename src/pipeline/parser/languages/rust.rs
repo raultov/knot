@@ -255,7 +255,7 @@ fn collect_macro_nodes(
 ///
 /// This function walks through function_item, struct_item, and enum_item nodes
 /// to extract type references from their signatures and fields.
-pub(crate) fn collect_rust_type_references(
+pub fn collect_rust_type_references(
     root: Node<'_>,
     source: &[u8],
     entities: &mut [ParsedEntity],
@@ -265,7 +265,7 @@ pub(crate) fn collect_rust_type_references(
     let mut type_refs: Vec<(usize, String)> = Vec::new();
 
     // Start from root, not first child (to process all top-level items)
-    collect_type_nodes(&root, source, &mut type_refs);
+    collect_type_nodes(&root, source, &mut type_refs, None);
 
     for (line, type_name) in type_refs {
         let target_idx = find_nearest_entity_by_line(entities, line);
@@ -285,7 +285,19 @@ pub(crate) fn collect_rust_type_references(
 /// 3. Struct literals: `Config { field: value }` → `Config`
 /// 4. Method calls: `Config::load_mcp()` → `Config`
 /// 5. Type annotations: `let cfg: Config` → `Config`
-fn collect_type_nodes(node: &Node<'_>, source: &[u8], type_refs: &mut Vec<(usize, String)>) {
+///
+/// # Performance Optimization
+///
+/// Uses O(N) substring skipping for nested `token_tree` nodes. When a `token_tree`
+/// node is fully contained within the byte range of a parent `token_tree` that was
+/// already processed, we skip redundant string allocation and `::` pattern matching.
+/// This eliminates exponential blowup for deeply nested macros like `vec![vec![vec![...]]]`.
+fn collect_type_nodes(
+    node: &Node<'_>,
+    source: &[u8],
+    type_refs: &mut Vec<(usize, String)>,
+    searched_range: Option<(usize, usize)>,
+) {
     // CASE 1: type_identifier in function signatures and type annotations
     if node.kind() == "type_identifier" {
         // Filter out type_identifier in pattern matching contexts (e.g., MyEnum::Variant in match arms)
@@ -474,13 +486,35 @@ fn collect_type_nodes(node: &Node<'_>, source: &[u8], type_refs: &mut Vec<(usize
     // Macros aren't expanded by tree-sitter, so scoped identifiers inside macros
     // are stored as raw tokens, not AST nodes. We need to manually extract them.
     //
-    // This is a workaround for tree-sitter-rust not expanding macros. Future improvements:
-    // - Could use proper tokenization instead of string search
-    // - Could filter out patterns in string literals and comments
-    // - May become unnecessary if tree-sitter-rust adds macro expansion support
+    // PERFORMANCE OPTIMIZATION (O(N) Substring Skipping):
+    // For deeply nested macros like `vec![vec![vec![MyType::new()]]]`, tree-sitter produces
+    // a tree of token_tree nodes. The outermost token_tree contains all the text, and
+    // each nested macro body is also a token_tree. Without skipping, we would:
+    //   1. Extract and search the entire outer token_tree text
+    //   2. Recursively do the SAME work for every nested token_tree (exponential blowup)
+    //
+    // Solution: If a token_tree is fully contained within a parent token_tree's byte range
+    // (i.e., `searched_range`), we skip it entirely since the parent already covered that text.
     if node.kind() == "token_tree" {
         let node_start_byte = node.start_byte();
         let node_end_byte = node.end_byte();
+
+        // O(N) SKIP CHECK: If this token_tree is contained within a parent searched range,
+        // skip the expensive string allocation and pattern matching.
+        if let Some((parent_start, parent_end)) = searched_range
+            && node_start_byte >= parent_start
+            && node_end_byte <= parent_end
+        {
+            // This token_tree is fully contained in parent's searched range - skip!
+            // Recurse to children WITHOUT passing the searched_range (they're not token_tree roots)
+            let mut child = node.child(0);
+            while let Some(c) = child {
+                collect_type_nodes(&c, source, type_refs, None);
+                child = c.next_sibling();
+            }
+            return;
+        }
+
         let text = &source[node_start_byte..node_end_byte.min(source.len())];
         let text_str = String::from_utf8_lossy(text);
 
@@ -534,10 +568,16 @@ fn collect_type_nodes(node: &Node<'_>, source: &[u8], type_refs: &mut Vec<(usize
         }
     }
 
-    // Recurse to children (ALWAYS recurse, even if we skipped this node due to pattern context)
+    // Recurse to children. When we're inside a processed token_tree, pass its range
+    // so nested token_trees can skip themselves (O(N) optimization).
+    let child_searched_range = if node.kind() == "token_tree" {
+        Some((node.start_byte(), node.end_byte()))
+    } else {
+        searched_range
+    };
     let mut child = node.child(0);
     while let Some(c) = child {
-        collect_type_nodes(&c, source, type_refs);
+        collect_type_nodes(&c, source, type_refs, child_searched_range);
         child = c.next_sibling();
     }
 }
@@ -1410,7 +1450,7 @@ fn test() {
         let tree = parser.parse(code, None).unwrap();
 
         let mut type_refs = Vec::new();
-        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs);
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
 
         // Should find EntityKind (appears twice) and Config (appears once) in macros
         let entity_kind_refs: Vec<_> = type_refs
@@ -1450,7 +1490,7 @@ fn test() {
         let tree = parser.parse(code, None).unwrap();
 
         let mut type_refs = Vec::new();
-        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs);
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
 
         // Collect unique type names
         let mut type_names: Vec<String> = type_refs.iter().map(|(_, name)| name.clone()).collect();
@@ -1480,7 +1520,7 @@ fn test() {
         let tree = parser.parse(code, None).unwrap();
 
         let mut type_refs = Vec::new();
-        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs);
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
 
         // Should find RealType but NOT FakeType (inside string)
         let fake_type_refs: Vec<_> = type_refs
@@ -1528,7 +1568,7 @@ fn test() {
         let tree = parser.parse(code, None).unwrap();
 
         let mut type_refs = Vec::new();
-        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs);
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
 
         // Should find MyType, Config, and EntityKind from macro invocations
         let type_names: Vec<String> = type_refs.iter().map(|(_, name)| name.clone()).collect();
@@ -1569,7 +1609,7 @@ fn test() {
         let tree = parser.parse(code, None).unwrap();
 
         let mut type_refs = Vec::new();
-        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs);
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
 
         // Should find all types in nested macros
         let mut type_names: Vec<String> = type_refs.iter().map(|(_, name)| name.clone()).collect();
@@ -1601,7 +1641,7 @@ fn test() {
         let tree = parser.parse(code, None).unwrap();
 
         let mut type_refs = Vec::new();
-        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs);
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
 
         let type_names: Vec<String> = type_refs.iter().map(|(_, name)| name.clone()).collect();
 
@@ -1614,5 +1654,58 @@ fn test() {
 
         // _PrivateType is edge case - starts with underscore, not uppercase letter
         // Current implementation won't capture it, which is acceptable
+    }
+
+    #[test]
+    fn test_token_tree_deeply_nested_optimization() {
+        let code = r#"
+fn process() {
+    let result = vec![
+        vec![
+            vec![MyType::new(), MyType::default()],
+            vec![OtherType::create()],
+        ],
+        vec![NestedType::validate()],
+    ];
+    assert!(!result.is_empty());
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut type_refs = Vec::new();
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
+
+        let type_names: Vec<String> = type_refs.iter().map(|(_, name)| name.clone()).collect();
+
+        assert!(
+            type_names.contains(&"MyType".to_string()),
+            "Should capture MyType from deeply nested vec! macros"
+        );
+        assert!(
+            type_names.contains(&"OtherType".to_string()),
+            "Should capture OtherType from nested vec! macro"
+        );
+        assert!(
+            type_names.contains(&"NestedType".to_string()),
+            "Should capture NestedType from deeply nested vec! macro"
+        );
+
+        // MyType appears twice in the same line inside the nested macro (::new and ::default)
+        // but deduplication should keep only unique (line, name) pairs
+        let my_type_refs: Vec<_> = type_refs
+            .iter()
+            .filter(|(_, name)| *name == "MyType")
+            .collect();
+        assert_eq!(
+            my_type_refs.len(),
+            1,
+            "MyType should appear exactly once per unique (line, name) pair, found {} refs: {:?}",
+            my_type_refs.len(),
+            my_type_refs
+        );
     }
 }
