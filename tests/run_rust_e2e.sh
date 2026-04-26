@@ -229,10 +229,10 @@ fi
 # Test 6: Rust module extraction
 echo ""
 echo "Test 6: Searching for Rust module inner..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"module inner\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"mod inner module documentation\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "module inner" -r "$REPO_NAME" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "inner module documentation" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "inner" && echo "$CLI_RESPONSE" | grep -q "inner"; then
     echo -e "${GREEN}✓ Found Rust module inner (MCP & CLI)${NC}"
@@ -306,10 +306,10 @@ fi
 # Test 12: Rust generic struct with trait bounds
 echo ""
 echo "Test 12: Searching for Rust generic struct Container..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Container\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"generic struct Container\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Container" -r "$REPO_NAME" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "generic struct Container" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Container" && echo "$CLI_RESPONSE" | grep -q "Container"; then
     echo -e "${GREEN}✓ Found Rust generic struct Container (MCP & CLI)${NC}"
@@ -321,10 +321,10 @@ fi
 # Test 13: Rust trait with generic associated type
 echo ""
 echo "Test 13: Searching for Rust trait Repository with associated type..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Repository\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"trait Repository associated type\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" -r "$REPO_NAME" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "trait Repository associated type" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Repository" && echo "$CLI_RESPONSE" | grep -q "Repository"; then
     echo -e "${GREEN}✓ Found Rust trait Repository with associated type (MCP & CLI)${NC}"
@@ -351,10 +351,10 @@ fi
 # Test 15: Rust struct with derive macros
 echo ""
 echo "Test 15: Searching for Rust struct Config with derive..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Config\",\"repo_name\":\"rust_e2e_test_repo\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"struct Config derive macros\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "Config" -r "$REPO_NAME" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "struct Config derive macros" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "Config" && echo "$CLI_RESPONSE" | grep -q "Config"; then
     echo -e "${GREEN}✓ Found Rust struct Config with derive macros (MCP & CLI)${NC}"
