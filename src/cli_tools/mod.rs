@@ -6,9 +6,9 @@
 
 pub mod explore_file;
 pub mod find_callers;
+pub mod formatters;
 pub mod search_hybrid_context;
 
-// Re-export main functions for convenience
-pub use explore_file::run_explore_file;
-pub use find_callers::run_find_callers;
+pub use explore_file::{format_file_entities, run_explore_file};
+pub use find_callers::{format_reference_entry, format_references_result, run_find_callers};
 pub use search_hybrid_context::run_search_hybrid_context;

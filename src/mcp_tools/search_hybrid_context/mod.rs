@@ -128,7 +128,7 @@ impl SearchHybridContextTool {
             .ok_or_else(|| CallToolError::from_message("Embedder not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let formatted = cli_tools::run_search_hybrid_context(
+        let json_result = cli_tools::run_search_hybrid_context(
             query,
             max_results,
             repo_name,
@@ -138,6 +138,9 @@ impl SearchHybridContextTool {
         )
         .await
         .map_err(|e| CallToolError::from_message(format!("Search failed: {}", e)))?;
+
+        let formatted =
+            crate::mcp_tools::search_hybrid_context::format::format_search_results(&json_result);
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(

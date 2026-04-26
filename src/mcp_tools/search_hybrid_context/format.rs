@@ -1,6 +1,6 @@
 use serde_json::json;
 
-pub(crate) fn format_search_results(context: &serde_json::Value) -> String {
+pub fn format_search_results(context: &serde_json::Value) -> String {
     let mut output = String::from("# Search Results\n\n");
 
     if let Some(entities) = context.as_array() {

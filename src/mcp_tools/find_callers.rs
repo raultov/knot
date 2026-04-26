@@ -106,9 +106,11 @@ impl FindCallersTool {
             .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let formatted = cli_tools::run_find_callers(entity_name, repo_name, graph_db)
+        let json_result = cli_tools::run_find_callers(entity_name, repo_name, graph_db)
             .await
             .map_err(|e| CallToolError::from_message(format!("Find callers failed: {}", e)))?;
+
+        let formatted = cli_tools::format_references_result(entity_name, &json_result);
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(

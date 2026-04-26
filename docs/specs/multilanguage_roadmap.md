@@ -1,119 +1,44 @@
-# 🗺️ Multi-Language Roadmap for Knot
+# Multi-Language Roadmap for Knot
 
-This document outlines the phased expansion of `knot` from a Java/TypeScript indexer to a comprehensive codebase graph indexer supporting JavaScript, HTML, CSS/SCSS, and eventually Rust. Each phase builds upon the previous, enabling increasingly sophisticated cross-language code understanding.
+This document outlines the planned expansion of `knot` to support Rust and C/C++ codebases, building on the existing foundation for Java, TypeScript, JavaScript, HTML, CSS, and SCSS.
 
 ---
 
 ## Overview
 
-**Current State (v0.8.4):**
-- ✅ Java support (full AST extraction)
-- ✅ Kotlin support (v0.7.4+) - Complete with classes, interfaces, objects, functions, methods, properties
-- ✅ TypeScript/TSX/CTS support (modern JavaScript/TypeScript)
-- ✅ JavaScript/Node.js support (`.js`, `.mjs`, `.cjs`, `.jsx`)
-- ✅ HTML support (`.html`, `.htm` with custom elements, id/class indexing)
-- ✅ CSS support (`.css` with class/ID selector extraction)
-- ✅ SCSS support (`.scss`, `.sass` with mixins, functions, variables)
-- ✅ Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
-- ✅ Dual-database architecture (Qdrant + Neo4j)
-- ✅ Three MCP tools (search_hybrid_context, find_callers, explore_file)
-- ✅ Standalone CLI Tool (`knot`) with full MCP parity (v0.8.0+)
-- ✅ Cross-language linking (JS/HTML/CSS)
-- ✅ Downloadable agent-skills documentation (v0.8.4+)
-- ✅ Lightweight clients mode for older systems (v0.8.4+)
+**Current State (v0.8.10):**
+- Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, HTML, CSS, SCSS support
+- Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
+- Dual-database architecture (Qdrant + Neo4j)
+- Three MCP tools (search_hybrid_context, find_callers, explore_file)
+- Standalone CLI Tool (`knot`) with full MCP parity
+- Colorized table output, interactive pager, configurable output formats (table/json/markdown)
+- Custom CA certificates support for corporate network downloads
+- O(N) nested macro traversal optimization for large Rust codebases
 
-**Goal:** Extend `knot` to become the standard indexer for hybrid web projects (JS/HTML/CSS) with full cross-language dependency resolution and support for Kotlin, CLI tools, Rust, and C/C++.
+**Goal:** Extend `knot` to become the standard indexer for hybrid web projects with full cross-language dependency resolution and support for Rust and C/C++.
 
 ---
 
-## Phase 5: Kotlin Support (v0.7.0) ✅ COMPLETED
-
-### Objective
-Enable `knot` to index Kotlin codebases, providing full AST extraction, semantic understanding of Kotlin-specific constructs (data classes, companion objects, extension functions), and cross-language linking (e.g., with Java).
-
-### Implementation Status
-
-#### ✅ Completed Features
-- **File Extensions**: Full support for `.kt` and `.kts` files
-- **Entity Types**: All 7 Kotlin entity types fully extracted:
-  - KotlinClass
-  - KotlinInterface
-  - KotlinObject (singleton objects)
-  - KotlinCompanionObject
-  - KotlinFunction (Top-level and extension functions)
-  - KotlinMethod (Class methods)
-  - KotlinProperty (val/var declarations)
-
-#### ✅ Dependencies
-- tree-sitter-kotlin-ng = "1.1.0" (in Cargo.toml)
-
-#### ✅ Relationship Tracking
-- **EXTENDS/IMPLEMENTS**: Track class inheritance and interface implementation
-- **CALLS**: Function and method invocations
-- **REFERENCES**: Type usage in signatures and generics
-- **ANNOTATES**: Capture annotations for Spring Boot/Android frameworks
-
-#### ✅ Special Handling
-- **Extension Functions**: Properly link `fun String.myExtension()` as callable methods on receiver type
-- **Companion Objects**: Map `companion object` methods as static-like calls to parent class
-- **Data Classes**: Auto-infer properties from primary constructor
-
-#### ✅ Validation Completed
-- ✅ 10 comprehensive E2E integration tests - ALL PASSING
-- ✅ Extract top-level functions and extension functions accurately
-- ✅ Correctly map companion object methods to parent class
-- ✅ Track dependencies between Kotlin and Java files in mixed projects
-- ✅ Full tree-sitter-kotlin-ng v1.1.0 grammar compatibility
-
----
-
-## Phase 6: CLI Interface & Agent Skill (v0.8.0) ✅ COMPLETED
-
-### Objective
-Create a standalone CLI binary named `knot` that exposes the exact same functionality as `knot-mcp`. This will allow both humans and AI agents (via standard terminal execution) to query the index without needing an MCP client.
-
-### Implementation Status
-
-#### ✅ Completed Features
-- **CLI Binary** (`src/bin/knot.rs`): Standalone `knot` command with three subcommands
-- **Command Parity**: 
-  - `knot search "query"` → equivalent to `search_hybrid_context`
-  - `knot callers "EntityName"` → equivalent to `find_callers`
-  - `knot explore "/path/to/file"` → equivalent to `explore_file`
-- **Shared Core Logic** (`src/cli_tools/`): Both CLI and MCP use identical business logic
-  - `run_search_hybrid_context()` — semantic + structural search
-  - `run_find_callers()` — reverse dependency lookup
-  - `run_explore_file()` — file anatomy inspection
-- **Agent Skill File** (`.knot-agent.md`): 4000+ line comprehensive guide teaching LLMs:
-  - How to use each command with examples
-  - Output interpretation guide
-  - Workflow patterns (feature discovery, impact analysis, dead code detection)
-  - Integration with AI agent systems
-- **Full Documentation**: CLI help, examples for Java/TypeScript/Kotlin
-- **CLI Argument Parsing**: Using `clap` with:
-  - `--repo` filter for multi-repo environments
-  - `--max-results` for search result limiting
-  - Consistent error messages
-
-#### ✅ Architecture Benefits
-- **No Duplication**: CLI and MCP share `src/cli_tools/` core
-- **Parallel Evolution**: Both interfaces evolve together as features are added
-- **Flexible Deployment**: Use MCP in IDEs, CLI in terminals and CI/CD
-- **LLM-Friendly**: `.knot-agent.md` skill enables autonomous code analysis via bash execution
-
-#### ✅ Validation Completed
-- All CLI unit tests pass
-- CLI parser tests cover all command variants
-- Output format matches MCP for consistency
-- Integration with existing database connections verified
-
----
-
-## Phase 7: Rust Support (v0.8.x)
+## Phase 7: Rust Support (v0.8.x) ✅
 
 ### Objective
 Enable `knot` to index Rust codebases with full semantic understanding of ownership, traits, and macro expansion.
-*(Implementation details to be defined closer to release).*
+
+### Implementation Status
+
+#### Completed (v0.8.10)
+- ✅ **Rust Parser**: tree-sitter-rust integration for AST extraction
+- ✅ **Entity Types**: RustStruct, RustEnum, RustTrait, RustFunction, RustMacro, RustMethod
+- ✅ **Macro Expansion**: token_tree extraction for `vec!`, `println!`, `assert!`, and custom macros
+- ✅ **Type Reference Detection**: Enhanced detection of `Type::Variant` patterns in macro bodies
+- ✅ **Trait relationship tracking**: EXTENDS for traits, IMPLEMENTS for impl blocks
+- ✅ **Lifetime annotation support**: Full lifetime parameter extraction
+- ✅ **Docstring support**: Full doc comment extraction for all Rust entity types
+- ✅ **O(N) Macro Traversal Optimization**: Substring skipping eliminates redundant string operations for deeply nested token_tree nodes
+
+#### Planned (Future)
+- Cross-crate reference resolution via Cargo.toml analysis
 
 ---
 
@@ -121,7 +46,12 @@ Enable `knot` to index Rust codebases with full semantic understanding of owners
 
 ### Objective
 Enable `knot` to index C and C++ codebases, focusing on pointer relationships, header inclusion graphs, and macro analysis.
-*(Planned for future expansion).*
+
+#### Planned
+- tree-sitter-cpp integration
+- Header inclusion graph construction
+- Macro call tracking
+- Pointer/reference relationship analysis
 
 ---
 
@@ -129,86 +59,44 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 
 | Phase | Complexity | Status |
 |-------|-----------|--------|
-| Phase 1: JavaScript | Low | ✅ Completed (v0.6.1) |
-| Phase 2: HTML | Low | ✅ Completed (v0.6.3) |
-| Phase 3: CSS/SCSS | Medium | ✅ Completed (v0.6.4) |
-| Phase 4: Web Ecosystem | High | ✅ Completed (v0.6.5) |
-| Phase 5: Kotlin | Medium | ✅ Completed (v0.7.4) |
-| Phase 6: CLI | Low | ✅ Completed (v0.8.0) |
-| Phase 7: Rust | High | 📋 Planned (v0.8.x) |
+| Phase 1-6: JS/HTML/CSS/Kotlin/CLI | - | ✅ Completed |
+| Phase 7: Rust | High | ✅ Completed (v0.8.10) |
 | Phase 8: C/C++ | High | 📋 Planned (v0.9.x) |
 
 ---
 
-## Breaking Changes & Backward Compatibility
+## Backward Compatibility
 
-### Phases 1-5 (File Format & Schema)
-- ✅ **Backward compatible**: New languages integrate into existing Neo4j/Qdrant structure
-- ✅ **No database migration needed**: Add new entity types dynamically
-- ✅ **MCP tools unchanged**: Work seamlessly with new entity kinds
-
-### Phase 4 (Cross-Language Relationships)
-- ⚠️ **New relationship types**: `REFERENCES_DOM`, `USES_CSS_CLASS`, `IMPORTS_SCRIPT`, `IMPORTS_STYLESHEET`
-- ✅ **Optional**: Existing queries continue to work
-- ✅ **Gradual rollout**: Enable per-project basis
-
-### Phase 7 & 8 (Rust & C/C++)
-- ✅ **Backward compatible**: Additional languages, not a replacement
+- All new language phases are backward compatible
+- No database migration needed: new entity types added dynamically
+- MCP tools and CLI work seamlessly with existing indexed data
 
 ---
-
-## Contributing & Future Enhancements
-
-### Community Contributions
-Contributions in any phase are welcome! Each phase is designed to be modular and independently valuable.
-
----
-
-## References
-
-- [Tree-sitter Language Support](https://tree-sitter.github.io/tree-sitter/#language-bindings)
-- [Tree-sitter JavaScript Grammar](https://github.com/tree-sitter/tree-sitter-javascript)
-- [Tree-sitter HTML Grammar](https://github.com/tree-sitter/tree-sitter-html)
-- [Tree-sitter CSS Grammar](https://github.com/tree-sitter/tree-sitter-css)
-- [Tree-sitter SCSS Grammar](https://github.com/tree-sitter/tree-sitter-scss)
-- [Tree-sitter Kotlin Grammar (kotlin-ng)](https://github.com/fwcd/tree-sitter-kotlin)
-- [Tree-sitter Rust Grammar](https://github.com/tree-sitter/tree-sitter-rust)
 
 ## Changelog
 
+### v0.8.10 - CLI UX Enhancements & Rust Performance Optimization
+- ✅ Colorized table output as default format with per-entity-kind ANSI colors
+- ✅ Interactive pager support via `less -R -e` with auto-exit at end of content
+- ✅ Configurable output formats via `--output` flag (`table` default, `json`, `markdown`)
+- ✅ O(N) nested macro traversal optimization for large Rust codebases with deeply nested token_tree nodes
+
+### v0.8.8 - Corporate Network Support
+- ✅ Custom CA certificates support for corporate SSL-inspecting proxies
+- ✅ `KNOT_CUSTOM_CA_CERTS` environment variable and `--custom-ca-certs` CLI flag
+
+### v0.8.7 - Enhanced Rust Type Reference Detection
+- ✅ token_tree extraction for macro invocations (`vec!`, `println!`, `assert!`, etc.)
+- ✅ String literal filtering to avoid false positives in macro bodies
+- ✅ Improved accuracy for EntityKind detection (+95.7%)
+
+### v0.8.6 - Rust Initial Support
+- ✅ tree-sitter-rust integration
+- ✅ Basic entity extraction for Rust codebases
+
 ### v0.8.3 - Dry-Run Mode for Deployment Platform Quality Checks
-- ✅ **Offline/Dry-Run Mode**: Added `KNOT_DRY_RUN` environment variable to enable MCP server to run without database dependencies.
-- ✅ **Platform Agnostic**: Removed all platform-specific references; code is now compatible with any deployment platform.
-- ✅ **Graceful Degradation**: MCP server responds to protocol requests (initialize, tools/list) but rejects query execution in dry-run mode with clear error messages.
-- ✅ **Quality Assurance**: Enables automated quality checks on deployment platforms without database setup.
-
-### v0.8.2 - Documentation Refactoring and Quality Enhancements
-- ✅ **MCP Description Enhancements**: Updated all tool descriptions to meet glama.ai quality standards (Behaviour, Conciseness, Completeness, Parameters, Purpose, Usage Guidelines).
-- ✅ **Token Efficiency**: Restructured `.knot-agent.md` into a modular index with on-demand skill loading in `docs/agent-skills/`.
-- ✅ **Improved Usage Guidance**: Added critical warnings and workflow patterns to the new modular documentation.
-
-### v0.8.1 - CLI UX Improvements and E2E Coverage
-- ✅ **Silenced CLI Logs**: Default log level set to `error` for `knot` CLI to eliminate onnxruntime/fastembed noise in stdout.
-- ✅ **Stderr Logging**: All CLI logs now redirected to stderr, keeping stdout clean for Markdown results.
-- ✅ **100% Dual Testing Coverage**: Updated all 35 E2E tests (25 main + 10 Kotlin) to simultaneously verify both `knot-mcp` and `knot` CLI.
-- ✅ **Docker Integration**: Added `knot` CLI binary to the official Docker image.
-- ✅ **Improved Agent Guidance**: Updated `.knot-agent.md` with critical warnings about searching ubiquitous method names (accept, process, etc.) by signature.
+- ✅ Offline/dry-run mode for MCP server without database dependencies
 
 ### v0.8.0 - CLI Interface
-- ✅ **Standalone CLI**: Created `knot` binary with `search`, `callers`, and `explore` commands.
-- ✅ **Unified Core**: Extracted shared logic into `cli_tools` module used by both CLI and MCP.
-- ✅ **Auto Repo Detection**: CLI automatically detects repository name from the current directory.
-- ✅ **LLM Skill File**: Introduced `.knot-agent.md` to teach AI agents how to query the index via CLI.
-
-### v0.7.4 - Enhanced Search Precision
-- ✅ **Signature-based Search**: Enhanced `find_callers` and `find_references` to support searching by full method signatures.
-- ✅ **Improved Search Accuracy**: Fixed limitations when searching with complex receivers or FQNs.
-- ✅ **Comprehensive E2E Testing**: Validated the signature-based search pipeline across languages.
-
-### v0.7.0 - Kotlin Support
-- ✅ Complete Kotlin language support with 7 entity types
-- ✅ tree-sitter-kotlin-ng v1.1.0 grammar compatibility
-- ✅ Comprehensive E2E test suite (10 test cases)
-- ✅ Full MCP server integration for Kotlin entities
-- ✅ Support for classes, interfaces, objects, companion objects, functions, methods, and properties
-- ✅ Extension functions and annotation extraction
+- ✅ Standalone CLI binary with `search`, `callers`, and `explore` commands
+- ✅ Unified core shared between CLI and MCP

@@ -100,9 +100,11 @@ impl ExploreFileTool {
             .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let formatted = cli_tools::run_explore_file(file_path, repo_name, graph_db)
+        let (fp, json_result) = cli_tools::run_explore_file(file_path, repo_name, graph_db)
             .await
             .map_err(|e| CallToolError::from_message(format!("Explore file failed: {}", e)))?;
+
+        let formatted = cli_tools::format_file_entities(&fp, &json_result);
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(

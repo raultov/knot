@@ -20,6 +20,31 @@ use knot::{
     utils,
 };
 
+/// Injects custom CA certificates into the process environment for TLS connections.
+///
+/// This is required for `fastembed`/`hf-hub` to work through corporate SSL-inspecting proxies.
+/// Must be called before any async runtime threads are spawned (i.e., early in `main()`).
+///
+/// # Safety
+/// `std::env::set_var` is marked unsafe in Rust 2024 because concurrent modification
+/// from multiple threads is a data race. This function is safe because:
+/// - It is called exactly once, early in main(), before any Tokio threads exist.
+/// - The tokio runtime is not yet running at this point.
+#[inline(always)]
+fn inject_custom_ca_certs(cert_path: &Option<String>) {
+    if let Some(path) = cert_path {
+        // SAFETY: This is safe because:
+        // 1. Called before any threads exist (single-threaded main context)
+        // 2. No other code can concurrently modify env vars at this point
+        // 3. Tokio runtime hasn't been entered yet
+        unsafe {
+            std::env::set_var("SSL_CERT_FILE", path);
+            std::env::set_var("SSL_CERT_DIR", path);
+        }
+        tracing::info!("Injected custom CA certificate path: {}", path);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Logging must be initialised before anything else.
@@ -27,6 +52,11 @@ async fn main() -> Result<()> {
 
     // Load configuration for indexer (.env takes precedence over CLI args).
     let cfg = Config::load_indexer()?;
+
+    // Inject custom CA certificates for fastembed/hf-hub model downloads if provided.
+    // This must be called before any async/tokio threads are spawned.
+    inject_custom_ca_certs(&cfg.custom_ca_certs);
+
     print_startup_banner(&cfg);
 
     // Initialize databases and load previous state.
@@ -91,6 +121,7 @@ async fn init_databases(cfg: &Config) -> Result<(VectorDb, GraphDb)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use knot::config::OutputFormat;
 
     #[test]
     fn test_clean_mode_disabled_after_initial_run_with_watch() {
@@ -110,6 +141,8 @@ mod tests {
             dependency_repos: Vec::new(),
             watch: true,
             dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Markdown,
         };
 
         // Initially, clean should be true (from CLI/env)
@@ -146,6 +179,8 @@ mod tests {
             dependency_repos: Vec::new(),
             watch: false,
             dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Markdown,
         };
 
         // Since watch is false, clean flag should not be modified
@@ -175,6 +210,8 @@ mod tests {
             dependency_repos: Vec::new(),
             watch: true,
             dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Markdown,
         };
 
         // clean is already false, so no change should occur
@@ -204,6 +241,8 @@ mod tests {
             dependency_repos: Vec::new(),
             watch: true,
             dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Markdown,
         };
 
         // Just verify the config is correctly initialized.

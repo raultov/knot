@@ -121,3 +121,11 @@ fn print_with_pager(content: &str) {
 5. **Step 5:** Wire the `--output` flag in the CLI (`knot.rs`).
 6. **Step 6:** Implement the pager logic for long table outputs.
 7. **Step 7:** Run `cargo clippy` and `cargo fmt`. Verify all 308+ unit tests and E2E tests still pass (especially ensuring MCP Markdown output remains identical to before).
+
+---
+
+## 6. Performance Considerations
+
+**Performance Optimization:** Implement token_tree result caching if performance becomes an issue with large codebases containing many macro invocations. The current token_tree extraction parses each macro invocation at query time; a simple `HashMap<(u64, u64), Vec<String>>` cache keyed by `(file_id, node_offset)` could avoid redundant parsing for frequently-accessed macro bodies.
+
+(End of file - total 131 lines)

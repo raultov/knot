@@ -10,7 +10,15 @@
 //! - [`Config::load_mcp`] for knot-mcp (MCP server)
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(Debug, Clone, ValueEnum, PartialEq, Default)]
+pub enum OutputFormat {
+    #[default]
+    Table,
+    Json,
+    Markdown,
+}
 
 /// Command-line arguments for knot-indexer.
 /// Includes all options for indexing, file watching, and query customization.
@@ -83,6 +91,11 @@ pub struct IndexerCli {
     /// perform real-time incremental updates.
     #[arg(long, env = "KNOT_WATCH", default_value_t = false)]
     pub watch: bool,
+
+    /// Path to a custom CA certificate bundle for corporate network model downloads.
+    /// Used to enable fastembed model downloads through SSL-inspecting proxies.
+    #[arg(long, env = "KNOT_CUSTOM_CA_CERTS")]
+    pub custom_ca_certs: Option<String>,
 }
 
 /// Command-line arguments for knot-mcp.
@@ -134,6 +147,11 @@ pub struct McpCli {
     /// The server responds to protocol requests but cannot execute queries.
     #[arg(long, env = "KNOT_DRY_RUN", default_value_t = false, hide = true)]
     pub dry_run: bool,
+
+    /// Path to a custom CA certificate bundle for corporate network model downloads.
+    /// Used to enable fastembed model downloads through SSL-inspecting proxies.
+    #[arg(long, env = "KNOT_CUSTOM_CA_CERTS")]
+    pub custom_ca_certs: Option<String>,
 }
 
 /// Resolved, validated configuration used throughout the application.
@@ -150,12 +168,11 @@ pub struct Config {
     pub embed_dim: u64,
     pub batch_size: usize,
     pub clean: bool,
-    /// List of repository names to include for cross-repository dependency analysis.
     pub dependency_repos: Vec<String>,
-    /// Whether to run in watch mode.
     pub watch: bool,
-    /// Whether to run in offline/dry-run mode.
     pub dry_run: bool,
+    pub custom_ca_certs: Option<String>,
+    pub output_format: OutputFormat,
 }
 
 impl Config {
@@ -188,7 +205,9 @@ impl Config {
                     clean: cli.clean,
                     dependency_repos,
                     watch: cli.watch,
-                    dry_run: false, // Not applicable to indexer
+                    dry_run: false,
+                    custom_ca_certs: cli.custom_ca_certs,
+                    output_format: OutputFormat::Markdown,
                 }
             },
         )
@@ -208,11 +227,13 @@ impl Config {
                 neo4j_password,
                 custom_queries_path: None,
                 embed_dim: cli.embed_dim,
-                batch_size: 0, // Not used by MCP
-                clean: false,  // Not used by MCP
+                batch_size: 0,
+                clean: false,
                 dependency_repos: Vec::new(),
-                watch: false, // Not used by MCP
+                watch: false,
                 dry_run: cli.dry_run,
+                custom_ca_certs: cli.custom_ca_certs,
+                output_format: OutputFormat::Markdown,
             },
         )
     }
@@ -273,11 +294,13 @@ impl Config {
             neo4j_password,
             custom_queries_path: None,
             embed_dim: cli.embed_dim,
-            batch_size: 0, // Not used by CLI
-            clean: false,  // Not used by CLI
+            batch_size: 0,
+            clean: false,
             dependency_repos: Vec::new(),
-            watch: false,   // Not used by CLI
-            dry_run: false, // Not used by CLI
+            watch: false,
+            dry_run: false,
+            custom_ca_certs: cli.custom_ca_certs,
+            output_format: OutputFormat::Table,
         })
     }
 
@@ -792,5 +815,130 @@ mod tests {
         // Should have valid configuration
         assert!(!cli.qdrant_url.is_empty());
         assert_eq!(cli.neo4j_user, "neo4j"); // Default value
+    }
+
+    #[test]
+    fn test_indexer_cli_with_custom_ca_certs() {
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+            "--custom-ca-certs",
+            "/etc/ssl/certs/corporate-bundle.pem",
+        ];
+
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(
+            cli.custom_ca_certs,
+            Some("/etc/ssl/certs/corporate-bundle.pem".to_string())
+        );
+    }
+
+    #[test]
+    fn test_indexer_cli_without_custom_ca_certs() {
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.custom_ca_certs, None);
+    }
+
+    #[test]
+    fn test_mcp_cli_with_custom_ca_certs() {
+        let args = vec![
+            "knot-mcp",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+            "--custom-ca-certs",
+            "/etc/ssl/certs/my-certs.crt",
+        ];
+
+        let cli = McpCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(
+            cli.custom_ca_certs,
+            Some("/etc/ssl/certs/my-certs.crt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_mcp_cli_without_custom_ca_certs() {
+        let args = vec![
+            "knot-mcp",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        let cli = McpCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.custom_ca_certs, None);
+    }
+
+    #[test]
+    fn test_config_custom_ca_certs_propagation() {
+        let config = Config {
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "knot_entities".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "secret".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: false,
+            dependency_repos: Vec::new(),
+            watch: false,
+            dry_run: false,
+            custom_ca_certs: Some("/etc/ssl/certs/corp.pem".to_string()),
+            output_format: OutputFormat::Table,
+        };
+
+        assert_eq!(
+            config.custom_ca_certs,
+            Some("/etc/ssl/certs/corp.pem".to_string())
+        );
+    }
+
+    #[test]
+    fn test_output_format_default_is_table() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Table);
+    }
+
+    #[test]
+    fn test_output_format_all_variants() {
+        let variants = [
+            OutputFormat::Table,
+            OutputFormat::Json,
+            OutputFormat::Markdown,
+        ];
+        assert_eq!(variants.len(), 3);
+        assert_ne!(OutputFormat::Table, OutputFormat::Json);
+        assert_ne!(OutputFormat::Table, OutputFormat::Markdown);
+        assert_ne!(OutputFormat::Json, OutputFormat::Markdown);
+    }
+
+    #[test]
+    fn test_output_format_clone() {
+        let fmt = OutputFormat::Json;
+        let cloned = fmt.clone();
+        assert_eq!(fmt, cloned);
+    }
+
+    #[test]
+    fn test_output_format_debug() {
+        let fmt = OutputFormat::Markdown;
+        let debug_str = format!("{:?}", fmt);
+        assert!(debug_str.contains("Markdown"));
     }
 }

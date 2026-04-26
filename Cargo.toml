@@ -1,6 +1,6 @@
 [package]
 name = "knot"
-version = "0.8.7"
+version = "0.8.10"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, and HTML codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
@@ -66,6 +66,10 @@ sha2 = "0.10"
 # --- Configuration & CLI ---
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
+
+# --- Output Formatting ---
+comfy-table = "7.1"
+colored = "2.1"
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }

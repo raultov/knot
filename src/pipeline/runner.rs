@@ -256,6 +256,7 @@ fn build_parse_config(custom_queries_path: Option<String>, repo_name: String) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OutputFormat;
 
     #[test]
     fn test_build_parse_config_variants() {
@@ -289,6 +290,8 @@ mod tests {
             dependency_repos: Vec::new(),
             watch: false,
             dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Markdown,
         };
 
         // We need to mock DBs if we want to run the full pipeline,

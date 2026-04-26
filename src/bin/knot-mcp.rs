@@ -17,6 +17,31 @@ use tracing::info;
 
 use knot::{config::Config, mcp_handler::KnotMcpHandler, utils};
 
+/// Injects custom CA certificates into the process environment for TLS connections.
+///
+/// This is required for `fastembed`/`hf-hub` to work through corporate SSL-inspecting proxies.
+/// Must be called before any async runtime threads are spawned (i.e., early in `main()`).
+///
+/// # Safety
+/// `std::env::set_var` is marked unsafe in Rust 2024 because concurrent modification
+/// from multiple threads is a data race. This function is safe because:
+/// - It is called exactly once, early in main(), before any Tokio threads exist.
+/// - The tokio runtime is not yet running at this point.
+#[inline(always)]
+fn inject_custom_ca_certs(cert_path: &Option<String>) {
+    if let Some(path) = cert_path {
+        // SAFETY: This is safe because:
+        // 1. Called before any threads exist (single-threaded main context)
+        // 2. No other code can concurrently modify env vars at this point
+        // 3. Tokio runtime hasn't been entered yet
+        unsafe {
+            std::env::set_var("SSL_CERT_FILE", path);
+            std::env::set_var("SSL_CERT_DIR", path);
+        }
+        tracing::info!("Injected custom CA certificate path: {}", path);
+    }
+}
+
 /// Build server details with configuration for the MCP server.
 fn build_server_details() -> InitializeResult {
     InitializeResult {
@@ -54,6 +79,10 @@ async fn main() -> SdkResult<()> {
 
     // Load configuration for MCP server (.env takes precedence over CLI args).
     let cfg = Config::load_mcp().expect("Failed to load configuration");
+
+    // Inject custom CA certificates for fastembed/hf-hub model downloads if provided.
+    // This must be called before any async/tokio threads are spawned.
+    inject_custom_ca_certs(&cfg.custom_ca_certs);
 
     info!("knot MCP server starting");
     info!("Repository path : {}", cfg.repo_path);

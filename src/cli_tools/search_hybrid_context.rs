@@ -21,22 +21,19 @@ pub async fn run_search_hybrid_context(
     vector_db: &Arc<VectorDb>,
     graph_db: &Arc<GraphDb>,
     embedder: &Arc<Mutex<Embedder>>,
-) -> anyhow::Result<String> {
-    // Step 1: Embed the query using fastembed
+) -> anyhow::Result<serde_json::Value> {
     let vector = embedder
         .lock()
         .unwrap()
         .embed_query(query)
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
 
-    // Step 2: Search Qdrant for similar vectors
     let search_results = vector_db.search(&vector, max_results, repo_name).await?;
 
     if search_results.is_empty() {
-        return Ok("No matching code found for your query.".to_string());
+        return Ok(serde_json::Value::Null);
     }
 
-    // Extract UUIDs and names from search results
     let uuids: Vec<String> = search_results
         .iter()
         .filter_map(|result| {
@@ -57,20 +54,15 @@ pub async fn run_search_hybrid_context(
         })
         .collect();
 
-    // Step 3: Query Neo4j for detailed context and dependencies
     let context = graph_db
         .get_entities_with_dependencies(&uuids, repo_name)
         .await?;
 
-    // Step 4: Enrich context with related entities (subclasses, implementers, references)
     let enriched_context = enrich_with_relationships(&context, &entity_names, graph_db, repo_name)
         .await
         .unwrap_or(context);
 
-    // Step 5: Format results as Markdown
-    let formatted = format_search_results(&enriched_context);
-
-    Ok(formatted)
+    Ok(enriched_context)
 }
 
 /// Enrich search results with related entities (subclasses, implementers, usages)
@@ -82,14 +74,12 @@ async fn enrich_with_relationships(
 ) -> anyhow::Result<serde_json::Value> {
     let mut enriched = context.clone();
 
-    // For each entity in the search results, find related entities
     if let Some(entities) = enriched.as_array_mut() {
         for entity in entities.iter_mut() {
-            if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
-                // Query for all references to this entity
-                if let Ok(references) = graph_db.find_references(name, repo_name).await {
-                    enrich_single_entity(entity, &references);
-                }
+            if let Some(name) = entity.get("name").and_then(|v| v.as_str())
+                && let Ok(references) = graph_db.find_references(name, repo_name).await
+            {
+                enrich_single_entity(entity, &references);
             }
         }
     }
@@ -97,7 +87,6 @@ async fn enrich_with_relationships(
     Ok(enriched)
 }
 
-/// Extract subclass names from an extends relationship array.
 fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {
     extends_arr
         .iter()
@@ -105,7 +94,6 @@ fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-/// Extract implementer names from an implements relationship array.
 fn extract_implementer_names(implements_arr: &[serde_json::Value]) -> Vec<String> {
     implements_arr
         .iter()
@@ -113,7 +101,6 @@ fn extract_implementer_names(implements_arr: &[serde_json::Value]) -> Vec<String
         .collect()
 }
 
-/// Format type usage samples from a references array (limited to 3 samples).
 fn format_usage_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
     references_arr
         .iter()
@@ -126,7 +113,6 @@ fn format_usage_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-/// Format caller samples from a calls array (limited to 3 samples).
 fn format_caller_samples(calls_arr: &[serde_json::Value]) -> Vec<String> {
     calls_arr
         .iter()
@@ -139,10 +125,7 @@ fn format_caller_samples(calls_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-/// Enrich a single entity with relationship data extracted from references.
-/// This is a pure function that operates only on JSON data.
 fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json::Value) {
-    // Add subclasses (EXTENDS)
     if let Some(extends_arr) = references.get("extends").and_then(|v| v.as_array())
         && !extends_arr.is_empty()
     {
@@ -152,7 +135,6 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
         }
     }
 
-    // Add implementers (IMPLEMENTS)
     if let Some(implements_arr) = references.get("implements").and_then(|v| v.as_array())
         && !implements_arr.is_empty()
     {
@@ -162,7 +144,6 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
         }
     }
 
-    // Add type usages (REFERENCES)
     if let Some(references_arr) = references.get("references").and_then(|v| v.as_array())
         && !references_arr.is_empty()
     {
@@ -174,7 +155,6 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
         }
     }
 
-    // Add callers (CALLS)
     if let Some(calls_arr) = references.get("calls").and_then(|v| v.as_array())
         && !calls_arr.is_empty()
     {
@@ -185,12 +165,6 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
             obj.insert("caller_samples".to_string(), json!(samples));
         }
     }
-}
-
-/// Format search results as Markdown
-fn format_search_results(context: &serde_json::Value) -> String {
-    use crate::mcp_tools::search_hybrid_context::format::format_search_results as mcp_format;
-    mcp_format(context)
 }
 
 #[cfg(test)]

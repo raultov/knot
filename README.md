@@ -38,7 +38,7 @@ This dual-database approach powers both:
 - **HTML** (v0.6.3+): Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
 - **JSX/TSX Attributes** (v0.6.3+): Extracts `id` and `className` from React components for unified HTML/CSS discovery
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
-- **Rust** (v0.8.7): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling.
+- **Rust** (v0.8.10): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.10**: O(N) nested macro traversal optimization for large Rust codebases.
 - **C/C++** (Planned v0.9.x): Pointer relationships and macro analysis
 
 **📚 Rich Comment Extraction**
@@ -501,7 +501,8 @@ All options can be set via environment variables (`.env`) or CLI flags. Environm
 | `KNOT_EMBED_DIM`           | `--embed-dim`              | `384`                       | Embedding vector dimension                               |
 | `KNOT_BATCH_SIZE`          | `--batch-size`             | `64`                        | Entities per batch                                       |
 | `KNOT_CLEAN`               | `--clean`                  | `false`                     | Force full re-index (delete all existing data)           |
-| `RUST_LOG`                 | *(env only)*               | `info`                      | Log level: `trace`, `debug`, `info`, `warn`, `error`     |
+| `KNOT_CUSTOM_CA_CERTS`     | `--custom-ca-certs`       | *(none)*                    | Path to CA certificate bundle for corporate SSL proxies  |
+| `RUST_LOG`                 | *(env only)*              | `info`                      | Log level: `trace`, `debug`, `info`, `warn`, `error`     |
 
 ---
 
@@ -514,6 +515,34 @@ KNOT_CUSTOM_QUERIES_PATH=/path/to/my/queries ./target/release/knot-indexer
 ```
 
 Place `java.scm` and/or `typescript.scm` in your custom directory. Missing files fall back to built-in defaults.
+
+---
+
+## 🔐 Corporate SSL / CA Certificates
+
+In restricted corporate environments with SSL-inspecting proxies, you may need to provide a custom CA certificate bundle so that `knot` can download the embedding model from HuggingFace.
+
+**Via environment variable:**
+```bash
+export KNOT_CUSTOM_CA_CERTS=/etc/ssl/certs/corporate-bundle.pem
+./target/release/knot-indexer --repo-path /path/to/repo --neo4j-password secret
+```
+
+**Via CLI flag:**
+```bash
+./target/release/knot-indexer \
+  --custom-ca-certs /etc/ssl/certs/corporate-bundle.pem \
+  --repo-path /path/to/repo \
+  --neo4j-password secret
+```
+
+**Via `.env` file:**
+```bash
+echo "KNOT_CUSTOM_CA_CERTS=/etc/ssl/certs/corporate-bundle.pem" >> .env
+./target/release/knot-indexer
+```
+
+This works for all three binaries: `knot-indexer`, `knot-mcp`, and `knot`.
 
 ---
 
@@ -571,7 +600,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.8.7 — Enhanced Rust Type Reference Detection in Macros) ✅
+### Current Release (v0.8.10 — CLI UX Enhancements) ✅
+- ✅ **Colorized Table Output**: Default `--output table` format with ANSI-colored headers and per-entity-kind colors for optimal terminal readability
+- ✅ **Interactive Pager Support**: Long results automatically pipe through `less -R -e` for smooth scrolling; auto-exits at end of content
+- ✅ **Configurable Output Formats**: `--output` flag supports `table` (default), `json`, and `markdown`; MCP always receives Markdown for backward compatibility
+- ✅ **Custom CA Certificates**: `--custom-ca-certs` / `KNOT_CUSTOM_CA_CERTS` for corporate SSL-inspecting proxies
+
+### Previous Release (v0.8.7 — Enhanced Rust Type Reference Detection in Macros) ✅
 - ✅ **Macro Type Reference Extraction**: Type references inside macro invocations (`vec![]`, `println!()`, `assert!()`, `format!()`, etc.) are now correctly captured
 - ✅ **Intelligent String Filtering**: Filters out false positives from string literals using quote-counting heuristics
 - ✅ **Comprehensive Edge Case Handling**: Validates identifiers, handles nested macros, supports `macro_rules!` definitions
@@ -613,12 +648,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **LLM Skill File**: `.knot-agent.md` teaches AI agents how to use CLI for autonomous analysis.
 
 ### Upcoming (v0.8.x+)
-#### Phase 7: CLI UX Improvements & Corporate Network Support
-- [ ] Human-friendly output formatting for CLI (replace raw Markdown with pretty-printed tables, colors, and summaries)
-- [ ] Interactive result navigation for terminal users
-- [ ] Configurable output formats (JSON, table, markdown)
-- [ ] **Custom CA Certificates for Corporate Networks**: Support for user-provided SSL/TLS certificates to enable model downloads in restricted corporate environments where standard certificate authorities are not available
-- [ ] **Performance Optimization**: Implement token_tree result caching if performance becomes an issue with large codebases containing many macro invocations
+#### Phase 7: CLI UX Improvements & Corporate Network Support (v0.8.10) ✅
+- ✅ **Human-friendly output formatting** (v0.8.10): Colorized table output as default with per-entity-kind ANSI colors
+- ✅ **Interactive result navigation** (v0.8.10): Pager support via `less -R -e` with auto-exit at end of content
+- ✅ **Configurable output formats** (v0.8.10): `--output` flag supports `table` (default), `json`, and `markdown`
+- ✅ **Custom CA Certificates for Corporate Networks** (v0.8.8): Support for user-provided SSL/TLS certificates
+- ✅ **O(N) Macro Traversal Optimization** (v0.8.10): Substring skipping eliminates redundant string operations for nested token_tree nodes in Rust macros
 
 #### Phase 8: Rust Support ✅ (v0.8.6)
 - ✅ Support `.rs` files with tree-sitter-rust parser

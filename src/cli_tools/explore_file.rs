@@ -13,30 +13,23 @@ pub async fn run_explore_file(
     file_path: &str,
     repo_name: Option<&str>,
     graph_db: &Arc<GraphDb>,
-) -> anyhow::Result<String> {
-    // Normalize file path: attempt to canonicalize, fall back to original if file doesn't exist
+) -> anyhow::Result<(String, serde_json::Value)> {
     let normalized_path = if Path::new(file_path).exists() {
         std::fs::canonicalize(file_path)?
             .to_string_lossy()
             .to_string()
     } else {
-        // If file doesn't exist in current filesystem, use path as-is
-        // (it may exist in a different repo context or be an absolute path)
         file_path.to_string()
     };
 
-    // Query Neo4j for all entities in the file
     let entities = graph_db
         .get_file_entities(&normalized_path, repo_name)
         .await?;
 
-    let formatted = format_file_entities(file_path, &entities);
-
-    Ok(formatted)
+    Ok((file_path.to_string(), entities))
 }
 
-/// Format file entities as Markdown
-fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String {
+pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String {
     let mut output = format!("# Entities in `{}`\n\n", file_path);
 
     if let Some(entities_array) = entities.as_array() {

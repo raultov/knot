@@ -3,18 +3,6 @@
 //! Performs comprehensive reverse dependency lookup: given an entity name,
 //! finds all other entities that reference it through any relationship type
 //! (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
-//!
-//! **Multiple Targets Handling:**
-//! When multiple entities share the same name (e.g., `find_nearest_entity_by_line`
-//! in both `orphans.rs` and `rust.rs`), results are automatically grouped by target.
-//! Each group shows:
-//! - Target entity location (file_path:line_number)
-//! - Target signature (if available)
-//! - List of all callers referencing that specific target
-//!
-//! **Output Format:**
-//! Single target: Flat list of callers
-//! Multiple targets: Grouped sections with target headers
 
 use std::sync::Arc;
 
@@ -25,19 +13,16 @@ pub async fn run_find_callers(
     entity_name: &str,
     repo_name: Option<&str>,
     graph_db: &Arc<GraphDb>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<serde_json::Value> {
     let references = graph_db.find_references(entity_name, repo_name).await?;
-    let formatted = format_references_result(entity_name, &references);
-    Ok(formatted)
+    Ok(references)
 }
 
-/// Format references result as Markdown
-fn format_references_result(entity_name: &str, references: &serde_json::Value) -> String {
+pub fn format_references_result(entity_name: &str, references: &serde_json::Value) -> String {
     use std::collections::HashMap;
 
     let mut output = format!("# References to `{}`\n\n", entity_name);
 
-    // Count total references across all types
     let mut total_refs = 0;
     let rel_types = vec![
         ("calls", "Calls (function/method invocations)"),
@@ -65,14 +50,12 @@ fn format_references_result(entity_name: &str, references: &serde_json::Value) -
         total_refs
     ));
 
-    // Format each relationship type
     for (key, label) in rel_types {
         if let Some(arr) = references.get(key).and_then(|v| v.as_array())
             && !arr.is_empty()
         {
             output.push_str(&format!("## {} ({})\n\n", label, arr.len()));
 
-            // Group by target (file_path:line) to distinguish entities with same name
             let mut grouped: HashMap<String, Vec<&serde_json::Value>> = HashMap::new();
 
             for entity in arr {
@@ -92,13 +75,11 @@ fn format_references_result(entity_name: &str, references: &serde_json::Value) -
                 grouped.entry(target_key).or_default().push(entity);
             }
 
-            // If there's only one target, don't show the grouping header
             if grouped.len() == 1 {
                 for entity in arr {
                     output.push_str(&format_reference_entry(entity));
                 }
             } else {
-                // Multiple targets with same name - show which target each caller refers to
                 for (target_key, entities) in grouped {
                     let first_entity = entities[0];
                     let target_name = first_entity
@@ -130,8 +111,7 @@ fn format_references_result(entity_name: &str, references: &serde_json::Value) -
     output
 }
 
-/// Format a single reference entry
-fn format_reference_entry(entity: &serde_json::Value) -> String {
+pub fn format_reference_entry(entity: &serde_json::Value) -> String {
     let mut output = String::new();
 
     if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
@@ -291,7 +271,6 @@ mod tests {
 
     #[test]
     fn test_format_references_result_multiple_targets_same_name() {
-        // Simulate two different functions with same name in different files
         let references = json!({
             "calls": [
                 {
@@ -332,19 +311,12 @@ mod tests {
 
         let formatted = format_references_result("find_nearest_entity_by_line", &references);
 
-        // Should show 3 total references
         assert!(formatted.contains("Found 3 reference(s)"));
-
-        // Should have target grouping headers (2 different targets)
         assert!(formatted.contains("### Target:"));
         assert!(formatted.contains("src/parser/orphans.rs:92"));
         assert!(formatted.contains("src/parser/languages/rust.rs:445"));
-
-        // Should show signatures for targets
         assert!(formatted.contains("pub(crate) fn find_nearest_entity_by_line"));
         assert!(formatted.contains("fn find_nearest_entity_by_line"));
-
-        // Should list all callers
         assert!(formatted.contains("caller1"));
         assert!(formatted.contains("caller2"));
         assert!(formatted.contains("caller3"));
@@ -352,7 +324,6 @@ mod tests {
 
     #[test]
     fn test_format_references_result_single_target_no_grouping() {
-        // When there's only one target, should not show grouping headers
         let references = json!({
             "calls": [
                 {
@@ -383,13 +354,8 @@ mod tests {
 
         let formatted = format_references_result("myMethod", &references);
 
-        // Should show 2 references
         assert!(formatted.contains("Found 2 reference(s)"));
-
-        // Should NOT have target grouping headers (single target)
         assert!(!formatted.contains("### Target:"));
-
-        // Should list callers directly
         assert!(formatted.contains("caller1"));
         assert!(formatted.contains("caller2"));
     }
