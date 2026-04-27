@@ -226,13 +226,14 @@ else
     exit 1
 fi
 
-# Test 6: Rust module extraction
+# Test 6: Rust module extraction - verify via explore_file (path-based, no semantic ranking)
 echo ""
-echo "Test 6: Searching for Rust module inner..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"mod inner module documentation\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+echo "Test 6: Verifying Rust module inner in sample.rs..."
+RS_FILE="$TEST_FILES_DIR/sample.rs"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$RS_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "inner module documentation" -r "$REPO_NAME" -m 10 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$RS_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "inner" && echo "$CLI_RESPONSE" | grep -q "inner"; then
     echo -e "${GREEN}✓ Found Rust module inner (MCP & CLI)${NC}"
