@@ -18,7 +18,7 @@ The indexer automatically builds:
 
 This dual-database approach powers both:
 - **MCP (Model Context Protocol) Server** — Exposes three tools to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.)
-- **CLI Tool** (v0.8.0+) — Standalone `knot` command for terminal and scripting environments
+- **CLI Tool** (v0.10.1) — Standalone `knot` command for terminal and scripting environments
 
 ---
 
@@ -40,7 +40,7 @@ This dual-database approach powers both:
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
 - **Rust** (v0.8.11): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.11**: O(N) nested macro traversal optimization for large Rust codebases with deeply nested `token_tree` nodes.
 - **Python** (v0.9.3): Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), Py2/Py3 exception syntax compatibility, and `self.method()` resolution with inherited method walking. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
-- **Groovy** (v0.10.5): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN (`com.example.MyClass.method`) and enclosing class relationships (`(Method)-[:BELONGS_TO]->(Class)`). Reuses JVM reference extraction from Java for call-graph resolution.
+- **Groovy** (v0.10.1): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN (`com.example.MyClass.method`) and enclosing class relationships (`(Method)-[:BELONGS_TO]->(Class)`). Reuses JVM reference extraction from Java for call-graph resolution.
 - **Build Systems** (v0.10.0): Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and `Jenkinsfile` pipeline (stages + steps) extraction.
 - **C/C++** (Planned v0.11.x): Pointer relationships and macro analysis
 

@@ -1,4 +1,4 @@
-use crate::models::{EntityKind, ParsedEntity};
+use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 
 pub(crate) fn handle_groovy_capture(
     capture_name: &str,
@@ -176,7 +176,170 @@ pub(crate) fn extract_entities_groovy_standard(
         }
     }
 
+    // Extract reference intents: for each method, scan source lines after its signature
+    let mut method_spans: Vec<(usize, usize, usize)> = entities
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            matches!(
+                e.kind,
+                EntityKind::GroovyMethod | EntityKind::GroovyFunction
+            )
+        })
+        .map(|(i, e)| (e.start_line, e.end_line, i))
+        .collect();
+    method_spans.sort_by_key(|(s, _, _)| *s);
+
+    let refs = extract_method_calls(source, &entities);
+
+    for (idx, (m_start, m_end, m_eidx)) in method_spans.iter().enumerate() {
+        // End boundary: next method/entity start, or EOF
+        let end_boundary = method_spans
+            .get(idx + 1)
+            .map(|(s, _, _)| *s)
+            .unwrap_or(usize::MAX);
+        // Use tracked end_line if available (tree-sitter), otherwise next entity boundary
+        let actual_end = if *m_end != *m_start {
+            *m_end
+        } else {
+            end_boundary.saturating_sub(1)
+        };
+
+        entities[*m_eidx].reference_intents = refs
+            .iter()
+            .filter(|r| match r {
+                ReferenceIntent::Call { line, .. } => *line > *m_start && *line <= actual_end,
+                _ => false,
+            })
+            .cloned()
+            .collect();
+    }
+
     entities
+}
+
+/// Scans source for method call patterns and returns reference intents.
+fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<ReferenceIntent> {
+    let mut refs = Vec::new();
+    let keywords = [
+        "if",
+        "else",
+        "while",
+        "for",
+        "return",
+        "new",
+        "throw",
+        "catch",
+        "switch",
+        "case",
+        "import",
+        "package",
+        "class",
+        "interface",
+        "trait",
+        "enum",
+        "def",
+        "try",
+        "finally",
+        "assert",
+        "println",
+        "void",
+        "int",
+        "String",
+        "boolean",
+        "double",
+        "float",
+        "long",
+        "byte",
+        "short",
+        "char",
+        "public",
+        "private",
+        "protected",
+        "static",
+        "final",
+        "abstract",
+        "synchronized",
+        "volatile",
+        "transient",
+    ];
+
+    for (line_idx, line) in source.lines().enumerate() {
+        let line_num = line_idx + 1;
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*")
+            || trimmed.starts_with("package ")
+            || trimmed.starts_with("import ")
+        {
+            continue;
+        }
+
+        let mut chars = trimmed.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if !c.is_alphabetic() && c != '_' {
+                continue;
+            }
+
+            let word_start = i;
+            let mut word_end = i;
+            while let Some((_, nc)) = chars.peek() {
+                if nc.is_alphanumeric() || *nc == '_' {
+                    word_end = chars.next().unwrap().0;
+                } else {
+                    break;
+                }
+            }
+
+            let word = &trimmed[word_start..=word_end];
+            if keywords.contains(&word) {
+                continue;
+            }
+
+            let after_word = &trimmed[word_end + 1..];
+            let after_trimmed = after_word.trim_start();
+
+            // Pattern: word.word(...)
+            if let Some(dot_rest) = after_trimmed.strip_prefix('.') {
+                let dot_trimmed = dot_rest.trim_start();
+                if let Some((next_word, rest)) = split_identifier(dot_trimmed) {
+                    let after_next = rest.trim_start();
+                    if after_next.starts_with('(') {
+                        refs.push(ReferenceIntent::Call {
+                            method: next_word.to_string(),
+                            receiver: Some(word.to_string()),
+                            line: line_num,
+                        });
+                        continue;
+                    }
+                }
+            }
+
+            // Pattern: word(...)
+            if after_trimmed.starts_with('(') && !keywords.contains(&word) && word.len() > 1 {
+                refs.push(ReferenceIntent::Call {
+                    method: word.to_string(),
+                    receiver: None,
+                    line: line_num,
+                });
+            }
+        }
+    }
+    refs
+}
+
+/// Splits an identifier from the start of `s`, returns (identifier, rest).
+fn split_identifier(s: &str) -> Option<(&str, &str)> {
+    let first = s.chars().next()?;
+    if !first.is_alphabetic() && first != '_' {
+        return None;
+    }
+    let end = s
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(s.len());
+    Some((&s[..end], &s[end..]))
 }
 
 /// Extract package name from source (e.g., `package com.example.service`)
