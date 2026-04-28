@@ -40,16 +40,17 @@ Enable `knot` to index Python codebases with full semantic understanding of AST,
 
 ---
 
-## Phase 9: Groovy Support (v0.10.x)
+## Phase 9: Build Systems & CI/CD Support (v0.10.x)
 
 ### Objective
-Enable `knot` to index Groovy codebases, focusing on Gradle build scripts and Jenkins pipeline files.
+Enable `knot` to index project infrastructure and build configurations. By understanding `build.gradle`, `pom.xml`, and `Jenkinsfile`, the MCP server will be able to answer semantic questions about project dependencies, custom build tasks, and deployment pipeline stages. (See full specs in `phase_9_build_systems_plan.md`).
 
 #### Planned
-- tree-sitter-groovy integration
+- tree-sitter-groovy and tree-sitter-xml integration
 - Gradle build script entity extraction (`build.gradle`, `settings.gradle`)
+- Maven dependency and plugin extraction (`pom.xml`)
 - Jenkins pipeline stage and step tracking (`Jenkinsfile`)
-- Closure and DSL method call resolution
+- BuildDependency, BuildPlugin, BuildTask, PipelineStage, and PipelineStep entity kinds
 - Task and dependency graph construction
 
 ---
