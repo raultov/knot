@@ -12,8 +12,29 @@ use tracing::info;
 /// Supported source file extensions.
 /// This is the single source of truth for all supported languages across the indexing pipeline.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "py", "pyi", "pyw", "html",
-    "htm", "css", "scss", "sass", "rs",
+    "java",
+    "ts",
+    "tsx",
+    "cts",
+    "js",
+    "mjs",
+    "cjs",
+    "jsx",
+    "kt",
+    "kts",
+    "py",
+    "pyi",
+    "pyw",
+    "html",
+    "htm",
+    "css",
+    "scss",
+    "sass",
+    "rs",
+    "groovy",
+    "gradle",
+    "jenkinsfile",
+    "xml",
 ];
 
 /// Recursively discover all supported source files under `repo_path`.
@@ -21,29 +42,46 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
 /// Respects `.gitignore` and other ignore files found during traversal.
 /// Returns absolute [`PathBuf`]s sorted for deterministic processing order.
 pub fn discover_files(repo_path: &str) -> Result<Vec<PathBuf>> {
+    use std::collections::HashSet;
+
     let mut files: Vec<PathBuf> = WalkBuilder::new(repo_path)
-        .hidden(false) // include dot-files (e.g. .github actions) but not dirs
-        .git_ignore(true) // respect .gitignore
-        .git_global(true) // respect global gitignore
-        .git_exclude(true) // respect .git/info/exclude
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
         .build()
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path().to_path_buf();
 
-            // Skip directories and unsupported extensions.
             if !path.is_file() {
                 return None;
             }
 
-            let ext = path.extension()?.to_str()?;
-            if SUPPORTED_EXTENSIONS.contains(&ext) {
-                Some(path)
-            } else {
-                None
+            // Match by extension first
+            if let Some(ext) = path.extension().and_then(|e| e.to_str())
+                && SUPPORTED_EXTENSIONS.contains(&ext)
+            {
+                return Some(path);
             }
+
+            // Match by filename (e.g. Jenkinsfile has no extension)
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let known_names = ["Jenkinsfile", "pom.xml"];
+                if known_names.contains(&name) {
+                    return Some(path);
+                }
+            }
+
+            None
         })
         .collect();
+
+    // Deduplicate (some files match both extension and filename)
+    let mut seen = HashSet::new();
+    files.retain(|p| seen.insert(p.clone()));
+
+    files.sort();
 
     files.sort();
 

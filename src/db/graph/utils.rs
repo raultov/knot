@@ -43,6 +43,11 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::PythonMethod => "PythonMethod",
         EntityKind::PythonModule => "PythonModule",
         EntityKind::PythonConstant => "PythonConstant",
+        EntityKind::BuildDependency => "BuildDependency",
+        EntityKind::BuildPlugin => "BuildPlugin",
+        EntityKind::BuildTask => "BuildTask",
+        EntityKind::PipelineStage => "PipelineStage",
+        EntityKind::PipelineStep => "PipelineStep",
     }
 }
 

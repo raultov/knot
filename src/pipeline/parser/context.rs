@@ -151,6 +151,12 @@ pub(crate) fn compute_fqn_and_context(
                 name.to_string()
             }
         }
+        // Build Systems & CI/CD entities — use name as FQN
+        EntityKind::BuildDependency
+        | EntityKind::BuildPlugin
+        | EntityKind::BuildTask
+        | EntityKind::PipelineStage
+        | EntityKind::PipelineStep => name.to_string(),
     };
 
     (fqn, enclosing_class)

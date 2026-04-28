@@ -236,7 +236,7 @@ mod tests {
         let unsupported = vec![
             "readme.md",
             "config.json",
-            "data.xml",
+            "data.yaml",
             "document.txt",
             "image.png",
             "script.pyc",

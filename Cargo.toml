@@ -1,8 +1,8 @@
 [package]
 name = "knot"
-version = "0.9.3"
+version = "0.10.0"
 edition = "2024"
-description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, and HTML codebases"
+description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, Groovy(Build Systems), and HTML/CSS codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
 license = "MIT"
 repository = "https://github.com/raultov/knot"
@@ -75,6 +75,9 @@ colored = "2.1"
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# --- XML Parsing (Maven pom.xml) ---
+roxmltree = "0.21"
 
 # --- Error Handling ---
 anyhow = "1"

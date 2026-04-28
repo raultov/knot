@@ -106,7 +106,22 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
         .and_then(|e| e.to_str())
         .unwrap_or_default();
 
+    // Handle files identified by name (no extension), e.g. Jenkinsfile
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+
     let file_path = path.to_string_lossy().to_string();
+
+    // Dispatch by filename first for extensionless files
+    if filename == "Jenkinsfile" {
+        return Ok(languages::groovy::extract_entities_groovy(
+            &source,
+            &file_path,
+            &parse_cfg.repo_name,
+        ));
+    }
 
     let entities = match ext {
         "java" => {
@@ -222,6 +237,10 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )?
         }
+        "groovy" | "gradle" | "jenkinsfile" => {
+            languages::groovy::extract_entities_groovy(&source, &file_path, &parse_cfg.repo_name)
+        }
+        "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),
         other => {
             warn!("Unsupported extension '{other}', skipping");
             vec![]

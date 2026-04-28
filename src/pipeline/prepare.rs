@@ -188,4 +188,119 @@ mod tests {
         assert!(entities[0].embed_text.contains("Class1"));
         assert!(entities[1].embed_text.contains("Class2"));
     }
+
+    #[test]
+    fn test_build_embed_text_build_dependency() {
+        let entity = ParsedEntity::new(
+            "org.springframework:spring-core:5.3.29",
+            EntityKind::BuildDependency,
+            "org.springframework:spring-core:5.3.29",
+            Some("scope: compile".to_string()),
+            Some("Maven dependency: org.springframework:spring-core:5.3.29".to_string()),
+            "xml",
+            "pom.xml",
+            15,
+            19,
+            None,
+            "test-repo",
+        );
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[build_dependency] org.springframework:spring-core:5.3.29"));
+        assert!(embed_text.contains("Signature: scope: compile"));
+        assert!(embed_text.contains("Maven dependency:"));
+        assert!(embed_text.contains("File: pom.xml:15"));
+    }
+
+    #[test]
+    fn test_build_embed_text_build_plugin() {
+        let entity = ParsedEntity::new(
+            "org.apache.maven.plugins:maven-compiler-plugin:3.11.0",
+            EntityKind::BuildPlugin,
+            "org.apache.maven.plugins:maven-compiler-plugin:3.11.0",
+            None,
+            Some("Maven plugin: org.apache.maven.plugins:maven-compiler-plugin:3.11.0".to_string()),
+            "xml",
+            "pom.xml",
+            30,
+            35,
+            None,
+            "test-repo",
+        );
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[build_plugin]"));
+        assert!(embed_text.contains("maven-compiler-plugin"));
+        assert!(embed_text.contains("Maven plugin:"));
+        assert!(embed_text.contains("File: pom.xml:30"));
+    }
+
+    #[test]
+    fn test_build_embed_text_build_task() {
+        let entity = ParsedEntity::new(
+            "buildDocs",
+            EntityKind::BuildTask,
+            "buildDocs",
+            None,
+            Some("task buildDocs(type: Copy) {".to_string()),
+            "groovy",
+            "build.gradle",
+            25,
+            25,
+            None,
+            "test-repo",
+        );
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[build_task] buildDocs"));
+        assert!(embed_text.contains("task buildDocs(type: Copy) {"));
+        assert!(embed_text.contains("File: build.gradle:25"));
+    }
+
+    #[test]
+    fn test_build_embed_text_pipeline_stage() {
+        let entity = ParsedEntity::new(
+            "stage: Build",
+            EntityKind::PipelineStage,
+            "stage: Build",
+            None,
+            Some("stage('Build') {".to_string()),
+            "groovy",
+            "Jenkinsfile",
+            10,
+            10,
+            None,
+            "test-repo",
+        );
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[pipeline_stage] stage: Build"));
+        assert!(embed_text.contains("File: Jenkinsfile:10"));
+    }
+
+    #[test]
+    fn test_build_embed_text_pipeline_step() {
+        let entity = ParsedEntity::new(
+            "sh: mvn compile",
+            EntityKind::PipelineStep,
+            "sh: mvn compile",
+            None,
+            Some("sh 'mvn compile'".to_string()),
+            "groovy",
+            "Jenkinsfile",
+            12,
+            12,
+            None,
+            "test-repo",
+        );
+
+        let embed_text = build_embed_text(&entity);
+
+        assert!(embed_text.contains("[pipeline_step] sh: mvn compile"));
+        assert!(embed_text.contains("File: Jenkinsfile:12"));
+    }
 }

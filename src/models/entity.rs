@@ -60,6 +60,12 @@ pub enum EntityKind {
     PythonMethod,   // methods inside classes
     PythonModule,   // module-level entities (docstrings, constants)
     PythonConstant, // module-level constants (UPPER_CASE)
+    // Build Systems & CI/CD entities
+    BuildDependency, // Maven/Gradle dependency (groupId:artifactId:version)
+    BuildPlugin,     // Maven/Gradle build plugin
+    BuildTask,       // Gradle task definition
+    PipelineStage,   // Jenkins pipeline stage
+    PipelineStep,    // Jenkins pipeline step inside a stage
 }
 
 impl std::fmt::Display for EntityKind {
@@ -105,6 +111,11 @@ impl std::fmt::Display for EntityKind {
             EntityKind::PythonMethod => "python_method",
             EntityKind::PythonModule => "python_module",
             EntityKind::PythonConstant => "python_constant",
+            EntityKind::BuildDependency => "build_dependency",
+            EntityKind::BuildPlugin => "build_plugin",
+            EntityKind::BuildTask => "build_task",
+            EntityKind::PipelineStage => "pipeline_stage",
+            EntityKind::PipelineStep => "pipeline_step",
         };
         write!(f, "{s}")
     }

@@ -94,7 +94,7 @@ jobs:
         if: always()
         run: |
           cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_data .e2e_kotlin_data .e2e_rust_data .e2e_python_data 2>/dev/null || true
+          rm -rf .e2e_data .e2e_kotlin_data .e2e_rust_data .e2e_python_data .e2e_build_systems_data 2>/dev/null || true
           sleep 5
 
       - name: Run Kotlin E2E tests
@@ -123,6 +123,17 @@ jobs:
         run: ./tests/run_python_e2e.sh
         timeout-minutes: 10
 
+      - name: Cleanup Docker between E2E test suites
+        if: always()
+        run: |
+          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+          rm -rf .e2e_python_data .e2e_build_systems_data 2>/dev/null || true
+          sleep 5
+
+      - name: Run Build Systems E2E tests
+        run: ./tests/run_build_systems_e2e.sh
+        timeout-minutes: 10
+
       - name: Upload E2E logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -133,4 +144,5 @@ jobs:
             tests/.e2e_kotlin_data/
             tests/.e2e_rust_data/
             tests/.e2e_python_data/
+            tests/.e2e_build_systems_data/
           retention-days: 7

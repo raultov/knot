@@ -68,6 +68,11 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         let mut rust_constants = Vec::new();
         let mut rust_statics = Vec::new();
         let mut rust_modules = Vec::new();
+        let mut build_deps = Vec::new();
+        let mut build_plugins = Vec::new();
+        let mut build_tasks = Vec::new();
+        let mut pipeline_stages = Vec::new();
+        let mut pipeline_steps = Vec::new();
 
         for entity in entities_array {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
@@ -96,6 +101,11 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
                     "rust_constant" => rust_constants.push(entity),
                     "rust_static" => rust_statics.push(entity),
                     "rust_module" => rust_modules.push(entity),
+                    "build_dependency" => build_deps.push(entity),
+                    "build_plugin" => build_plugins.push(entity),
+                    "build_task" => build_tasks.push(entity),
+                    "pipeline_stage" => pipeline_stages.push(entity),
+                    "pipeline_step" => pipeline_steps.push(entity),
                     _ => {}
                 }
             }
@@ -268,6 +278,42 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         if !rust_modules.is_empty() {
             output.push_str("## Modules (Rust)\n\n");
             for entity in rust_modules {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        // Build Systems & CI/CD entities
+        if !build_deps.is_empty() {
+            output.push_str("## Dependencies\n\n");
+            for entity in build_deps {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !build_plugins.is_empty() {
+            output.push_str("## Plugins\n\n");
+            for entity in build_plugins {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !build_tasks.is_empty() {
+            output.push_str("## Tasks\n\n");
+            for entity in build_tasks {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !pipeline_stages.is_empty() {
+            output.push_str("## Pipeline Stages\n\n");
+            for entity in pipeline_stages {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !pipeline_steps.is_empty() {
+            output.push_str("## Pipeline Steps\n\n");
+            for entity in pipeline_steps {
                 output.push_str(&format_entity_summary(entity));
             }
         }

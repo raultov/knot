@@ -17,11 +17,20 @@ pub type FileClassification = (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<Str
 /// Uses the centralized SUPPORTED_EXTENSIONS list to ensure consistency
 /// across all pipeline stages (discovery, watching, parsing, etc.).
 pub fn is_supported_file(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    SUPPORTED_EXTENSIONS.contains(&ext)
+    // Match by extension first
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && SUPPORTED_EXTENSIONS.contains(&ext)
+    {
+        return true;
+    }
+    // Match by filename for extensionless files (e.g. Jenkinsfile)
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        let known_names = ["Jenkinsfile", "pom.xml"];
+        if known_names.contains(&name) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Classify files into unchanged, modified, added, and deleted categories.
