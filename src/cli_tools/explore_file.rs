@@ -73,6 +73,13 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         let mut build_tasks = Vec::new();
         let mut pipeline_stages = Vec::new();
         let mut pipeline_steps = Vec::new();
+        let mut groovy_classes = Vec::new();
+        let mut groovy_interfaces = Vec::new();
+        let mut groovy_traits = Vec::new();
+        let mut groovy_methods = Vec::new();
+        let mut groovy_functions = Vec::new();
+        let mut groovy_enums = Vec::new();
+        let mut groovy_properties = Vec::new();
 
         for entity in entities_array {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
@@ -106,6 +113,13 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
                     "build_task" => build_tasks.push(entity),
                     "pipeline_stage" => pipeline_stages.push(entity),
                     "pipeline_step" => pipeline_steps.push(entity),
+                    "groovy_class" => groovy_classes.push(entity),
+                    "groovy_interface" => groovy_interfaces.push(entity),
+                    "groovy_trait" => groovy_traits.push(entity),
+                    "groovy_method" => groovy_methods.push(entity),
+                    "groovy_function" => groovy_functions.push(entity),
+                    "groovy_enum" => groovy_enums.push(entity),
+                    "groovy_property" => groovy_properties.push(entity),
                     _ => {}
                 }
             }
@@ -314,6 +328,55 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         if !pipeline_steps.is_empty() {
             output.push_str("## Pipeline Steps\n\n");
             for entity in pipeline_steps {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_classes.is_empty() {
+            output.push_str("## Classes (Groovy)\n\n");
+            for entity in groovy_classes {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_interfaces.is_empty() {
+            output.push_str("## Interfaces (Groovy)\n\n");
+            for entity in groovy_interfaces {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_traits.is_empty() {
+            output.push_str("## Traits (Groovy)\n\n");
+            for entity in groovy_traits {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_enums.is_empty() {
+            output.push_str("## Enums (Groovy)\n\n");
+            for entity in groovy_enums {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_methods.is_empty() {
+            output.push_str("## Methods (Groovy)\n\n");
+            for entity in groovy_methods {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_functions.is_empty() {
+            output.push_str("## Functions (Groovy)\n\n");
+            for entity in groovy_functions {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !groovy_properties.is_empty() {
+            output.push_str("## Properties (Groovy)\n\n");
+            for entity in groovy_properties {
                 output.push_str(&format_entity_summary(entity));
             }
         }

@@ -66,6 +66,14 @@ pub enum EntityKind {
     BuildTask,       // Gradle task definition
     PipelineStage,   // Jenkins pipeline stage
     PipelineStep,    // Jenkins pipeline step inside a stage
+    // Groovy specific entities (beyond build scripts)
+    GroovyClass,     // class declarations
+    GroovyInterface, // interface declarations
+    GroovyTrait,     // trait declarations
+    GroovyMethod,    // methods inside classes/traits
+    GroovyFunction,  // top-level methods/closures in scripts
+    GroovyEnum,      // enum declarations
+    GroovyProperty,  // fields/variables
 }
 
 impl std::fmt::Display for EntityKind {
@@ -116,6 +124,13 @@ impl std::fmt::Display for EntityKind {
             EntityKind::BuildTask => "build_task",
             EntityKind::PipelineStage => "pipeline_stage",
             EntityKind::PipelineStep => "pipeline_step",
+            EntityKind::GroovyClass => "groovy_class",
+            EntityKind::GroovyInterface => "groovy_interface",
+            EntityKind::GroovyTrait => "groovy_trait",
+            EntityKind::GroovyMethod => "groovy_method",
+            EntityKind::GroovyFunction => "groovy_function",
+            EntityKind::GroovyEnum => "groovy_enum",
+            EntityKind::GroovyProperty => "groovy_property",
         };
         write!(f, "{s}")
     }

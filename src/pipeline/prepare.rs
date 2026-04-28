@@ -303,4 +303,104 @@ mod tests {
         assert!(embed_text.contains("[pipeline_step] sh: mvn compile"));
         assert!(embed_text.contains("File: Jenkinsfile:12"));
     }
+
+    #[test]
+    fn test_build_embed_text_groovy_class() {
+        let entity = ParsedEntity::new(
+            "MyGroovyClass",
+            EntityKind::GroovyClass,
+            "com.example.MyGroovyClass",
+            None,
+            Some("A Groovy class".to_string()),
+            "groovy",
+            "src/MyGroovyClass.groovy",
+            1,
+            10,
+            None,
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("[groovy_class] MyGroovyClass"));
+        assert!(embed_text.contains("A Groovy class"));
+    }
+
+    #[test]
+    fn test_build_embed_text_groovy_interface() {
+        let entity = ParsedEntity::new(
+            "MyGroovyInterface",
+            EntityKind::GroovyInterface,
+            "com.example.MyGroovyInterface",
+            None,
+            None,
+            "groovy",
+            "src/MyGroovyInterface.groovy",
+            1,
+            5,
+            None,
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("[groovy_interface] MyGroovyInterface"));
+    }
+
+    #[test]
+    fn test_build_embed_text_groovy_trait() {
+        let entity = ParsedEntity::new(
+            "MyGroovyTrait",
+            EntityKind::GroovyTrait,
+            "com.example.MyGroovyTrait",
+            None,
+            None,
+            "groovy",
+            "src/MyGroovyTrait.groovy",
+            1,
+            8,
+            None,
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("[groovy_trait] MyGroovyTrait"));
+    }
+
+    #[test]
+    fn test_build_embed_text_groovy_method() {
+        let mut entity = ParsedEntity::new(
+            "save",
+            EntityKind::GroovyMethod,
+            "UserService.save",
+            Some("def save(User user)".to_string()),
+            Some("Saves the user".to_string()),
+            "groovy",
+            "UserService.groovy",
+            42,
+            46,
+            Some("UserService".to_string()),
+            "test-repo",
+        );
+        entity.decorators = vec!["@Transactional".to_string()];
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("[groovy_method] save"));
+        assert!(embed_text.contains("Signature: def save(User user)"));
+        assert!(embed_text.contains("Saves the user"));
+        assert!(embed_text.contains("Decorators: @Transactional"));
+    }
+
+    #[test]
+    fn test_build_embed_text_groovy_property() {
+        let entity = ParsedEntity::new(
+            "config",
+            EntityKind::GroovyProperty,
+            "com.example.App.config",
+            None,
+            None,
+            "groovy",
+            "App.groovy",
+            3,
+            3,
+            None,
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("[groovy_property] config"));
+    }
 }

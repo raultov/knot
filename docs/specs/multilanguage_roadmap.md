@@ -6,17 +6,18 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.9.3):**
-- Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, HTML, CSS, SCSS support
+**Current State (v0.10.0 → v0.10.5-dev):**
+- Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
-- Python Phases 1-6 complete: full extraction, calls, imports, constants, value references, inheritance, decorators, type hints, *args/**kwargs, Py2/Py3 syntax
+- Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile extraction
+- Groovy: standard .groovy files via tree-sitter-groovy (classes, interfaces, enums, methods, fields)
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file)
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
-- 375 unit tests | 66+ E2E tests across all languages
+- 426 unit tests | 74+ E2E tests across all languages
 
 **Goal:** Extend `knot` to become the standard indexer for hybrid web projects with full cross-language dependency resolution and support for Python and C/C++.
 
@@ -40,22 +41,41 @@ Enable `knot` to index Python codebases with full semantic understanding of AST,
 
 ---
 
-## Phase 9: Build Systems & CI/CD Support (v0.10.x)
+## Phase 9: Build Systems & CI/CD Support (v0.10.0)
 
 ### Objective
-Enable `knot` to index project infrastructure and build configurations. By understanding `build.gradle`, `pom.xml`, and `Jenkinsfile`, the MCP server will be able to answer semantic questions about project dependencies, custom build tasks, and deployment pipeline stages. (See full specs in `phase_9_build_systems_plan.md`).
+Enable `knot` to index project infrastructure and build configurations. By understanding `build.gradle`, `pom.xml`, and `Jenkinsfile`, the MCP server will be able to answer semantic questions about project dependencies, custom build tasks, and deployment pipeline stages.
 
-#### Planned
-- tree-sitter-groovy and tree-sitter-xml integration
-- Gradle build script entity extraction (`build.gradle`, `settings.gradle`)
-- Maven dependency and plugin extraction (`pom.xml`)
-- Jenkins pipeline stage and step tracking (`Jenkinsfile`)
-- BuildDependency, BuildPlugin, BuildTask, PipelineStage, and PipelineStep entity kinds
-- Task and dependency graph construction
+#### Planned → ✅ Completed
+- ✅ Maven pom.xml extraction via roxmltree (dependencies + plugins)
+- ✅ Gradle build.gradle extraction via custom Groovy parser (deps + plugins + tasks)
+- ✅ Jenkinsfile pipeline extraction via custom Groovy parser (stages + steps)
+- ✅ BuildDependency, BuildPlugin, BuildTask, PipelineStage, PipelineStep entity kinds
+- ✅ 22 unit tests (6 XML + 12 Gradle + 4 Jenkins)
+- ✅ 8 E2E tests (Maven search, pom.xml explore, Gradle dep/task search, Jenkins stage/step search)
+- ✅ Explore_file output formatting for all 5 new entity kinds
 
 ---
 
-## Phase 10: C/C++ Support (v0.11.x)
+## Phase 10: Full Groovy Language Support (v0.10.5 — in progress)
+
+### Objective
+Enable `knot` to parse and semantically understand standard Groovy source files beyond build scripts, integrating `tree-sitter-groovy` into the Rust pipeline.
+
+#### Current Status
+- ✅ tree-sitter-groovy v0.1.2 integration
+- ✅ 7 new EntityKind variants: GroovyClass, GroovyInterface, GroovyTrait, GroovyMethod, GroovyFunction, GroovyEnum, GroovyProperty
+- ✅ groovy.scm tree-sitter queries for class/interface/enum/method/field/constructor extraction
+- ✅ Standard .groovy file parser (extract_entities_groovy_standard) sharing JVM reference extraction with Java
+- ✅ Explore_file Markdown sections (Classes/Interfaces/Traits/Enums/Methods/Functions/Properties Groovy)
+- ✅ 10 new unit tests + 5 embedding tests
+- ✅ E2E suite (5 tests: class search, interface search, enum search, method search, explore_file)
+- 🔲 Known limitation: tree-sitter-groovy does not support `def` keyword methods (Java-compatible grammar only)
+- 🔲 Known limitation: traits not detected as separate entity (parsed as class_declaration)
+
+---
+
+## Phase 11: C/C++ Support (v0.11.x)
 
 ### Objective
 Enable `knot` to index C and C++ codebases, focusing on pointer relationships, header inclusion graphs, and macro analysis.
@@ -75,8 +95,9 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 | Phase 1-6: JS/HTML/CSS/Kotlin/CLI | - | ✅ Completed |
 | Phase 7: Rust | High | ✅ Completed (v0.8.11) |
 | Phase 8: Python | High | ✅ Completed (v0.9.3) |
-| Phase 9: Groovy | Medium | 📋 Planned (v0.10.x) |
-| Phase 10: C/C++ | High | 📋 Planned (v0.11.x) |
+| Phase 9: Build Systems (Maven/Gradle/Jenkins) | Medium | ✅ Completed (v0.10.0) |
+| Phase 10: Groovy Language Support | Medium | 🚧 In Progress (v0.10.5) |
+| Phase 11: C/C++ | High | 📋 Planned (v0.11.x) |
 
 ---
 

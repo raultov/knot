@@ -237,7 +237,12 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )?
         }
-        "groovy" | "gradle" | "jenkinsfile" => {
+        "groovy" => languages::groovy::extract_entities_groovy_standard(
+            &source,
+            &file_path,
+            &parse_cfg.repo_name,
+        ),
+        "gradle" | "jenkinsfile" => {
             languages::groovy::extract_entities_groovy(&source, &file_path, &parse_cfg.repo_name)
         }
         "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),

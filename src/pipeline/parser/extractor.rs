@@ -4,7 +4,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
-use super::languages::{css, html, java, javascript, kotlin, python, rust, typescript};
+use super::languages::{css, groovy, html, java, javascript, kotlin, python, rust, typescript};
 use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
@@ -409,6 +409,44 @@ pub(crate) fn extract_entities(
                         node.start_position().row + 1,
                     ) {
                         reference_intents.push(intent);
+                    }
+                }
+                // Groovy: Handle Groovy entity captures (JVM-shared grammar with Java)
+                name_or_intent if name_or_intent.starts_with("groovy.") => {
+                    if let Some((entity_name, entity_kind, entity_line)) =
+                        groovy::handle_groovy_capture(name_or_intent, &text, node)
+                    {
+                        name = Some(entity_name);
+                        kind = Some(entity_kind.clone());
+                        start_line = entity_line;
+                        // Find parent node using same patterns as Java (shared grammar)
+                        entity_node = match name_or_intent {
+                            n if n.contains("class") => {
+                                find_parent_by_kind(node, "class_declaration")
+                            }
+                            n if n.contains("interface") => {
+                                find_parent_by_kind(node, "interface_declaration")
+                            }
+                            n if n.contains("enum") => {
+                                find_parent_by_kind(node, "enum_declaration")
+                            }
+                            n if n.contains("method") => {
+                                find_parent_by_kind(node, "method_declaration").or_else(|| {
+                                    find_parent_by_kind(node, "constructor_declaration")
+                                })
+                            }
+                            _ => node.parent(),
+                        };
+                        // For Groovy methods/constructors, reuse Java's reference extraction (shared grammar)
+                        if matches!(entity_kind, EntityKind::GroovyMethod)
+                            && let Some(method_node) = entity_node
+                        {
+                            java::extract_reference_intents_java(
+                                method_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
                     }
                 }
                 // Ignore unhandled captures

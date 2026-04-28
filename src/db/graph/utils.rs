@@ -48,6 +48,13 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::BuildTask => "BuildTask",
         EntityKind::PipelineStage => "PipelineStage",
         EntityKind::PipelineStep => "PipelineStep",
+        EntityKind::GroovyClass => "GroovyClass",
+        EntityKind::GroovyInterface => "GroovyInterface",
+        EntityKind::GroovyTrait => "GroovyTrait",
+        EntityKind::GroovyMethod => "GroovyMethod",
+        EntityKind::GroovyFunction => "GroovyFunction",
+        EntityKind::GroovyEnum => "GroovyEnum",
+        EntityKind::GroovyProperty => "GroovyProperty",
     }
 }
 
@@ -166,6 +173,18 @@ mod tests {
             EntityKind::PythonMethod,
             EntityKind::PythonModule,
             EntityKind::PythonConstant,
+            EntityKind::BuildDependency,
+            EntityKind::BuildPlugin,
+            EntityKind::BuildTask,
+            EntityKind::PipelineStage,
+            EntityKind::PipelineStep,
+            EntityKind::GroovyClass,
+            EntityKind::GroovyInterface,
+            EntityKind::GroovyTrait,
+            EntityKind::GroovyMethod,
+            EntityKind::GroovyFunction,
+            EntityKind::GroovyEnum,
+            EntityKind::GroovyProperty,
         ];
 
         let expected_labels = [
@@ -202,6 +221,18 @@ mod tests {
             "PythonMethod",
             "PythonModule",
             "PythonConstant",
+            "BuildDependency",
+            "BuildPlugin",
+            "BuildTask",
+            "PipelineStage",
+            "PipelineStep",
+            "GroovyClass",
+            "GroovyInterface",
+            "GroovyTrait",
+            "GroovyMethod",
+            "GroovyFunction",
+            "GroovyEnum",
+            "GroovyProperty",
         ];
 
         for (variant, expected_label) in variants.iter().zip(expected_labels.iter()) {

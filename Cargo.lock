@@ -2051,6 +2051,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-css",
+ "tree-sitter-groovy",
  "tree-sitter-html",
  "tree-sitter-java",
  "tree-sitter-javascript",
@@ -4282,6 +4283,16 @@ name = "tree-sitter-css"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ad6489794d41350d12a7fbe520e5199f688618f43aace5443980d1ddcf1b29e"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-groovy"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a20016017f0865ba902ca50354f92429de5de8df994e64ab7fae087a13c40ed"
 dependencies = [
  "cc",
  "tree-sitter-language",

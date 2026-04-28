@@ -157,6 +157,20 @@ pub(crate) fn compute_fqn_and_context(
         | EntityKind::BuildTask
         | EntityKind::PipelineStage
         | EntityKind::PipelineStep => name.to_string(),
+        // Groovy entities
+        EntityKind::GroovyClass
+        | EntityKind::GroovyInterface
+        | EntityKind::GroovyTrait
+        | EntityKind::GroovyFunction
+        | EntityKind::GroovyEnum
+        | EntityKind::GroovyProperty => name.to_string(),
+        EntityKind::GroovyMethod => {
+            if let Some(class_name) = &enclosing_class {
+                format!("{}.{}", class_name, name)
+            } else {
+                name.to_string()
+            }
+        }
     };
 
     (fqn, enclosing_class)
