@@ -603,19 +603,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.9.3 — Python Complete & CI Fixes) ✅
-- ✅ **Python Extraction (Phase 1)**: tree-sitter-python integration with EntityKind variants for `PythonClass`, `PythonFunction`, `PythonMethod`
-- ✅ **Python Structural Extraction (Phase 2)**: `class_definition`, `function_definition` (top-level), lambda assignment captures
-- ✅ **Python References & Calls (Phase 3)**: Direct call (`identifier()`) and method call (`object.method()`) resolution, `print_statement` (Py2) support. `CALLS` edges in the dependency graph.
-- ✅ **Python Imports & Module Graph (Phase 4)**: `import os` and `from django.db import models` detection via `TypeReference`. `PythonConstant` extraction (UPPER_CASE identifiers). `PythonModule` synthetic entity for module-level orphans.
-- ✅ **Python ValueReferences (Phase 4.5)**: `action=EnumAction` patterns via `keyword_argument` detection. Creates `REFERENCES` edges for classes/functions used as argument values.
-- ✅ **Python Inheritance & Decorators (Phase 5)**: `EXTENDS` relationships from class inheritance (`class Dog(Animal)`). Decorator `CALLS` from `@staticmethod`, `@property`, `@dataclass`, `@route(...)`. Decorator names exposed in `explore_file` output.
-- ✅ **Python Advanced Testing (Phase 6)**: Generic type hints (`List[str]`, `Optional[Dict]`), `*args`/`**kwargs` parameter extraction, Py2/Py3 exception syntax compatibility, 5 additional unit tests, 4 additional E2E tests.
-- ✅ **Method vs Function Detection**: `is_inside_class_body()` parent walk distinguishes methods from functions
-- ✅ **Signature Extraction**: Parameter signatures captured for Python functions and methods
-- ✅ **CI Enhancements**: Replaced unreliable `nc -z` network checks with Neo4j-specific Docker health checks (`docker inspect`), eliminating `Connection reset by peer` errors. Added 5s sleep between test suites.
-- ✅ **Search Stability**: Fixed CLI search bug where `-r` filter flag was not correctly applied across Python/Rust/Kotlin searches.
-- ✅ **376 unit tests | 24 Python E2E Tests | 22 Rust E2E | 10 Kotlin E2E**
+### Current Release (v0.10.1 — Groovy Full Support) ✅
+- ✅ **Groovy Language Support (Phase 10)**: Hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators
+- ✅ **Package FQN & Scope Tracking**: `extract_package()`, `build_fqn()` (pkg.parent.method), brace-count scope tracking for `(Method)-[:BELONGS_TO]->(Class)` relationships in Neo4j
+- ✅ **Ad-hoc Reference Extraction**: `extract_method_calls()` populates `reference_intents` from Groovy method bodies via line-span filtering, enabling CALLS relationships for `def`-based methods
+- ✅ **Cross-language `find_callers`**: Java→Groovy (Helper.greet, Helper.add, Parser.parse) and Groovy→Groovy cross-class refs fully functional via Neo4j
+- ✅ **Spock Method Name Indexing**: Quoted Spock method names (`"addition of #num1 and #num2 should be #expected"`) extracted and indexed
+- ✅ **E2E Test Suites**: `run_groovy_e2e.sh` (5/5), `run_cross_lang_ref_e2e.sh` (6/6), `run_groovy_cross_ref_e2e.sh` (4/4) — all 15 Groovy E2E tests pass
+- ✅ **435 unit tests | clippy clean | fmt applied**
 
 ### Previous Release (v0.8.11 — CLI UX Enhancements & Rust Performance) ✅
 
@@ -642,6 +637,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Dry-Run Mode**: MCP server can run in offline mode for quality checks on deployment platforms.
 - ✅ **Platform-Agnostic**: Removed all platform-specific references; compatible with any deployment platform.
 - ✅ **Enhanced Reliability**: Graceful handling of missing database connections for validation scenarios.
+
+### Previous Release (v0.10.0 — Build Systems & CI/CD Support) ✅
+- ✅ **Build Systems Support (Phase 9)**: Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and Jenkinsfile pipeline (stages + steps) extraction
+- ✅ **22 unit tests + 8 E2E tests** (Maven search, pom.xml explore, Gradle dep/task search, Jenkins stage/step search)
+- ✅ **BuildDependency, BuildPlugin, BuildTask, PipelineStage, PipelineStep entity kinds** with explore_file formatting
+
+### Previous Release (v0.9.3 — Python Search Stability & CI Fixes) ✅
+- ✅ Fixed CLI `explore` & `search` queries that queried the default collection instead of test collection by appending `-r "$REPO_NAME"`
+- ✅ Python CLI search bug handled; resolved `knot search` queries failing in specific collection bounds
+- ✅ Replaced unreliable `nc -z` network checks with Neo4j-specific Docker health checks (`docker inspect`)
+- ✅ 426 unit tests | 23 Python E2E | 22 Rust E2E | 10 Kotlin E2E
 
 ### Earlier Release (v0.8.2 — Quality & Doc Refactor) ✅
 - ✅ **MCP Quality**: Enhanced tool descriptions for better agent discovery and usage safety.
@@ -672,13 +678,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 17 unit tests for Rust entity and reference extraction
 - ✅ 22 end-to-end integration tests covering all Rust language constructs
 
-### Upcoming (v0.10.x+)
-#### Phase 9: Groovy Support (v0.10.x)
-- [ ] Support `.groovy`, `.gradle`, `.jenkinsfile` files
-- [ ] Gradle build script entity extraction
-- [ ] Jenkins pipeline stage and step tracking
-- [ ] Closure and DSL method call resolution
-
+### Upcoming (v0.11.x)
 #### Phase 10: C/C++ Support (v0.11.x)
 - [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
 - [ ] Pointer and memory relationship tracking

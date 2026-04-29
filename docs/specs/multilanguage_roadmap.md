@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.10.0 → v0.10.5-dev):**
+**Current State (v0.10.1):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile extraction
@@ -57,21 +57,22 @@ Enable `knot` to index project infrastructure and build configurations. By under
 
 ---
 
-## Phase 10: Full Groovy Language Support (v0.10.5 — in progress)
+## Phase 10: Full Groovy Language Support (v0.10.1 — ✅ Completed)
 
 ### Objective
 Enable `knot` to parse and semantically understand standard Groovy source files beyond build scripts, integrating `tree-sitter-groovy` into the Rust pipeline.
 
-#### Current Status
+#### Planned → ✅ Completed
 - ✅ tree-sitter-groovy v0.1.2 integration
 - ✅ 7 new EntityKind variants: GroovyClass, GroovyInterface, GroovyTrait, GroovyMethod, GroovyFunction, GroovyEnum, GroovyProperty
 - ✅ groovy.scm tree-sitter queries for class/interface/enum/method/field/constructor extraction
 - ✅ Standard .groovy file parser (extract_entities_groovy_standard) sharing JVM reference extraction with Java
+- ✅ Hybrid tree-sitter + ad-hoc lexical parser for `def`-keyword, `trait`, and Spock-quoted method names
+- ✅ Ad-hoc reference extraction: `extract_method_calls()` populates `reference_intents` from Groovy method bodies via line-span filtering
+- ✅ Cross-language references: Java→Groovy and Groovy→Groovy `find_callers` (via Neo4j CALLS edges)
 - ✅ Explore_file Markdown sections (Classes/Interfaces/Traits/Enums/Methods/Functions/Properties Groovy)
-- ✅ 10 new unit tests + 5 embedding tests
-- ✅ E2E suite (5 tests: class search, interface search, enum search, method search, explore_file)
-- 🔲 Known limitation: tree-sitter-groovy does not support `def` keyword methods (Java-compatible grammar only)
-- 🔲 Known limitation: traits not detected as separate entity (parsed as class_declaration)
+- ✅ 10 new unit tests + 5 embedding tests + 8 FQN/scope/resilience tests + 8 E2E tests (cross-lang + groovy-only)
+- ✅ E2E suites: `run_groovy_e2e.sh` (5/5), `run_cross_lang_ref_e2e.sh` (6/6), `run_groovy_cross_ref_e2e.sh` (4/4)
 
 ---
 
@@ -96,7 +97,7 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 | Phase 7: Rust | High | ✅ Completed (v0.8.11) |
 | Phase 8: Python | High | ✅ Completed (v0.9.3) |
 | Phase 9: Build Systems (Maven/Gradle/Jenkins) | Medium | ✅ Completed (v0.10.0) |
-| Phase 10: Groovy Language Support | Medium | 🚧 In Progress (v0.10.5) |
+| Phase 10: Groovy Language Support | Medium | ✅ Completed (v0.10.1) |
 | Phase 11: C/C++ | High | 📋 Planned (v0.11.x) |
 
 ---
@@ -110,6 +111,19 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 ---
 
 ## Changelog
+
+### v0.10.1 - Groovy Reference Extraction Fix & E2E Test Suite
+- ✅ Fixed ad-hoc Groovy parser: `extract_method_calls()` now populates `reference_intents` from method bodies via line-span filtering, enabling CALLS relationships for `def`-based Groovy methods in Neo4j
+- ✅ Cross-language `find_callers`: Java→Groovy (Helper.greet, Helper.add, Parser.parse) fully functional
+- ✅ Groovy→Groovy cross-class `find_callers`: ClientA.groovy and ClientB.groovy both found as callers of Calculator.add/multiply
+- ✅ Added `run_cross_lang_ref_e2e.sh`: 6/6 tests (Java→Groovy)
+- ✅ Added `run_groovy_cross_ref_e2e.sh`: 4/4 tests (Groovy→Groovy cross-class refs)
+- ✅ E2E suites: all 15 Groovy E2E tests pass across 3 test scripts
+- ✅ 435 unit tests passing, clippy clean, fmt applied
+
+### v0.10.0 - Build Systems & CI/CD Support
+- ✅ Phase 9 complete: Maven pom.xml, Gradle build.gradle, Jenkinsfile extraction
+- ✅ 22 unit tests + 8 E2E tests
 
 ### v0.9.3 - Python Search Stability & CI Enhancements
 - ✅ Fixed Rust/Kotlin CLI `explore` & `search` queries that queried the default collection instead of test collection by appending `-r "$REPO_NAME"`
