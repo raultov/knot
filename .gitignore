@@ -1,6 +1,6 @@
 /target
 /data/
-./node_modules/
+/node_modules/
 .knot/
 
 # Local Database Persistent Storage
