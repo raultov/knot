@@ -95,7 +95,9 @@ pub(crate) fn extract_entities_groovy_standard(
         }
 
         // Try to extract class/interface/enum/trait if tree-sitter missed it
-        if let Some((name, kind)) = try_extract_type_declaration(trimmed) {
+        if !known_lines.contains(&line_num)
+            && let Some((name, kind)) = try_extract_type_declaration(trimmed)
+        {
             // Push to scope stack BEFORE brace_count is updated for the current line's `{`
             let fqn = if let Some(pkg) = &package {
                 format!("{}.{}", pkg, name)
@@ -113,48 +115,53 @@ pub(crate) fn extract_entities_groovy_standard(
         // Re-read enclosing after potential scope push
         let enclosing = scope_stack.last().map(|(n, _)| n.clone());
 
-        // Try to find a `def` method declaration
-        if let Some((method_name, signature)) = try_extract_def_method(trimmed) {
-            let fqn = build_fqn(&package, &enclosing, &method_name);
-            entities.push(ParsedEntity::new(
-                &method_name,
-                EntityKind::GroovyMethod,
-                &fqn,
-                Some(signature),
-                None,
-                "groovy",
-                file_path,
-                line_num,
-                line_num,
-                enclosing,
-                repo_name,
-            ));
-            continue;
-        }
-
-        // Try to find typed methods or script-level methods missed by tree-sitter
-        if let Some((method_name, signature)) = try_extract_typed_method(trimmed) {
-            // Filter false positives: method names that contain dots or look like object.method()
-            if method_name.contains('.')
-                || method_name.chars().all(|c| c.is_uppercase() || c == '_')
-            {
+        // Ad-hoc method/field/closure extraction only if tree-sitter didn't already find an entity at this line
+        if !known_lines.contains(&line_num) {
+            // Try to find a `def` method declaration
+            if let Some((method_name, signature)) = try_extract_def_method(trimmed) {
+                let fqn = build_fqn(&package, &enclosing, &method_name);
+                entities.push(ParsedEntity::new(
+                    &method_name,
+                    EntityKind::GroovyMethod,
+                    &fqn,
+                    Some(signature),
+                    None,
+                    "groovy",
+                    file_path,
+                    line_num,
+                    line_num,
+                    enclosing,
+                    repo_name,
+                ));
                 continue;
             }
-            let fqn = build_fqn(&package, &enclosing, &method_name);
-            entities.push(ParsedEntity::new(
-                &method_name,
-                EntityKind::GroovyMethod,
-                &fqn,
-                Some(signature),
-                None,
-                "groovy",
-                file_path,
-                line_num,
-                line_num,
-                enclosing,
-                repo_name,
-            ));
-            continue;
+
+            // Try to find typed methods or script-level methods missed by tree-sitter
+            if let Some((method_name, _signature)) = try_extract_typed_method(trimmed) {
+                // Filter false positives: method names that contain dots or look like object.method()
+                if method_name.contains('.')
+                    || method_name.chars().all(|c| c.is_uppercase() || c == '_')
+                {
+                    continue;
+                }
+                let sig_end = trimmed.find('{').unwrap_or(trimmed.len());
+                let signature_full = trimmed[..sig_end].trim().to_string();
+                let fqn = build_fqn(&package, &enclosing, &method_name);
+                entities.push(ParsedEntity::new(
+                    &method_name,
+                    EntityKind::GroovyMethod,
+                    &fqn,
+                    Some(signature_full),
+                    None,
+                    "groovy",
+                    file_path,
+                    line_num,
+                    line_num,
+                    enclosing,
+                    repo_name,
+                ));
+                continue;
+            }
         }
 
         // Try to extract properties or script-level variables
@@ -205,14 +212,14 @@ pub(crate) fn extract_entities_groovy_standard(
             end_boundary.saturating_sub(1)
         };
 
-        entities[*m_eidx].reference_intents = refs
-            .iter()
-            .filter(|r| match r {
-                ReferenceIntent::Call { line, .. } => *line > *m_start && *line <= actual_end,
-                _ => false,
-            })
-            .cloned()
-            .collect();
+        entities[*m_eidx].reference_intents.extend(
+            refs.iter()
+                .filter(|r| match r {
+                    ReferenceIntent::Call { line, .. } => *line > *m_start && *line <= actual_end,
+                    _ => false,
+                })
+                .cloned(),
+        );
     }
 
     entities
@@ -279,6 +286,18 @@ fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<Referen
 
         let mut chars = trimmed.char_indices().peekable();
         while let Some((i, c)) = chars.next() {
+            // Skip string literals to avoid false positives
+            if c == '\"' || c == '\'' {
+                while let Some((_, nc)) = chars.next() {
+                    if nc == c {
+                        break; // closing quote found
+                    }
+                    if nc == '\\' {
+                        let _ = chars.next(); // skip escaped char
+                    }
+                }
+                continue;
+            }
             if !c.is_alphabetic() && c != '_' {
                 continue;
             }
@@ -324,6 +343,34 @@ fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<Referen
                     receiver: None,
                     line: line_num,
                 });
+            }
+
+            // Pattern: no-paren call — word followed by string literal or identifier args
+            // Groovy style: runAnalyzer "abc", 123 or doSomething arg1, arg2
+            if !after_trimmed.is_empty()
+                && !keywords.contains(&word)
+                && word.len() > 1
+                && !after_trimmed.starts_with('(')
+                && !after_trimmed.starts_with('.')
+                && !after_trimmed.starts_with('=')
+                && !after_trimmed.starts_with('{')
+                && !after_trimmed.starts_with(')')
+                && !after_trimmed.starts_with(':')
+                && !after_trimmed.starts_with(';')
+            {
+                let first_arg_char = after_trimmed.chars().next().unwrap();
+                // Argument must start with string quote or identifier char
+                if first_arg_char == '"'
+                    || first_arg_char == '\''
+                    || first_arg_char.is_alphabetic()
+                    || first_arg_char == '$'
+                {
+                    refs.push(ReferenceIntent::Call {
+                        method: word.to_string(),
+                        receiver: None,
+                        line: line_num,
+                    });
+                }
             }
         }
     }
@@ -1353,4 +1400,121 @@ dependencies {
         assert!(entities.iter().any(|e| e.name == "method1"));
         assert!(entities.iter().any(|e| e.name == "method2"));
     }
+}
+
+#[test]
+fn test_all_typed_methods_no_duplication() {
+    // Both methods typed → tree-sitter finds both, ad-hoc must NOT duplicate (Fix 3: known_lines)
+    let source = r#"
+class HttpUtil {
+    private static void restartHttpServer() {
+        println "hello"
+    }
+    void loadIntoHttpServer(String html) {
+        restartHttpServer()
+    }
+}
+"#;
+    let entities = extract_entities_groovy_standard(source, "HttpUtil.groovy", "test-repo");
+    let r_count = entities
+        .iter()
+        .filter(|e| e.name == "restartHttpServer")
+        .count();
+    let l_count = entities
+        .iter()
+        .filter(|e| e.name == "loadIntoHttpServer")
+        .count();
+    assert_eq!(r_count, 1, "restartHttpServer duplicated");
+    assert_eq!(l_count, 1, "loadIntoHttpServer duplicated");
+}
+
+#[test]
+fn test_def_methods_call_typed_private_method() {
+    // Simulates LLM scenario: def method calling private typed method
+    let source = r#"
+class HttpUtil {
+    private static void restartHttpServer() {
+        println "hello"
+    }
+    def loadIntoHttpServer(String html) {
+        restartHttpServer()
+    }
+}
+"#;
+    let entities = extract_entities_groovy_standard(source, "HttpUtil.groovy", "test-repo");
+    let load = entities.iter().find(|e| e.name == "loadIntoHttpServer");
+    assert!(load.is_some(), "loadIntoHttpServer not found");
+    let load = load.unwrap();
+    let calls_to_restart = load
+        .reference_intents
+        .iter()
+        .filter(
+            |r| matches!(r, ReferenceIntent::Call { method, .. } if method == "restartHttpServer"),
+        )
+        .count();
+    assert!(
+        calls_to_restart > 0,
+        "Expected def method to have CALL to restartHttpServer"
+    );
+}
+
+#[test]
+fn test_no_paren_call_detection() {
+    // Fix 2: Groovy no-paren call style: runAnalyzer "abc", 123 and doSomething arg1
+    let source = r#"
+class Worker {
+    void process() {
+        runAnalyzer "abc", 123
+        doSomething result
+        println "hello"
+    }
+}
+"#;
+    let entities = extract_entities_groovy_standard(source, "Worker.groovy", "test-repo");
+    let process = entities
+        .iter()
+        .find(|e| e.name == "process")
+        .expect("process not found");
+    let refs: Vec<String> = process
+        .reference_intents
+        .iter()
+        .map(|r| match r {
+            ReferenceIntent::Call {
+                method,
+                receiver,
+                line,
+            } => format!(
+                "Call({}{}, line {})",
+                receiver
+                    .as_ref()
+                    .map(|r| format!("{}.", r))
+                    .unwrap_or_default(),
+                method,
+                line
+            ),
+            _ => format!("{:?}", r),
+        })
+        .collect();
+    eprintln!("process reference_intents: {:?}", refs);
+
+    // runAnalyzer "abc", 123 — no-paren call with string arg
+    let has_run = process
+        .reference_intents
+        .iter()
+        .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "runAnalyzer"));
+    assert!(has_run);
+
+    // doSomething result — no-paren call with identifier arg
+    let has_do = process
+        .reference_intents
+        .iter()
+        .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "doSomething"));
+    assert!(has_do);
+
+    // println — must NOT be captured (it's a keyword)
+    let has_println = process
+        .reference_intents
+        .iter()
+        .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "println"));
+    assert!(!has_println);
 }

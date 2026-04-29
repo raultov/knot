@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.10.1):**
+**Current State (v0.10.2):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile extraction
@@ -111,6 +111,13 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 ---
 
 ## Changelog
+
+### v0.10.2 - Groovy No-Paren Calls & Private Method Tracking
+- ✅ Fixed no-paren Groovy call detection: `extract_method_calls()` recognizes `runAnalyzer "abc", 123` style calls with string literal skipping
+- ✅ Fixed entity deduplication: `known_lines` from tree-sitter now gates ad-hoc extraction, preventing duplicate entities
+- ✅ Fixed reference intent overwrite: ad-hoc intents use `extend()` instead of `= collect()`, preserving tree-sitter intents
+- ✅ Private methods now correctly tracked: `find_callers` finds callers of private typed/`def` Groovy methods
+- ✅ 438 unit tests (3 new) + new `run_groovy_private_method_e2e.sh` (5/5)
 
 ### v0.10.1 - Groovy Reference Extraction Fix & E2E Test Suite
 - ✅ Fixed ad-hoc Groovy parser: `extract_method_calls()` now populates `reference_intents` from method bodies via line-span filtering, enabling CALLS relationships for `def`-based Groovy methods in Neo4j

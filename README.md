@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.5), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking, with planned support for C/C++.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.2), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking, with planned support for C/C++.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -40,7 +40,7 @@ This dual-database approach powers both:
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
 - **Rust** (v0.8.11): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.11**: O(N) nested macro traversal optimization for large Rust codebases with deeply nested `token_tree` nodes.
 - **Python** (v0.9.3): Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), Py2/Py3 exception syntax compatibility, and `self.method()` resolution with inherited method walking. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
-- **Groovy** (v0.10.1): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN (`com.example.MyClass.method`) and enclosing class relationships (`(Method)-[:BELONGS_TO]->(Class)`). Reuses JVM reference extraction from Java for call-graph resolution.
+- **Groovy** (v0.10.2): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. **NEW in v0.10.2**: No-paren call detection, entity deduplication via `known_lines`, fixed reference intent overwrite bug (extend instead of replace).
 - **Build Systems** (v0.10.0): Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and `Jenkinsfile` pipeline (stages + steps) extraction.
 - **C/C++** (Planned v0.11.x): Pointer relationships and macro analysis
 
@@ -603,14 +603,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.10.1 — Groovy Full Support) ✅
-- ✅ **Groovy Language Support (Phase 10)**: Hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators
-- ✅ **Package FQN & Scope Tracking**: `extract_package()`, `build_fqn()` (pkg.parent.method), brace-count scope tracking for `(Method)-[:BELONGS_TO]->(Class)` relationships in Neo4j
-- ✅ **Ad-hoc Reference Extraction**: `extract_method_calls()` populates `reference_intents` from Groovy method bodies via line-span filtering, enabling CALLS relationships for `def`-based methods
-- ✅ **Cross-language `find_callers`**: Java→Groovy (Helper.greet, Helper.add, Parser.parse) and Groovy→Groovy cross-class refs fully functional via Neo4j
-- ✅ **Spock Method Name Indexing**: Quoted Spock method names (`"addition of #num1 and #num2 should be #expected"`) extracted and indexed
-- ✅ **E2E Test Suites**: `run_groovy_e2e.sh` (5/5), `run_cross_lang_ref_e2e.sh` (6/6), `run_groovy_cross_ref_e2e.sh` (4/4) — all 15 Groovy E2E tests pass
-- ✅ **435 unit tests | clippy clean | fmt applied**
+### Current Release (v0.10.2 — Groovy No-Paren Calls & Private Method Tracking) ✅
+- ✅ **No-Paren Call Detection**: `extract_method_calls()` recognizes Groovy no-paren call style (`runAnalyzer "abc", 123`), with string literal skipping to avoid false positives
+- ✅ **Entity Deduplication**: `known_lines` from tree-sitter entities gates ad-hoc extraction, preventing duplicate entities for the same method
+- ✅ **Reference Intent Fix**: Ad-hoc `reference_intents` now use `extend()` instead of `= collect()`, preserving tree-sitter intents alongside ad-hoc intents
+- ✅ **Private Method Tracking**: `find_callers` correctly identifies callers of private Groovy methods (typed, `def`, and no-paren calling styles)
+- ✅ **438 unit tests | 5 new E2E private method tests | clippy clean**
 
 ### Previous Release (v0.8.11 — CLI UX Enhancements & Rust Performance) ✅
 
