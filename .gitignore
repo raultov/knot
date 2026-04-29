@@ -1,6 +1,8 @@
 /target
 /data/
 /node_modules/
+package.json
+package-lock.json
 .knot/
 
 # Local Database Persistent Storage
