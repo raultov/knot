@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.2), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking, with planned support for C/C++.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking, with planned support for C/C++.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -40,7 +40,7 @@ This dual-database approach powers both:
 - **CSS/SCSS** (v0.6.4+): Stylesheet indexing with class/ID selector extraction and variable tracking (CSS/SCSS variables, mixins, functions)
 - **Rust** (v0.8.11): Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. **NEW in v0.8.6**: Type alias, constant, static, and macro definition extraction with full docstring and signature support. **NEW in v0.8.7**: Enhanced type reference detection inside macros (`vec![]`, `println!()`, `assert!()`, etc.) with intelligent string literal filtering and comprehensive edge case handling. **NEW in v0.8.11**: O(N) nested macro traversal optimization for large Rust codebases with deeply nested `token_tree` nodes.
 - **Python** (v0.9.3): Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), Py2/Py3 exception syntax compatibility, and `self.method()` resolution with inherited method walking. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
-- **Groovy** (v0.10.2): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. **NEW in v0.10.2**: No-paren call detection, entity deduplication via `known_lines`, fixed reference intent overwrite bug (extend instead of replace).
+- **Groovy** (v0.10.3): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. **NEW in v0.10.3**: Multi-line signatures (closure default params), assignment-vs-declaration disambiguation, innermost assignment for nested closures, UUID collision fix for duplicate method names, `find_callers` accurately tracks private methods including those in anonymous `new AnAction` closures.
 - **Build Systems** (v0.10.0): Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and `Jenkinsfile` pipeline (stages + steps) extraction.
 - **C/C++** (Planned v0.11.x): Pointer relationships and macro analysis
 
@@ -603,12 +603,16 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.10.2 — Groovy No-Paren Calls & Private Method Tracking) ✅
-- ✅ **No-Paren Call Detection**: `extract_method_calls()` recognizes Groovy no-paren call style (`runAnalyzer "abc", 123`), with string literal skipping to avoid false positives
-- ✅ **Entity Deduplication**: `known_lines` from tree-sitter entities gates ad-hoc extraction, preventing duplicate entities for the same method
-- ✅ **Reference Intent Fix**: Ad-hoc `reference_intents` now use `extend()` instead of `= collect()`, preserving tree-sitter intents alongside ad-hoc intents
-- ✅ **Private Method Tracking**: `find_callers` correctly identifies callers of private Groovy methods (typed, `def`, and no-paren calling styles)
-- ✅ **438 unit tests | 5 new E2E private method tests | clippy clean**
+### Current Release (v0.10.3 — Groovy Private Methods, Nested Closures & UUID Collision Fix) ✅
+- ✅ **UUID Collision Fix**: `ParsedEntity` identity now includes `start_line` to prevent entities with identical name/FQN in the same file from colliding (e.g., multiple `@Override void actionPerformed(...)` in anonymous `new AnAction` closures)
+- ✅ **Multi-line Method Extraction**: `try_extract_typed_method_multiline` handles method signatures spanning multiple lines (closure default params)
+- ✅ **Innermost Assignment**: Method calls inside nested closures are assigned to the innermost method, not the outer container (e.g., `hyperlinkUpdate` inside `showGrabbingFinishedMessage`)
+- ✅ **Assignment-vs-Declaration Disambiguation**: `try_extract_typed_method` rejects `=` before `(` and `new Type(...)` constructor patterns
+- ✅ **Brace-Scope `end_line` Fix**: `find_method_body_end` estimates method body closing line via brace matching with string-awareness
+- ✅ **Java Ref Extraction Removed for Groovy**: Tree-sitter `method_invocation` nodes are unreliable for Groovy closures; ad-hoc `extract_method_calls` + innermost assignment handles all cases
+- ✅ **10 E2E test cases** (`run_groovy_private_method_e2e.sh`): typed/`def`/no-paren callers, multi-line closures, innermost assignment, UIPattern duplicate-method-name test
+- ✅ **CI**: All 3 Groovy E2E suites (`run_groovy_e2e.sh`, `run_groovy_cross_ref_e2e.sh`, `run_groovy_private_method_e2e.sh`) run on every push/PR
+- ✅ **441 unit tests | clippy clean | fmt applied**
 
 ### Previous Release (v0.8.11 — CLI UX Enhancements & Rust Performance) ✅
 

@@ -3,6 +3,7 @@
 /node_modules/
 package.json
 package-lock.json
+publish_at_utc.sh
 .knot/
 
 # Local Database Persistent Storage

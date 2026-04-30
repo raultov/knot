@@ -437,16 +437,11 @@ pub(crate) fn extract_entities(
                             }
                             _ => node.parent(),
                         };
-                        // For Groovy methods/constructors, reuse Java's reference extraction (shared grammar)
-                        if matches!(entity_kind, EntityKind::GroovyMethod)
-                            && let Some(method_node) = entity_node
-                        {
-                            java::extract_reference_intents_java(
-                                method_node,
-                                source_bytes,
-                                &mut reference_intents,
-                            );
-                        }
+                        // Groovy reference extraction is handled by ad-hoc `extract_method_calls`
+                        // in extract_entities_groovy_standard(), which uses innermost assignment.
+                        // Java's tree-sitter ref extraction is unreliable for Groovy because
+                        // tree-sitter-groovy misparses methods nested inside closures (e.g.,
+                        // `new AnAction() { @Override void actionPerformed(...) { ... } }`).
                     }
                 }
                 // Ignore unhandled captures

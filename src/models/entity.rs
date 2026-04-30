@@ -300,7 +300,7 @@ impl ParsedEntity {
         let repo_name = repo_name.into();
 
         // Generate deterministic UUID from unique identity
-        let identity = format!("{}:{}:{}", repo_name, file_path, fqn);
+        let identity = format!("{}:{}:{}:{}", repo_name, file_path, fqn, start_line);
         let uuid = Uuid::new_v5(&NAMESPACE_KNOT, identity.as_bytes());
 
         Self {

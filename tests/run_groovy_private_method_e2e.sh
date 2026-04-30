@@ -111,6 +111,92 @@ class PrivateMethods {
 }
 EOF
 
+# File 2: HttpUtil-like — private method with multi-line signature and closure args
+cat > "$TMP_REPO_DIR/src/main/groovy/com/example/HttpUtil.groovy" << 'EOF'
+package com.example
+
+class HttpUtil {
+    static String loadIntoHttpServer(String html) {
+        def server = restartHttpServer("web", "/tmp", {null}, {log?.errorOnHttpRequest(it.toString())})
+        "http://localhost"
+    }
+
+    private static SimpleHttpServer restartHttpServer(String id, String webRootPath,
+                                                       Closure handler = {null},
+                                                       Closure errorListener = {}) {
+        def server = new SimpleHttpServer()
+        server
+    }
+}
+EOF
+
+# File 3: Nested methods — outer container must NOT steal references from inner methods
+# Replicates the pattern from code-history-mining UI.groovy:
+#   showGrabbingFinishedMessage() containing hyperlinkUpdate() which calls runAnalyzer().
+#   Only hyperlinkUpdate (innermost) should appear as caller of runAnalyzer.
+cat > "$TMP_REPO_DIR/src/main/groovy/com/example/NestedMethods.groovy" << 'EOF'
+package com.example
+
+class NestedMethods {
+    def showGrabbingFinishedMessage(String message) {
+        show(message, new Listener() {
+            @Override void hyperlinkUpdate(String event) {
+                runAnalyzer("visualize")
+            }
+        })
+    }
+
+    def show(message, Listener listener) {
+    }
+
+    private void runAnalyzer(String action) {
+        println action
+    }
+}
+EOF
+
+# File 4: Replicates code-history-mining UI.groovy pattern:
+#   createActionsOnHistoryFile contains an inner actionPerformed that calls runAnalyzer.
+#   A SEPARATE actionPerformed elsewhere does NOT call runAnalyzer.
+#   Only the correct one should appear as caller of runAnalyzer.
+cat > "$TMP_REPO_DIR/src/main/groovy/com/example/UIPattern.groovy" << 'EOF'
+package com.example
+
+class UIPattern {
+    def showInBrowser(String html) {
+        loadIntoHttpServer(html)
+    }
+
+    static String loadIntoHttpServer(String html) {
+        "http://..."
+    }
+
+    private AnAction createActionsOnHistoryFile(File file) {
+        new AnAction("Run") {
+            @Override void actionPerformed(AnActionEvent event) {
+                runAnalyzer(file, event.project)
+            }
+        }
+    }
+
+    private runScriptAction() {
+        new AnAction("Execute") {
+            @Override void actionPerformed(AnActionEvent event) {
+                runCurrentFileAsScript(event.project)
+            }
+        }
+    }
+
+    def runCurrentFileAsScript(project) {
+        println "running script"
+    }
+
+    private void runAnalyzer(File file, project) {
+        println "analyzing"
+    }
+}
+EOF
+
 # ── Index the repo ─────────────────────────────────────
 echo -n "Indexing... "
 KNOT_REPO_PATH="$TMP_REPO_DIR" \
@@ -185,6 +271,62 @@ else
     echo "$OUT3"
     exit 1
 fi
+
+# ── Test 6: find_callers for multi-line private method with closure args ─
+echo -n "Test 6: find_callers restartHttpServer (multi-line closure args)... "
+OUT4=$(env "${KNOT_ENV[@]}" "$PROJECT_ROOT/target/debug/knot" callers restartHttpServer --repo "$REPO_NAME" 2>&1)
+if echo "$OUT4" | grep -q "loadIntoHttpServer"; then
+    echo -e "${GREEN}✓ loadIntoHttpServer found as caller${NC}"
+else
+    echo -e "${RED}✗ loadIntoHttpServer NOT found as caller of restartHttpServer${NC}"
+    echo "$OUT4"
+    exit 1
+fi
+
+# ── Test 7: innermost assignment — nested method gets the reference ─
+echo -n "Test 7: find_callers runAnalyzer (innermost caller)... "
+OUT5=$(env "${KNOT_ENV[@]}" "$PROJECT_ROOT/target/debug/knot" callers runAnalyzer --repo "$REPO_NAME" 2>&1)
+if echo "$OUT5" | grep -q "hyperlinkUpdate"; then
+    echo -e "${GREEN}✓ hyperlinkUpdate found as caller${NC}"
+else
+    echo -e "${RED}✗ hyperlinkUpdate NOT found as caller of runAnalyzer${NC}"
+    echo "$OUT5"
+    exit 1
+fi
+
+# ── Test 8: innermost assignment — outer container must NOT appear ─
+echo -n "Test 8: find_callers runAnalyzer (outer NOT a caller)... "
+if echo "$OUT5" | grep -q "showGrabbingFinishedMessage"; then
+    echo -e "${RED}✗ showGrabbingFinishedMessage incorrectly listed as caller${NC}"
+    echo "$OUT5"
+    exit 1
+else
+    echo -e "${GREEN}✓ showGrabbingFinishedMessage correctly absent${NC}"
+fi
+
+# ── Test 9: runAnalyzer caller should be the inner actionPerformed (not the outer one) ─
+echo -n "Test 9: find_callers runAnalyzer (correct actionPerformed)... "
+OUT6=$(env "${KNOT_ENV[@]}" "$PROJECT_ROOT/target/debug/knot" callers runAnalyzer --repo "$REPO_NAME" 2>&1)
+# The inner actionPerformed calls runAnalyzer. It should appear in the callers.
+# The outer actionPerformed does NOT call runAnalyzer and should NOT appear.
+if echo "$OUT6" | grep -q "actionPerformed"; then
+    echo -e "${GREEN}✓ actionPerformed found as caller${NC}"
+else
+    echo -e "${RED}✗ actionPerformed NOT found as caller${NC}"
+    echo "$OUT6"
+    exit 1
+fi
+
+# ── Test 10: the outer actionPerformed must NOT be caller (no duplicate) ─
+echo -n "Test 10: find_callers runAnalyzer (no duplicate actionPerformed)... "
+# The output should have at most one actionPerformed line from UIPattern.groovy
+UIP_COUNT=$(echo "$OUT6" | grep -c "UIPattern.groovy" || true)
+if echo "$OUT6" | grep -q "runCurrentFileAsScript" && echo "$OUT6" | grep -q "actionPerformed"; then
+    echo -e "${RED}✗ runCurrentFileAsScript incorrectly associated with actionPerformed${NC}"
+    echo "$OUT6"
+    exit 1
+fi
+echo -e "${GREEN}✓ no cross-contamination${NC}"
 
 # Cleanup before trap
 docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v > /dev/null 2>&1

@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.10.2):**
+**Current State (v0.10.3):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile extraction
@@ -111,6 +111,17 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 ---
 
 ## Changelog
+
+### v0.10.3 - Groovy Nested Methods, Innermost Assignment & UUID Collision Fix
+- ✅ Fixed UUID collision: `ParsedEntity` identity now includes `start_line` to prevent entities with identical name/FQN in same file from colliding (e.g., multiple `actionPerformed` in `new AnAction` closures)
+- ✅ Innermost assignment: method calls in nested closures go to the innermost method, not the outer container (fixes `showGrabbingFinishedMessage`/`hyperlinkUpdate` and `createActionsOnHistoryFile`/`actionPerformed` patterns)
+- ✅ Multi-line method signatures: `try_extract_typed_method_multiline` handles closure default params spanning multiple lines
+- ✅ Assignment-vs-declaration disambiguation: `=` check and `new Type(...)` constructor rejection
+- ✅ Brace-scope `end_line` fix: `find_method_body_end` with string-aware brace matching
+- ✅ Removed Java tree-sitter ref extraction for Groovy (`method_invocation` nodes unreliable for closures)
+- ✅ `tests/run_groovy_private_method_e2e.sh`: 10 tests (typed/`def`/no-paren callers, multi-line closures, innermost assignment, UIPattern duplicate-name)
+- ✅ CI updated: all 3 Groovy E2E suites run on every push/PR
+- ✅ 441 unit tests (3 new Groovy tests) | clippy clean
 
 ### v0.10.2 - Groovy No-Paren Calls & Private Method Tracking
 - ✅ Fixed no-paren Groovy call detection: `extract_method_calls()` recognizes `runAnalyzer "abc", 123` style calls with string literal skipping

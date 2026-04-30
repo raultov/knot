@@ -137,6 +137,7 @@ pub(crate) fn extract_entities_groovy_standard(
             }
 
             // Try to find typed methods or script-level methods missed by tree-sitter
+            // First, try single-line detection
             if let Some((method_name, _signature)) = try_extract_typed_method(trimmed) {
                 // Filter false positives: method names that contain dots or look like object.method()
                 if method_name.contains('.')
@@ -156,6 +157,29 @@ pub(crate) fn extract_entities_groovy_standard(
                     "groovy",
                     file_path,
                     line_num,
+                    line_num,
+                    enclosing,
+                    repo_name,
+                ));
+                continue;
+            }
+
+            // Multi-line method detection: method signature with `(` but no `)` on this line,
+            // spanning multiple lines (e.g., closure default parameter values)
+            if let Some((method_name, method_start_line)) =
+                try_extract_typed_method_multiline(source, line_idx)
+                && !method_name.contains('.')
+            {
+                let fqn = build_fqn(&package, &enclosing, &method_name);
+                entities.push(ParsedEntity::new(
+                    &method_name,
+                    EntityKind::GroovyMethod,
+                    &fqn,
+                    None,
+                    None,
+                    "groovy",
+                    file_path,
+                    method_start_line,
                     line_num,
                     enclosing,
                     repo_name,
@@ -183,6 +207,18 @@ pub(crate) fn extract_entities_groovy_standard(
         }
     }
 
+    // Fix end_line for all methods (both tree-sitter and ad-hoc) that
+    // couldn't determine their body closing line.
+    for entity in entities.iter_mut() {
+        if entity.kind == EntityKind::GroovyMethod
+            && entity.end_line == entity.start_line
+            && let Some(end_line) = find_method_body_end(source, entity.start_line)
+            && end_line > entity.start_line
+        {
+            entity.end_line = end_line;
+        }
+    }
+
     // Extract reference intents: for each method, scan source lines after its signature
     let mut method_spans: Vec<(usize, usize, usize)> = entities
         .iter()
@@ -199,27 +235,26 @@ pub(crate) fn extract_entities_groovy_standard(
 
     let refs = extract_method_calls(source, &entities);
 
-    for (idx, (m_start, m_end, m_eidx)) in method_spans.iter().enumerate() {
-        // End boundary: next method/entity start, or EOF
-        let end_boundary = method_spans
-            .get(idx + 1)
-            .map(|(s, _, _)| *s)
-            .unwrap_or(usize::MAX);
-        // Use tracked end_line if available (tree-sitter), otherwise next entity boundary
-        let actual_end = if *m_end != *m_start {
-            *m_end
-        } else {
-            end_boundary.saturating_sub(1)
-        };
-
-        entities[*m_eidx].reference_intents.extend(
-            refs.iter()
-                .filter(|r| match r {
-                    ReferenceIntent::Call { line, .. } => *line > *m_start && *line <= actual_end,
-                    _ => false,
+    // Assign each reference intent to the innermost containing method.
+    // When methods are nested (e.g., hyperlinkUpdate inside showGrabbingFinishedMessage),
+    // we assign the call to the deepest method, not the outer container.
+    for method_ref in refs.iter() {
+        if let ReferenceIntent::Call { line, .. } = method_ref {
+            // Find all methods that contain this line
+            let mut candidates: Vec<(usize, usize, usize)> = method_spans
+                .iter()
+                .filter(|(m_start, m_end, _)| {
+                    let actual_end = if *m_end != *m_start { *m_end } else { *m_start };
+                    *line > *m_start && *line <= actual_end
                 })
-                .cloned(),
-        );
+                .copied()
+                .collect();
+            // Pick the innermost: smallest (end - start) wins
+            candidates.sort_by_key(|(s, e, _)| e.saturating_sub(*s));
+            if let Some(&(_, _, m_eidx)) = candidates.first() {
+                entities[m_eidx].reference_intents.push(method_ref.clone());
+            }
+        }
     }
 
     entities
@@ -414,6 +449,60 @@ fn build_fqn(package: &Option<String>, parent: &Option<String>, name: &str) -> S
 }
 
 /// Tries to extract class, interface, enum, or trait declarations
+/// Scans forward from `line_num` to find the matching closing `}` of the method body.
+fn find_method_body_end(source: &str, line_num: usize) -> Option<usize> {
+    let mut chars = source.chars().peekable();
+    let mut current_line = 1usize;
+    let mut brace_depth = 0i32;
+    let mut found_opening = false;
+
+    while current_line < line_num {
+        match chars.next() {
+            Some('\n') => current_line += 1,
+            Some(_) => {}
+            None => return None,
+        }
+    }
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\n' => current_line += 1,
+            '/' => {
+                if chars.peek() == Some(&'/') {
+                    for c in chars.by_ref() {
+                        if c == '\n' {
+                            current_line += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            '"' | '\'' => {
+                let quote = ch;
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        let _ = chars.next();
+                    } else if c == quote {
+                        break;
+                    }
+                }
+            }
+            '{' => {
+                brace_depth += 1;
+                found_opening = true;
+            }
+            '}' => {
+                brace_depth -= 1;
+                if found_opening && brace_depth == 0 {
+                    return Some(current_line);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn try_extract_type_declaration(line: &str) -> Option<(String, EntityKind)> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
 
@@ -475,6 +564,126 @@ fn try_extract_property(line: &str) -> Option<String> {
     None
 }
 
+/// Tries to extract a method name from a multi-line method signature.
+///
+/// Handles cases like:
+///   private static SimpleHttpServer restartHttpServer(String id, String webRootPath,
+///                                                      Closure handler = {null},
+///                                                      Closure errorListener = {}) {
+///
+/// where the opening `(` and closing `)` are on different lines.
+fn try_extract_typed_method_multiline(source: &str, line_idx: usize) -> Option<(String, usize)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let start_line = lines.get(line_idx)?;
+    let trimmed = start_line.trim();
+
+    let method_start_keywords = [
+        "private",
+        "public",
+        "protected",
+        "static",
+        "final",
+        "abstract",
+        "synchronized",
+        "volatile",
+        "transient",
+        "native",
+        "void",
+        "boolean",
+        "byte",
+        "short",
+        "int",
+        "long",
+        "float",
+        "double",
+        "char",
+        "String",
+        "Object",
+        "List",
+        "Map",
+        "Set",
+        "Closure",
+        "SimpleHttpServer",
+    ];
+
+    if trimmed.starts_with("if ")
+        || trimmed.starts_with("while ")
+        || trimmed.starts_with("for ")
+        || trimmed.starts_with("catch ")
+        || trimmed.starts_with("switch ")
+        || trimmed.starts_with("return ")
+    {
+        return None;
+    }
+
+    // Must contain `(` but not `)` on the same line
+    if !trimmed.contains('(') || trimmed.contains(')') {
+        return None;
+    }
+
+    let paren_idx = trimmed.find('(').unwrap();
+    if trimmed[..paren_idx].contains('=') {
+        return None;
+    }
+
+    let before_paren = trimmed[..paren_idx].trim();
+    let tokens: Vec<&str> = before_paren.split_whitespace().collect();
+
+    // Need at least 2 tokens (type keyword + method name)
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    // Check that tokens look like access modifiers / type / name pattern
+    let has_modifier = tokens.iter().any(|t| method_start_keywords.contains(t));
+    if !has_modifier {
+        // Also check if the second-to-last token looks like a type (starts with uppercase)
+        if tokens.len() >= 2 {
+            let second_last = tokens[tokens.len() - 2];
+            if !second_last.chars().next().is_some_and(|c| c.is_uppercase()) {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+
+    let name = tokens.last().unwrap();
+    let first_char = name.chars().next()?;
+    if !first_char.is_alphabetic() && first_char != '_' {
+        return None;
+    }
+
+    // Scan ahead for the closing `)` and opening `{` (within a reasonable window)
+    let max_lookahead = 10;
+    let mut found_close_paren = false;
+    for offset in 1..=max_lookahead {
+        let next_line = lines.get(line_idx + offset)?;
+        let next_trimmed = next_line.trim();
+
+        if !found_close_paren && next_trimmed.contains(')') {
+            found_close_paren = true;
+        }
+
+        if next_trimmed.contains('{') {
+            // Must have found `)` before `{`
+            if found_close_paren {
+                return Some((name.to_string(), line_idx + 1));
+            }
+            // `{` before `)` indicates a closure literal, not the method body
+        }
+
+        if next_trimmed.is_empty()
+            || next_trimmed.starts_with("//")
+            || next_trimmed.starts_with("/*")
+        {
+            continue;
+        }
+    }
+
+    None
+}
+
 /// Tries to extract a typed method name and signature
 fn try_extract_typed_method(line: &str) -> Option<(String, String)> {
     // Quick heuristic: contains `(` and `)` and `{`, doesn't start with `if`/`while`/`for`/`catch`
@@ -489,6 +698,17 @@ fn try_extract_typed_method(line: &str) -> Option<(String, String)> {
         }
 
         let paren_idx = line.find('(').unwrap();
+
+        // Reject assignment patterns like `def foo = bar(...)` — these are calls, not declarations
+        if line[..paren_idx].contains('=') {
+            return None;
+        }
+
+        // Reject constructor calls like `new File(...)` or `new SimpleHttpServer()`
+        if line[..paren_idx].contains("new ") || line[..paren_idx].ends_with(" new") {
+            return None;
+        }
+
         let before_paren = line[..paren_idx].trim();
 
         // Handle quoted method names (Spock feature methods)
@@ -1384,9 +1604,63 @@ dependencies {
         let source = "garbage {{{ // not valid groovy\nclass ";
         let entities = extract_entities_groovy_standard(source, "test.groovy", "test-repo");
         // Should not panic, just return what it can (likely empty)
+        assert!(entities.is_empty() || entities.iter().any(|e| e.name == "class"));
+    }
+
+    #[test]
+    fn test_innermost_assignment_nested_methods() {
+        // Replicates code-history-mining UI.groovy pattern:
+        // showGrabbingFinishedMessage contains hyperlinkUpdate which calls runAnalyzer.
+        // Only hyperlinkUpdate (innermost) should get the reference, NOT the outer container.
+        let source = r#"
+package com.example
+
+class NestedMethods {
+    def showGrabbingFinishedMessage(String message) {
+        show(message, new Listener() {
+            @Override void hyperlinkUpdate(String event) {
+                runAnalyzer("visualize")
+            }
+        })
+    }
+
+    def show(message, Listener listener) {
+    }
+
+    private void runAnalyzer(String action) {
+        println action
+    }
+}
+"#;
+        let entities =
+            extract_entities_groovy_standard(source, "NestedMethods.groovy", "test-repo");
+
+        // hyperlinkUpdate should get the runAnalyzer call
+        let hyperlink = entities
+            .iter()
+            .find(|e| e.name == "hyperlinkUpdate")
+            .expect("hyperlinkUpdate not found");
+        let hyper_has_run = hyperlink
+            .reference_intents
+            .iter()
+            .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "runAnalyzer"));
         assert!(
-            entities.len() <= 2,
-            "Expected at most 2 entities from malformed code"
+            hyper_has_run,
+            "hyperlinkUpdate should have CALL to runAnalyzer"
+        );
+
+        // showGrabbingFinishedMessage must NOT have the runAnalyzer call
+        let outer = entities
+            .iter()
+            .find(|e| e.name == "showGrabbingFinishedMessage")
+            .expect("showGrabbingFinishedMessage not found");
+        let outer_has_run = outer
+            .reference_intents
+            .iter()
+            .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "runAnalyzer"));
+        assert!(
+            !outer_has_run,
+            "showGrabbingFinishedMessage should NOT have CALL to runAnalyzer (belongs to hyperlinkUpdate)"
         );
     }
 
@@ -1517,4 +1791,141 @@ class Worker {
         .iter()
         .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "println"));
     assert!(!has_println);
+}
+
+#[test]
+fn test_private_method_with_closure_args_is_callable() {
+    // Replicates exact pattern from HttpUtil.groovy in code-history-mining:
+    // private static method with closure args, called from a public static method
+    let source = r#"
+package test
+import com.example.SimpleHttpServer
+class HttpUtil {
+    static String loadIntoHttpServer(String html) {
+        def server = restartHttpServer("web", "/tmp", {null}, {log?.errorOnHttpRequest(it.toString())})
+        "http://localhost"
+    }
+
+    private static SimpleHttpServer restartHttpServer(String id, String webRootPath,
+                                                       Closure handler = {null},
+                                                       Closure errorListener = {}) {
+        def server = new SimpleHttpServer()
+        server
+    }
+}
+"#;
+    let entities = extract_entities_groovy_standard(source, "HttpUtil.groovy", "test-repo");
+
+    let load = entities.iter().find(|e| e.name == "loadIntoHttpServer");
+    assert!(load.is_some(), "loadIntoHttpServer not found");
+    let load = load.unwrap();
+    assert_eq!(
+        load.enclosing_class.as_deref(),
+        Some("HttpUtil"),
+        "loadIntoHttpServer should have enclosing_class HttpUtil"
+    );
+    assert!(
+        !load.fqn.is_empty(),
+        "loadIntoHttpServer should have non-empty FQN, got: '{}'",
+        load.fqn
+    );
+
+    let calls_restart = load
+        .reference_intents
+        .iter()
+        .filter(
+            |r| matches!(r, ReferenceIntent::Call { method, .. } if method == "restartHttpServer"),
+        )
+        .count();
+    assert!(
+        calls_restart > 0,
+        "Expected loadIntoHttpServer to have CALL to restartHttpServer, but found {} call(s). refs: {:?}",
+        calls_restart,
+        load.reference_intents
+            .iter()
+            .filter_map(|r| match r {
+                ReferenceIntent::Call { method, line, .. } => Some(format!("{}@L{}", method, line)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
+
+    let restart = entities.iter().find(|e| e.name == "restartHttpServer");
+    assert!(restart.is_some(), "restartHttpServer not found in entities");
+    let restart = restart.unwrap();
+    assert_eq!(
+        restart.enclosing_class.as_deref(),
+        Some("HttpUtil"),
+        "restartHttpServer should have enclosing_class HttpUtil"
+    );
+    assert!(
+        !restart.fqn.is_empty(),
+        "restartHttpServer should have non-empty FQN, got: '{}'",
+        restart.fqn
+    );
+    assert!(
+        restart.enclosing_class.is_some(),
+        "restartHttpServer should have enclosing_class set"
+    );
+}
+
+#[test]
+fn test_new_constructor_not_method_declaration() {
+    // `new File(...).write(...)` and `new SimpleHttpServer()` are constructor calls,
+    // NOT method declarations. They should not create spurious method entities.
+    let source = r#"
+class HttpUtil {
+    static String loadIntoHttpServer(String html) {
+        def tempDir = FileUtil.createTempDirectory("proj", "")
+        new File("path").write(html)
+        def server = restartHttpServer("web", "/tmp", {null}, {log?.errorOnHttpRequest(it.toString())})
+        "http://localhost"
+    }
+    private static SimpleHttpServer restartHttpServer(String id, String webRootPath,
+                                                       Closure handler = {null},
+                                                       Closure errorListener = {}) {
+        def server = new SimpleHttpServer()
+        server
+    }
+}
+"#;
+    let entities = extract_entities_groovy_standard(source, "HttpUtil.groovy", "test-repo");
+
+    // `File` must NOT appear as a method entity
+    assert!(
+        !entities
+            .iter()
+            .any(|e| e.kind == EntityKind::GroovyMethod && e.name == "File"),
+        "new File(...) was incorrectly extracted as a method declaration"
+    );
+
+    // `SimpleHttpServer` constructor call inside method body must NOT appear as method
+    // (allow the one at the return type position in the private method signature via multi-line though)
+    let ssh_methods: Vec<_> = entities
+        .iter()
+        .filter(|e| e.kind == EntityKind::GroovyMethod && e.name == "SimpleHttpServer")
+        .collect();
+    assert!(
+        ssh_methods.len() <= 1,
+        "new SimpleHttpServer() constructor should not create method entities, found {}: {:?}",
+        ssh_methods.len(),
+        ssh_methods.iter().map(|e| e.start_line).collect::<Vec<_>>()
+    );
+
+    // restartHttpServer should be callable from loadIntoHttpServer
+    let load = entities
+        .iter()
+        .find(|e| e.name == "loadIntoHttpServer")
+        .expect("loadIntoHttpServer not found");
+    let calls_restart = load
+        .reference_intents
+        .iter()
+        .filter(
+            |r| matches!(r, ReferenceIntent::Call { method, .. } if method == "restartHttpServer"),
+        )
+        .count();
+    assert!(
+        calls_restart > 0,
+        "loadIntoHttpServer should call restartHttpServer"
+    );
 }
