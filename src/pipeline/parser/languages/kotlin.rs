@@ -22,6 +22,7 @@ pub(crate) fn collect_all_reference_intents_kotlin(
                         method: call.method,
                         receiver: call.receiver,
                         line,
+                        arg_count: call.arg_count,
                     },
                     byte_pos,
                 ));
@@ -175,6 +176,7 @@ pub(crate) fn extract_reference_intents_kotlin(
             method: call.method,
             receiver: call.receiver,
             line: call.line,
+            arg_count: call.arg_count,
         });
     }
 }
@@ -224,6 +226,7 @@ pub(crate) fn extract_call_intents_kotlin(
                 method,
                 receiver,
                 line,
+                arg_count: None,
             });
         }
     }
@@ -341,10 +344,12 @@ pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -
                 method,
                 receiver,
                 line,
+                arg_count: None,
             });
         }
     }
 
+    // NO recursive child processing - that's the key difference!
     intents
 }
 

@@ -4,8 +4,9 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
-use super::languages::*;
-use super::languages::{css, groovy, html, java, javascript, kotlin, python, rust, typescript};
+use super::languages::{
+    cpp, css, groovy, html, java, javascript, kotlin, python, rust, typescript,
+};
 use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
@@ -515,6 +516,7 @@ pub(crate) fn extract_entities(
                                 method: path_str,
                                 receiver: None,
                                 line: node.start_position().row + 1,
+                                arg_count: None,
                             });
                         }
                         _ => {}
@@ -652,6 +654,14 @@ pub(crate) fn extract_entities(
             } else {
                 // If no entity_node, use start_line as a fallback
                 end_line = start_line;
+            }
+
+            // Extract C++ signature from entity_node if not captured by query
+            if signature.is_none()
+                && matches!(kind, EntityKind::CppMethod | EntityKind::CFunction)
+                && let Some(node) = entity_node
+            {
+                signature = cpp::extract_cpp_signature(node, source_bytes);
             }
 
             let mut entity = ParsedEntity::new(
@@ -1894,6 +1904,7 @@ mod tests {
                 method,
                 receiver,
                 line,
+                arg_count: _,
             } => {
                 assert_eq!(method, "fetch_data");
                 assert!(receiver.is_none());
@@ -1928,6 +1939,7 @@ mod tests {
                 method,
                 receiver,
                 line,
+                arg_count: _,
             } => {
                 assert_eq!(method, "get_email");
                 assert_eq!(receiver.as_deref(), Some("user"));

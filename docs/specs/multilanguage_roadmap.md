@@ -76,7 +76,7 @@ Enable `knot` to parse and semantically understand standard Groovy source files 
 
 ---
 
-## Phase 11: C/C++ Support (v0.11.0 — ✅ Completed)
+## Phase 11: C/C++ Support (v1.0.0 — ✅ Completed)
 
 ### Objective
 Enable `knot` to index C and C++ codebases with full support for namespaces, classes, methods, pointers, and macros.
@@ -115,7 +115,7 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 | Phase 8: Python | High | ✅ Completed (v0.9.3) |
 | Phase 9: Build Systems (Maven/Gradle/Jenkins) | Medium | ✅ Completed (v0.10.0) |
 | Phase 10: Groovy Language Support | Medium | ✅ Completed (v0.10.3) |
-| Phase 11: C/C++ | High | ✅ Completed (v0.11.0) |
+| Phase 11: C/C++ | High | ✅ Completed (v1.0.0) |
 
 ---
 
@@ -129,7 +129,7 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 
 ## Changelog
 
-### v0.11.0 - C/C++ Language Support
+### v1.0.0 - C/C++ Language Support
 - ✅ Phase 11 complete: tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integration
 - ✅ 6 new EntityKind variants: CppClass, CStruct, CppMethod, CFunction, CppNamespace, MacroDefinition
 - ✅ Namespace-aware FQN resolution: `Engine::MyClass::start` format via AST parent traversal
@@ -143,7 +143,7 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 - ✅ CI updated with C/C++ and Cross-Language Ref E2E tests
 - ✅ Groovy Cross-Ref E2E fixed: pass neo4j env vars to knot-indexer
 - ✅ `cargo fmt` clean | `cargo clippy --all-targets -- -D warnings` clean
-- ✅ Published to crates.io as v0.11.0
+- ✅ Published to crates.io as v1.0.0
 
 ### v0.10.3 - Groovy Nested Methods, Innermost Assignment & UUID Collision Fix
 - ✅ Fixed UUID collision: `ParsedEntity` identity now includes `start_line` to prevent entities with identical name/FQN in same file from colliding (e.g., multiple `actionPerformed` in `new AnAction` closures)

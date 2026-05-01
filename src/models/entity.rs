@@ -263,6 +263,7 @@ pub struct ResolutionEntity {
     pub fqn: String,
     pub file_path: String,
     pub enclosing_class: Option<String>,
+    pub signature: Option<String>,
     pub reference_intents: Vec<ReferenceIntent>,
     pub relationships: Vec<(Uuid, RelationshipType)>,
 }
@@ -275,6 +276,7 @@ impl From<&ParsedEntity> for ResolutionEntity {
             fqn: entity.fqn.clone(),
             file_path: entity.file_path.clone(),
             enclosing_class: entity.enclosing_class.clone(),
+            signature: entity.signature.clone(),
             reference_intents: entity.reference_intents.clone(),
             relationships: Vec::new(),
         }
@@ -283,7 +285,9 @@ impl From<&ParsedEntity> for ResolutionEntity {
 
 impl From<&EmbeddedEntity> for ResolutionEntity {
     fn from(ee: &EmbeddedEntity) -> Self {
-        ResolutionEntity::from(&ee.entity)
+        let mut e = ResolutionEntity::from(&ee.entity);
+        e.signature = ee.entity.signature.clone();
+        e
     }
 }
 

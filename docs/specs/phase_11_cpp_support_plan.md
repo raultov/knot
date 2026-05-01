@@ -1,6 +1,6 @@
 # Phase 11: C/C++ Support Implementation Plan
 
-## Status: ✅ COMPLETED (v0.11.0)
+## Status: ✅ COMPLETED (v1.0.0)
 
 ---
 
@@ -154,4 +154,4 @@ Heuristic: identifiers that are ALL_UPPERCASE with underscores and digits are li
 - ✅ `cargo fmt`: clean
 - ✅ `cargo clippy --all-targets -- -D warnings`: clean
 - ✅ `cargo build --release`: successful
-- ✅ Published to crates.io as v0.11.0
+- ✅ Published to crates.io as v1.0.0

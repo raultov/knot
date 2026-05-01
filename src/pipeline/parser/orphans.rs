@@ -106,6 +106,7 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
                     method: call.method,
                     receiver: call.receiver,
                     line: call.line,
+                    arg_count: call.arg_count,
                 },
                 0, // Byte pos not strictly needed for Python yet
             ));
@@ -133,6 +134,7 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
                     method: call.method,
                     receiver: call.receiver,
                     line: call.line,
+                    arg_count: call.arg_count,
                 },
                 0, // Byte pos not strictly needed for C++ basic resolution
             ));

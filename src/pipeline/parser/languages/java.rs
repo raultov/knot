@@ -22,6 +22,7 @@ pub(crate) fn collect_all_reference_intents_java(
                         method: call.method,
                         receiver: call.receiver,
                         line,
+                        arg_count: call.arg_count,
                     },
                     byte_pos,
                 ));
@@ -180,6 +181,7 @@ pub(crate) fn extract_reference_intents_java(
             method: call.method,
             receiver: call.receiver,
             line: call.line,
+            arg_count: call.arg_count,
         });
     }
 }
@@ -231,6 +233,7 @@ pub(crate) fn extract_call_intents_java(
                     method,
                     receiver,
                     line,
+                    arg_count: None,
                 });
             }
         } else if let Some(method) = method_name {
@@ -239,6 +242,7 @@ pub(crate) fn extract_call_intents_java(
                 method,
                 receiver: None,
                 line,
+                arg_count: None,
             });
             // Revert receiver since it's not a receiver
         } else if let Some(receiver_val) = receiver {
@@ -247,6 +251,7 @@ pub(crate) fn extract_call_intents_java(
                 method: receiver_val,
                 receiver: None,
                 line,
+                arg_count: None,
             });
         }
     } else if node.kind() == "object_creation_expression" {
@@ -258,6 +263,7 @@ pub(crate) fn extract_call_intents_java(
                     method: node_text(c, source),
                     receiver: None,
                     line,
+                    arg_count: None,
                 });
                 break;
             }
@@ -325,6 +331,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                     method,
                     receiver,
                     line,
+                    arg_count: None,
                 });
             }
         } else if let Some(method) = method_name {
@@ -333,6 +340,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                 method,
                 receiver: None,
                 line,
+                arg_count: None,
             });
             // Revert receiver since it's not a receiver
         } else if let Some(receiver_val) = receiver {
@@ -341,6 +349,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                 method: receiver_val,
                 receiver: None,
                 line,
+                arg_count: None,
             });
         }
     } else if node.kind() == "object_creation_expression" {
@@ -352,6 +361,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                     method: node_text(c, source),
                     receiver: None,
                     line,
+                    arg_count: None,
                 });
                 break;
             }

@@ -20,6 +20,9 @@ pub enum ReferenceIntent {
         receiver: Option<String>,
         /// Line number where this call occurs.
         line: usize,
+        /// Number of arguments in the call (if known).
+        /// Used for disambiguating overloaded methods.
+        arg_count: Option<usize>,
     },
     /// A class or interface is extended (inheritance).
     /// Example: `class Child extends Parent { }`
@@ -160,6 +163,10 @@ pub struct CallIntent {
 
     /// 1-based line number where this call occurs.
     pub line: usize,
+
+    /// Number of arguments in the call (if known).
+    /// Used for disambiguating overloaded methods.
+    pub arg_count: Option<usize>,
 }
 
 impl From<CallIntent> for ReferenceIntent {
@@ -168,6 +175,7 @@ impl From<CallIntent> for ReferenceIntent {
             method: call.method,
             receiver: call.receiver,
             line: call.line,
+            arg_count: call.arg_count,
         }
     }
 }

@@ -22,6 +22,7 @@ pub(crate) fn collect_all_reference_intents_typescript(
                         method: call.method,
                         receiver: call.receiver,
                         line,
+                        arg_count: call.arg_count,
                     },
                     byte_pos,
                 ));
@@ -36,6 +37,7 @@ pub(crate) fn collect_all_reference_intents_typescript(
                         method: call.method,
                         receiver: call.receiver,
                         line,
+                        arg_count: call.arg_count,
                     },
                     byte_pos,
                 ));
@@ -231,6 +233,7 @@ pub(crate) fn extract_reference_intents_typescript(
             method: call.method,
             receiver: call.receiver,
             line: call.line,
+            arg_count: call.arg_count,
         });
     }
 
@@ -308,6 +311,7 @@ pub(crate) fn extract_call_intents_typescript(
                                 Some("this".to_string())
                             },
                             line,
+                            arg_count: None,
                         });
                     }
                 }
@@ -316,6 +320,7 @@ pub(crate) fn extract_call_intents_typescript(
                     method,
                     receiver,
                     line,
+                    arg_count: None,
                 });
             }
         }
@@ -331,6 +336,7 @@ pub(crate) fn extract_call_intents_typescript(
                     method: node_text(c, source),
                     receiver: None,
                     line,
+                    arg_count: None,
                 });
                 break;
             }
@@ -355,6 +361,7 @@ pub(crate) fn extract_call_intents_typescript(
                 method: prop_text,
                 receiver: Some("this".to_string()),
                 line,
+                arg_count: None,
             });
         }
     }
@@ -438,6 +445,7 @@ pub(crate) fn extract_single_call_intent_typescript(
                                 Some("this".to_string())
                             },
                             line,
+                            arg_count: None,
                         });
                     }
                 }
@@ -446,6 +454,7 @@ pub(crate) fn extract_single_call_intent_typescript(
                     method,
                     receiver,
                     line,
+                    arg_count: None,
                 });
             }
         }
@@ -461,6 +470,7 @@ pub(crate) fn extract_single_call_intent_typescript(
                     method: node_text(c, source),
                     receiver: None,
                     line,
+                    arg_count: None,
                 });
                 break;
             }
@@ -481,6 +491,7 @@ pub(crate) fn extract_single_call_intent_typescript(
                 method: prop_text,
                 receiver: Some("this".to_string()),
                 line,
+                arg_count: None,
             });
         }
     }
@@ -523,6 +534,7 @@ pub(crate) fn extract_jsx_component_invocation(
                     method,
                     receiver,
                     line,
+                    arg_count: None,
                 });
             } else {
                 // Simple component name
@@ -530,6 +542,7 @@ pub(crate) fn extract_jsx_component_invocation(
                     method: comp_name,
                     receiver: None,
                     line,
+                    arg_count: None,
                 });
             }
         }
@@ -563,6 +576,7 @@ pub(crate) fn extract_callback_arguments(
                             method: method_name,
                             receiver: Some(receiver),
                             line,
+                            arg_count: None,
                         });
                     }
                 }
@@ -577,6 +591,7 @@ pub(crate) fn extract_callback_arguments(
                         method: name,
                         receiver: None,
                         line,
+                        arg_count: None,
                     });
                 }
             }

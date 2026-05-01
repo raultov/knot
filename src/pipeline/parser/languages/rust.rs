@@ -609,6 +609,7 @@ pub(crate) fn collect_rust_call_references(
                     method: func_name,
                     receiver,
                     line,
+                    arg_count: None,
                 });
         }
     }

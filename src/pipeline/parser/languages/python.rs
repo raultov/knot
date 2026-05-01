@@ -47,6 +47,7 @@ pub(crate) fn extract_reference_intents_python(
             method: call.method,
             receiver: call.receiver,
             line: call.line,
+            arg_count: call.arg_count,
         });
     }
 
@@ -81,6 +82,7 @@ pub(crate) fn extract_call_intents_python(
                         method: method_name,
                         receiver: None,
                         line,
+                        arg_count: None,
                     });
                 }
                 "attribute" => {
@@ -99,6 +101,7 @@ pub(crate) fn extract_call_intents_python(
                             method,
                             receiver,
                             line,
+                            arg_count: None,
                         });
                     }
                 }
@@ -111,6 +114,7 @@ pub(crate) fn extract_call_intents_python(
             method: "print".to_string(),
             receiver: None,
             line,
+            arg_count: None,
         });
     }
 
@@ -304,6 +308,7 @@ fn extract_decorator_name(
                     method,
                     receiver: None,
                     line,
+                    arg_count: None,
                 });
             }
         }

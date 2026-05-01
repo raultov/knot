@@ -44,17 +44,37 @@ pub async fn resolve_and_save_relationships(
     Ok(())
 }
 
-/// Resolve reference intents to actual entity UUIDs for a batch of entities.
+fn count_params_from_signature(sig: &str) -> Option<usize> {
+    let open = sig.rfind('(')?;
+    let close = sig.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let params = sig[open + 1..close].trim();
+    if params.is_empty() {
+        Some(0)
+    } else {
+        Some(params.chars().filter(|&c| c == ',').count() + 1)
+    }
+}
+
 pub fn resolve_reference_intents_with_context(
     entities: &mut [ResolutionEntity],
     mut fqn_to_uuid: HashMap<String, Uuid>,
     mut name_to_uuids: HashMap<String, Vec<Uuid>>,
 ) {
-    // Build uuid -> file_path mapping for same-file entity resolution
     let uuid_to_file: HashMap<Uuid, String> = entities
         .iter()
         .map(|e| (e.uuid, e.file_path.clone()))
         .collect();
+
+    let uuid_to_arg_count: HashMap<Uuid, usize> = entities
+        .iter()
+        .filter_map(|e| count_params_from_signature(e.signature.as_deref()?).map(|c| (e.uuid, c)))
+        .collect();
+
+    let uuid_to_fqn: HashMap<Uuid, String> =
+        entities.iter().map(|e| (e.uuid, e.fqn.clone())).collect();
 
     // Build class_name → parent_class_names map from EXTENDS intents for inherited self.method() resolution
     let extends_map: HashMap<String, Vec<String>> = entities
@@ -100,12 +120,16 @@ pub fn resolve_reference_intents_with_context(
             use crate::models::ReferenceIntent;
             let (resolved_uuid, rel_type) = match &intent {
                 ReferenceIntent::Call {
-                    method, receiver, ..
+                    method,
+                    receiver,
+                    arg_count,
+                    ..
                 } => {
                     let call_intent = crate::models::CallIntent {
                         method: method.clone(),
                         receiver: receiver.clone(),
                         line: 0,
+                        arg_count: *arg_count,
                     };
                     (
                         resolve_single_call_intent(
@@ -117,6 +141,8 @@ pub fn resolve_reference_intents_with_context(
                             &name_to_uuids,
                             &uuid_to_file,
                             &extends_map,
+                            Some(&uuid_to_arg_count),
+                            Some(&uuid_to_fqn),
                         ),
                         RelationshipType::Calls,
                     )
@@ -182,6 +208,58 @@ pub fn resolve_reference_intents_with_context(
     }
 }
 
+/// When multiple entities share the same method name (overloads), use arg_count
+/// to pick the correct target. If the FQN-matched UUID has a different arg_count
+/// and another entity with the same name has the matching count, return that instead.
+fn disambiguate_overload(
+    fqn_uuid: Uuid,
+    intent: &crate::models::CallIntent,
+    name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    uuid_to_arg_count: Option<&HashMap<Uuid, usize>>,
+    expected_enclosing_class: Option<&str>,
+    uuid_to_fqn: Option<&HashMap<Uuid, String>>,
+) -> Uuid {
+    if let Some(ac) = intent.arg_count
+        && let Some(ac_map) = uuid_to_arg_count
+        && ac_map.get(&fqn_uuid) != Some(&ac)
+    {
+        // FQN matched the wrong overload — search for a better match by arg_count
+        if let Some(uuids) = name_to_uuids.get(&intent.method) {
+            // First, prefer overloads from the same enclosing class if possible
+            if let Some(class_name) = expected_enclosing_class
+                && let Some(fqn_map) = uuid_to_fqn
+            {
+                let dot_fqn = format!("{}.{}", class_name, intent.method);
+                let colon_fqn = format!("{}::{}", class_name, intent.method);
+
+                if let Some(&better) = uuids.iter().find(|&&u| {
+                    ac_map.get(&u) == Some(&ac)
+                        && fqn_map
+                            .get(&u)
+                            .is_some_and(|fqn| *fqn == dot_fqn || *fqn == colon_fqn)
+                }) {
+                    return better;
+                }
+            }
+
+            // Fallback: any matching arg_count
+            if let Some(&better) = uuids.iter().find(|u| ac_map.get(u) == Some(&ac)) {
+                return better;
+            }
+        }
+    }
+    fqn_uuid
+}
+
+fn lookup_fqn(class: &str, method: &str, fqn_to_uuid: &HashMap<String, Uuid>) -> Option<Uuid> {
+    let dot_fqn = format!("{}.{}", class, method);
+    if let Some(&uuid) = fqn_to_uuid.get(&dot_fqn) {
+        return Some(uuid);
+    }
+    let colon_fqn = format!("{}::{}", class, method);
+    fqn_to_uuid.get(&colon_fqn).copied()
+}
+
 /// Resolve a single CallIntent to a UUID using available context.
 #[allow(clippy::too_many_arguments)]
 fn resolve_single_call_intent(
@@ -193,6 +271,8 @@ fn resolve_single_call_intent(
     name_to_uuids: &HashMap<String, Vec<Uuid>>,
     uuid_to_file: &HashMap<Uuid, String>,
     extends_map: &HashMap<String, Vec<String>>,
+    uuid_to_arg_count: Option<&HashMap<Uuid, usize>>,
+    uuid_to_fqn: Option<&HashMap<Uuid, String>>,
 ) -> Option<Uuid> {
     // Strategy 1: Local call (no receiver or receiver is "this"/"self")
     if (intent.receiver.is_none()
@@ -200,9 +280,16 @@ fn resolve_single_call_intent(
         || intent.receiver.as_deref() == Some("self"))
         && let Some(enclosing_class) = &caller_enclosing_class
     {
-        let fqn = format!("{}.{}", enclosing_class, intent.method);
-        if let Some(&uuid) = fqn_to_uuid.get(&fqn) {
-            return Some(uuid);
+        if let Some(uuid) = lookup_fqn(enclosing_class, &intent.method, fqn_to_uuid) {
+            // For overloaded methods, verify or correct with arg_count
+            return Some(disambiguate_overload(
+                uuid,
+                intent,
+                name_to_uuids,
+                uuid_to_arg_count,
+                Some(enclosing_class),
+                uuid_to_fqn,
+            ));
         }
 
         // Check parent classes via EXTENDS (for inherited self.method() calls)
@@ -210,23 +297,26 @@ fn resolve_single_call_intent(
             && let Some(parents) = extends_map.get(enclosing_class)
         {
             for parent in parents {
-                let parent_fqn = format!("{}.{}", parent, intent.method);
-                if let Some(&uuid) = fqn_to_uuid.get(&parent_fqn) {
+                if let Some(uuid) = lookup_fqn(parent, &intent.method, fqn_to_uuid) {
                     return Some(uuid);
                 }
             }
         }
     }
 
-    // Strategy 2: Static call (receiver is a class name)
     if let Some(receiver) = &intent.receiver
         && receiver.chars().next().is_some_and(|c| c.is_uppercase())
         && receiver != "this"
+        && let Some(uuid) = lookup_fqn(receiver, &intent.method, fqn_to_uuid)
     {
-        let fqn = format!("{}.{}", receiver, intent.method);
-        if let Some(&uuid) = fqn_to_uuid.get(&fqn) {
-            return Some(uuid);
-        }
+        return Some(disambiguate_overload(
+            uuid,
+            intent,
+            name_to_uuids,
+            uuid_to_arg_count,
+            Some(receiver),
+            uuid_to_fqn,
+        ));
     }
 
     // Strategy 3: Instance call (receiver is variable or object)
@@ -242,9 +332,15 @@ fn resolve_single_call_intent(
         };
 
         if !receiver_class.is_empty() {
-            let exact_fqn = format!("{}.{}", receiver_class, intent.method);
-            if let Some(&uuid) = fqn_to_uuid.get(&exact_fqn) {
-                return Some(uuid);
+            if let Some(uuid) = lookup_fqn(receiver_class, &intent.method, fqn_to_uuid) {
+                return Some(disambiguate_overload(
+                    uuid,
+                    intent,
+                    name_to_uuids,
+                    uuid_to_arg_count,
+                    Some(receiver_class),
+                    uuid_to_fqn,
+                ));
             }
 
             let mut chars = receiver_class.chars();
@@ -254,15 +350,27 @@ fn resolve_single_call_intent(
                 receiver_class.to_string()
             };
 
-            let capitalized_fqn = format!("{}.{}", capitalized, intent.method);
-            if let Some(&uuid) = fqn_to_uuid.get(&capitalized_fqn) {
-                return Some(uuid);
+            if let Some(uuid) = lookup_fqn(&capitalized, &intent.method, fqn_to_uuid) {
+                return Some(disambiguate_overload(
+                    uuid,
+                    intent,
+                    name_to_uuids,
+                    uuid_to_arg_count,
+                    Some(&capitalized),
+                    uuid_to_fqn,
+                ));
             }
 
             // Fuzzy match: search for ClassName.method in known FQNs.
+            let method_dot = format!("{}.{}", receiver_class, intent.method);
+            let capitalized_method_dot = format!("{}.{}", capitalized, intent.method);
+            let method_colon = format!("{}::{}", receiver_class, intent.method);
+            let capitalized_method_colon = format!("{}::{}", capitalized, intent.method);
             for (fqn, uuid) in fqn_to_uuid.iter() {
-                if fqn.contains(&format!("{}.{}", receiver_class, intent.method))
-                    || fqn.contains(&format!("{}.{}", capitalized, intent.method))
+                if fqn.contains(&method_dot)
+                    || fqn.contains(&capitalized_method_dot)
+                    || fqn.contains(&method_colon)
+                    || fqn.contains(&capitalized_method_colon)
                 {
                     return Some(*uuid);
                 }
@@ -271,7 +379,12 @@ fn resolve_single_call_intent(
 
         // Fallback: just match on method name.
         if let Some(uuids) = name_to_uuids.get(&intent.method) {
-            // Prioritize entities in the same file (for Rust private functions)
+            if let Some(ac) = intent.arg_count
+                && let Some(ac_map) = uuid_to_arg_count
+                && let Some(&matching_uuid) = uuids.iter().find(|u| ac_map.get(u) == Some(&ac))
+            {
+                return Some(matching_uuid);
+            }
             if let Some(same_file_uuid) =
                 find_entity_in_same_file(uuids, &caller_file_path, uuid_to_file)
             {
@@ -285,7 +398,12 @@ fn resolve_single_call_intent(
     if intent.receiver.is_none()
         && let Some(uuids) = name_to_uuids.get(&intent.method)
     {
-        // Prioritize entities in the same file (for Rust private functions)
+        if let Some(ac) = intent.arg_count
+            && let Some(ac_map) = uuid_to_arg_count
+            && let Some(&matching_uuid) = uuids.iter().find(|u| ac_map.get(u) == Some(&ac))
+        {
+            return Some(matching_uuid);
+        }
         if let Some(same_file_uuid) =
             find_entity_in_same_file(uuids, &caller_file_path, uuid_to_file)
         {
@@ -342,6 +460,7 @@ mod tests {
             fqn: fqn.to_string(),
             file_path: "test/file.java".to_string(),
             enclosing_class: enclosing.map(|s| s.to_string()),
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         }
@@ -356,6 +475,7 @@ mod tests {
             method: "methodB".to_string(),
             receiver: None,
             line: 10,
+            arg_count: None,
         });
 
         let mut entities = vec![caller, callee];
@@ -377,6 +497,7 @@ mod tests {
             method: "staticMethod".to_string(),
             receiver: Some("Utils".to_string()),
             line: 5,
+            arg_count: None,
         });
 
         let mut entities = vec![caller, callee];
@@ -398,6 +519,7 @@ mod tests {
             method: "execute".to_string(),
             receiver: Some("worker".to_string()),
             line: 20,
+            arg_count: None,
         });
 
         let mut entities = vec![caller, callee];
@@ -461,11 +583,13 @@ mod tests {
             method: "B".to_string(),
             receiver: None,
             line: 1,
+            arg_count: None,
         });
         caller.reference_intents.push(ReferenceIntent::Call {
             method: "B".to_string(),
             receiver: None,
             line: 2,
+            arg_count: None,
         });
 
         let mut entities = vec![caller, callee];
@@ -491,6 +615,7 @@ mod tests {
             fqn: "knot::pipeline::parser::orphans::find_nearest_entity_by_line".to_string(),
             file_path: "src/pipeline/parser/orphans.rs".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -501,6 +626,7 @@ mod tests {
             fqn: "knot::pipeline::parser::languages::rust::find_nearest_entity_by_line".to_string(),
             file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -513,10 +639,12 @@ mod tests {
                 .to_string(),
             file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "find_nearest_entity_by_line".to_string(),
                 receiver: None,
                 line: 258,
+                arg_count: None,
             }],
             relationships: Vec::new(),
         };
@@ -528,10 +656,12 @@ mod tests {
             fqn: "knot::pipeline::parser::orphans::collect_orphaned_references".to_string(),
             file_path: "src/pipeline/parser/orphans.rs".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "find_nearest_entity_by_line".to_string(),
                 receiver: None,
                 line: 8,
+                arg_count: None,
             }],
             relationships: Vec::new(),
         };
@@ -581,6 +711,7 @@ mod tests {
             fqn: "Animal".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -590,6 +721,7 @@ mod tests {
             fqn: "Animal.speak".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: Some("Animal".to_string()),
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -600,6 +732,7 @@ mod tests {
             fqn: "Dog".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: vec![ReferenceIntent::Extends {
                 parent: "Animal".to_string(),
                 line: 10,
@@ -612,10 +745,12 @@ mod tests {
             fqn: "Dog.compute".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: Some("Dog".to_string()),
+            signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "speak".to_string(),
                 receiver: Some("self".to_string()),
                 line: 15,
+                arg_count: None,
             }],
             relationships: Vec::new(),
         };
@@ -646,6 +781,7 @@ mod tests {
             fqn: "do_thing".to_string(),
             file_path: "lora.py".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -657,6 +793,7 @@ mod tests {
             fqn: "MyLoader".to_string(),
             file_path: "nodes.py".to_string(),
             enclosing_class: None,
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -667,6 +804,7 @@ mod tests {
             fqn: "MyLoader.do_thing".to_string(),
             file_path: "nodes.py".to_string(),
             enclosing_class: Some("MyLoader".to_string()),
+            signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
         };
@@ -677,10 +815,12 @@ mod tests {
             fqn: "MyLoader.caller".to_string(),
             file_path: "nodes.py".to_string(),
             enclosing_class: Some("MyLoader".to_string()),
+            signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "do_thing".to_string(),
                 receiver: Some("self".to_string()),
                 line: 20,
+                arg_count: None,
             }],
             relationships: Vec::new(),
         };

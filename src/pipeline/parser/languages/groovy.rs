@@ -365,6 +365,7 @@ fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<Referen
                             method: next_word.to_string(),
                             receiver: Some(word.to_string()),
                             line: line_num,
+                            arg_count: None,
                         });
                         continue;
                     }
@@ -377,6 +378,7 @@ fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<Referen
                     method: word.to_string(),
                     receiver: None,
                     line: line_num,
+                    arg_count: None,
                 });
             }
 
@@ -404,6 +406,7 @@ fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<Referen
                         method: word.to_string(),
                         receiver: None,
                         line: line_num,
+                        arg_count: None,
                     });
                 }
             }
@@ -1755,6 +1758,7 @@ class Worker {
                 method,
                 receiver,
                 line,
+                arg_count: _,
             } => format!(
                 "Call({}{}, line {})",
                 receiver

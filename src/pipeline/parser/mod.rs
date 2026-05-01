@@ -99,9 +99,35 @@ pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEnti
 }
 
 /// Parse a single source file and return its extracted entities.
+/// Heuristic: detect whether a `.h` header contains C++ syntax.
+/// Scans for keywords exclusive to C++ that do not appear in valid C.
+fn is_cpp_header(source: &str) -> bool {
+    let cpp_indicators = [
+        "class ",
+        "namespace ",
+        "template<",
+        "template <",
+        "virtual ",
+        "public:",
+        "private:",
+        "protected:",
+        "using namespace",
+        "constexpr ",
+        "noexcept",
+        "nullptr",
+        "override",
+        " final",
+        "::", // qualified calls like Print::write(...)
+    ];
+    cpp_indicators.iter().any(|kw| source.contains(kw))
+}
+
 fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
-    let source = fs::read_to_string(path)
-        .with_context(|| format!("Cannot read file: {}", path.display()))?;
+    let source = {
+        let bytes =
+            fs::read(path).with_context(|| format!("Cannot read file: {}", path.display()))?;
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
 
     let ext = path
         .extension()
@@ -239,7 +265,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )?
         }
-        "c" | "h" => {
+        "c" => {
             let query_src = load_query_source("c.scm", DEFAULT_C_QUERY, parse_cfg);
             extractor::extract_entities(
                 &source,
@@ -249,6 +275,29 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &file_path,
                 &parse_cfg.repo_name,
             )?
+        }
+        "h" => {
+            if is_cpp_header(&source) {
+                let query_src = load_query_source("cpp.scm", DEFAULT_CPP_QUERY, parse_cfg);
+                extractor::extract_entities(
+                    &source,
+                    tree_sitter_cpp::LANGUAGE.into(),
+                    &query_src,
+                    "cpp",
+                    &file_path,
+                    &parse_cfg.repo_name,
+                )?
+            } else {
+                let query_src = load_query_source("c.scm", DEFAULT_C_QUERY, parse_cfg);
+                extractor::extract_entities(
+                    &source,
+                    tree_sitter_c::LANGUAGE.into(),
+                    &query_src,
+                    "c",
+                    &file_path,
+                    &parse_cfg.repo_name,
+                )?
+            }
         }
         "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => {
             let query_src = load_query_source("cpp.scm", DEFAULT_CPP_QUERY, parse_cfg);
@@ -384,6 +433,53 @@ mod tests {
 
         // Verify channel can receive messages (simulated)
         assert!(receiver.try_recv().is_err()); // No data sent
+    }
+
+    #[test]
+    fn test_is_cpp_header_detects_class() {
+        assert!(is_cpp_header(
+            "class Print {\npublic:\n    void write();\n};"
+        ));
+    }
+
+    #[test]
+    fn test_is_cpp_header_detects_namespace() {
+        assert!(is_cpp_header("namespace Engine {\n    class Foo {};\n}"));
+    }
+
+    #[test]
+    fn test_is_cpp_header_detects_virtual() {
+        assert!(is_cpp_header("virtual size_t write(uint8_t) = 0;"));
+    }
+
+    #[test]
+    fn test_is_cpp_header_detects_template() {
+        assert!(is_cpp_header("template <typename T>\nclass Container {};"));
+    }
+
+    #[test]
+    fn test_is_cpp_header_pure_c_returns_false() {
+        let c_header = r#"
+#ifndef FOO_H
+#define FOO_H
+typedef struct { int x; int y; } Point;
+void foo(int n);
+int bar(const char *s);
+#endif
+"#;
+        assert!(!is_cpp_header(c_header));
+    }
+
+    #[test]
+    fn test_is_cpp_header_empty_returns_false() {
+        assert!(!is_cpp_header(""));
+    }
+
+    #[test]
+    fn test_is_cpp_header_detects_qualified_call() {
+        assert!(is_cpp_header(
+            "size_t Print::write(const uint8_t *buf, size_t s) { return 0; }"
+        ));
     }
 
     #[test]
