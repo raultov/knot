@@ -4,6 +4,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use super::comments::*;
 use super::context::*;
+use super::languages::*;
 use super::languages::{css, groovy, html, java, javascript, kotlin, python, rust, typescript};
 use super::orphans::*;
 use super::utils::*;
@@ -444,6 +445,81 @@ pub(crate) fn extract_entities(
                         // `new AnAction() { @Override void actionPerformed(...) { ... } }`).
                     }
                 }
+                // C/C++ Entities
+                name_or_intent
+                    if name_or_intent.starts_with("cpp_")
+                        || name_or_intent.starts_with("c_")
+                        || name_or_intent.starts_with("preproc.") =>
+                {
+                    let text_str = text.clone();
+                    match name_or_intent {
+                        "cpp_class.name" => {
+                            name = Some(text_str);
+                            kind = Some(EntityKind::CppClass);
+                            start_line = node.start_position().row + 1;
+                            entity_node = find_parent_by_kind(node, "class_specifier");
+                        }
+                        "c_struct.name" => {
+                            name = Some(text_str);
+                            kind = Some(EntityKind::CStruct);
+                            start_line = node.start_position().row + 1;
+                            entity_node = find_parent_by_kind(node, "struct_specifier");
+                        }
+                        "cpp_namespace.name" => {
+                            name = Some(text_str);
+                            kind = Some(EntityKind::CppNamespace);
+                            start_line = node.start_position().row + 1;
+                            entity_node = find_parent_by_kind(node, "namespace_definition");
+                        }
+                        "cpp_method.name" => {
+                            name = Some(text_str);
+                            kind = Some(EntityKind::CppMethod);
+                            start_line = node.start_position().row + 1;
+                            entity_node = find_parent_by_kind(node, "function_definition")
+                                .or_else(|| find_parent_by_kind(node, "declaration"))
+                                .or_else(|| find_parent_by_kind(node, "field_declaration"));
+                            if let Some(m_node) = entity_node {
+                                cpp::extract_reference_intents_cpp(
+                                    m_node,
+                                    source_bytes,
+                                    &mut reference_intents,
+                                );
+                            }
+                        }
+                        "c_function.name" => {
+                            name = Some(text_str);
+                            kind = Some(EntityKind::CFunction);
+                            start_line = node.start_position().row + 1;
+                            entity_node = find_parent_by_kind(node, "function_definition");
+                            if let Some(m_node) = entity_node {
+                                cpp::extract_reference_intents_cpp(
+                                    m_node,
+                                    source_bytes,
+                                    &mut reference_intents,
+                                );
+                            }
+                        }
+                        "preproc.macro" => {
+                            name = Some(text_str);
+                            kind = Some(EntityKind::MacroDefinition);
+                            start_line = node.start_position().row + 1;
+                            entity_node = find_parent_by_kind(node, "preproc_def");
+                        }
+                        "preproc.include" => {
+                            // Extract included file path and register it as an intent
+                            let mut path_str = text_str;
+                            if path_str.starts_with('"') || path_str.starts_with('<') {
+                                path_str = path_str[1..path_str.len() - 1].to_string();
+                            }
+                            reference_intents.push(ReferenceIntent::Call {
+                                method: path_str,
+                                receiver: None,
+                                line: node.start_position().row + 1,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
                 // Ignore unhandled captures
                 "dom.receiver" | "dom.action" | "dom.method" | "css.receiver" | "css.classList"
                 | "css.className" | "css.method" | "css.keyframe" | "script_src"
@@ -477,8 +553,24 @@ pub(crate) fn extract_entities(
             }
 
             // Determine FQN and enclosing class based on context
-            let (fqn, enclosing_class) =
+            let (mut fqn, mut enclosing_class) =
                 compute_fqn_and_context(&name, &kind, start_line, lang_name, &class_contexts);
+
+            if matches!(
+                kind,
+                EntityKind::CppMethod
+                    | EntityKind::CFunction
+                    | EntityKind::CppClass
+                    | EntityKind::CStruct
+                    | EntityKind::CppNamespace
+                    | EntityKind::MacroDefinition
+            ) && let Some(node) = entity_node
+                && let Some(cpp_fqn) = cpp::build_cpp_fqn(node, source_bytes)
+                && !cpp_fqn.is_empty()
+            {
+                enclosing_class = Some(cpp_fqn.clone());
+                fqn = format!("{}::{}", cpp_fqn, name);
+            }
 
             // For classes, also extract extends/implements from AST
             if matches!(

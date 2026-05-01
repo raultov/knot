@@ -43,6 +43,8 @@ const DEFAULT_CSS_QUERY: &str = include_str!("../../../queries/css.scm");
 const DEFAULT_SCSS_QUERY: &str = include_str!("../../../queries/scss.scm");
 const DEFAULT_RUST_QUERY: &str = include_str!("../../../queries/rust.scm");
 const DEFAULT_PYTHON_QUERY: &str = include_str!("../../../queries/python.scm");
+const DEFAULT_C_QUERY: &str = include_str!("../../../queries/c.scm");
+const DEFAULT_CPP_QUERY: &str = include_str!("../../../queries/cpp.scm");
 
 /// Configuration for the parse stage.
 pub struct ParseConfig {
@@ -233,6 +235,28 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 tree_sitter_rust::LANGUAGE.into(),
                 &query_src,
                 "rust",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "c" | "h" => {
+            let query_src = load_query_source("c.scm", DEFAULT_C_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_c::LANGUAGE.into(),
+                &query_src,
+                "c",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
+        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => {
+            let query_src = load_query_source("cpp.scm", DEFAULT_CPP_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_cpp::LANGUAGE.into(),
+                &query_src,
+                "cpp",
                 &file_path,
                 &parse_cfg.repo_name,
             )?

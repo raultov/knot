@@ -131,9 +131,9 @@ cd "$PROJECT_ROOT"
 # Isolate: copy only build system files to a temp dir so semantic search only sees build entities
 rm -rf "$TMP_REPO_DIR"
 mkdir -p "$TMP_REPO_DIR"
-cp "$TEST_FILES_DIR/sample_pom.xml" "$TMP_REPO_DIR/"
-cp "$TEST_FILES_DIR/sample_build.gradle" "$TMP_REPO_DIR/"
-cp "$TEST_FILES_DIR/sample.jenkinsfile" "$TMP_REPO_DIR/"
+cp "$TEST_FILES_DIR/sample_pom.xml" "$TMP_REPO_DIR/pom.xml"
+cp "$TEST_FILES_DIR/sample_build.gradle" "$TMP_REPO_DIR/build.gradle"
+cp "$TEST_FILES_DIR/sample.jenkinsfile" "$TMP_REPO_DIR/Jenkinsfile"
 
 export KNOT_REPO_PATH="$TMP_REPO_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
@@ -176,7 +176,7 @@ fi
 # Test 2: Maven dependencies via explore_file on pom.xml
 echo ""
 echo "Test 2: Exploring pom.xml for dependency structure..."
-POM_FILE="$TMP_REPO_DIR/sample_pom.xml"
+POM_FILE="$TMP_REPO_DIR/pom.xml"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$POM_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
@@ -250,7 +250,7 @@ fi
 # Test 7: Explore build.gradle
 echo ""
 echo "Test 7: Exploring build.gradle..."
-GRADLE_FILE="$TMP_REPO_DIR/sample_build.gradle"
+GRADLE_FILE="$TMP_REPO_DIR/build.gradle"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$GRADLE_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)

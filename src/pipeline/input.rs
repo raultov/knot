@@ -12,29 +12,9 @@ use tracing::info;
 /// Supported source file extensions.
 /// This is the single source of truth for all supported languages across the indexing pipeline.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "java",
-    "ts",
-    "tsx",
-    "cts",
-    "js",
-    "mjs",
-    "cjs",
-    "jsx",
-    "kt",
-    "kts",
-    "py",
-    "pyi",
-    "pyw",
-    "html",
-    "htm",
-    "css",
-    "scss",
-    "sass",
-    "rs",
-    "groovy",
-    "gradle",
-    "jenkinsfile",
-    "xml",
+    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "py", "pyi", "pyw", "html",
+    "htm", "css", "scss", "sass", "rs", "groovy", "gradle", "c", "h", "cpp", "hpp", "cc", "cxx",
+    "hh", "hxx",
 ];
 
 /// Recursively discover all supported source files under `repo_path`.

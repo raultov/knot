@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking, with planned support for C/C++.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v0.11.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -42,7 +42,7 @@ This dual-database approach powers both:
 - **Python** (v0.9.3): Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), Py2/Py3 exception syntax compatibility, and `self.method()` resolution with inherited method walking. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
 - **Groovy** (v0.10.3): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. **NEW in v0.10.3**: Multi-line signatures (closure default params), assignment-vs-declaration disambiguation, innermost assignment for nested closures, UUID collision fix for duplicate method names, `find_callers` accurately tracks private methods including those in anonymous `new AnAction` closures.
 - **Build Systems** (v0.10.0): Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and `Jenkinsfile` pipeline (stages + steps) extraction.
-- **C/C++** (Planned v0.11.x): Pointer relationships and macro analysis
+- **C/C++** (v0.11.0): Complete C/C++ support with namespace-aware FQN resolution (`Engine::MyClass::start`), class/struct extraction, function/method tracking, macro definition and usage detection (uppercase identifier heuristic), type reference tracking (declarations, `new` expressions), and full call graph analysis. Supports `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hh`, `.hxx` extensions via tree-sitter-c and tree-sitter-cpp parsers.
 
 **📚 Rich Comment Extraction**
 - Captures docstrings (JavaDoc, JSDoc) preceding declarations
@@ -680,18 +680,24 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 17 unit tests for Rust entity and reference extraction
 - ✅ 22 end-to-end integration tests covering all Rust language constructs
 
-### Upcoming (v0.11.x)
-#### Phase 10: C/C++ Support (v0.11.x)
-- [ ] Support `.c`, `.cpp`, `.h`, `.hpp` files
-- [ ] Pointer and memory relationship tracking
-- [ ] Header inclusion graph analysis
+### Phase 11 (v0.11.0 — C/C++ Support) ✅
+- ✅ Support `.c`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.hh`, `.hxx` files via tree-sitter-c and tree-sitter-cpp
+- ✅ Namespace-aware FQN resolution (`Engine::MyClass::start`)
+- ✅ Class, struct, function, and method extraction with full signatures
+- ✅ Macro definition and usage tracking (uppercase identifier heuristic)
+- ✅ Type reference tracking (declarations, `new` expressions, qualified types)
+- ✅ Call graph analysis including method calls, field access (`obj->method()`), and scope resolution (`std::vector::size()`)
+- ✅ 3 unit tests for C++ entity and reference extraction
+- ✅ 4 end-to-end integration tests covering FQN, call graphs, macro usage, and type references
 
-#### Phase 11: YAML/Configuration Language Support
+### Upcoming (v0.12.x)
+#### Phase 12: YAML/Configuration Language Support
 - [ ] HELM chart indexing (`.yaml`, `.tpl`)
 - [ ] Kubernetes manifest analysis
 - [ ] Template variable tracking and resolution
 
 #### Long-Term Vision
+- [ ] Reestructure E2E test suites to gain velocity by sharing binaries with unit tests and avoid Docker overhead
 - [ ] Markdown documentation indexing
 - [ ] Go support
 - [ ] C# support

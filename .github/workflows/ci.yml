@@ -167,11 +167,33 @@ jobs:
         run: ./tests/run_groovy_private_method_e2e.sh
         timeout-minutes: 10
 
+      - name: Cleanup Docker between E2E test suites
+        if: always()
+        run: |
+          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+          rm -rf .e2e_groovy_private_data .e2e_crosslang_data .e2e_cpp_data 2>/dev/null || true
+          sleep 5
+
+      - name: Run Cross-Language Ref E2E tests
+        run: ./tests/run_cross_lang_ref_e2e.sh
+        timeout-minutes: 10
+
+      - name: Cleanup Docker between E2E test suites
+        if: always()
+        run: |
+          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+          rm -rf .e2e_crosslang_data .e2e_cpp_data 2>/dev/null || true
+          sleep 5
+
+      - name: Run C/C++ E2E tests
+        run: ./tests/run_cpp_e2e.sh
+        timeout-minutes: 10
+
       - name: Cleanup Docker and data dirs after all E2E tests
         if: always()
         run: |
           cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_groovy_private_data .e2e_groovy_private_repo 2>/dev/null || true
+          rm -rf .e2e_cpp_data .e2e_cpp_repo 2>/dev/null || true
           sleep 5
 
       - name: Upload E2E logs on failure
@@ -188,4 +210,6 @@ jobs:
             tests/.e2e_groovy_data/
             tests/.e2e_groovy_xref_data/
             tests/.e2e_groovy_private_data/
+            tests/.e2e_crosslang_data/
+            tests/.e2e_cpp_data/
           retention-days: 7

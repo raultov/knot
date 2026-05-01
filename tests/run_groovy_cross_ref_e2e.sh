@@ -145,12 +145,23 @@ export KNOT_REPO_PATH="$TMP_REPO_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 
 cd "$PROJECT_ROOT"
-cargo run --release --bin knot-indexer -- --clean 2>/dev/null
+if ! cargo run --release --bin knot-indexer -- --clean 2>&1 | grep -q "Incremental update complete\|initial indexing run"; then
+    echo -e "${RED}✗ Indexing failed${NC}"
+    cargo run --release --bin knot-indexer -- --clean
+    exit 1
+fi
 
 echo -e "${GREEN}✓ Indexed${NC}"
 
 call_mcp() {
-    echo "$1" | cargo run --release --bin knot-mcp 2>/dev/null | tail -1
+    local response
+    response=$(echo "$1" | cargo run --release --bin knot-mcp 2>/dev/null | tail -1)
+    if [ -z "$response" ]; then
+        echo -e "${RED}✗ MCP call returned empty response${NC}" >&2
+        echo "{}"
+    else
+        echo "$response"
+    fi
 }
 
 FAILED=0

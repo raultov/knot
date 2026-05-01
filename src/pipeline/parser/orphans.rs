@@ -107,7 +107,7 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
                     receiver: call.receiver,
                     line: call.line,
                 },
-                node.start_byte(),
+                0, // Byte pos not strictly needed for Python yet
             ));
         }
         let mut python_import_intents = Vec::new();
@@ -119,6 +119,23 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
         python::extract_value_references_python(node, source, &mut python_value_intents);
         for intent in python_value_intents {
             intents.push((intent, node.start_byte()));
+        }
+    } else if lang_name == "c" || lang_name == "cpp" {
+        let mut cpp_call_intents = Vec::new();
+        crate::pipeline::parser::languages::cpp::extract_call_intents_cpp(
+            node,
+            source,
+            &mut cpp_call_intents,
+        );
+        for call in cpp_call_intents {
+            intents.push((
+                ReferenceIntent::Call {
+                    method: call.method,
+                    receiver: call.receiver,
+                    line: call.line,
+                },
+                0, // Byte pos not strictly needed for C++ basic resolution
+            ));
         }
     }
 }

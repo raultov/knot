@@ -1,3 +1,4 @@
+pub mod cpp;
 pub mod css;
 pub mod groovy;
 pub mod html;

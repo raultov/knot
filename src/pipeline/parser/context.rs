@@ -70,12 +70,15 @@ pub(crate) fn compute_fqn_and_context(
         EntityKind::Class
         | EntityKind::Interface
         | EntityKind::KotlinClass
-        | EntityKind::KotlinInterface => {
-            // For Java/Kotlin, we'd want to include package name here
-            // For now, just use the class name
+        | EntityKind::KotlinInterface
+        | EntityKind::CppClass
+        | EntityKind::CStruct
+        | EntityKind::CppNamespace => {
+            // For Java/Kotlin/C++, we'd want to include package/namespace name here
+            // For C++, the FQN will be updated dynamically in the extractor later
             name.to_string()
         }
-        EntityKind::Method | EntityKind::KotlinMethod => {
+        EntityKind::Method | EntityKind::KotlinMethod | EntityKind::CppMethod => {
             // Method FQN: ClassName.methodName
             if let Some(class_name) = &enclosing_class {
                 format!("{}.{}", class_name, name)
@@ -83,7 +86,7 @@ pub(crate) fn compute_fqn_and_context(
                 name.to_string()
             }
         }
-        EntityKind::Function | EntityKind::KotlinFunction => {
+        EntityKind::Function | EntityKind::KotlinFunction | EntityKind::CFunction => {
             // Top-level function - just the function name
             name.to_string()
         }
@@ -171,6 +174,7 @@ pub(crate) fn compute_fqn_and_context(
                 name.to_string()
             }
         }
+        EntityKind::MacroDefinition => name.to_string(),
     };
 
     (fqn, enclosing_class)

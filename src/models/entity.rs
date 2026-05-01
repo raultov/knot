@@ -60,6 +60,13 @@ pub enum EntityKind {
     PythonMethod,   // methods inside classes
     PythonModule,   // module-level entities (docstrings, constants)
     PythonConstant, // module-level constants (UPPER_CASE)
+    // C/C++ entities
+    CStruct,         // struct definitions
+    CFunction,       // top-level functions
+    CppClass,        // class definitions
+    CppMethod,       // methods inside classes
+    CppNamespace,    // namespace definitions
+    MacroDefinition, // #define macros
     // Build Systems & CI/CD entities
     BuildDependency, // Maven/Gradle dependency (groupId:artifactId:version)
     BuildPlugin,     // Maven/Gradle build plugin
@@ -131,6 +138,12 @@ impl std::fmt::Display for EntityKind {
             EntityKind::GroovyFunction => "groovy_function",
             EntityKind::GroovyEnum => "groovy_enum",
             EntityKind::GroovyProperty => "groovy_property",
+            EntityKind::CStruct => "c_struct",
+            EntityKind::CFunction => "c_function",
+            EntityKind::CppClass => "cpp_class",
+            EntityKind::CppMethod => "cpp_method",
+            EntityKind::CppNamespace => "cpp_namespace",
+            EntityKind::MacroDefinition => "macro_definition",
         };
         write!(f, "{s}")
     }

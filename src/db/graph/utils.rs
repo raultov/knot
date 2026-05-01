@@ -55,6 +55,12 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::GroovyFunction => "GroovyFunction",
         EntityKind::GroovyEnum => "GroovyEnum",
         EntityKind::GroovyProperty => "GroovyProperty",
+        EntityKind::CStruct => "CStruct",
+        EntityKind::CFunction => "CFunction",
+        EntityKind::CppClass => "CppClass",
+        EntityKind::CppMethod => "CppMethod",
+        EntityKind::CppNamespace => "CppNamespace",
+        EntityKind::MacroDefinition => "MacroDefinition",
     }
 }
 
