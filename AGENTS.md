@@ -1,0 +1,306 @@
+# AGENTS.md — Knot Development Guidance
+
+**knot** is a dual-database codebase indexer (Rust 2024 edition) that powers semantic code search via MCP. This file captures repo-specific guidance that would trip up an unfamiliar agent.
+
+---
+
+## Quick Commands
+
+**Build everything:**
+```bash
+cargo build --release
+```
+
+**Run unit tests only:**
+```bash
+cargo test
+```
+
+**Run all E2E tests** (requires Docker + databases):
+```bash
+./tests/run_all_e2e.sh
+```
+
+**Run a single E2E language suite:**
+```bash
+./tests/run_e2e.sh              # JS/TS/Java/HTML/CSS
+./tests/run_rust_e2e.sh         # Rust
+./tests/run_kotlin_e2e.sh       # Kotlin
+./tests/run_python_e2e.sh       # Python
+./tests/run_build_systems_e2e.sh  # Maven/Gradle/Jenkins
+./tests/run_groovy_e2e.sh       # Groovy
+./tests/run_cpp_e2e.sh          # C/C++
+./tests/run_cross_lang_ref_e2e.sh  # Cross-language validation
+```
+
+**Code quality:**
+```bash
+cargo clippy --all-targets -- -D warnings  # Must pass
+cargo fmt -- --check                        # Must pass before commit
+cargo fmt                                   # Auto-fix formatting
+```
+
+---
+
+## Architecture Overview
+
+### Three Binaries
+| Binary | Purpose | Feature Flag |
+|--------|---------|--------------|
+| `knot-indexer` | Parses code, builds indexes (Qdrant + Neo4j) | `indexer` (default) |
+| `knot` | CLI tool for search/explore/callers | always built |
+| `knot-mcp` | MCP server for LLM integration | always built |
+
+### Entrypoints
+- `src/bin/knot-indexer.rs` — Main indexing pipeline
+- `src/bin/knot.rs` — CLI tool (search/explore/callers commands)
+- `src/bin/knot-mcp.rs` — MCP server (exposes tools to LLMs)
+- `src/lib.rs` — Shared library (modules: `pipeline`, `db`, `mcp_tools`, `cli_tools`, etc.)
+
+### Language Parsers
+Located in `src/pipeline/parser/languages/`:
+- `java.rs`, `typescript.rs`, `javascript.rs` (via tree-sitter)
+- `kotlin.rs` (tree-sitter-kotlin-ng v1.1.0)
+- `rust.rs` (tree-sitter-rust v0.24) — Supports macros, type aliases, constants
+- `python.rs` (v0.9.3) — Full async/decorator/type hint support
+- `groovy.rs` (v0.10.3) — Hybrid tree-sitter + lexical parser
+- `c_cpp.rs` (v1.0.0) — Namespace-aware FQN for C++
+- `html.rs`, `css.rs` — Web stack support
+
+Each module extracts `ParsedEntity` (name, kind, signature, docstring, FQN) and references (calls, extends, implements, references).
+
+### Data Flow
+```
+Code Files (100+ languages)
+    ↓
+Tree-sitter Parsing (src/pipeline/parser/)
+    ↓
+Entity Extraction + Reference Graph Building
+    ↓
+Parallel Streams (MPSC channels for CPU/IO overlap)
+    ├→ Qdrant (vector embeddings for semantic search)
+    └→ Neo4j (graph relationships for call chains)
+```
+
+---
+
+## Testing Strategy
+
+### Philosophy
+- **BDD**: E2E tests written **first**, must fail before logic implemented
+- **TDD**: Unit tests in parser modules before implementation
+- **E2E Regression**: Every bug must have E2E case before fix
+- **No `unsafe`**: All code must be safe Rust
+
+### Unit Tests
+Located inline in source modules. Example: `src/pipeline/parser/languages/rust.rs#1234`.
+
+```bash
+cargo test                          # All unit tests
+cargo test --lib pipeline::parser   # Specific module
+cargo test -- --nocapture          # With stdout
+```
+
+### E2E Tests
+Scripts in `tests/`:
+- Test fixtures in `tests/testing_files/` (real code samples)
+- Each script validates both MCP server and CLI tool identically
+- Require `docker compose` with Qdrant + Neo4j running
+- Use `docker-compose.e2e.yml` (ephemeral test databases)
+
+**Critical**: E2E tests clean up Docker containers between suites (see `run_all_e2e.sh` lines 36-42).
+
+### Running Specific Test
+```bash
+# Single language (rebuilds binaries if needed)
+./tests/run_rust_e2e.sh
+
+# Subset of unit tests by regex
+cargo test parser::languages::rust::tests::test_struct -- --nocapture
+
+# With output
+RUST_LOG=debug cargo test --lib parser::languages::rust -- --nocapture
+```
+
+---
+
+## Repo-Specific Constraints & Quirks
+
+### Rust Edition: 2024
+This project requires Rust 1.90+ with unstable 2024 edition features. Standard 2021 features will not work.
+
+```toml
+# Cargo.toml
+[package]
+edition = "2024"
+```
+
+### Build Artifacts to Ignore
+- `target/` — Compiled binaries, intermediate objects
+- `.knot/` — Index state (.json file tracking file hashes for incremental indexing)
+- `.e2e_*` — Ephemeral test databases (cleaned up by `run_all_e2e.sh`)
+- `node_modules/` — Only for tree-sitter-groovy npm package
+
+### Database Dependencies
+**Indexer (`knot-indexer`) requires:**
+- Qdrant (default: `http://localhost:6334`) — vector search
+- Neo4j (default: `bolt://localhost:7687`) — graph relationships
+
+**Start via:**
+```bash
+docker compose up -d
+# Reads .env (copy from .env.example first)
+```
+
+**Environment variables** (CLI overrides `.env`):
+```bash
+KNOT_REPO_PATH=/path/to/repo
+KNOT_NEO4J_PASSWORD=<required>
+KNOT_QDRANT_URL=http://localhost:6334
+KNOT_NEO4J_URI=bolt://localhost:7687
+KNOT_CUSTOM_CA_CERTS=/etc/ssl/certs/bundle.pem  # Corporate proxy
+RUST_LOG=info  # debug, info, warn, error
+```
+
+### Incremental Indexing
+Default behavior: only re-parses changed files. Tracked via `.knot/index_state.json` (SHA-256 hashes).
+
+```bash
+./target/release/knot-indexer          # Incremental (fast)
+./target/release/knot-indexer --clean  # Full re-index (deletes all data)
+./target/release/knot-indexer --watch  # Real-time watch mode
+```
+
+### Entity Kinds (Type System)
+Each language defines entity kinds (enum `EntityKind`). Common across all:
+- `Class`, `Interface`, `Trait`, `Enum`, `Struct`
+- `Function`, `Method`, `Constructor`
+- `Variable`, `Constant`, `Field`, `Property`
+
+Language-specific (e.g., Rust): `Macro`, `TypeAlias`, `Union`; Groovy: `Closure`, `GroovyTrait`; C++: `CppNamespace`.
+
+Reference intents (enum `ReferenceIntent`):
+- `Calls` — function/method invocation
+- `References` — variable/type lookup
+- `Extends` — inheritance (`extends`, `->`)
+- `Implements` — trait/interface implementation
+- `MethodCall` — `obj.method()`
+
+---
+
+## Code Quality Requirements
+
+**All PRs must pass:**
+
+```bash
+# 1. Clippy (lint rules enforced)
+cargo clippy --all-targets -- -D warnings
+
+# 2. Format check
+cargo fmt -- --check
+
+# 3. Unit tests
+cargo test
+
+# 4. E2E tests (optional locally, required in CI)
+./tests/run_all_e2e.sh
+```
+
+**No `unsafe` blocks** allowed except in unavoidable ONNX Runtime interop.
+
+---
+
+## Common Workflows
+
+### Adding a New Language
+
+1. **Create parser module** → `src/pipeline/parser/languages/mylang.rs`
+2. **Implement `parse_entities()` function** → Return `Vec<ParsedEntity>`
+3. **Add tree-sitter grammar** → Cargo.toml dependency, `queries/mylang.scm`
+4. **Write unit tests** → Test entity extraction with fixtures
+5. **Write E2E tests** → `tests/run_mylang_e2e.sh`
+6. **Register in pipeline** → `src/pipeline/parser/mod.rs`
+7. **Update README.md** → Document language support, coverage, caveats
+
+### Fixing a Bug
+
+1. **Write E2E regression test** (must fail with current code)
+2. **Identify root cause** → Likely in parser module or reference builder
+3. **Fix in parser** → Add unit tests covering the case
+4. **Verify E2E test passes**
+5. **Check no regressions** → `cargo test && ./tests/run_all_e2e.sh`
+
+### Refactoring Parser Logic
+
+1. **Understand call graph** → Use `find_callers` on the function
+2. **Check impact** → Look at E2E tests that may be affected
+3. **Update tests if needed** → BDD means tests define the contract
+4. **Run full suite** → Clippy, fmt, unit tests, all E2E suites
+
+---
+
+## Troubleshooting
+
+### Build Fails with Rust 2024 Edition
+- Check `rustc --version` (needs 1.90+)
+- If using rustup: `rustup update nightly` or `rustup default stable`
+
+### E2E Tests Time Out
+- Qdrant/Neo4j may not be ready → Check `docker ps` and `docker logs`
+- Run cleanup: `cd tests && docker compose -f docker-compose.e2e.yml down -v`
+- Restart: `docker compose up -d` (from repo root)
+
+### Incremental Index Becomes Stale
+- Delete `.knot/` and rebuild: `rm -rf .knot/ && ./target/release/knot-indexer`
+- Or use: `./target/release/knot-indexer --clean`
+
+### Clippy or Fmt Fails Before Commit
+- Auto-fix: `cargo fmt && cargo clippy --fix`
+- Manual check: `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`
+
+---
+
+## CI/CD
+
+**GitHub Actions workflows** in `.github/workflows/`:
+- `ci.yml` — Build + test (unit + E2E)
+- `release.yml` — Publish to GitHub releases
+
+**CI always runs:**
+1. `cargo fmt -- --check` (formatting)
+2. `cargo clippy --all-targets -- -D warnings` (linting)
+3. `cargo test` (unit tests)
+4. `./tests/run_all_e2e.sh` (all language suites)
+
+Failure = PR not mergeable. Check `.github/workflows/ci.yml` for exact steps.
+
+---
+
+## Key References in Codebase
+
+- **Parser module registration**: `src/pipeline/parser/mod.rs` (dispatcher for each language)
+- **MCP tools definition**: `src/mcp_tools/` (search_hybrid_context, find_callers, explore_file)
+- **CLI command routing**: `src/bin/knot.rs` (search/explore/callers subcommands)
+- **E2E test structure**: `tests/run_e2e.sh` (pattern used by all language suites)
+- **Docker setup**: `docker-compose.yml` (production), `tests/docker-compose.e2e.yml` (ephemeral)
+
+---
+
+## When to Ask a Human
+
+- **Team conventions not written down**: e.g., naming patterns for new entity kinds
+- **Release strategy questions**: e.g., breaking change policy, crates.io publishing cadence
+- **Architecture decisions**: e.g., adding a new database or changing the indexing pipeline
+- **External tool integration**: e.g., supporting a new language or build system
+
+---
+
+## AI Agent Emphasis
+
+**CRITICAL**: This repo contains **two systems**: the indexer (builds databases) and the MCP tools (queries them). When contributing:
+
+1. **Indexer changes** → Modify parsers, add unit + E2E tests
+2. **Query tools changes** → Modify MCP handlers, update tool descriptions
+3. **Both** → Update `.prompt` and `.knot-agent.md` if tool behavior changes
+
+Use the `knot` MCP tools yourself for code exploration—this repo is designed to showcase them.
