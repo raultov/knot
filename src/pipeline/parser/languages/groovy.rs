@@ -467,13 +467,11 @@ fn find_method_body_end(source: &str, line_num: usize) -> Option<usize> {
     while let Some(ch) = chars.next() {
         match ch {
             '\n' => current_line += 1,
-            '/' => {
-                if chars.peek() == Some(&'/') {
-                    for c in chars.by_ref() {
-                        if c == '\n' {
-                            current_line += 1;
-                            break;
-                        }
+            '/' if chars.peek() == Some(&'/') => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        current_line += 1;
+                        break;
                     }
                 }
             }
