@@ -90,7 +90,7 @@ for svc in "Neo4j $NEO4J_PORT" "Qdrant $QDRANT_PORT"; do
     done
     [ $elapsed -lt 120 ] || { echo -e "${RED}$name timeout${NC}"; exit 1; }
 done
-sleep 5
+sleep 8
 
 # 2. Create the test repo with a Groovy class and a Java caller
 echo -e "\n${YELLOW}[2/4] Creating test repo (Groovy class + Java caller)...${NC}"
@@ -158,13 +158,16 @@ JAVA
 
 # 3. Index
 echo -e "\n${YELLOW}[3/4] Indexing test repo...${NC}"
-export KNOT_NEO4J_URI KNOT_NEO4J_USER KNOT_NEO4J_PASSWORD
-export KNOT_QDRANT_URL KNOT_QDRANT_COLLECTION
-export KNOT_REPO_PATH="$TMP_REPO_DIR"
-export KNOT_REPO_NAME="$REPO_NAME"
-
 cd "$PROJECT_ROOT"
-cargo run --release --bin knot-indexer -- --clean 2>/dev/null
+env \
+    KNOT_NEO4J_URI="$NEO4J_URI" \
+    KNOT_NEO4J_USER="$NEO4J_USER" \
+    KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+    KNOT_QDRANT_URL="$QDRANT_URL" \
+    KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+    KNOT_REPO_PATH="$TMP_REPO_DIR" \
+    KNOT_REPO_NAME="$REPO_NAME" \
+    cargo run --release --bin knot-indexer -- --clean 2>/dev/null
 
 echo -e "${GREEN}✓ Indexed${NC}"
 
@@ -173,7 +176,15 @@ echo -e "\n${YELLOW}[4/4] Verifying cross-language references via find_callers..
 
 call_mcp() {
     local json_req="$1"
-    echo "$json_req" | cargo run --release --bin knot-mcp 2>/dev/null | tail -1
+    echo "$json_req" | env \
+        KNOT_NEO4J_URI="$NEO4J_URI" \
+        KNOT_NEO4J_USER="$NEO4J_USER" \
+        KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+        KNOT_QDRANT_URL="$QDRANT_URL" \
+        KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+        KNOT_REPO_PATH="$TMP_REPO_DIR" \
+        KNOT_REPO_NAME="$REPO_NAME" \
+        cargo run --release --bin knot-mcp 2>/dev/null | tail -1
 }
 
 # 4a: Should find callers of greet() from Main.java
