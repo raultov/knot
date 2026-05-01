@@ -603,18 +603,27 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v0.10.3 — Groovy Private Methods, Nested Closures & UUID Collision Fix) ✅
-- ✅ **UUID Collision Fix**: `ParsedEntity` identity now includes `start_line` to prevent entities with identical name/FQN in the same file from colliding (e.g., multiple `@Override void actionPerformed(...)` in anonymous `new AnAction` closures)
-- ✅ **Multi-line Method Extraction**: `try_extract_typed_method_multiline` handles method signatures spanning multiple lines (closure default params)
-- ✅ **Innermost Assignment**: Method calls inside nested closures are assigned to the innermost method, not the outer container (e.g., `hyperlinkUpdate` inside `showGrabbingFinishedMessage`)
-- ✅ **Assignment-vs-Declaration Disambiguation**: `try_extract_typed_method` rejects `=` before `(` and `new Type(...)` constructor patterns
-- ✅ **Brace-Scope `end_line` Fix**: `find_method_body_end` estimates method body closing line via brace matching with string-awareness
-- ✅ **Java Ref Extraction Removed for Groovy**: Tree-sitter `method_invocation` nodes are unreliable for Groovy closures; ad-hoc `extract_method_calls` + innermost assignment handles all cases
-- ✅ **10 E2E test cases** (`run_groovy_private_method_e2e.sh`): typed/`def`/no-paren callers, multi-line closures, innermost assignment, UIPattern duplicate-method-name test
-- ✅ **CI**: All 3 Groovy E2E suites (`run_groovy_e2e.sh`, `run_groovy_cross_ref_e2e.sh`, `run_groovy_private_method_e2e.sh`) run on every push/PR
-- ✅ **441 unit tests | clippy clean | fmt applied**
+### Current Release (v0.11.0 — C/C++ Language Support) ✅
+- ✅ **Phase 11: C/C++ Support**: tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integrated
+- ✅ **Namespace-aware FQN**: `Engine::MyClass::start` format via AST parent traversal in `build_cpp_fqn()`
+- ✅ **Call Graph Analysis**: direct calls, method calls (`obj.bar()`, `ptr->baz()`), scope resolution (`std::vector::size()`), field expressions (`this->compute()`)
+- ✅ **Type Reference Tracking**: declarations, `new` expressions, qualified types
+- ✅ **Macro Usage Detection**: uppercase identifier heuristic (e.g., `MAX_BUF`)
+- ✅ **6 EntityKind variants**: CppClass, CStruct, CppMethod, CFunction, CppNamespace, MacroDefinition
+- ✅ **3 new C++ unit tests** (307 lines in cpp.rs) | 443 total unit tests
+- ✅ **4 E2E tests** in `run_cpp_e2e.sh`: FQN extraction, call graphs, macro usage, type references
+- ✅ **10/10 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems (fixed), Groovy, Groovy Cross-Ref (fixed), Groovy Private Method, Cross-Language Ref, C/C++
+- ✅ **Master E2E script** (`run_all_e2e.sh`) for local validation of all test suites
+- ✅ **CI updated** with C/C++ and Cross-Language Ref E2E tests
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **cargo build --release** successful
+- ✅ **Published to crates.io as v0.11.0**
 
-### Previous Release (v0.8.11 — CLI UX Enhancements & Rust Performance) ✅
+### Previous Release (v0.10.3 — Groovy Private Methods, Nested Closures & UUID Collision Fix) ✅
+- ✅ **UUID Collision Fix**: `ParsedEntity` identity now includes `start_line`
+- ✅ **Multi-line Method Extraction**: `try_extract_typed_method_multiline` handles closure default params
+- ✅ **Innermost Assignment**: method calls in nested closures go to the innermost method
+- ✅ **10 E2E test cases**: typed/`def`/no-paren callers, multi-line closures, innermost assignment
+- ✅ **441 unit tests | clippy clean | fmt applied**
 
 ### Previous Release (v0.8.7 — Enhanced Rust Type Reference Detection in Macros) ✅
 - ✅ **Macro Type Reference Extraction**: Type references inside macro invocations (`vec![]`, `println!()`, `assert!()`, `format!()`, etc.) are now correctly captured

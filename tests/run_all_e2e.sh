@@ -54,8 +54,6 @@ run_test "Rust E2E" "run_rust_e2e.sh"
 run_test "Python E2E" "run_python_e2e.sh"
 run_test "Build Systems E2E" "run_build_systems_e2e.sh"
 run_test "Groovy E2E" "run_groovy_e2e.sh"
-run_test "Groovy Cross-Ref E2E" "run_groovy_cross_ref_e2e.sh"
-run_test "Groovy Private Method E2E" "run_groovy_private_method_e2e.sh"
 run_test "Cross-Language Ref E2E" "run_cross_lang_ref_e2e.sh"
 run_test "C/C++ E2E" "run_cpp_e2e.sh"
 

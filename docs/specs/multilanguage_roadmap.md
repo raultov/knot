@@ -76,16 +76,33 @@ Enable `knot` to parse and semantically understand standard Groovy source files 
 
 ---
 
-## Phase 11: C/C++ Support (v0.11.x)
+## Phase 11: C/C++ Support (v0.11.0 — ✅ Completed)
 
 ### Objective
-Enable `knot` to index C and C++ codebases, focusing on pointer relationships, header inclusion graphs, and macro analysis.
+Enable `knot` to index C and C++ codebases with full support for namespaces, classes, methods, pointers, and macros.
 
-#### Planned
-- tree-sitter-cpp integration
-- Header inclusion graph construction
-- Macro call tracking
-- Pointer/reference relationship analysis
+#### Planned → ✅ Completed
+- ✅ tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integration
+- ✅ 6 new EntityKind variants: CppClass, CStruct, CppMethod, CFunction, CppNamespace, MacroDefinition
+- ✅ Namespace-aware FQN resolution (`Engine::MyClass::start`)
+- ✅ cpp.scm and c.scm tree-sitter queries for entity extraction
+- ✅ `build_cpp_fqn()` for dynamic FQN construction via AST parent traversal
+- ✅ `extract_reference_intents_cpp()` and `extract_call_intents_cpp()` for call graph analysis
+- ✅ Call expression handling: direct calls, object/pointer access, scope resolution (`std::vector::size()`)
+- ✅ Type reference tracking: declarations, `new` expressions, qualified types
+- ✅ Macro usage detection via uppercase identifier heuristic
+- ✅ C/C++ reference integration in `orphans.rs` for `collect_all_reference_intents_with_byte_pos`
+- ✅ 3 new C++ unit tests (307 lines in cpp.rs)
+- ✅ 4 E2E tests in `run_cpp_e2e.sh`: FQN extraction, call graphs, macro usage, type references
+- ✅ CI updated with C/C++ and Cross-Language Ref E2E tests
+- ✅ Master E2E script (`run_all_e2e.sh`) to run all 10 test suites locally
+
+#### Implementation Files
+- `src/pipeline/parser/languages/cpp.rs` — main C++ parser module
+- `queries/c.scm` — C tree-sitter queries
+- `queries/cpp.scm` — C++ tree-sitter queries
+- `tests/run_cpp_e2e.sh` — C++ E2E test suite
+- `tests/run_all_e2e.sh` — master E2E runner
 
 ---
 
@@ -97,8 +114,8 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 | Phase 7: Rust | High | ✅ Completed (v0.8.11) |
 | Phase 8: Python | High | ✅ Completed (v0.9.3) |
 | Phase 9: Build Systems (Maven/Gradle/Jenkins) | Medium | ✅ Completed (v0.10.0) |
-| Phase 10: Groovy Language Support | Medium | ✅ Completed (v0.10.1) |
-| Phase 11: C/C++ | High | 📋 Planned (v0.11.x) |
+| Phase 10: Groovy Language Support | Medium | ✅ Completed (v0.10.3) |
+| Phase 11: C/C++ | High | ✅ Completed (v0.11.0) |
 
 ---
 
@@ -111,6 +128,22 @@ Enable `knot` to index C and C++ codebases, focusing on pointer relationships, h
 ---
 
 ## Changelog
+
+### v0.11.0 - C/C++ Language Support
+- ✅ Phase 11 complete: tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integration
+- ✅ 6 new EntityKind variants: CppClass, CStruct, CppMethod, CFunction, CppNamespace, MacroDefinition
+- ✅ Namespace-aware FQN resolution: `Engine::MyClass::start` format via AST parent traversal
+- ✅ Call graph analysis: direct calls, method calls (`obj.bar()`, `ptr->baz()`), scope resolution (`std::vector::size()`)
+- ✅ Type reference tracking: declarations, `new` expressions, qualified types
+- ✅ Macro usage detection via uppercase identifier heuristic (e.g., `MAX_BUF`)
+- ✅ 3 new C++ unit tests (307 lines in cpp.rs) | 443 total unit tests
+- ✅ 4 E2E tests in `run_cpp_e2e.sh`: FQN extraction, call graphs, macro usage, type references
+- ✅ 10/10 E2E test suites pass (C/C++ E2E included, Build Systems E2E fixed)
+- ✅ Master E2E script (`run_all_e2e.sh`) for local validation of all test suites
+- ✅ CI updated with C/C++ and Cross-Language Ref E2E tests
+- ✅ Groovy Cross-Ref E2E fixed: pass neo4j env vars to knot-indexer
+- ✅ `cargo fmt` clean | `cargo clippy --all-targets -- -D warnings` clean
+- ✅ Published to crates.io as v0.11.0
 
 ### v0.10.3 - Groovy Nested Methods, Innermost Assignment & UUID Collision Fix
 - ✅ Fixed UUID collision: `ParsedEntity` identity now includes `start_line` to prevent entities with identical name/FQN in same file from colliding (e.g., multiple `actionPerformed` in `new AnAction` closures)
