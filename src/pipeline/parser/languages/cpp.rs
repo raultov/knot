@@ -615,7 +615,7 @@ size_t Print::println(void) {
             .find(|e| {
                 e.signature
                     .as_deref()
-                    .map_or(false, |s| s.contains("char c"))
+                    .is_some_and(|s| s.contains("char c"))
             })
             .expect("println(char) not found");
 
@@ -644,7 +644,7 @@ size_t Print::println(void) {
                 e.name == "println"
                     && e.signature
                         .as_deref()
-                        .map_or(false, |s| s.contains("char c"))
+                        .is_some_and(|s| s.contains("char c"))
             })
             .expect("println(char) resolution entity not found");
 
@@ -669,14 +669,14 @@ size_t Print::println(void) {
                 e.name == "println"
                     && e.signature
                         .as_deref()
-                        .map_or(false, |s| s.contains("void") || !s.contains(','))
+                        .is_some_and(|s| s.contains("void") || !s.contains(','))
             })
             .or_else(|| {
                 resolution_entities.iter().find(|e| {
                     e.name == "println"
                         && e.signature
                             .as_deref()
-                            .map_or(false, |s| s.contains("(void)") || s.contains("()"))
+                            .is_some_and(|s| s.contains("(void)") || s.contains("()"))
                 })
             });
 
