@@ -32,7 +32,11 @@ cleanup() {
         echo "  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR"
         return 0
     fi
-    echo -e "\n${GREEN}✓ All C/C++ E2E tests passed!${NC}"
+    echo -e "\n${YELLOW}Cleaning up Docker...${NC}"
+    docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v 2>/dev/null || true
+    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
+    echo -e "${GREEN}Cleanup complete${NC}"
 }
 trap cleanup EXIT
 
@@ -40,7 +44,7 @@ echo -e "${BLUE}C/C++ E2E Test${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── Set up infra ────────────────────────────────────────
-rm -rf "$E2E_DATA_DIR" "$TMP_REPO_DIR"
+sudo rm -rf "$E2E_DATA_DIR" "$TMP_REPO_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" "$TMP_REPO_DIR" 2>/dev/null || true
 mkdir -p "$E2E_DATA_DIR" "$TMP_REPO_DIR/src"
 
 cat > "$E2E_DATA_DIR/docker-compose.yml" << 'DOCKEREOF'
@@ -72,6 +76,7 @@ for i in $(seq 1 30); do
     fi
     sleep 2
 done
+sleep 8
 echo -e "${GREEN}✓${NC}"
 
 # ── Create test source files ───────────────────────────
@@ -105,16 +110,25 @@ EOF
 
 # ── Index the repo ─────────────────────────────────────
 echo -n "Indexing... "
-KNOT_REPO_PATH="$TMP_REPO_DIR" \
-KNOT_REPO_NAME="$REPO_NAME" \
-KNOT_QDRANT_URL="$QDRANT_URL" \
-KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
-KNOT_NEO4J_URI="$NEO4J_URI" \
-KNOT_NEO4J_USER="$NEO4J_USER" \
-KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
-KNOT_CLEAN="true" \
-    "$PROJECT_ROOT/target/debug/knot-indexer" > /dev/null 2>&1
-echo -e "${GREEN}✓${NC}"
+cd "$PROJECT_ROOT"
+IDX_OUT=$(env \
+    KNOT_REPO_PATH="$TMP_REPO_DIR" \
+    KNOT_REPO_NAME="$REPO_NAME" \
+    KNOT_QDRANT_URL="$QDRANT_URL" \
+    KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+    KNOT_NEO4J_URI="$NEO4J_URI" \
+    KNOT_NEO4J_USER="$NEO4J_USER" \
+    KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+    KNOT_CLEAN="true" \
+    cargo run --release --bin knot-indexer -- --clean 2>&1)
+IDX_EXIT=$?
+if [ $IDX_EXIT -eq 0 ] && echo "$IDX_OUT" | grep -q "Incremental\|initial"; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${RED}✗ Indexing failed (exit: $IDX_EXIT)${NC}"
+    echo "$IDX_OUT"
+    exit 1
+fi
 
 KNOT_ENV=(
     KNOT_REPO_NAME="$REPO_NAME"
@@ -125,9 +139,17 @@ KNOT_ENV=(
     KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD"
 )
 
+run_knot() {
+    env "${KNOT_ENV[@]}" cargo run --release --bin knot -- "$@" 2>/dev/null
+}
+
+run_mcp() {
+    echo "$1" | env "${KNOT_ENV[@]}" cargo run --release --bin knot-mcp 2>/dev/null | tail -1
+}
+
 # ── Test 1: Class & Method Extraction with Namespaces ─
 echo -n "Test 1: FQN extraction for Engine::MyClass::start... "
-OUT1=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'start'}) RETURN e.fqn")
+OUT1=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'start'}) RETURN e.fqn" 2>/dev/null)
 if echo "$OUT1" | grep -q "Engine::MyClass::start"; then
     echo -e "${GREEN}✓ Engine::MyClass::start found${NC}"
 else
@@ -138,7 +160,7 @@ fi
 
 # ── Test 2: Call Graph for Pointers/Refs ─
 echo -n "Test 2: find_callers on start() finds main()... "
-OUT2=$(env "${KNOT_ENV[@]}" "$PROJECT_ROOT/target/debug/knot" callers start --repo "$REPO_NAME" 2>&1 || true)
+OUT2=$(run_knot callers start --repo "$REPO_NAME" || true)
 if echo "$OUT2" | grep -q "main"; then
     echo -e "${GREEN}✓ main found as caller${NC}"
 else
@@ -149,7 +171,7 @@ fi
 
 # ── Test 3: Macro Tracking ─
 echo -n "Test 3: macro MAX_BUF used in main()... "
-OUT3=$(env "${KNOT_ENV[@]}" "$PROJECT_ROOT/target/debug/knot" callers MAX_BUF --repo "$REPO_NAME" 2>&1 || true)
+OUT3=$(run_knot callers MAX_BUF --repo "$REPO_NAME" || true)
 if echo "$OUT3" | grep -q "main"; then
     echo -e "${GREEN}✓ MAX_BUF usage found in main${NC}"
 else
@@ -160,7 +182,7 @@ fi
 
 # ── Test 4: Namespace and Class References ─
 echo -n "Test 4: MyClass referenced in main()... "
-OUT4=$(env "${KNOT_ENV[@]}" "$PROJECT_ROOT/target/debug/knot" callers MyClass --repo "$REPO_NAME" 2>&1 || true)
+OUT4=$(run_knot callers MyClass --repo "$REPO_NAME" || true)
 if echo "$OUT4" | grep -q "main"; then
     echo -e "${GREEN}✓ MyClass reference found in main${NC}"
 else
@@ -169,7 +191,4 @@ else
     exit 1
 fi
 
-# Cleanup before trap
-docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v > /dev/null 2>&1
-rm -rf "$E2E_DATA_DIR" "$TMP_REPO_DIR"
 echo -e "\n${GREEN}✓ All C/C++ E2E tests passed!${NC}"
