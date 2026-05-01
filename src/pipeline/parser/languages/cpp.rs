@@ -612,11 +612,7 @@ size_t Print::println(void) {
 
         let println_char = println_entities
             .iter()
-            .find(|e| {
-                e.signature
-                    .as_deref()
-                    .is_some_and(|s| s.contains("char c"))
-            })
+            .find(|e| e.signature.as_deref().is_some_and(|s| s.contains("char c")))
             .expect("println(char) not found");
 
         let has_print_call = println_char.reference_intents.iter().any(|intent| {
@@ -641,10 +637,7 @@ size_t Print::println(void) {
         let println_char_res = resolution_entities
             .iter()
             .find(|e| {
-                e.name == "println"
-                    && e.signature
-                        .as_deref()
-                        .is_some_and(|s| s.contains("char c"))
+                e.name == "println" && e.signature.as_deref().is_some_and(|s| s.contains("char c"))
             })
             .expect("println(char) resolution entity not found");
 
