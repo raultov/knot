@@ -90,7 +90,7 @@ for svc in "Neo4j $NEO4J_PORT" "Qdrant $QDRANT_PORT"; do
     done
     [ $elapsed -lt 120 ] || { echo -e "${RED}$name timeout${NC}"; exit 1; }
 done
-sleep 8
+sleep 12
 
 # 2. Create the test repo with a Groovy class and a Java caller
 echo -e "\n${YELLOW}[2/4] Creating test repo (Groovy class + Java caller)...${NC}"
@@ -167,7 +167,13 @@ env \
     KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
     KNOT_REPO_PATH="$TMP_REPO_DIR" \
     KNOT_REPO_NAME="$REPO_NAME" \
-    cargo run --release --bin knot-indexer -- --clean 2>/dev/null
+    cargo run --release --bin knot-indexer -- --clean 2>&1
+
+IDX_EXIT=$?
+if [ $IDX_EXIT -ne 0 ]; then
+    echo -e "${RED}✗ Indexing failed (exit code: $IDX_EXIT)${NC}"
+    exit 1
+fi
 
 echo -e "${GREEN}✓ Indexed${NC}"
 
