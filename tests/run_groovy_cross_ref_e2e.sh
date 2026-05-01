@@ -145,13 +145,24 @@ export KNOT_REPO_PATH="$TMP_REPO_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 
 cd "$PROJECT_ROOT"
-if ! cargo run --release --bin knot-indexer -- --clean 2>&1 | grep -q "Incremental update complete\|initial indexing run"; then
+env \
+    KNOT_NEO4J_URI="$NEO4J_URI" \
+    KNOT_NEO4J_USER="$NEO4J_USER" \
+    KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+    KNOT_QDRANT_URL="$QDRANT_URL" \
+    KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+    KNOT_REPO_PATH="$TMP_REPO_DIR" \
+    KNOT_REPO_NAME="$REPO_NAME" \
+    cargo run --release --bin knot-indexer -- --clean 2>&1 | tee /tmp/indexer_output.txt
+IDX_RESULT=${PIPESTATUS[0]}
+
+if grep -q "Incremental update complete\|initial indexing run" /tmp/indexer_output.txt 2>/dev/null; then
+    echo -e "${GREEN}✓ Indexed${NC}"
+else
     echo -e "${RED}✗ Indexing failed${NC}"
-    cargo run --release --bin knot-indexer -- --clean
+    cat /tmp/indexer_output.txt
     exit 1
 fi
-
-echo -e "${GREEN}✓ Indexed${NC}"
 
 call_mcp() {
     local response
