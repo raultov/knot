@@ -109,12 +109,10 @@ while IFS= read -r -d '' suite_file; do
     echo -e "${YELLOW}${BOLD}[Suite: ${suite_name}]${NC}"
 
     # Get current metrics
-    local cur_total cur_mem
     cur_total=$(json_get "$suite_file" "['total_ms_median']")
     cur_mem=$(json_get "$suite_file" "['memory_peak_mb_median']")
 
     # Get baseline metrics if available
-    local baseline_total baseline_mem
     baseline_total=$(json_get "$BASELINE_FILE" "['suite_results']['${suite_name}']['total_ms']")
     baseline_mem=$(json_get "$BASELINE_FILE" "['suite_results']['${suite_name}']['memory_peak_mb']")
 
@@ -125,13 +123,11 @@ while IFS= read -r -d '' suite_file; do
     fi
 
     # Compare total time
-    local time_pct_change
     time_pct_change=$(awk "BEGIN {printf \"%.1f\", ((${cur_total} - ${baseline_total}) / ${baseline_total}) * 100}")
-    local time_abs_change
     time_abs_change=$(awk "BEGIN {printf \"%.0f\", ${cur_total} - ${baseline_total}}")
 
-    local time_status="${GREEN}✓${NC}"
-    local time_label="within tolerance"
+    time_status="${GREEN}✓${NC}"
+    time_label="within tolerance"
 
     if [ "$(awk "BEGIN {print (${time_pct_change} > ${TIME_TOLERANCE_PCT} ? 1 : 0)}")" = "1" ]; then
         time_status="${RED}✗${NC}"
@@ -145,11 +141,10 @@ while IFS= read -r -d '' suite_file; do
     echo -e "  Total Time:   ${cur_total}ms (baseline: ${baseline_total}ms) ${time_status} ${time_pct_change}% (${time_abs_change}ms) — ${time_label}"
 
     # Compare memory
-    local mem_pct_change
     mem_pct_change=$(awk "BEGIN {printf \"%.1f\", ((${cur_mem} - ${baseline_mem}) / ${baseline_mem}) * 100}")
 
-    local mem_status="${GREEN}✓${NC}"
-    local mem_label="within tolerance"
+    mem_status="${GREEN}✓${NC}"
+    mem_label="within tolerance"
 
     if [ "$(awk "BEGIN {print (${mem_pct_change} > ${MEM_TOLERANCE_PCT} ? 1 : 0)}")" = "1" ]; then
         mem_status="${RED}✗${NC}"
