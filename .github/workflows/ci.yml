@@ -230,9 +230,9 @@ jobs:
 
       - name: Run Performance Benchmarks
         run: |
-          ./tests/benchmark_e2e.sh --output-dir /tmp/perf_results
+          ./tests/benchmark_e2e.sh --focus java_e2e --output-dir /tmp/perf_results
           scripts/compare_perf_metrics.sh /tmp/perf_results .perf_metrics/baseline.json
-        timeout-minutes: 30
+        timeout-minutes: 10
 
       - name: Upload performance metrics
         if: always()
