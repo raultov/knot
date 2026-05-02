@@ -245,5 +245,10 @@ jobs:
       - name: Update Baseline (on main/master merge)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
-          cp /tmp/perf_results/aggregated.json .perf_metrics/baseline.json
-          echo "Baseline updated for $(git rev-parse --short HEAD)"
+          LATEST_AGG=$(find /tmp/perf_results -name aggregated.json -type f | sort | tail -1)
+          if [ -n "$LATEST_AGG" ]; then
+            cp "$LATEST_AGG" .perf_metrics/baseline.json
+            echo "Baseline updated for $(git rev-parse --short HEAD)"
+          else
+            echo "WARNING: No aggregated.json found in /tmp/perf_results"
+          fi
