@@ -38,7 +38,7 @@ trap cleanup EXIT INT TERM
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}knot Cross-Lang Reference E2E Regression Test${NC}"
-echo -e "${BLUE}(Java -> Groovy CALLS relationship)${NC}"
+echo -e "${BLUE}(Java/Kotlin/Groovy CALLS relationships)${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # 1. Set up Docker
@@ -77,26 +77,35 @@ EOF
 
 docker compose -f "$E2E_DATA_DIR/docker-compose.yml" up -d
 
-# Wait for services
-for svc in "Neo4j $NEO4J_PORT" "Qdrant $QDRANT_PORT"; do
-    set -- $svc; name=$1; port=$2
-    elapsed=0
-    echo -n "Waiting for $name on port $port"
-    while [ $elapsed -lt 120 ]; do
-        if nc -z localhost "$port" 2>/dev/null; then
-            echo -e "\n${GREEN}✓ $name is ready${NC}"; break
-        fi
-        sleep 2; elapsed=$((elapsed+2)); echo -n "."
-    done
-    [ $elapsed -lt 120 ] || { echo -e "${RED}$name timeout${NC}"; exit 1; }
+# Wait for services using Docker health checks for Neo4j
+echo -n "Waiting for Neo4j (health check)"
+elapsed=0
+while [ $elapsed -lt 120 ]; do
+    status=$(docker inspect --format='{{.State.Health.Status}}' knot_neo4j_crosslang_e2e 2>/dev/null || echo "starting")
+    if [ "$status" = "healthy" ]; then
+        echo -e "\n${GREEN}✓ Neo4j is ready (healthy)${NC}"; break
+    fi
+    sleep 3; elapsed=$((elapsed+3)); echo -n "."
 done
-sleep 12
+[ $elapsed -lt 120 ] || { echo -e "\n${RED}Neo4j timeout${NC}"; exit 1; }
 
-# 2. Create the test repo with a Groovy class and a Java caller
-echo -e "\n${YELLOW}[2/4] Creating test repo (Groovy class + Java caller)...${NC}"
+echo -n "Waiting for Qdrant on port $QDRANT_PORT"
+elapsed=0
+while [ $elapsed -lt 120 ]; do
+    if nc -z localhost "$QDRANT_PORT" 2>/dev/null; then
+        echo -e "\n${GREEN}✓ Qdrant is ready${NC}"; break
+    fi
+    sleep 2; elapsed=$((elapsed+2)); echo -n "."
+done
+[ $elapsed -lt 120 ] || { echo -e "\n${RED}Qdrant timeout${NC}"; exit 1; }
+sleep 5
+
+# 2. Create the test repo with Groovy, Java, and Kotlin classes
+echo -e "\n${YELLOW}[2/4] Creating test repo (Groovy + Java + Kotlin classes)...${NC}"
 rm -rf "$TMP_REPO_DIR"
 mkdir -p "$TMP_REPO_DIR/src/main/groovy/com/example/utils" \
-         "$TMP_REPO_DIR/src/main/java/com/example/app"
+         "$TMP_REPO_DIR/src/main/java/com/example/app" \
+         "$TMP_REPO_DIR/src/main/kotlin/com/example/kotlin"
 
 # Groovy class with a static method
 cat > "$TMP_REPO_DIR/src/main/groovy/com/example/utils/Helper.groovy" <<'GROOVY'
@@ -155,6 +164,79 @@ public class Consumer {
     }
 }
 JAVA
+
+# Kotlin class that calls a Groovy static method (Kotlin → Groovy)
+cat > "$TMP_REPO_DIR/src/main/kotlin/com/example/kotlin/KotlinClient.kt" <<'KOTLIN'
+package com.example.kotlin
+
+import com.example.utils.Helper
+
+class KotlinClient {
+    fun callGroovyStatic(): String {
+        return Helper.greet("Kotlin")
+    }
+
+    fun callGroovyAdd(): Int {
+        return Helper.add(10, 20)
+    }
+}
+KOTLIN
+
+# Kotlin class that calls a Groovy instance method (Kotlin → Groovy)
+cat > "$TMP_REPO_DIR/src/main/kotlin/com/example/kotlin/KotlinParser.kt" <<'KOTLIN'
+package com.example.kotlin
+
+import com.example.utils.Parser
+
+class KotlinParser {
+    fun parseGroovy(input: String): String {
+        val p = Parser()
+        return p.parse(input)
+    }
+}
+KOTLIN
+
+# Kotlin utility class called from Java (Java → Kotlin)
+cat > "$TMP_REPO_DIR/src/main/kotlin/com/example/kotlin/StringUtils.kt" <<'KOTLIN'
+package com.example.kotlin
+
+object StringUtils {
+    fun capitalize(text: String): String {
+        return text.replaceFirstChar { it.uppercase() }
+    }
+
+    fun countWords(text: String): Int {
+        return text.split(" ").size
+    }
+}
+KOTLIN
+
+# Java class that calls Kotlin utility (Java → Kotlin)
+cat > "$TMP_REPO_DIR/src/main/java/com/example/app/JavaUser.java" <<'JAVA'
+package com.example.app;
+
+import com.example.kotlin.StringUtils;
+
+public class JavaUser {
+    public String formatName(String name) {
+        return StringUtils.INSTANCE.capitalize(name);
+    }
+}
+JAVA
+
+# Groovy class that calls Kotlin (Groovy → Kotlin)
+cat > "$TMP_REPO_DIR/src/main/groovy/com/example/utils/GroovyUser.groovy" <<'GROOVY'
+package com.example.utils
+
+import com.example.kotlin.StringUtils
+
+class GroovyUser {
+    String analyze(String text) {
+        def words = StringUtils.INSTANCE.countWords(text)
+        return "Text has ${words} words"
+    }
+}
+GROOVY
 
 # 3. Index
 echo -e "\n${YELLOW}[3/4] Indexing test repo...${NC}"
@@ -259,6 +341,72 @@ if echo "$MCP_RESP" | grep -q "Main"; then
     echo -e "${GREEN}✓ PASS: Main.java entities found${NC}"
 else
     echo -e "${RED}✗ FAIL: Main.java NOT explored correctly${NC}"
+    FAILED=1
+fi
+
+# 4g: Kotlin → Groovy static method call
+echo -e "\n${BLUE}Test G: find_callers for Helper.greet — should include KotlinClient (Kotlin → Groovy)${NC}"
+MCP_RESP=$(call_mcp '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"greet","repo_name":"'"$REPO_NAME"'"}}}')
+
+if echo "$MCP_RESP" | grep -qE "KotlinClient|callGroovyStatic"; then
+    echo -e "${GREEN}✓ PASS: KotlinClient found as caller of Helper.greet${NC}"
+else
+    echo -e "${RED}✗ FAIL: KotlinClient NOT found as caller of Helper.greet${NC}"
+    FAILED=1
+fi
+
+# 4h: Kotlin → Groovy instance method call
+echo -e "\n${BLUE}Test H: find_callers for Parser.parse — should include KotlinParser (Kotlin → Groovy)${NC}"
+MCP_RESP=$(call_mcp '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"parse","repo_name":"'"$REPO_NAME"'"}}}')
+
+if echo "$MCP_RESP" | grep -qE "KotlinParser|parseGroovy"; then
+    echo -e "${GREEN}✓ PASS: KotlinParser found as caller of Parser.parse${NC}"
+else
+    echo -e "${RED}✗ FAIL: KotlinParser NOT found as caller of Parser.parse${NC}"
+    FAILED=1
+fi
+
+# 4i: Java → Kotlin object method call
+echo -e "\n${BLUE}Test I: find_callers for StringUtils.capitalize — should include JavaUser (Java → Kotlin)${NC}"
+MCP_RESP=$(call_mcp '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"capitalize","repo_name":"'"$REPO_NAME"'"}}}')
+
+if echo "$MCP_RESP" | grep -qE "JavaUser|formatName"; then
+    echo -e "${GREEN}✓ PASS: JavaUser found as caller of StringUtils.capitalize${NC}"
+else
+    echo -e "${RED}✗ FAIL: JavaUser NOT found as caller of StringUtils.capitalize${NC}"
+    FAILED=1
+fi
+
+# 4j: Groovy → Kotlin object method call
+echo -e "\n${BLUE}Test J: find_callers for StringUtils.countWords — should include GroovyUser (Groovy → Kotlin)${NC}"
+MCP_RESP=$(call_mcp '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"countWords","repo_name":"'"$REPO_NAME"'"}}}')
+
+if echo "$MCP_RESP" | grep -qE "GroovyUser|analyze"; then
+    echo -e "${GREEN}✓ PASS: GroovyUser found as caller of StringUtils.countWords${NC}"
+else
+    echo -e "${RED}✗ FAIL: GroovyUser NOT found as caller of StringUtils.countWords${NC}"
+    FAILED=1
+fi
+
+# 4k: explore_file on KotlinClient.kt
+echo -e "\n${BLUE}Test K: explore_file on KotlinClient.kt${NC}"
+MCP_RESP=$(call_mcp '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$TMP_REPO_DIR"'/src/main/kotlin/com/example/kotlin/KotlinClient.kt","repo_name":"'"$REPO_NAME"'"}}}')
+
+if echo "$MCP_RESP" | grep -q "KotlinClient"; then
+    echo -e "${GREEN}✓ PASS: KotlinClient.kt entities found${NC}"
+else
+    echo -e "${RED}✗ FAIL: KotlinClient.kt NOT explored correctly${NC}"
+    FAILED=1
+fi
+
+# 4l: explore_file on StringUtils.kt
+echo -e "\n${BLUE}Test L: explore_file on StringUtils.kt${NC}"
+MCP_RESP=$(call_mcp '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$TMP_REPO_DIR"'/src/main/kotlin/com/example/kotlin/StringUtils.kt","repo_name":"'"$REPO_NAME"'"}}}')
+
+if echo "$MCP_RESP" | grep -q "StringUtils"; then
+    echo -e "${GREEN}✓ PASS: StringUtils.kt entities found${NC}"
+else
+    echo -e "${RED}✗ FAIL: StringUtils.kt NOT explored correctly${NC}"
     FAILED=1
 fi
 

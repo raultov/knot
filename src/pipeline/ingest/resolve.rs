@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
@@ -108,8 +109,10 @@ pub fn resolve_reference_intents_with_context(
             .push(e.uuid);
     }
 
-    // Resolve reference intents for each entity.
-    for entity in entities.iter_mut() {
+    // Resolve reference intents for each entity — parallelized via Rayon.
+    // All context maps (fqn_to_uuid, name_to_uuids, etc.) are read-only
+    // at this point, so no synchronization is needed.
+    entities.par_iter_mut().for_each(|entity| {
         let reference_intents = entity.reference_intents.clone();
 
         // Deduplication set to prevent duplicate relationships.
@@ -205,7 +208,7 @@ pub fn resolve_reference_intents_with_context(
                 entity.relationships.push((uuid, rel_type));
             }
         }
-    }
+    });
 }
 
 /// When multiple entities share the same method name (overloads), use arg_count
@@ -845,5 +848,103 @@ mod tests {
                 .contains(&(module_uuid, RelationshipType::Calls)),
             "self.do_thing() should NOT resolve to module-level do_thing"
         );
+    }
+
+    /// Verify that parallel resolution produces the same results as
+    /// sequential resolution would, even with a larger batch of entities.
+    #[test]
+    fn test_parallel_resolution_deterministic() {
+        // Generate a batch of entities with mixed reference intents.
+        let mut entities: Vec<ResolutionEntity> = (0..50)
+            .map(|i| {
+                let mut e = mock_resolution_entity(
+                    &format!("Entity{i}"),
+                    &format!("com.example.Entity{i}"),
+                    Some(&format!("Class{i}")),
+                );
+                // Add a type reference to every other entity
+                if i % 2 == 0 && i + 1 < 50 {
+                    e.reference_intents.push(ReferenceIntent::TypeReference {
+                        type_name: format!("Entity{}", i + 1),
+                        line: 1,
+                    });
+                }
+                e
+            })
+            .collect();
+
+        resolve_reference_intents(&mut entities);
+
+        // Every even-indexed entity should have resolved its reference to the odd-indexed one
+        for i in (0..50).step_by(2) {
+            if i + 1 < 50 {
+                let caller = &entities[i];
+                let callee = &entities[i + 1];
+                assert!(
+                    caller
+                        .relationships
+                        .contains(&(callee.uuid, RelationshipType::References)),
+                    "Entity{i} should reference Entity{}",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    /// Verify that parallel resolution correctly handles deduplication
+    /// even when an entity has multiple references to the same target.
+    #[test]
+    fn test_parallel_resolution_deduplication() {
+        let mut caller = mock_resolution_entity("A", "A", None);
+        let callee = mock_resolution_entity("B", "B", None);
+
+        // Add many duplicate reference intents to the same target
+        for i in 0..100 {
+            caller.reference_intents.push(ReferenceIntent::Call {
+                method: "B".to_string(),
+                receiver: None,
+                line: i,
+                arg_count: None,
+            });
+        }
+
+        let mut entities = vec![caller, callee];
+        resolve_reference_intents(&mut entities);
+
+        // Only 1 CALLS relationship should exist (deduplicated)
+        assert_eq!(entities[0].relationships.len(), 1);
+    }
+
+    /// Verify that parallel resolution works for multiple entities
+    /// that all refer to the same single target (many-to-one).
+    #[test]
+    fn test_parallel_resolution_many_to_one() {
+        let callee = mock_resolution_entity("Target", "com.Target", None);
+        let callee_uuid = callee.uuid;
+
+        let mut callers: Vec<ResolutionEntity> = (0..20)
+            .map(|i| {
+                let mut e =
+                    mock_resolution_entity(&format!("Caller{i}"), &format!("com.Caller{i}"), None);
+                e.reference_intents.push(ReferenceIntent::TypeReference {
+                    type_name: "Target".to_string(),
+                    line: 1,
+                });
+                e
+            })
+            .collect();
+
+        let mut entities = vec![callee];
+        entities.append(&mut callers);
+        resolve_reference_intents(&mut entities);
+
+        // All callers should reference the same callee
+        for e in entities.iter().skip(1) {
+            assert_eq!(e.relationships.len(), 1);
+            assert_eq!(
+                e.relationships[0],
+                (callee_uuid, RelationshipType::References)
+            );
+        }
     }
 }

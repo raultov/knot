@@ -19,3 +19,7 @@ publish_at_utc.sh
 # Environment variables (local configuration)
 .env
 
+# Performance benchmark run data (baseline.json IS committed)
+.perf_metrics/2*/
+.perf_metrics/run_*
+

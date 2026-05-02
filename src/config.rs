@@ -96,6 +96,18 @@ pub struct IndexerCli {
     /// Used to enable fastembed model downloads through SSL-inspecting proxies.
     #[arg(long, env = "KNOT_CUSTOM_CA_CERTS")]
     pub custom_ca_certs: Option<String>,
+
+    /// Maximum number of concurrent ingestion tasks.
+    /// Controls how many batches are ingested into Qdrant + Neo4j simultaneously.
+    /// Higher values increase throughput but also database load.
+    #[arg(long, env = "KNOT_INGEST_CONCURRENCY", default_value_t = 4)]
+    pub ingest_concurrency: usize,
+
+    /// Number of threads for the Rayon parallel parsing thread pool.
+    /// When not set, defaults to (logical CPUs - 1), leaving 1 core
+    /// for the Tokio async runtime and OS. Minimum: 2.
+    #[arg(long, env = "KNOT_RAYON_THREADS")]
+    pub rayon_threads: Option<usize>,
 }
 
 /// Command-line arguments for knot-mcp.
@@ -173,6 +185,8 @@ pub struct Config {
     pub dry_run: bool,
     pub custom_ca_certs: Option<String>,
     pub output_format: OutputFormat,
+    pub ingest_concurrency: usize,
+    pub rayon_threads: Option<usize>,
 }
 
 impl Config {
@@ -208,6 +222,8 @@ impl Config {
                     dry_run: false,
                     custom_ca_certs: cli.custom_ca_certs,
                     output_format: OutputFormat::Markdown,
+                    ingest_concurrency: cli.ingest_concurrency,
+                    rayon_threads: cli.rayon_threads,
                 }
             },
         )
@@ -234,6 +250,8 @@ impl Config {
                 dry_run: cli.dry_run,
                 custom_ca_certs: cli.custom_ca_certs,
                 output_format: OutputFormat::Markdown,
+                ingest_concurrency: 4,
+                rayon_threads: None,
             },
         )
     }
@@ -301,6 +319,8 @@ impl Config {
             dry_run: false,
             custom_ca_certs: cli.custom_ca_certs,
             output_format: OutputFormat::Table,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         })
     }
 
@@ -902,6 +922,8 @@ mod tests {
             dry_run: false,
             custom_ca_certs: Some("/etc/ssl/certs/corp.pem".to_string()),
             output_format: OutputFormat::Table,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         };
 
         assert_eq!(
@@ -940,5 +962,161 @@ mod tests {
         let fmt = OutputFormat::Markdown;
         let debug_str = format!("{:?}", fmt);
         assert!(debug_str.contains("Markdown"));
+    }
+
+    #[test]
+    fn test_ingest_concurrency_default() {
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        // Default should be 4
+        assert_eq!(cli.ingest_concurrency, 4);
+    }
+
+    #[test]
+    fn test_ingest_concurrency_explicit() {
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+            "--ingest-concurrency",
+            "8",
+        ];
+
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.ingest_concurrency, 8);
+    }
+
+    #[test]
+    fn test_ingest_concurrency_env_var() {
+        // Test that the env var is mapped correctly (check the attribute)
+        // Clap sets env = "KNOT_INGEST_CONCURRENCY" for this field
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        // Without the env var set, should get default
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.ingest_concurrency, 4);
+    }
+
+    #[test]
+    fn test_ingest_concurrency_in_config() {
+        let config = Config {
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "knot_entities".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "secret".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: false,
+            dependency_repos: Vec::new(),
+            watch: false,
+            dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Table,
+            ingest_concurrency: 8,
+            rayon_threads: None,
+        };
+
+        assert_eq!(config.ingest_concurrency, 8);
+    }
+
+    #[test]
+    fn test_rayon_threads_default() {
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+        ];
+
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.rayon_threads, None);
+    }
+
+    #[test]
+    fn test_rayon_threads_explicit() {
+        let args = vec![
+            "knot-indexer",
+            "--repo-path",
+            "/tmp/repo",
+            "--neo4j-password",
+            "secret",
+            "--rayon-threads",
+            "8",
+        ];
+
+        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+        assert_eq!(cli.rayon_threads, Some(8));
+    }
+
+    #[test]
+    fn test_rayon_threads_in_config() {
+        let config = Config {
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "knot_entities".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "secret".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: false,
+            dependency_repos: Vec::new(),
+            watch: false,
+            dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Table,
+            ingest_concurrency: 4,
+            rayon_threads: Some(6),
+        };
+
+        assert_eq!(config.rayon_threads, Some(6));
+    }
+
+    #[test]
+    fn test_rayon_threads_none() {
+        let config = Config {
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: "test-repo".to_string(),
+            qdrant_url: "http://localhost:6334".to_string(),
+            qdrant_collection: "knot_entities".to_string(),
+            neo4j_uri: "bolt://localhost:7687".to_string(),
+            neo4j_user: "neo4j".to_string(),
+            neo4j_password: "secret".to_string(),
+            custom_queries_path: None,
+            embed_dim: 384,
+            batch_size: 64,
+            clean: false,
+            dependency_repos: Vec::new(),
+            watch: false,
+            dry_run: false,
+            custom_ca_certs: None,
+            output_format: OutputFormat::Table,
+            ingest_concurrency: 4,
+            rayon_threads: None,
+        };
+
+        assert_eq!(config.rayon_threads, None);
     }
 }

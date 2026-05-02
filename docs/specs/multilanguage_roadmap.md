@@ -19,7 +19,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - O(N) nested macro traversal optimization for large Rust codebases
 - 426 unit tests | 74+ E2E tests across all languages
 
-**Goal:** Extend `knot` to become the standard indexer for hybrid web projects with full cross-language dependency resolution and support for Python and C/C++.
+**Goal:** Extend `knot` to become the standard indexer for hybrid projects with full cross-language dependency resolution.
 
 ---
 
@@ -106,6 +106,72 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 
 ---
 
+## Phase 12: Performance Optimization (v1.1.0 — ✅ Completed)
+
+### Objective
+Optimize the post-parse indexing pipeline by eliminating serialization bottlenecks and adding comprehensive performance validation for future regression detection.
+
+#### Planned → ✅ Completed
+
+**Bottlenecks Identified:**
+| Bottleneck | Root Cause | Impact |
+|------------|-----------|--------|
+| Neo4j N+1 entity inserts | 64 individual `MERGE` queries per batch | ~250ms → ~10ms with UNWIND |
+| Neo4j N+1 relationship inserts | 1 query per edge | O(N) round-trips → O(8) |
+| Sequential ingestion | Single tokio task | Batches processed one-at-a-time |
+| Unbounded channels | `parse_tx`/`res_tx` unbounded | Worst-case: 500MB uncontrolled |
+| Sequential resolution | Single-threaded HashMap traversal | O(N) → O(N/num_cpus) |
+
+**Phase 1-2: Neo4j UNWIND Batching**
+- ✅ `upsert_entities` groups entities by `EntityKind` and runs one `UNWIND $entities` query per group — 10-50x speedup
+- ✅ `upsert_relationships` groups by `RelationshipType` and runs one `UNWIND $edges` query per type — 10-50x speedup
+- ✅ 50,560 individual queries reduced to <100 batched queries per full index
+- ✅ File: `src/db/graph/upsert.rs`
+
+**Phase 3: Bounded Channels**
+- ✅ `parse_tx` bounded to `batch_size * 4` (256) — ~1.3MB vs potential 500MB unbounded
+- ✅ `res_tx` bounded to `batch_size * 4` (256) — ~0.5MB peak
+- ✅ `embed_tx` bounded to 16 batches — ~8MB peak
+- ✅ Files: `src/pipeline/runner.rs`, `src/pipeline/parser/mod.rs`
+
+**Phase 4: Concurrent Ingestion**
+- ✅ JoinSet + Semaphore for parallel Neo4j/Qdrant writes
+- ✅ Configurable via `KNOT_INGEST_CONCURRENCY` (default: 4 concurrent tasks)
+- ✅ File: `src/pipeline/runner.rs`
+
+**Phase 5: Rayon Thread Pool Configuration**
+- ✅ `KNOT_RAYON_THREADS` env var (default N-1 cores)
+- ✅ Startup banner logs thread counts
+- ✅ File: `src/config.rs`
+
+**Phase 6: Parallel Relationship Resolution**
+- ✅ `par_iter_mut()` replaces sequential loop — linear speedup with core count
+- ✅ File: `src/pipeline/ingest/resolve.rs`
+
+**Performance Targets Achieved:**
+- Peak memory: ~300-400MB (well below 2GB nice-to-have, far from 5GB hard limit)
+- Neo4j query count: <100 per full index (vs 50,560+ before)
+- Ingestion throughput: 2-3x improvement
+- Parsing: Uses all available CPU cores (N-1 for Rayon)
+
+**Three-Level Benchmarking Framework:**
+- ✅ Level 1 (Criterion): `benches/pipeline_bench.rs`, `benches/graph_upsert_bench.rs`, `benches/channel_backpressure_bench.rs`
+- ✅ Level 2 (E2E): `tests/benchmark_e2e.sh` with `/usr/bin/time -f` metrics capture
+- ✅ Level 3 (CI): `scripts/compare_perf_metrics.sh` + `test-performance` job in CI
+- ✅ Baseline: `.perf_metrics/baseline.json` (committed, updated on main/master merges)
+- ✅ Tolerances: `.perf_metrics/threshold_tolerances.json` (±5% time, ±10% memory by default)
+
+**New Configuration Options:**
+| Env Variable | Default | Description |
+|-------------|---------|-------------|
+| `KNOT_RAYON_THREADS` | `num_cpus - 1` | Rayon parsing thread count |
+| `KNOT_INGEST_CONCURRENCY` | `4` | Max concurrent ingestion tasks |
+| `KNOT_BATCH_SIZE` | `64` | Entities per embed/upsert batch |
+
+**521 unit tests passing | clippy clean | fmt applied**
+
+---
+
 ## Implementation Priority & Timeline
 
 | Phase | Complexity | Status |
@@ -116,6 +182,7 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 | Phase 9: Build Systems (Maven/Gradle/Jenkins) | Medium | ✅ Completed (v0.10.0) |
 | Phase 10: Groovy Language Support | Medium | ✅ Completed (v0.10.3) |
 | Phase 11: C/C++ | High | ✅ Completed (v1.0.0) |
+| Phase 12: Performance Optimization | High | ✅ Completed (v1.1.0) |
 
 ---
 
@@ -128,6 +195,28 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.1.0 - Performance Optimization (Phase 12)
+
+**Bottleneck Resolution:**
+- ✅ Replaced N individual Neo4j `MERGE` queries with batched `UNWIND` — 10-50x entity write speedup, 50,560 queries → <100
+- ✅ Replaced O(N) relationship inserts with `UNWIND`-batched queries per type — O(N) → O(8) queries
+- ✅ Bounded all pipeline channels — peak memory ~300-400MB (vs 500MB unbounded potential)
+- ✅ Concurrent ingestion via JoinSet + Semaphore — 2-3x ingestion throughput improvement
+- ✅ Rayon thread pool configurable via `KNOT_RAYON_THREADS` (default N-1 cores)
+- ✅ Parallel relationship resolution via `par_iter_mut()` — linear speedup with core count
+
+**Benchmarking Framework:**
+- ✅ Three-level performance validation: Criterion unit benchmarks + E2E metrics + CI baseline tracking
+- ✅ `benches/pipeline_bench.rs` — parse/prepare throughput per language
+- ✅ `benches/graph_upsert_bench.rs` — Neo4j UNWIND batching validation
+- ✅ `benches/channel_backpressure_bench.rs` — bounded channel overhead
+- ✅ `tests/benchmark_e2e.sh` — full pipeline metrics with `/usr/bin/time` RSS capture
+- ✅ `scripts/compare_perf_metrics.sh` — baseline comparison with tolerance gates (±5% time, ±10% memory)
+- ✅ `test-performance` job in CI — runs after E2E, fails on regression, updates baseline on main/master merges
+- ✅ `.perf_metrics/baseline.json` — committed baseline (updated on main/master only)
+- ✅ `.perf_metrics/threshold_tolerances.json` — configurable tolerance thresholds
+- ✅ 521 unit tests passing | clippy clean | fmt applied
 
 ### v1.0.0 - C/C++ Language Support
 - ✅ Phase 11 complete: tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integration

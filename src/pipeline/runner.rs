@@ -6,7 +6,8 @@
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinSet;
 use tracing::info;
 
 use crate::config::Config;
@@ -87,19 +88,28 @@ pub async fn run_indexing_pipeline(
         );
 
         // --- STREAMING PIPELINE ---
-        let (parse_tx, mut parse_rx) = mpsc::unbounded_channel::<ParsedEntity>();
+        // Bounded channels provide backpressure: capacity = batch_size * 4
+        // limits worst-case memory to ~1.3MB (256 entities * ~5KB each).
+        let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedEntity>(cfg.batch_size * 4);
         let (embed_tx, mut embed_rx) = mpsc::channel::<Vec<EmbeddedEntity>>(16);
-        let (res_tx, mut res_rx) = mpsc::unbounded_channel::<ResolutionEntity>();
+        let (res_tx, mut res_rx) = mpsc::channel::<ResolutionEntity>(cfg.batch_size * 4);
 
-        // Stage 2: Parallel Parsing (Rayon)
+        // Stage 2: Parallel Parsing (std::thread::scope OS threads)
         info!(
             "Stage 2: Starting parallel parsing of {} files...",
             files_to_parse.len()
         );
         let parse_cfg = build_parse_config(cfg.custom_queries_path.clone(), cfg.repo_name.clone());
         let files_to_parse_clone = files_to_parse.clone();
+
+        let cpus = cfg.rayon_threads.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        });
+
         tokio::task::spawn_blocking(move || {
-            parse_files_stream(&files_to_parse_clone, &parse_cfg, parse_tx);
+            parse_files_stream(&files_to_parse_clone, &parse_cfg, parse_tx, cpus);
             info!("Stage 2: Parallel parsing complete.");
         });
 
@@ -152,30 +162,64 @@ pub async fn run_indexing_pipeline(
             })
         };
 
-        // Stage 5 & 6: Ingestion & Resolution Prep
+        // Stage 5 & 6: Ingestion & Resolution Prep (concurrent via JoinSet)
+        // Drain res_rx concurrently to prevent the ingestion task from
+        // deadlocking when the bounded res_tx channel fills up.
+        let res_handle = tokio::spawn(async move {
+            let mut resolution_entities = Vec::new();
+            while let Some(res_entity) = res_rx.recv().await {
+                resolution_entities.push(res_entity);
+            }
+            resolution_entities
+        });
+
         let ingest_handle = {
             let vdb = Arc::clone(vector_db);
             let gdb = Arc::clone(graph_db);
+            let max_concurrent = cfg.ingest_concurrency;
+            let semaphore = Arc::new(Semaphore::new(max_concurrent));
+
+            info!("Ingestion concurrency: {max_concurrent} simultaneous batches");
+
             tokio::spawn(async move {
                 let mut total_ingested = 0;
                 let mut batch_count = 0;
+                let mut join_set = JoinSet::new();
+
                 while let Some(embedded_batch) = embed_rx.recv().await {
                     batch_count += 1;
-                    info!(
-                        "[Worker: Ingester] Stage 4: Ingesting batch #{} ({} entities) into Qdrant & Neo4j...",
-                        batch_count,
-                        embedded_batch.len()
-                    );
                     total_ingested += embedded_batch.len();
+
+                    // Dispatch resolution entities before ingestion spawns
                     for ee in &embedded_batch {
-                        res_tx.send(ResolutionEntity::from(ee))?;
+                        res_tx.send(ResolutionEntity::from(ee)).await?;
                     }
-                    ingest_batch(&embedded_batch, &vdb, &gdb).await?;
-                    info!(
-                        "[Worker: Ingester] Stage 4: Batch #{} ingested successfully (Total so far: {})",
-                        batch_count, total_ingested
-                    );
+
+                    // Acquire a semaphore permit to limit concurrency
+                    let permit = semaphore.clone().acquire_owned().await?;
+                    let vdb = Arc::clone(&vdb);
+                    let gdb = Arc::clone(&gdb);
+                    let bc = batch_count;
+                    let bl = embedded_batch.len();
+
+                    join_set.spawn(async move {
+                        info!("[Worker: Ingester] Ingesting batch #{bc} ({bl} entities)...");
+                        let result = ingest_batch(&embedded_batch, &vdb, &gdb).await;
+                        drop(permit);
+                        result
+                    });
                 }
+
+                info!(
+                    "All {} batches dispatched — waiting for ingestion workers to finish...",
+                    batch_count
+                );
+
+                // Drain all completed tasks, propagating any errors
+                while let Some(result) = join_set.join_next().await {
+                    result??;
+                }
+
                 Ok::<usize, anyhow::Error>(total_ingested)
             })
         };
@@ -186,10 +230,9 @@ pub async fn run_indexing_pipeline(
         let total_entities = ingest_handle.await??;
 
         // Stage 7: Relationship Resolution
-        let mut resolution_entities = Vec::with_capacity(total_entities);
-        while let Ok(res_entity) = res_rx.try_recv() {
-            resolution_entities.push(res_entity);
-        }
+        // The ingest task drops res_tx on exit, which closes the channel
+        // and causes res_handle to finish naturally.
+        let mut resolution_entities = res_handle.await?;
 
         resolve_and_save_relationships(&mut resolution_entities, graph_db, cfg).await?;
 
@@ -269,6 +312,82 @@ mod tests {
         assert_eq!(cfg_custom.custom_queries_path, Some("/path".to_string()));
     }
 
+    /// Verify that JoinSet + Semaphore correctly limits concurrent task execution.
+    #[tokio::test]
+    async fn test_joinset_semaphore_concurrency_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let max_concurrent = 2;
+        let semaphore = Arc::new(Semaphore::new(max_concurrent));
+        let concurrent_count = Arc::new(AtomicUsize::new(0));
+        let peak_concurrent = Arc::new(AtomicUsize::new(0));
+
+        let mut join_set = JoinSet::new();
+        let total_tasks = 10;
+
+        for i in 0..total_tasks {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let concurrent = Arc::clone(&concurrent_count);
+            let peak = Arc::clone(&peak_concurrent);
+
+            join_set.spawn(async move {
+                let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                concurrent.fetch_sub(1, Ordering::SeqCst);
+                drop(permit);
+                Ok::<usize, anyhow::Error>(i)
+            });
+        }
+
+        let mut results = Vec::new();
+        while let Some(result) = join_set.join_next().await {
+            results.push(result.unwrap().unwrap());
+        }
+
+        assert_eq!(results.len(), total_tasks);
+        // Peak concurrent should not exceed the semaphore limit
+        assert!(peak_concurrent.load(Ordering::SeqCst) <= max_concurrent);
+    }
+
+    /// Verify JoinSet drains properly and preserves data.
+    #[tokio::test]
+    async fn test_joinset_collects_all_tasks() {
+        let mut join_set = JoinSet::new();
+        let total_tasks = 5;
+
+        for i in 0..total_tasks {
+            join_set.spawn(async move { i * 2 });
+        }
+
+        let mut results = Vec::new();
+        while let Some(result) = join_set.join_next().await {
+            results.push(result.unwrap());
+        }
+
+        results.sort();
+        assert_eq!(results, vec![0, 2, 4, 6, 8]);
+    }
+
+    /// Verify JoinSet properly propagates errors.
+    #[tokio::test]
+    async fn test_joinset_error_propagation() {
+        let mut join_set = JoinSet::new();
+
+        join_set.spawn(async { Ok::<_, anyhow::Error>(1) });
+        join_set.spawn(async { Err::<i32, _>(anyhow::anyhow!("task failed")) });
+
+        let mut error_seen = false;
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => error_seen = true,
+                Err(_) => error_seen = true,
+            }
+        }
+        assert!(error_seen);
+    }
+
     #[tokio::test]
     async fn test_run_indexing_pipeline_empty_repo() {
         use tempfile::tempdir;
@@ -292,6 +411,8 @@ mod tests {
             dry_run: false,
             custom_ca_certs: None,
             output_format: OutputFormat::Markdown,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         };
 
         // We need to mock DBs if we want to run the full pipeline,

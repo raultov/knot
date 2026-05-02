@@ -1,0 +1,12 @@
+{
+  "total_time_regression_pct": 5.0,
+  "memory_regression_pct": 10.0,
+  "stage_regression_pct": 10.0,
+  "per_stage_tolerances": {
+    "parse": 10.0,
+    "embed": 15.0,
+    "ingest": 20.0,
+    "resolve": 10.0
+  },
+  "notes": "Regress tolerances are relaxed initially (wider gates). Tighten after 2 weeks of baseline history once variance is understood."
+}

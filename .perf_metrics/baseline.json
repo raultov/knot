@@ -1,0 +1,40 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-05-02T00:00:00Z",
+  "commit_hash": "PLACEHOLDER",
+  "hardware": {
+    "cpu_cores": "PLACEHOLDER",
+    "ram_gb": "PLACEHOLDER",
+    "os": "PLACEHOLDER"
+  },
+  "suite_results": {
+    "rust_e2e": {
+      "total_ms": 0,
+      "stage_timings": {
+        "parse": { "ms": 0, "entities_per_sec": 0 },
+        "embed": { "ms": 0, "batches": 0, "avg_batch_ms": 0 },
+        "ingest": { "ms": 0, "neo4j_queries": 0, "qdrant_latency_ms": 0 },
+        "resolve": { "ms": 0, "relationships_resolved": 0 }
+      },
+      "memory_peak_mb": 0,
+      "entities_total": 0
+    },
+    "java_e2e": {
+      "total_ms": 0,
+      "stage_timings": {
+        "parse": { "ms": 0, "entities_per_sec": 0 },
+        "embed": { "ms": 0, "batches": 0, "avg_batch_ms": 0 },
+        "ingest": { "ms": 0, "neo4j_queries": 0, "qdrant_latency_ms": 0 },
+        "resolve": { "ms": 0, "relationships_resolved": 0 }
+      },
+      "memory_peak_mb": 0,
+      "entities_total": 0
+    }
+  },
+  "threshold_tolerances": {
+    "total_time_regression_pct": 5.0,
+    "memory_regression_pct": 10.0,
+    "stage_regression_pct": 10.0
+  },
+  "notes": "Replace PLACEHOLDER values with actual benchmark results. This file is committed to the repository and updated on main/master merges only."
+}

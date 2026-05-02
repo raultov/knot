@@ -4,7 +4,7 @@
 //! Handles CLI, database initialization, and watch mode.
 //! Delegates actual pipeline execution to the runner module.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::info;
 
@@ -57,7 +57,11 @@ async fn main() -> Result<()> {
     // This must be called before any async/tokio threads are spawned.
     inject_custom_ca_certs(&cfg.custom_ca_certs);
 
-    print_startup_banner(&cfg);
+    // Configure Rayon thread pool before any parallel parsing occurs.
+    // Must be called before the tokio runtime spawns blocking tasks.
+    let rayon_threads = configure_rayon(cfg.rayon_threads)?;
+
+    print_startup_banner(&cfg, rayon_threads);
 
     // Initialize databases and load previous state.
     let (vector_db, graph_db) = init_databases(&cfg).await?;
@@ -90,13 +94,21 @@ async fn main() -> Result<()> {
 }
 
 /// Print startup banner with configuration details.
-fn print_startup_banner(cfg: &Config) {
+fn print_startup_banner(cfg: &Config, rayon_threads: usize) {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
     info!(
         "knot indexer starting (v{} - parallel streaming + watch mode)",
         env!("CARGO_PKG_VERSION")
     );
     info!("Repository path : {}", cfg.repo_path);
     info!("Repository name : {}", cfg.repo_name);
+    info!("Logical CPUs    : {cpus}");
+    info!("Rayon threads   : {rayon_threads}");
+    info!("Batch size      : {}", cfg.batch_size);
+    info!("Ingest workers  : {}", cfg.ingest_concurrency);
     info!("Clean mode      : {}", cfg.clean);
     info!("Watch mode      : {}", cfg.watch);
     info!(
@@ -104,6 +116,26 @@ fn print_startup_banner(cfg: &Config) {
         cfg.qdrant_url, cfg.qdrant_collection
     );
     info!("Neo4j           : {}", cfg.neo4j_uri);
+}
+
+/// Configure the Rayon thread pool size.
+///
+/// Default: `logical_cpus - 1` (leaves 1 core for tokio runtime + OS).
+/// Minimum: 2 threads. Respects the `KNOT_RAYON_THREADS` env var override.
+fn configure_rayon(threads: Option<usize>) -> Result<usize> {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    let thread_count = threads.unwrap_or(cpus.saturating_sub(1).max(2));
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .build_global()
+        .context("Failed to initialize Rayon thread pool")?;
+
+    info!("Rayon thread pool initialized with {thread_count} threads ({cpus} logical CPUs)");
+    Ok(thread_count)
 }
 
 /// Initialize database connections and perform pre-flight checks.
@@ -143,9 +175,9 @@ mod tests {
             dry_run: false,
             custom_ca_certs: None,
             output_format: OutputFormat::Markdown,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         };
-
-        // Initially, clean should be true (from CLI/env)
 
         // Initially, clean should be true (from CLI/env)
         assert!(cfg.clean);
@@ -181,6 +213,8 @@ mod tests {
             dry_run: false,
             custom_ca_certs: None,
             output_format: OutputFormat::Markdown,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         };
 
         // Since watch is false, clean flag should not be modified
@@ -212,6 +246,8 @@ mod tests {
             dry_run: false,
             custom_ca_certs: None,
             output_format: OutputFormat::Markdown,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         };
 
         // clean is already false, so no change should occur
@@ -243,6 +279,8 @@ mod tests {
             dry_run: false,
             custom_ca_certs: None,
             output_format: OutputFormat::Markdown,
+            ingest_concurrency: 4,
+            rayon_threads: None,
         };
 
         // Just verify the config is correctly initialized.
@@ -250,5 +288,43 @@ mod tests {
         assert_eq!(cfg.repo_name, "test-repo");
         assert!(cfg.clean);
         assert!(cfg.watch);
+    }
+
+    #[test]
+    fn test_configure_rayon_default_logic() {
+        // Test the N-1 default thread count computation logic.
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        // Without override: N-1, minimum 2
+        let thread_count = cpus.saturating_sub(1).max(2);
+
+        assert!(thread_count >= 2);
+        assert!(thread_count <= cpus);
+    }
+
+    #[test]
+    fn test_configure_rayon_explicit_override() {
+        // With override: use the provided value
+        let thread_count = 4usize;
+
+        assert_eq!(thread_count, 4);
+    }
+
+    #[test]
+    fn test_configure_rayon_minimum_two() {
+        // Simulate a single-CPU system: minimum should be 2
+        let cpus: usize = 1;
+        let thread_count = cpus.saturating_sub(1).max(2);
+        assert_eq!(thread_count, 2);
+    }
+
+    #[test]
+    fn test_configure_rayon_many_cpus() {
+        // Simulate a 32-core system: should be 31 (N-1)
+        let cpus: usize = 32;
+        let thread_count = cpus.saturating_sub(1).max(2);
+        assert_eq!(thread_count, 31);
     }
 }

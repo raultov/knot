@@ -11,7 +11,6 @@
 //! allowing callers to override extraction logic without recompiling.
 
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -47,6 +46,7 @@ const DEFAULT_C_QUERY: &str = include_str!("../../../queries/c.scm");
 const DEFAULT_CPP_QUERY: &str = include_str!("../../../queries/cpp.scm");
 
 /// Configuration for the parse stage.
+#[derive(Clone)]
 pub struct ParseConfig {
     /// Optional filesystem path to a directory containing custom `.scm` query files.
     pub custom_queries_path: Option<String>,
@@ -56,46 +56,84 @@ pub struct ParseConfig {
 
 /// Parse a collection of source files in parallel and send results through a channel.
 ///
-/// This function blocks until all files have been processed. It is intended to be
-/// called from a `tokio::task::spawn_blocking` context.
+/// Uses `std::thread::scope` with raw OS threads (NOT Rayon) so that
+/// `blocking_send` on the bounded channel only blocks the dedicated
+/// parsing thread rather than a shared thread pool. This prevents
+/// deadlocks with `fastembed` which requires Rayon for tokenization.
+///
+/// This function blocks until all files have been processed. It is
+/// intended to be called from a `tokio::task::spawn_blocking` context.
 pub fn parse_files_stream(
     files: &[PathBuf],
     parse_cfg: &ParseConfig,
-    sender: mpsc::UnboundedSender<ParsedEntity>,
+    sender: mpsc::Sender<ParsedEntity>,
+    max_concurrent: usize,
 ) {
-    files
-        .par_iter()
-        .for_each(|path| match parse_single_file(path, parse_cfg) {
-            Ok(entities) => {
-                for entity in entities {
-                    if let Err(e) = sender.send(entity) {
-                        warn!("Failed to send entity to channel: {e}");
-                        break;
+    use std::sync::{Arc, Condvar, Mutex};
+
+    // Concurrency limiter: Condvar-based semaphore backed by a Mutex.
+    let sem = Arc::new((Mutex::new(0usize), Condvar::new()));
+
+    std::thread::scope(|s| {
+        for path in files {
+            let path = path.clone();
+            let parse_cfg = parse_cfg.clone();
+            let sender = sender.clone();
+            let sem = Arc::clone(&sem);
+
+            // Acquire: block until active < max_concurrent
+            {
+                let (lock, cvar) = &*sem;
+                let mut active = lock.lock().unwrap();
+                while *active >= max_concurrent {
+                    active = cvar.wait(active).unwrap();
+                }
+                *active += 1;
+            }
+
+            s.spawn(move || {
+                match parse_single_file(&path, &parse_cfg) {
+                    Ok(entities) => {
+                        for entity in entities {
+                            if sender.blocking_send(entity).is_err() {
+                                warn!("Failed to send entity to channel");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse {}: {e:#}", path.display());
                     }
                 }
-            }
-            Err(e) => {
-                warn!("Failed to parse {}: {e:#}", path.display());
-            }
-        });
+
+                // Release: decrement active count and wake waiter
+                let (lock, cvar) = &*sem;
+                let mut active = lock.lock().unwrap();
+                *active -= 1;
+                cvar.notify_one();
+            });
+        }
+    });
+    // All threads joined here (std::thread::scope guarantees this).
 }
 
 /// Parse a collection of source files in parallel and return all extracted entities.
 ///
-/// This function blocks until all files have been processed. It is intended to be
-/// called from a `tokio::task::spawn_blocking` context so the async executor is
-/// not starved.
+/// Uses `parse_files_stream` internally. This is a convenience wrapper for
+/// callers that want the full Vec instead of streaming through a channel.
 pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEntity> {
-    files
-        .par_iter()
-        .flat_map(|path| match parse_single_file(path, parse_cfg) {
-            Ok(entities) => entities,
-            Err(e) => {
-                warn!("Failed to parse {}: {e:#}", path.display());
-                vec![]
-            }
-        })
-        .collect()
+    let (tx, mut rx) = mpsc::channel(1024);
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    parse_files_stream(files, parse_cfg, tx, cpus);
+
+    let mut entities = Vec::with_capacity(1024);
+    while let Ok(entity) = rx.try_recv() {
+        entities.push(entity);
+    }
+    entities
 }
 
 /// Parse a single source file and return its extracted entities.
@@ -410,9 +448,9 @@ mod tests {
         };
 
         let files: Vec<PathBuf> = vec![];
-        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
 
-        parse_files_stream(&files, &cfg, sender);
+        parse_files_stream(&files, &cfg, sender, 4);
 
         // No files to parse, channel should receive nothing
         assert!(receiver.try_recv().is_err());
@@ -427,9 +465,9 @@ mod tests {
 
         // Use an empty list since we can't create real files in unit tests
         let files: Vec<PathBuf> = vec![];
-        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
 
-        parse_files_stream(&files, &cfg, sender);
+        parse_files_stream(&files, &cfg, sender, 4);
 
         // Verify channel can receive messages (simulated)
         assert!(receiver.try_recv().is_err()); // No data sent
@@ -601,14 +639,97 @@ int bar(const char *s);
 
     #[test]
     fn test_channel_sender_behavior_mock() {
-        // Test that channel sender doesn't fail on empty input
-        let (sender, mut receiver) = mpsc::unbounded_channel::<ParsedEntity>();
+        // Test that bounded channel sender doesn't fail on empty input
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
 
         // Dropping sender without sending should not error
         drop(sender);
 
         // Receiver should get no data
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_bounded_channel_blocking_send() {
+        // Test that blocking_send works correctly with a bounded channel
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(2);
+
+        // Create a minimal entity for testing
+        let entity = ParsedEntity::new(
+            "TestEntity",
+            crate::models::EntityKind::Class,
+            "com.test.TestEntity",
+            None,
+            None,
+            "java",
+            "/test/Test.java",
+            1,
+            5,
+            None,
+            "test-repo",
+        );
+
+        // Send via blocking_send (simulating what parse_files_stream does)
+        assert!(sender.blocking_send(entity.clone()).is_ok());
+        assert!(sender.blocking_send(entity).is_ok());
+
+        // Verify receiver gets both entities
+        assert!(receiver.try_recv().is_ok());
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn test_bounded_channel_capacity_backpressure() {
+        // Test that bounded channel respects capacity
+        let (sender, _receiver) = mpsc::channel::<ParsedEntity>(2);
+
+        let entity = ParsedEntity::new(
+            "TestEntity",
+            crate::models::EntityKind::Class,
+            "com.test.TestEntity",
+            None,
+            None,
+            "java",
+            "/test/Test.java",
+            1,
+            5,
+            None,
+            "test-repo",
+        );
+
+        // Fill the channel to capacity
+        assert!(sender.try_send(entity.clone()).is_ok());
+        assert!(sender.try_send(entity.clone()).is_ok());
+
+        // Third send should fail with Full error (channel is at capacity)
+        assert!(sender.try_send(entity).is_err());
+    }
+
+    #[test]
+    fn test_bounded_channel_receives_after_blocking_send() {
+        // Verify that after blocking_send, data is available on the receiver
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(1);
+
+        let entity = ParsedEntity::new(
+            "TestClass",
+            crate::models::EntityKind::Class,
+            "com.example.TestClass",
+            Some("public class TestClass".to_string()),
+            Some("A test class".to_string()),
+            "java",
+            "/proj/TestClass.java",
+            10,
+            25,
+            None,
+            "test-repo",
+        );
+
+        sender.blocking_send(entity).unwrap();
+
+        let received = receiver.try_recv().unwrap();
+        assert_eq!(received.name, "TestClass");
+        assert_eq!(received.fqn, "com.example.TestClass");
+        assert_eq!(received.language, "java");
     }
 
     #[test]

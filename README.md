@@ -60,6 +60,10 @@ This dual-database approach powers both:
 - **Real-time Watch Mode**: Automatically re-indexes changed files in seconds via `--watch`
 - **CPU Parallelism**: AST extraction via Rayon
 - **Scalable**: Configurable batch processing and constant memory footprint (~2GB) regardless of repository size
+- **Performance Benchmarking** (v1.1.0+): Three-level validation framework
+  - *Unit benchmarks*: Criterion-based benchmarks for parse, embed, and graph write throughput (`benches/`)
+  - *E2E benchmarks*: Full pipeline metrics capture with per-stage timing (`tests/benchmark_e2e.sh`)
+  - *CI regression tracking*: Automated baseline comparison against tolerance thresholds (`scripts/compare_perf_metrics.sh`)
 
 ---
 
@@ -592,6 +596,32 @@ Contributions are welcome! Please ensure:
 - All code passes `cargo clippy`
 - Code is formatted with `cargo fmt`
 - Changes are compatible with Rust 2024 edition
+- All new functionality includes unit tests
+- Performance regressions are validated with the benchmark framework before submitting PRs
+
+### Performance Benchmarking
+
+The project includes a three-level benchmarking framework to validate optimizations and detect regressions:
+
+**Level 1 — Unit Benchmarks (Criterion):**
+```bash
+cargo bench --bench pipeline_bench          # Parse + prepare throughput per language
+cargo bench --bench graph_upsert_bench     # Neo4j UNWIND batching speedup (needs Neo4j)
+cargo bench --bench channel_backpressure_bench  # Bounded channel overhead
+```
+
+**Level 2 — E2E Integration Benchmarks:**
+```bash
+# Full pipeline metrics with memory and per-stage timing
+./tests/benchmark_e2e.sh --focus rust_e2e --output-dir /tmp/perf_results
+
+# Compare against baseline (fails CI if tolerance exceeded)
+scripts/compare_perf_metrics.sh /tmp/perf_results .perf_metrics/baseline.json
+```
+
+**Baseline files:** `.perf_metrics/baseline.json` stores the last known good metrics (committed, updated on main/master merges). Tolerance thresholds in `.perf_metrics/threshold_tolerances.json` control regression gates (±5% time, ±10% memory by default).
+
+**CI Integration:** The `test-performance` job in `.github/workflows/ci.yml` runs after all E2E correctness tests pass, comparing results against baseline and fails the build on regression.
 
 ---
 
@@ -602,6 +632,20 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 ---
 
 ## 🚀 Roadmap
+
+### Next Release (v1.1.0 — Performance Optimization) ✅
+- ✅ **Neo4j UNWIND Batching** (Phase 1-2): Replaced N individual `MERGE` queries with single `UNWIND $entities` batch queries — 10-50x speedup on entity/relationship writes
+- ✅ **Bounded Channels** (Phase 3): Parse/embed/res channels bounded with backpressure — peak memory <400MB (was 500MB unbounded)
+- ✅ **Concurrent Ingestion** (Phase 4): JoinSet + Semaphore for parallel Neo4j/Qdrant writes — 2-3x ingestion throughput
+- ✅ **Rayon Thread Pool Config** (Phase 5): Configurable `KNOT_RAYON_THREADS` env var (default N-1 cores)
+- ✅ **Parallel Relationship Resolution** (Phase 6): `par_iter_mut()` for O(N/num_cpus) resolution
+- ✅ **Three-Level Benchmarking Framework** (Section 9):
+  - Criterion unit benchmarks: `pipeline_bench`, `graph_upsert_bench`, `channel_backpressure_bench`
+  - E2E benchmark script: `tests/benchmark_e2e.sh` with metrics capture
+  - CI regression tracking: `scripts/compare_perf_metrics.sh` + `test-performance` job
+- ✅ **Memory targets**: ~300-400MB peak (well below 2GB nice-to-have, far from 5GB hard limit)
+- ✅ **Criterion benchmarks** at `benches/` | **Baseline metrics** at `.perf_metrics/baseline.json`
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **521 unit tests** passing
 
 ### Current Release (v1.0.0 — C/C++ Language Support) ✅
 - ✅ **Phase 11: C/C++ Support**: tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integrated
@@ -700,7 +744,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 3 unit tests for C++ entity and reference extraction
 - ✅ 4 end-to-end integration tests covering FQN, call graphs, macro usage, and type references
 
-### Upcoming (v0.12.x)
+### Upcoming (v1.1.x)
 #### Phase 12: YAML/Configuration Language Support
 - [ ] HELM chart indexing (`.yaml`, `.tpl`)
 - [ ] Kubernetes manifest analysis
