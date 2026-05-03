@@ -10,11 +10,7 @@
   </a>
 </div>
 
-<div align="center">
-
 ### Knot in action
-
-</div>
 
 <table>
 <tr>
