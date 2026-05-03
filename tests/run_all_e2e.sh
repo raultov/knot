@@ -37,7 +37,7 @@ run_test() {
     echo -e "\n${YELLOW}Cleaning up Docker...${NC}"
     cd "$PROJECT_ROOT/tests"
     docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-    rm -rf .e2e_* 2>/dev/null || true
+    sudo rm -rf .e2e_* 2>/dev/null || rm -rf .e2e_* 2>/dev/null || true
     sleep 3
     cd "$PROJECT_ROOT"
 }
@@ -53,6 +53,8 @@ run_test "Kotlin E2E" "run_kotlin_e2e.sh"
 run_test "Rust E2E" "run_rust_e2e.sh"
 run_test "Python E2E" "run_python_e2e.sh"
 run_test "Build Systems E2E" "run_build_systems_e2e.sh"
+run_test "Config Files E2E" "run_config_e2e.sh"
+run_test "K8s/Helm E2E" "run_k8s_helm_e2e.sh"
 run_test "Groovy E2E" "run_groovy_e2e.sh"
 run_test "Cross-Language Ref E2E" "run_cross_lang_ref_e2e.sh"
 run_test "C/C++ E2E" "run_cpp_e2e.sh"

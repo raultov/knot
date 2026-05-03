@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: default
+  labels:
+    app: my-app
+data:
+  APP_NAME: MyApplication
+  APP_PORT: "8080"
+  LOG_LEVEL: INFO
+  DATABASE_URL: postgres://localhost:5432/mydb

@@ -134,6 +134,7 @@ mkdir -p "$TMP_REPO_DIR"
 cp "$TEST_FILES_DIR/sample_pom.xml" "$TMP_REPO_DIR/pom.xml"
 cp "$TEST_FILES_DIR/sample_build.gradle" "$TMP_REPO_DIR/build.gradle"
 cp "$TEST_FILES_DIR/sample.jenkinsfile" "$TMP_REPO_DIR/Jenkinsfile"
+cp "$TEST_FILES_DIR/sample_Cargo.toml" "$TMP_REPO_DIR/Cargo.toml"
 
 export KNOT_REPO_PATH="$TMP_REPO_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
@@ -275,6 +276,97 @@ if echo "$MCP_RESPONSE" | grep -q "maven-compiler-plugin" && echo "$CLI_RESPONSE
     echo -e "${GREEN}✓ Found Maven plugin maven-compiler-plugin (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Maven plugin maven-compiler-plugin not found${NC}"
+    exit 1
+fi
+
+# Test 9: Cargo dependency via search
+echo ""
+echo "Test 9: Searching for Cargo dependency serde..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"serde\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "serde" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "serde" && echo "$CLI_RESPONSE" | grep -q "serde"; then
+    echo -e "${GREEN}✓ Found Cargo dependency serde (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Cargo dependency serde not found${NC}"
+    exit 1
+fi
+
+# Test 10: Explore Cargo.toml
+echo ""
+echo "Test 10: Exploring Cargo.toml for dependencies and features..."
+CARGO_FILE="$TMP_REPO_DIR/Cargo.toml"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$CARGO_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$CARGO_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -qE "serde|tokio" && echo "$CLI_RESPONSE" | grep -qE "serde|tokio"; then
+    echo -e "${GREEN}✓ Cargo.toml dependencies found via explore (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Cargo.toml dependencies not found via explore${NC}"
+    exit 1
+fi
+
+# Test 11: Cargo feature via search
+echo ""
+echo "Test 11: Searching for Cargo feature derive..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"derive feature\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "derive feature" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -qi "derive" && echo "$CLI_RESPONSE" | grep -qi "derive"; then
+    echo -e "${GREEN}✓ Found Cargo feature derive (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Cargo feature derive not found${NC}"
+    exit 1
+fi
+
+# Test 12: Workspace member via search
+echo ""
+echo "Test 12: Searching for workspace member knot-core..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"knot-core\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "knot-core" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "knot-core" && echo "$CLI_RESPONSE" | grep -q "knot-core"; then
+    echo -e "${GREEN}✓ Found workspace member knot-core (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Workspace member knot-core not found${NC}"
+    exit 1
+fi
+
+# Test 13: Package metadata via search
+echo ""
+echo "Test 13: Searching for Cargo package metadata..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"cargo package edition 2024\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "cargo package" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "cargo_package" && echo "$CLI_RESPONSE" | grep -q "cargo_package"; then
+    echo -e "${GREEN}✓ Found CargoPackage entity (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ CargoPackage entity not found${NC}"
+    exit 1
+fi
+
+# Test 14: Dev dependency via search
+echo ""
+echo "Test 14: Searching for dev-dependency criterion..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"criterion\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "criterion" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "criterion" && echo "$CLI_RESPONSE" | grep -q "criterion"; then
+    echo -e "${GREEN}✓ Found dev-dependency criterion (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Dev-dependency criterion not found${NC}"
     exit 1
 fi
 
