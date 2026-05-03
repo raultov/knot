@@ -216,16 +216,17 @@ else
     exit 1
 fi
 
-# Test 5: Kotlin companion object extraction
+# Test 5: Kotlin companion object extraction via explore_file
 echo ""
-echo "Test 5: Searching for Kotlin companion object in ConfigManager..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"ConfigManager","repo_name":"kotlin_e2e_test_repo"}}}'
+echo "Test 5: Exploring sample.kt for ConfigManager with companion object..."
+KT_FILE="$TEST_FILES_DIR/sample.kt"
+MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$KT_FILE"'","repo_name":"kotlin_e2e_test_repo"}}}'
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
-CLI_RESPONSE=$(cargo run --release --bin knot -- search "ConfigManager" -r "$REPO_NAME" 2>/dev/null)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "ConfigManager" && echo "$CLI_RESPONSE" | grep -q "ConfigManager"; then
-    echo -e "${GREEN}✓ Found Kotlin class ConfigManager with companion object (MCP & CLI)${NC}"
+    echo -e "${GREEN}✓ Found Kotlin class ConfigManager in sample.kt (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Kotlin class ConfigManager not found${NC}"
     exit 1
