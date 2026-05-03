@@ -12,24 +12,21 @@
 
 ### Knot in action
 
-<table>
-<tr>
-<td width="50%" align="center">
+<div align="center">
 
-<img src="demo-cli.gif" alt="knot CLI demo" width="120%">
+<img src="demo-cli.gif" alt="knot CLI demo" width="144%">
 
 **CLI** — instant reverse dependency lookup
 
-</td>
-<td width="50%" align="center">
+</div>
 
-<img src="demo-mcp.gif" alt="knot MCP demo" width="120%">
+<div align="center">
+
+<img src="demo-mcp.gif" alt="knot MCP demo" width="144%">
 
 **MCP** — JSON-RPC protocol for AI agents
 
-</td>
-</tr>
-</table>
+</div>
 
 **knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — v1.2.5), **Kubernetes + Helm** (v1.2.5), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking.
 
