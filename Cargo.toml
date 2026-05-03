@@ -1,6 +1,6 @@
 [package]
 name = "knot"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, Groovy, C/C++, Build Systems, and HTML/CSS codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
@@ -81,6 +81,12 @@ serde_json = "1"
 
 # --- XML Parsing (Maven pom.xml) ---
 roxmltree = "0.21"
+
+# --- TOML Parsing (Cargo.toml) ---
+toml = "0.8"
+
+# --- YAML Parsing (Config, Helm, K8s) ---
+serde_yaml = "0.9"
 
 # --- Error Handling ---
 anyhow = "1"
