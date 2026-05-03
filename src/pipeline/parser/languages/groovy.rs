@@ -16,26 +16,17 @@ pub(crate) fn handle_groovy_capture(
     }
 }
 
-#[allow(dead_code)] // Reserved for future Groovy standard parser fallback
+#[allow(dead_code)] // tree-sitter-groovy disabled: CI query compilation unreliable (v1.2.0)
 pub(crate) fn extract_entities_groovy_standard(
     source: &str,
     file_path: &str,
     repo_name: &str,
 ) -> Vec<ParsedEntity> {
-    let mut entities = match super::super::extractor::extract_entities(
-        source,
-        tree_sitter_groovy::LANGUAGE.into(),
-        include_str!("../../../../queries/groovy.scm"),
-        "groovy",
-        file_path,
-        repo_name,
-    ) {
-        Ok(entities) => entities,
-        Err(e) => {
-            tracing::warn!("Failed to parse Groovy file {}: {}", file_path, e);
-            vec![]
-        }
-    };
+    // tree-sitter-groovy (v0.1.2) query compilation fails intermittently on CI
+    // runners with tree-sitter 0.26. The ad-hoc lexical parser provides equivalent
+    // entity coverage (classes, interfaces, enums, traits, methods, properties) plus
+    // scope tracking and reference intent extraction not available via tree-sitter alone.
+    let mut entities: Vec<ParsedEntity> = vec![];
 
     // Extract package declaration
     let package = extract_package(source);
