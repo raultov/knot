@@ -6,18 +6,19 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v0.10.3):**
+**Current State (v1.2.0):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
-- Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
-- Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile extraction
-- Groovy: standard .groovy files via tree-sitter-groovy (classes, interfaces, enums, methods, fields)
+- Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
+- Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
+- Configuration Files: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with leaf-key granularity and package.json special handling
+- Kubernetes + Helm: K8s manifest parsing (Deployment, Service, ConfigMap, Secret, Ingress, Namespace) and Helm chart indexing (Chart.yaml, values.yaml, templates)
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file)
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
-- 426 unit tests | 74+ E2E tests across all languages
+- 520 unit tests | 100+ E2E tests across all languages
 
 **Goal:** Extend `knot` to become the standard indexer for hybrid projects with full cross-language dependency resolution.
 
@@ -106,69 +107,30 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 
 ---
 
-## Phase 12: Performance Optimization (v1.1.0 — ✅ Completed)
+---
 
-### Objective
-Optimize the post-parse indexing pipeline by eliminating serialization bottlenecks and adding comprehensive performance validation for future regression detection.
+## Phase 12: Build Systems, Config Files & Kubernetes/Helm (v1.2.0 — ✅ Completed)
 
-#### Planned → ✅ Completed
+### 12A — Cargo.toml Parser
+- ✅ `toml = "0.8"` integration with package metadata, multi-format dependency parsing, features, workspace members
+- ✅ 4 new EntityKind variants: CargoPackage, CargoFeature, WorkspaceMember, ProjectIdentity
+- ✅ 8 unit tests + 6 E2E tests (extended `run_build_systems_e2e.sh`)
 
-**Bottlenecks Identified:**
-| Bottleneck | Root Cause | Impact |
-|------------|-----------|--------|
-| Neo4j N+1 entity inserts | 64 individual `MERGE` queries per batch | ~250ms → ~10ms with UNWIND |
-| Neo4j N+1 relationship inserts | 1 query per edge | O(N) round-trips → O(8) |
-| Sequential ingestion | Single tokio task | Batches processed one-at-a-time |
-| Unbounded channels | `parse_tx`/`res_tx` unbounded | Worst-case: 500MB uncontrolled |
-| Sequential resolution | Single-threaded HashMap traversal | O(N) → O(N/num_cpus) |
+### 12B — Configuration Files (YAML, JSON, .properties)
+- ✅ `serde_yaml = "0.9"` integration. Recursive walk with depth limit 10, multi-document YAML
+- ✅ package.json special handling: deps → BuildDependency, scripts → ConfigProperty, ProjectIdentity
+- ✅ .properties: line-by-line parser with `=`/`:`/space delimiters, comments, line continuation
+- ✅ ConfigProperty EntityKind. 500KB file size limit + lock file exclusions
+- ✅ 18 unit tests (6/6/6) + 6 E2E tests (`run_config_e2e.sh`)
 
-**Phase 1-2: Neo4j UNWIND Batching**
-- ✅ `upsert_entities` groups entities by `EntityKind` and runs one `UNWIND $entities` query per group — 10-50x speedup
-- ✅ `upsert_relationships` groups by `RelationshipType` and runs one `UNWIND $edges` query per type — 10-50x speedup
-- ✅ 50,560 individual queries reduced to <100 batched queries per full index
-- ✅ File: `src/db/graph/upsert.rs`
+### 12C — Kubernetes + Helm
+- ✅ 10 new EntityKind variants (7 K8s + 3 Helm)
+- ✅ Multi-resource K8s YAML with label/annotation/spec extraction and cross-resource references
+- ✅ Helm: Chart.yaml, values.yaml, template {{ .Values.X }} extraction with `{{-` whitespace trim
+- ✅ `dispatch_yaml()` cascade: Chart.yaml → Helm directory → K8s (apiVersion+kind) → generic YAML
+- ✅ 15 unit tests (7+5+3) + 9 E2E tests (`run_k8s_helm_e2e.sh`)
 
-**Phase 3: Bounded Channels**
-- ✅ `parse_tx` bounded to `batch_size * 4` (256) — ~1.3MB vs potential 500MB unbounded
-- ✅ `res_tx` bounded to `batch_size * 4` (256) — ~0.5MB peak
-- ✅ `embed_tx` bounded to 16 batches — ~8MB peak
-- ✅ Files: `src/pipeline/runner.rs`, `src/pipeline/parser/mod.rs`
-
-**Phase 4: Concurrent Ingestion**
-- ✅ JoinSet + Semaphore for parallel Neo4j/Qdrant writes
-- ✅ Configurable via `KNOT_INGEST_CONCURRENCY` (default: 4 concurrent tasks)
-- ✅ File: `src/pipeline/runner.rs`
-
-**Phase 5: Rayon Thread Pool Configuration**
-- ✅ `KNOT_RAYON_THREADS` env var (default N-1 cores)
-- ✅ Startup banner logs thread counts
-- ✅ File: `src/config.rs`
-
-**Phase 6: Parallel Relationship Resolution**
-- ✅ `par_iter_mut()` replaces sequential loop — linear speedup with core count
-- ✅ File: `src/pipeline/ingest/resolve.rs`
-
-**Performance Targets Achieved:**
-- Peak memory: ~300-400MB (well below 2GB nice-to-have, far from 5GB hard limit)
-- Neo4j query count: <100 per full index (vs 50,560+ before)
-- Ingestion throughput: 2-3x improvement
-- Parsing: Uses all available CPU cores (N-1 for Rayon)
-
-**Three-Level Benchmarking Framework:**
-- ✅ Level 1 (Criterion): `benches/pipeline_bench.rs`, `benches/graph_upsert_bench.rs`, `benches/channel_backpressure_bench.rs`
-- ✅ Level 2 (E2E): `tests/benchmark_e2e.sh` with `/usr/bin/time -f` metrics capture
-- ✅ Level 3 (CI): `scripts/compare_perf_metrics.sh` + `test-performance` job in CI
-- ✅ Baseline: `.perf_metrics/baseline.json` (committed, updated on main/master merges)
-- ✅ Tolerances: `.perf_metrics/threshold_tolerances.json` (±5% time, ±10% memory by default)
-
-**New Configuration Options:**
-| Env Variable | Default | Description |
-|-------------|---------|-------------|
-| `KNOT_RAYON_THREADS` | `num_cpus - 1` | Rayon parsing thread count |
-| `KNOT_INGEST_CONCURRENCY` | `4` | Max concurrent ingestion tasks |
-| `KNOT_BATCH_SIZE` | `64` | Entities per embed/upsert batch |
-
-**521 unit tests passing | clippy clean | fmt applied**
+**Total Phase 12: 6 new parsers, 16 EntityKind variants, 41 unit tests, 29 E2E tests**
 
 ---
 
@@ -183,6 +145,7 @@ Optimize the post-parse indexing pipeline by eliminating serialization bottlenec
 | Phase 10: Groovy Language Support | Medium | ✅ Completed (v0.10.3) |
 | Phase 11: C/C++ | High | ✅ Completed (v1.0.0) |
 | Phase 12: Performance Optimization | High | ✅ Completed (v1.1.0) |
+| Phase 12A-C: Cargo.toml, Config, K8s/Helm | Medium | ✅ Completed (v1.2.0) |
 
 ---
 
@@ -195,6 +158,29 @@ Optimize the post-parse indexing pipeline by eliminating serialization bottlenec
 ---
 
 ## Changelog
+
+### v1.2.0 - Cargo.toml, Configuration Files, Kubernetes + Helm
+
+**Phase 12A — Cargo.toml Parser:**
+- ✅ `toml = "0.8"` integration with package metadata, multi-format deps (simple/table/git/path), features, workspace members
+- ✅ 4 new EntityKind variants: CargoPackage, CargoFeature, WorkspaceMember, ProjectIdentity
+- ✅ 8 unit tests + 6 E2E tests (extended `run_build_systems_e2e.sh`)
+
+**Phase 12B — Configuration Files:**
+- ✅ `serde_yaml = "0.9"` integration. YAML/JSON recursive walk with depth limit 10, multi-document support
+- ✅ package.json special handling: npm deps → BuildDependency, scripts → ConfigProperty, ProjectIdentity
+- ✅ .properties: line-by-line parser with comment-as-docstring heuristic, line continuation
+- ✅ ConfigProperty EntityKind. 500KB file size limit + lock file exclusions
+- ✅ 18 unit tests + 6 E2E tests (`run_config_e2e.sh`)
+
+**Phase 12C — Kubernetes + Helm:**
+- ✅ 10 new EntityKind variants (K8sDeployment, K8sService, K8sConfigMap, K8sSecret, K8sIngress, K8sNamespace, K8sResource, HelmChart, HelmValue, HelmTemplateVar)
+- ✅ Multi-resource K8s YAML with label/annotation/spec extraction and cross-resource references
+- ✅ Helm: Chart.yaml, values.yaml, template {{ .Values.X }} extraction with `{{-` whitespace trim
+- ✅ `dispatch_yaml()` cascade: Chart.yaml → Helm directory → K8s (apiVersion+kind) → generic YAML
+- ✅ 15 unit tests + 9 E2E tests (`run_k8s_helm_e2e.sh`)
+- ✅ All 10 E2E test suites pass (Config Files + K8s/Helm added to CI and `run_all_e2e.sh`)
+- ✅ 520 unit tests passing | cargo fmt + clippy clean
 
 ### v1.1.0 - Performance Optimization (Phase 12)
 

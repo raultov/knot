@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline — v0.10.0) with full cross-language linking.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.0), **Configuration Files** (YAML, JSON, .properties — v1.2.0), and **Kubernetes + Helm** (v1.2.0) with full cross-language linking.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -42,6 +42,9 @@ This dual-database approach powers both:
 - **Python** (v0.9.3): Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), Py2/Py3 exception syntax compatibility, and `self.method()` resolution with inherited method walking. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection.
 - **Groovy** (v0.10.3): Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. **NEW in v0.10.3**: Multi-line signatures (closure default params), assignment-vs-declaration disambiguation, innermost assignment for nested closures, UUID collision fix for duplicate method names, `find_callers` accurately tracks private methods including those in anonymous `new AnAction` closures.
 - **Build Systems** (v0.10.0): Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and `Jenkinsfile` pipeline (stages + steps) extraction.
+- **Cargo.toml** (v1.2.0): Rust package manager support with package metadata, features, workspace members, and multi-format dependency parsing (simple, table, git, path).
+- **Configuration Files** (v1.2.0): YAML (.yml/.yaml), JSON (.json), and Java Properties (.properties) with leaf-key granularity. Special handling for package.json (npm dependencies as BuildDependency, scripts as ConfigProperty).
+- **Kubernetes + Helm** (v1.2.0): K8s manifest parsing (Deployment, Service, ConfigMap, Secret, Ingress, Namespace) with label/annotation tracking and cross-resource references. Helm chart indexing (Chart.yaml metadata, values.yaml key-value pairs, template variable extraction via {{ .Values.X }}).
 - **C/C++** (v1.0.0): Complete C/C++ support with namespace-aware FQN resolution (`Engine::MyClass::start`), class/struct extraction, function/method tracking, macro definition and usage detection (uppercase identifier heuristic), type reference tracking (declarations, `new` expressions), and full call graph analysis. Supports `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hh`, `.hxx` extensions via tree-sitter-c and tree-sitter-cpp parsers. Includes intelligent auto-detection for `.h` headers to parse them correctly as C or C++ based on their contents.
 
 **📚 Rich Comment Extraction**
@@ -647,20 +650,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Criterion benchmarks** at `benches/` | **Baseline metrics** at `.perf_metrics/baseline.json`
 - ✅ **cargo fmt** clean | **cargo clippy** clean | **521 unit tests** passing
 
-### Current Release (v1.0.0 — C/C++ Language Support) ✅
-- ✅ **Phase 11: C/C++ Support**: tree-sitter-c v0.23 and tree-sitter-cpp v0.23 integrated
-- ✅ **Namespace-aware FQN**: `Engine::MyClass::start` format via AST parent traversal in `build_cpp_fqn()`
-- ✅ **Call Graph Analysis**: direct calls, method calls (`obj.bar()`, `ptr->baz()`), scope resolution (`std::vector::size()`), field expressions (`this->compute()`)
-- ✅ **Type Reference Tracking**: declarations, `new` expressions, qualified types
-- ✅ **Macro Usage Detection**: uppercase identifier heuristic (e.g., `MAX_BUF`)
-- ✅ **6 EntityKind variants**: CppClass, CStruct, CppMethod, CFunction, CppNamespace, MacroDefinition
-- ✅ **3 new C++ unit tests** (307 lines in cpp.rs) | 443 total unit tests
-- ✅ **4 E2E tests** in `run_cpp_e2e.sh`: FQN extraction, call graphs, macro usage, type references
-- ✅ **10/10 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems (fixed), Groovy, Groovy Cross-Ref (fixed), Groovy Private Method, Cross-Language Ref, C/C++
-- ✅ **Master E2E script** (`run_all_e2e.sh`) for local validation of all test suites
-- ✅ **CI updated** with C/C++ and Cross-Language Ref E2E tests
-- ✅ **cargo fmt** clean | **cargo clippy** clean | **cargo build --release** successful
-- ✅ **Published to crates.io as v1.0.0**
+### Current Release (v1.2.0 — Cargo.toml, Config Files, Kubernetes + Helm) ✅
+- ✅ **Phase 12A — Cargo.toml Parser**: Package metadata, dependencies (simple/table/git/path), features, workspace members via `toml = "0.8"`
+- ✅ **Phase 12B — Configuration Files**: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with recursive walk, depth limit 10, leaf-key granularity, lock file exclusions, 500KB file size limit. package.json special handling: npm deps as BuildDependency, scripts as ConfigProperty, ProjectIdentity emission
+- ✅ **Phase 12C — Kubernetes + Helm**: 10 new EntityKind variants (K8sDeployment, K8sService, K8sConfigMap, K8sSecret, K8sIngress, K8sNamespace, K8sResource, HelmChart, HelmValue, HelmTemplateVar). K8s manifest parsing with label/annotation/reference extraction, Helm Chart.yaml/values.yaml/templates support with {{ .Values.X }} variable tracking
+- ✅ **74+ new unit tests** across 6 parser modules + 29 E2E tests (6 Cargo + 6 Config + 9 K8s/Helm)
+- ✅ **10/10 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems (extended), Config Files, K8s/Helm, Groovy, Cross-Language Ref, C/C++
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **520 unit tests** passing
 
 ### Previous Release (v0.10.3 — Groovy Private Methods, Nested Closures & UUID Collision Fix) ✅
 - ✅ **UUID Collision Fix**: `ParsedEntity` identity now includes `start_line`
@@ -744,11 +740,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 3 unit tests for C++ entity and reference extraction
 - ✅ 4 end-to-end integration tests covering FQN, call graphs, macro usage, and type references
 
-### Upcoming (v1.1.x)
-#### Phase 12: YAML/Configuration Language Support
-- [ ] HELM chart indexing (`.yaml`, `.tpl`)
-- [ ] Kubernetes manifest analysis
-- [ ] Template variable tracking and resolution
+### Upcoming (v1.3.x)
+#### Phase D: Cross-Repo Dependency Linking
+- [ ] Automatic inter-repository call resolution via `:Repository` graph model with `DEPENDS_ON` edges
+- [ ] `ProjectIdentity` marker entity from build files (Maven GAV, Cargo package, npm name)
+- [ ] `knot deps` CLI subcommand + `list_repo_dependencies` MCP tool for dependency graph visualization
+- [ ] Retroactive linking for out-of-order indexing
 
 #### Long-Term Vision
 - [ ] Reestructure E2E test suites to gain velocity by sharing binaries with unit tests and avoid Docker overhead
