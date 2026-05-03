@@ -16,6 +16,7 @@ pub(crate) fn handle_groovy_capture(
     }
 }
 
+#[allow(dead_code)] // Reserved for future Groovy standard parser fallback
 pub(crate) fn extract_entities_groovy_standard(
     source: &str,
     file_path: &str,
@@ -261,6 +262,7 @@ pub(crate) fn extract_entities_groovy_standard(
 }
 
 /// Scans source for method call patterns and returns reference intents.
+#[allow(dead_code)] // Reserved for future reference extraction
 fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<ReferenceIntent> {
     let mut refs = Vec::new();
     let keywords = [
@@ -416,6 +418,7 @@ fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<Referen
 }
 
 /// Splits an identifier from the start of `s`, returns (identifier, rest).
+#[allow(dead_code)] // Reserved for future FQN construction
 fn split_identifier(s: &str) -> Option<(&str, &str)> {
     let first = s.chars().next()?;
     if !first.is_alphabetic() && first != '_' {
@@ -428,6 +431,7 @@ fn split_identifier(s: &str) -> Option<(&str, &str)> {
 }
 
 /// Extract package name from source (e.g., `package com.example.service`)
+#[allow(dead_code)] // Reserved for future package resolution
 fn extract_package(source: &str) -> Option<String> {
     for line in source.lines().take(20) {
         let trimmed = line.trim();
@@ -442,6 +446,7 @@ fn extract_package(source: &str) -> Option<String> {
 }
 
 /// Build a fully-qualified name: package.parent.method or package.method
+#[allow(dead_code)] // Reserved for future FQN construction
 fn build_fqn(package: &Option<String>, parent: &Option<String>, name: &str) -> String {
     match (package, parent) {
         (Some(pkg), Some(enclosing_class)) => format!("{}.{}.{}", pkg, enclosing_class, name),
@@ -453,6 +458,7 @@ fn build_fqn(package: &Option<String>, parent: &Option<String>, name: &str) -> S
 
 /// Tries to extract class, interface, enum, or trait declarations
 /// Scans forward from `line_num` to find the matching closing `}` of the method body.
+#[allow(dead_code)] // Reserved for future method body parsing
 fn find_method_body_end(source: &str, line_num: usize) -> Option<usize> {
     let mut chars = source.chars().peekable();
     let mut current_line = 1usize;
@@ -504,6 +510,7 @@ fn find_method_body_end(source: &str, line_num: usize) -> Option<usize> {
     None
 }
 
+#[allow(dead_code)] // Reserved for future type declaration parsing
 fn try_extract_type_declaration(line: &str) -> Option<(String, EntityKind)> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
 
@@ -538,6 +545,7 @@ fn try_extract_type_declaration(line: &str) -> Option<(String, EntityKind)> {
 }
 
 /// Tries to extract properties (fields, script variables)
+#[allow(dead_code)] // Reserved for future property extraction
 fn try_extract_property(line: &str) -> Option<String> {
     // A very basic heuristic for `Type name = ...` or `def name = ...`
     if let Some(eq_idx) = line.find('=') {
@@ -573,6 +581,7 @@ fn try_extract_property(line: &str) -> Option<String> {
 ///                                                      Closure errorListener = {}) {
 ///
 /// where the opening `(` and closing `)` are on different lines.
+#[allow(dead_code)] // Reserved for future multiline method parsing
 fn try_extract_typed_method_multiline(source: &str, line_idx: usize) -> Option<(String, usize)> {
     let lines: Vec<&str> = source.lines().collect();
     let start_line = lines.get(line_idx)?;
@@ -686,6 +695,7 @@ fn try_extract_typed_method_multiline(source: &str, line_idx: usize) -> Option<(
 }
 
 /// Tries to extract a typed method name and signature
+#[allow(dead_code)] // Reserved for future typed method parsing
 fn try_extract_typed_method(line: &str) -> Option<(String, String)> {
     // Quick heuristic: contains `(` and `)` and `{`, doesn't start with `if`/`while`/`for`/`catch`
     if line.contains('(') && line.contains(')') && (line.contains('{') || line.ends_with(')')) {
@@ -738,6 +748,7 @@ fn try_extract_typed_method(line: &str) -> Option<(String, String)> {
 }
 
 /// Tries to extract a method name and signature from a line containing `def`
+#[allow(dead_code)] // Reserved for future def method parsing
 fn try_extract_def_method(line: &str) -> Option<(String, String)> {
     // Look for `def `
     if let Some(def_idx) = line.find("def ") {
