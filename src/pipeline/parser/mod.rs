@@ -38,11 +38,17 @@ const DEFAULT_TSX_QUERY: &str = include_str!("../../../queries/tsx.scm");
 const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
 #[allow(dead_code)] // Reserved for future query-based HTML parsing
 const DEFAULT_HTML_QUERY: &str = include_str!("../../../queries/html.scm");
+#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_CSS_QUERY: &str = include_str!("../../../queries/css.scm");
+#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_SCSS_QUERY: &str = include_str!("../../../queries/scss.scm");
+#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_RUST_QUERY: &str = include_str!("../../../queries/rust.scm");
+#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_PYTHON_QUERY: &str = include_str!("../../../queries/python.scm");
+#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_C_QUERY: &str = include_str!("../../../queries/c.scm");
+#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_CPP_QUERY: &str = include_str!("../../../queries/cpp.scm");
 
 /// Configuration for the parse stage.
@@ -139,6 +145,7 @@ pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEnti
 /// Parse a single source file and return its extracted entities.
 /// Heuristic: detect whether a `.h` header contains C++ syntax.
 /// Scans for keywords exclusive to C++ that do not appear in valid C.
+#[allow(dead_code)] // Used by C/C++ header detection in dispatch
 fn is_cpp_header(source: &str) -> bool {
     let cpp_indicators = [
         "class ",
@@ -259,6 +266,26 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )
         }
+        "yml" | "yaml" => dispatch_yaml(&source, &file_path, &parse_cfg.repo_name),
+        "json" => languages::json_config::extract_entities_json_config(
+            &source,
+            &file_path,
+            &parse_cfg.repo_name,
+        ),
+        "properties" => languages::properties::extract_entities_properties(
+            &source,
+            &file_path,
+            &parse_cfg.repo_name,
+        ),
+        "tpl" => {
+            let chart_name = detect_chart_name(&file_path);
+            languages::helm::extract_helm_template(
+                &source,
+                &file_path,
+                &parse_cfg.repo_name,
+                &chart_name,
+            )
+        }
         "css" => {
             let query_src = load_query_source("css.scm", DEFAULT_CSS_QUERY, parse_cfg);
             extractor::extract_entities(
@@ -357,6 +384,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
             languages::groovy::extract_entities_groovy(&source, &file_path, &parse_cfg.repo_name)
         }
         "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),
+        "toml" => languages::toml::extract_entities_toml(&source, &file_path, &parse_cfg.repo_name),
         other => {
             warn!("Unsupported extension '{other}', skipping");
             vec![]
@@ -365,6 +393,105 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
 
     debug!("Extracted {} entities from {}", entities.len(), file_path);
     Ok(entities)
+}
+
+/// Dispatch YAML files to the appropriate parser based on content.
+#[allow(dead_code)] // Called via dispatch for YAML handling
+fn dispatch_yaml(source: &str, file_path: &str, repo_name: &str) -> Vec<ParsedEntity> {
+    let filename = Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    // 1. Is it Chart.yaml?
+    if filename == "Chart.yaml" {
+        return languages::helm::extract_chart_yaml(source, file_path, repo_name);
+    }
+
+    // 2. Is it inside a Helm chart directory?
+    if is_in_helm_chart_dir(file_path) {
+        if filename == "values.yaml" || filename == "values.yml" {
+            let chart_name = detect_chart_name(file_path);
+            return languages::helm::extract_values_yaml(source, file_path, repo_name, &chart_name);
+        }
+        if is_in_templates_dir(file_path) {
+            let chart_name = detect_chart_name(file_path);
+            return languages::helm::extract_helm_template(
+                source,
+                file_path,
+                repo_name,
+                &chart_name,
+            );
+        }
+    }
+
+    // 3. Is it a K8s manifest? (has apiVersion + kind at root level)
+    if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(source)
+        && yaml.get("apiVersion").is_some()
+        && yaml.get("kind").is_some()
+    {
+        return languages::kubernetes::extract_entities_k8s(source, file_path, repo_name);
+    }
+
+    // 4. Default: generic configuration YAML
+    languages::yaml::extract_entities_yaml(source, file_path, repo_name)
+}
+
+/// Check if the file is inside a Helm chart directory by looking for Chart.yaml in parent dirs.
+#[allow(dead_code)] // Used by YAML dispatch heuristics
+fn is_in_helm_chart_dir(file_path: &str) -> bool {
+    let path = Path::new(file_path);
+    let mut current = path.parent();
+
+    while let Some(dir) = current {
+        if dir.join("Chart.yaml").exists() {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+/// Check if the file is inside a templates directory (Helm convention).
+#[allow(dead_code)] // Used by YAML dispatch heuristics
+fn is_in_templates_dir(file_path: &str) -> bool {
+    let path = Path::new(file_path);
+    let mut current = Some(path);
+
+    while let Some(p) = current {
+        if p.file_name().and_then(|n| n.to_str()) == Some("templates") {
+            return true;
+        }
+        current = p.parent();
+    }
+    false
+}
+
+/// Detect the Helm chart name from the nearest Chart.yaml or directory name.
+fn detect_chart_name(file_path: &str) -> String {
+    let path = Path::new(file_path);
+    let mut current = path.parent();
+
+    while let Some(dir) = current {
+        let chart_yaml = dir.join("Chart.yaml");
+        if chart_yaml.exists() {
+            if let Ok(source) = std::fs::read_to_string(&chart_yaml)
+                && let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&source)
+                && let Some(name) = yaml.get("name").and_then(|v| v.as_str())
+            {
+                return name.to_string();
+            }
+            break;
+        }
+        current = dir.parent();
+    }
+
+    // Fall back to parent directory name
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 /// Return the query source string, preferring a custom file when available.

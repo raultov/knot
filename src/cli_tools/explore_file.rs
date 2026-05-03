@@ -14,19 +14,19 @@ pub async fn run_explore_file(
     repo_name: Option<&str>,
     graph_db: &Arc<GraphDb>,
 ) -> anyhow::Result<(String, serde_json::Value)> {
-    let normalized_path = if Path::new(file_path).exists() {
-        std::fs::canonicalize(file_path)?
-            .to_string_lossy()
-            .to_string()
+    let (normalized_path, display_path) = if Path::new(file_path).exists() {
+        let canonical = std::fs::canonicalize(file_path)?;
+        let canonical_str = canonical.to_string_lossy().to_string();
+        (canonical_str.clone(), canonical_str)
     } else {
-        file_path.to_string()
+        (file_path.to_string(), file_path.to_string())
     };
 
     let entities = graph_db
         .get_file_entities(&normalized_path, repo_name)
         .await?;
 
-    Ok((file_path.to_string(), entities))
+    Ok((display_path, entities))
 }
 
 pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String {
@@ -80,6 +80,14 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         let mut groovy_functions = Vec::new();
         let mut groovy_enums = Vec::new();
         let mut groovy_properties = Vec::new();
+        let mut cargo_packages = Vec::new();
+        let mut cargo_features = Vec::new();
+        let mut workspace_members = Vec::new();
+        let mut config_properties = Vec::new();
+        let mut k8s_resources = Vec::new();
+        let mut helm_charts = Vec::new();
+        let mut helm_values = Vec::new();
+        let mut helm_template_vars = Vec::new();
 
         for entity in entities_array {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
@@ -120,6 +128,17 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
                     "groovy_function" => groovy_functions.push(entity),
                     "groovy_enum" => groovy_enums.push(entity),
                     "groovy_property" => groovy_properties.push(entity),
+                    "cargo_package" => cargo_packages.push(entity),
+                    "cargo_feature" => cargo_features.push(entity),
+                    "workspace_member" => workspace_members.push(entity),
+                    "config_property" => config_properties.push(entity),
+                    "k8s_deployment" | "k8s_service" | "k8s_configmap" | "k8s_secret"
+                    | "k8s_ingress" | "k8s_namespace" | "k8s_resource" => {
+                        k8s_resources.push(entity)
+                    }
+                    "helm_chart" => helm_charts.push(entity),
+                    "helm_value" => helm_values.push(entity),
+                    "helm_template_var" => helm_template_vars.push(entity),
                     _ => {}
                 }
             }
@@ -377,6 +396,62 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         if !groovy_properties.is_empty() {
             output.push_str("## Properties (Groovy)\n\n");
             for entity in groovy_properties {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !cargo_packages.is_empty() {
+            output.push_str("## Cargo Package\n\n");
+            for entity in cargo_packages {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !cargo_features.is_empty() {
+            output.push_str("## Cargo Features\n\n");
+            for entity in cargo_features {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !workspace_members.is_empty() {
+            output.push_str("## Workspace Members\n\n");
+            for entity in workspace_members {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !config_properties.is_empty() {
+            output.push_str("## Configuration Properties\n\n");
+            for entity in config_properties {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !k8s_resources.is_empty() {
+            output.push_str("## Kubernetes Resources\n\n");
+            for entity in k8s_resources {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !helm_charts.is_empty() {
+            output.push_str("## Helm Chart\n\n");
+            for entity in helm_charts {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !helm_values.is_empty() {
+            output.push_str("## Helm Values\n\n");
+            for entity in helm_values {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
+
+        if !helm_template_vars.is_empty() {
+            output.push_str("## Template Variables\n\n");
+            for entity in helm_template_vars {
                 output.push_str(&format_entity_summary(entity));
             }
         }

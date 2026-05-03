@@ -2,20 +2,66 @@
 //!
 //! Uses the `ignore` crate to walk a directory tree while respecting
 //! `.gitignore`, `.ignore`, and other standard ignore files.
-//! Supported extensions: `.java`, `.ts`, `.tsx`, `.cts`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.kt`, `.kts`, `.py`, `.pyi`, `.pyw`, `.html`, `.htm`, `.css`, `.scss`, `.sass`.
 
 use anyhow::Result;
 use ignore::WalkBuilder;
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Supported source file extensions.
 /// This is the single source of truth for all supported languages across the indexing pipeline.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "py", "pyi", "pyw", "html",
-    "htm", "css", "scss", "sass", "rs", "groovy", "gradle", "c", "h", "cpp", "hpp", "cc", "cxx",
-    "hh", "hxx",
+    "java",
+    "ts",
+    "tsx",
+    "cts",
+    "js",
+    "mjs",
+    "cjs",
+    "jsx",
+    "kt",
+    "kts",
+    "py",
+    "pyi",
+    "pyw",
+    "html",
+    "htm",
+    "css",
+    "scss",
+    "sass",
+    "rs",
+    "groovy",
+    "gradle",
+    "c",
+    "h",
+    "cpp",
+    "hpp",
+    "cc",
+    "cxx",
+    "hh",
+    "hxx",
+    "yml",
+    "yaml",
+    "json",
+    "properties",
+    "tpl",
 ];
+
+/// Lock/config file names to exclude from indexing (prevent indexing large generated files).
+const EXCLUDED_NAMES: &[&str] = &[
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+];
+
+/// Maximum file size in bytes for indexing (500 KB).
+/// Files larger than this are skipped to prevent indexing data dumps or generated files.
+const MAX_FILE_SIZE: u64 = 500 * 1024;
 
 /// Recursively discover all supported source files under `repo_path`.
 ///
@@ -38,6 +84,26 @@ pub fn discover_files(repo_path: &str) -> Result<Vec<PathBuf>> {
                 return None;
             }
 
+            // Exclude lock files and generated files by name
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && EXCLUDED_NAMES.contains(&name)
+            {
+                debug!("Skipping excluded file: {}", name);
+                return None;
+            }
+
+            // File size check — skip files > 500KB
+            if let Ok(metadata) = std::fs::metadata(&path)
+                && metadata.len() > MAX_FILE_SIZE
+            {
+                debug!(
+                    "Skipping file over size limit ({} bytes): {}",
+                    metadata.len(),
+                    path.display()
+                );
+                return None;
+            }
+
             // Match by extension first
             if let Some(ext) = path.extension().and_then(|e| e.to_str())
                 && SUPPORTED_EXTENSIONS.contains(&ext)
@@ -47,7 +113,13 @@ pub fn discover_files(repo_path: &str) -> Result<Vec<PathBuf>> {
 
             // Match by filename (e.g. Jenkinsfile has no extension)
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                let known_names = ["Jenkinsfile", "pom.xml"];
+                let known_names = [
+                    "Jenkinsfile",
+                    "pom.xml",
+                    "Cargo.toml",
+                    "package.json",
+                    "tsconfig.json",
+                ];
                 if known_names.contains(&name) {
                     return Some(path);
                 }
@@ -103,7 +175,7 @@ mod tests {
 
         // Create unsupported files
         fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
-        fs::write(dir.path().join("config.json"), "{}").unwrap();
+        fs::write(dir.path().join("data.xml"), "<root/>").unwrap();
 
         // Create nested supported file
         let src_dir = dir.path().join("src");

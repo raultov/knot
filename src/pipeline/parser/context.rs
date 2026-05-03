@@ -160,6 +160,26 @@ pub(crate) fn compute_fqn_and_context(
         | EntityKind::BuildTask
         | EntityKind::PipelineStage
         | EntityKind::PipelineStep => name.to_string(),
+        // Cargo (Rust build system) entities
+        EntityKind::CargoPackage | EntityKind::CargoFeature | EntityKind::WorkspaceMember => {
+            name.to_string()
+        }
+        // Configuration entities
+        EntityKind::ConfigProperty => name.to_string(),
+        // Kubernetes entities
+        EntityKind::K8sDeployment
+        | EntityKind::K8sService
+        | EntityKind::K8sConfigMap
+        | EntityKind::K8sSecret
+        | EntityKind::K8sIngress
+        | EntityKind::K8sNamespace
+        | EntityKind::K8sResource => name.to_string(),
+        // Helm entities
+        EntityKind::HelmChart | EntityKind::HelmValue | EntityKind::HelmTemplateVar => {
+            name.to_string()
+        }
+        // Project identity for cross-repo linking
+        EntityKind::ProjectIdentity => name.to_string(),
         // Groovy entities
         EntityKind::GroovyClass
         | EntityKind::GroovyInterface
