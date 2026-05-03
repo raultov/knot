@@ -1,8 +1,8 @@
 /target
 /data/
 /node_modules/
-package.json
-package-lock.json
+/package.json
+/package-lock.json
 publish_at_utc.sh
 .knot/
 
@@ -11,7 +11,7 @@ publish_at_utc.sh
 /tests/.e2e_data/
 /tests/.e2e_*_data/
 /tests/.e2e_*_repo/
-/tests/testing_files/.knot/
+!/tests/.e2e_config_repo/
 
 # fastembed cache (downloaded models)
 .fastembed_cache/
