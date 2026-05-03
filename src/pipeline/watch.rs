@@ -235,8 +235,6 @@ mod tests {
         // Test common unsupported extensions (JS/TS, CSS, HTML, Kotlin, Rust, Python are now supported)
         let unsupported = vec![
             "readme.md",
-            "config.json",
-            "data.yaml",
             "document.txt",
             "image.png",
             "script.pyc",
