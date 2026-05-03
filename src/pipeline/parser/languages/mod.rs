@@ -1,11 +1,17 @@
 pub mod cpp;
 pub mod css;
 pub mod groovy;
+pub mod helm;
 pub mod html;
 pub mod java;
 pub mod javascript;
+pub mod json_config;
 pub mod kotlin;
+pub mod kubernetes;
+pub mod properties;
 pub mod python;
 pub mod rust;
+pub mod toml;
 pub mod typescript;
 pub mod xml;
+pub mod yaml;
