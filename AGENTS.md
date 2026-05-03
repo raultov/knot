@@ -27,10 +27,13 @@ cargo test
 ./tests/run_rust_e2e.sh         # Rust
 ./tests/run_kotlin_e2e.sh       # Kotlin
 ./tests/run_python_e2e.sh       # Python
-./tests/run_build_systems_e2e.sh  # Maven/Gradle/Jenkins
+./tests/run_build_systems_e2e.sh  # Maven/Gradle/Jenkins/Cargo.toml
 ./tests/run_groovy_e2e.sh       # Groovy
 ./tests/run_cpp_e2e.sh          # C/C++
 ./tests/run_cross_lang_ref_e2e.sh  # Cross-language validation
+./tests/run_config_e2e.sh         # YAML/JSON/.properties config
+./tests/run_k8s_helm_e2e.sh       # Kubernetes + Helm
+./tests/run_cross_repo_dep_e2e.sh # Cross-repo dependency linking
 ```
 
 **Code quality:**
@@ -53,7 +56,7 @@ cargo fmt                                   # Auto-fix formatting
 
 ### Entrypoints
 - `src/bin/knot-indexer.rs` — Main indexing pipeline
-- `src/bin/knot.rs` — CLI tool (search/explore/callers commands)
+- `src/bin/knot.rs` — CLI tool (search/explore/callers/deps commands)
 - `src/bin/knot-mcp.rs` — MCP server (exposes tools to LLMs)
 - `src/lib.rs` — Shared library (modules: `pipeline`, `db`, `mcp_tools`, `cli_tools`, etc.)
 
@@ -66,6 +69,14 @@ Located in `src/pipeline/parser/languages/`:
 - `groovy.rs` (v0.10.3) — Hybrid tree-sitter + lexical parser
 - `c_cpp.rs` (v1.0.0) — Namespace-aware FQN for C++
 - `html.rs`, `css.rs` — Web stack support
+- `toml.rs` (v1.2.5) — Cargo.toml parser (package, deps, features, workspace)
+- `yaml.rs` (v1.2.5) — Generic YAML config parser (recursive walk, max depth 10)
+- `json_config.rs` (v1.2.5) — JSON config + package.json special handling
+- `properties.rs` (v1.2.5) — Java .properties line-by-line parser
+- `kubernetes.rs` (v1.2.5) — K8s manifest parser (Deployment, Service, ConfigMap, etc.)
+- `helm.rs` (v1.2.5) — Helm chart parser (Chart.yaml, values.yaml, templates)
+- `xml.rs` — Maven pom.xml parser (extended with ProjectIdentity extraction)
+- `groovy.rs` — Gradle build.gradle parser (extended with ProjectIdentity extraction)
 
 Each module extracts `ParsedEntity` (name, kind, signature, docstring, FQN) and references (calls, extends, implements, references).
 
@@ -179,12 +190,22 @@ Each language defines entity kinds (enum `EntityKind`). Common across all:
 
 Language-specific (e.g., Rust): `Macro`, `TypeAlias`, `Union`; Groovy: `Closure`, `GroovyTrait`; C++: `CppNamespace`.
 
+v1.2.5 additions: `CargoPackage`, `CargoFeature`, `WorkspaceMember`, `ConfigProperty`, `K8sDeployment`, `K8sService`, `K8sConfigMap`, `K8sSecret`, `K8sIngress`, `K8sNamespace`, `K8sResource`, `HelmChart`, `HelmValue`, `HelmTemplateVar`, `ProjectIdentity`.
+
 Reference intents (enum `ReferenceIntent`):
 - `Calls` — function/method invocation
 - `References` — variable/type lookup
 - `Extends` — inheritance (`extends`, `->`)
 - `Implements` — trait/interface implementation
-- `MethodCall` — `obj.method()`
+- `ValueReference` — variable/class passed as keyword argument or referenced by value
+- `DomElementReference` — JavaScript references an HTML element by ID
+- `CssClassUsage` — JavaScript uses or manipulates a CSS class
+
+Relationship types (enum `RelationshipType`):
+- `Calls`, `Extends`, `Implements`, `References`
+- `ReferencesDOM`, `UsesCSSClass`, `ImportsScript`, `ImportsStylesheet`
+- `MacroCalls`, `Contains`, `GenericBound` (Rust)
+- `DependsOn` — Repository-to-repository dependency edge (v1.2.5)
 
 ---
 
@@ -229,6 +250,14 @@ cargo test
 3. **Fix in parser** → Add unit tests covering the case
 4. **Verify E2E test passes**
 5. **Check no regressions** → `cargo test && ./tests/run_all_e2e.sh`
+
+### Cross-Repo Dependency Linking Workflow (v1.2.5)
+
+1. **Index libraries first** → Best practice for full call resolution
+2. **Index client repos** → Auto-discovers DEPENDS_ON edges from build files (pom.xml, build.gradle, Cargo.toml, package.json)
+3. **Retroactive linking** → Indexing a library after its clients creates DEPENDS_ON edges retroactively; re-index clients with `--clean` for full cross-repo call resolution
+4. **Manual override** → Use `--dependencies` / `KNOT_DEPENDENCIES` to force linking without matching build file identities
+5. **Query deps** → `knot deps <repo>` for forward dependencies, `knot deps --reverse <repo>` for reverse lookups
 
 ### Refactoring Parser Logic
 
@@ -280,7 +309,7 @@ Failure = PR not mergeable. Check `.github/workflows/ci.yml` for exact steps.
 
 - **Parser module registration**: `src/pipeline/parser/mod.rs` (dispatcher for each language)
 - **MCP tools definition**: `src/mcp_tools/` (search_hybrid_context, find_callers, explore_file)
-- **CLI command routing**: `src/bin/knot.rs` (search/explore/callers subcommands)
+- **CLI command routing**: `src/bin/knot.rs` (search/explore/callers/deps subcommands)
 - **E2E test structure**: `tests/run_e2e.sh` (pattern used by all language suites)
 - **Docker setup**: `docker-compose.yml` (production), `tests/docker-compose.e2e.yml` (ephemeral)
 

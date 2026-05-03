@@ -10,7 +10,26 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.0), **Configuration Files** (YAML, JSON, .properties — v1.2.0), and **Kubernetes + Helm** (v1.2.0) with full cross-language linking.
+<table>
+<tr>
+<td width="50%" align="center">
+
+<img src="demo-cli.gif" alt="knot CLI demo" width="120%">
+
+**CLI** — instant reverse dependency lookup
+
+</td>
+<td width="50%" align="center">
+
+<img src="demo-mcp.gif" alt="knot MCP demo" width="120%">
+
+**MCP** — JSON-RPC protocol for AI agents
+
+</td>
+</tr>
+</table>
+
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — v1.2.5), **Kubernetes + Helm** (v1.2.5), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -26,8 +45,9 @@ This dual-database approach powers both:
 
 **🔍 Code Intelligence Tools**
 - **`search_hybrid_context`**: Semantic + structural search. Find code by meaning, class name, method signature, docstrings, or comments. Returns full context including dependencies.
-- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references.
+- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references. Supports cross-repository call resolution via `DEPENDS_ON` graph edges.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
+- **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package awareness
@@ -318,6 +338,13 @@ Find all code that references a specific entity (dead code detection, impact ana
 knot explore "src/services/auth.ts" --repo my-app
 ```
 List all classes, methods, functions in a file with signatures and documentation.
+
+#### `knot deps` — Repository Dependency Graph (v1.2.5)
+```bash
+knot deps my-app --depth 2           # Show forward dependencies (transitive)
+knot deps my-app --reverse           # Show who depends on this repo
+```
+Visualize auto-discovered dependencies between indexed repositories with transitive resolution up to 3 levels deep.
 
 **For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 
@@ -636,7 +663,16 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Next Release (v1.1.0 — Performance Optimization) ✅
+### Current Release (v1.2.5 — Cargo.toml, Config Files, Kubernetes + Helm, Cross-Repo Linking) ✅
+- ✅ **Phase 12A — Cargo.toml Parser**: Package metadata, dependencies (simple/table/git/path), features, workspace members via `toml = "0.8"`
+- ✅ **Phase 12B — Configuration Files**: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with recursive walk, depth limit 10, leaf-key granularity, lock file exclusions, 500KB file size limit. package.json special handling: npm deps as BuildDependency, scripts as ConfigProperty, ProjectIdentity emission
+- ✅ **Phase 12C — Kubernetes + Helm**: 10 new EntityKind variants (K8sDeployment, K8sService, K8sConfigMap, K8sSecret, K8sIngress, K8sNamespace, K8sResource, HelmChart, HelmValue, HelmTemplateVar). K8s manifest parsing with label/annotation/reference extraction, Helm Chart.yaml/values.yaml/templates support with {{ .Values.X }} variable tracking
+- ✅ **Phase 12D — Cross-Repo Dependency Linking**: Automatic inter-repository call resolution via `:Repository` graph model with `DEPENDS_ON` edges. `ProjectIdentity` marker entity from build files (Maven GAV, Cargo package, npm name). `knot deps` CLI subcommand + `list_repo_dependencies` MCP tool for dependency graph visualization. Retroactive linking for out-of-order indexing
+- ✅ **74+ new unit tests** across 6 parser modules + cross-repo integration tests
+- ✅ **11/11 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems (extended), Config Files, K8s/Helm, Groovy, Cross-Language Ref, C/C++, Cross-Repo Dependencies
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **520+ unit tests** passing
+
+### Previous Release (v1.1.0 — Performance Optimization) ✅
 - ✅ **Neo4j UNWIND Batching** (Phase 1-2): Replaced N individual `MERGE` queries with single `UNWIND $entities` batch queries — 10-50x speedup on entity/relationship writes
 - ✅ **Bounded Channels** (Phase 3): Parse/embed/res channels bounded with backpressure — peak memory <400MB (was 500MB unbounded)
 - ✅ **Concurrent Ingestion** (Phase 4): JoinSet + Semaphore for parallel Neo4j/Qdrant writes — 2-3x ingestion throughput
@@ -649,14 +685,6 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ **Memory targets**: ~300-400MB peak (well below 2GB nice-to-have, far from 5GB hard limit)
 - ✅ **Criterion benchmarks** at `benches/` | **Baseline metrics** at `.perf_metrics/baseline.json`
 - ✅ **cargo fmt** clean | **cargo clippy** clean | **521 unit tests** passing
-
-### Current Release (v1.2.0 — Cargo.toml, Config Files, Kubernetes + Helm) ✅
-- ✅ **Phase 12A — Cargo.toml Parser**: Package metadata, dependencies (simple/table/git/path), features, workspace members via `toml = "0.8"`
-- ✅ **Phase 12B — Configuration Files**: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with recursive walk, depth limit 10, leaf-key granularity, lock file exclusions, 500KB file size limit. package.json special handling: npm deps as BuildDependency, scripts as ConfigProperty, ProjectIdentity emission
-- ✅ **Phase 12C — Kubernetes + Helm**: 10 new EntityKind variants (K8sDeployment, K8sService, K8sConfigMap, K8sSecret, K8sIngress, K8sNamespace, K8sResource, HelmChart, HelmValue, HelmTemplateVar). K8s manifest parsing with label/annotation/reference extraction, Helm Chart.yaml/values.yaml/templates support with {{ .Values.X }} variable tracking
-- ✅ **74+ new unit tests** across 6 parser modules + 29 E2E tests (6 Cargo + 6 Config + 9 K8s/Helm)
-- ✅ **10/10 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems (extended), Config Files, K8s/Helm, Groovy, Cross-Language Ref, C/C++
-- ✅ **cargo fmt** clean | **cargo clippy** clean | **520 unit tests** passing
 
 ### Previous Release (v0.10.3 — Groovy Private Methods, Nested Closures & UUID Collision Fix) ✅
 - ✅ **UUID Collision Fix**: `ParsedEntity` identity now includes `start_line`
@@ -740,12 +768,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 3 unit tests for C++ entity and reference extraction
 - ✅ 4 end-to-end integration tests covering FQN, call graphs, macro usage, and type references
 
-### Upcoming (v1.2.5)
-#### Phase D: Cross-Repo Dependency Linking
-- [ ] Automatic inter-repository call resolution via `:Repository` graph model with `DEPENDS_ON` edges
-- [ ] `ProjectIdentity` marker entity from build files (Maven GAV, Cargo package, npm name)
-- [ ] `knot deps` CLI subcommand + `list_repo_dependencies` MCP tool for dependency graph visualization
-- [ ] Retroactive linking for out-of-order indexing
+### Upcoming
 
 #### Long-Term Vision
 - [ ] Build Server/Client architecture to facilitate enterprise usage with multiple MCP clients
