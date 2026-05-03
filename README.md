@@ -740,7 +740,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - ✅ 3 unit tests for C++ entity and reference extraction
 - ✅ 4 end-to-end integration tests covering FQN, call graphs, macro usage, and type references
 
-### Upcoming (v1.3.x)
+### Upcoming (v1.2.5)
 #### Phase D: Cross-Repo Dependency Linking
 - [ ] Automatic inter-repository call resolution via `:Repository` graph model with `DEPENDS_ON` edges
 - [ ] `ProjectIdentity` marker entity from build files (Maven GAV, Cargo package, npm name)
@@ -748,7 +748,8 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 - [ ] Retroactive linking for out-of-order indexing
 
 #### Long-Term Vision
-- [ ] Reestructure E2E test suites to gain velocity by sharing binaries with unit tests and avoid Docker overhead
+- [ ] Build Server/Client architecture to facilitate enterprise usage with multiple MCP clients
+- [ ] Reestructure E2E test suites to run all together at once sharing databases context avoiding Docker overhead
 - [ ] Markdown documentation indexing
 - [ ] Go support
 - [ ] C# support

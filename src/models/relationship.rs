@@ -126,6 +126,8 @@ pub enum RelationshipType {
     Contains,
     /// Rust: Generic type parameter bound (e.g., `T: Clone`)
     GenericBound,
+    /// Repository -> Repository dependency edge.
+    DependsOn,
 }
 
 impl std::fmt::Display for RelationshipType {
@@ -142,6 +144,7 @@ impl std::fmt::Display for RelationshipType {
             RelationshipType::MacroCalls => write!(f, "MACRO_CALLS"),
             RelationshipType::Contains => write!(f, "CONTAINS"),
             RelationshipType::GenericBound => write!(f, "GENERIC_BOUND"),
+            RelationshipType::DependsOn => write!(f, "DEPENDS_ON"),
         }
     }
 }

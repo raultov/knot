@@ -13,7 +13,29 @@ pub(crate) fn extract_entities_xml(
         Err(_) => return entities,
     };
 
-    let root = doc.root();
+    let root = doc.root_element();
+
+    // Extract project identity for cross-repo linking
+    let group_id = child_text(&root, "groupId");
+    let artifact_id = child_text(&root, "artifactId");
+    let version = child_text(&root, "version").unwrap_or_else(|| "unknown".to_string());
+
+    if let (Some(gid), Some(aid)) = (&group_id, &artifact_id) {
+        let fqn = format!("maven:{}:{}", gid, aid);
+        entities.push(ParsedEntity::new(
+            format!("{}:{}", gid, aid),
+            EntityKind::ProjectIdentity,
+            &fqn,
+            Some(format!("version: {}, build_system: maven", version)),
+            Some(format!("Maven project identity: {}:{}", gid, aid)),
+            "xml",
+            file_path,
+            1,
+            1,
+            None,
+            repo_name,
+        ));
+    }
 
     // Extract <dependency> elements under <dependencies>
     for deps_node in root
@@ -140,13 +162,27 @@ mod tests {
 </project>"#;
 
         let entities = extract_entities_xml(source, "pom.xml", "test-repo");
-        assert_eq!(entities.len(), 1);
-        assert_eq!(entities[0].name, "org.springframework:spring-core:5.3.29");
-        assert_eq!(entities[0].kind, EntityKind::BuildDependency);
-        assert_eq!(entities[0].fqn, "org.springframework:spring-core:5.3.29");
-        assert_eq!(entities[0].repo_name, "test-repo");
+        assert_eq!(entities.len(), 2);
+
+        let proj_ids: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::ProjectIdentity)
+            .collect();
+        assert_eq!(proj_ids.len(), 1);
+        assert_eq!(proj_ids[0].name, "com.example:test-app");
+        assert_eq!(proj_ids[0].fqn, "maven:com.example:test-app");
+
+        let deps: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::BuildDependency)
+            .collect();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, "org.springframework:spring-core:5.3.29");
+        assert_eq!(deps[0].kind, EntityKind::BuildDependency);
+        assert_eq!(deps[0].fqn, "org.springframework:spring-core:5.3.29");
+        assert_eq!(deps[0].repo_name, "test-repo");
         assert!(
-            entities[0]
+            deps[0]
                 .docstring
                 .as_ref()
                 .unwrap()
@@ -298,5 +334,66 @@ mod tests {
         let entities = extract_entities_xml(source, "pom.xml", "test-repo");
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].name, "com.example:managed-lib:unknown");
+    }
+
+    #[test]
+    fn test_extract_maven_project_identity() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>my-app</artifactId>
+    <version>2.0.1</version>
+</project>"#;
+
+        let entities = extract_entities_xml(source, "pom.xml", "test-repo");
+        let proj_ids: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::ProjectIdentity)
+            .collect();
+        assert_eq!(proj_ids.len(), 1);
+        assert_eq!(proj_ids[0].name, "com.example:my-app");
+        assert_eq!(proj_ids[0].fqn, "maven:com.example:my-app");
+        assert!(
+            proj_ids[0]
+                .signature
+                .as_ref()
+                .unwrap()
+                .contains("build_system: maven")
+        );
+    }
+
+    #[test]
+    fn test_extract_maven_project_identity_with_dependencies() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <groupId>com.example</groupId>
+    <artifactId>test-app</artifactId>
+    <version>1.0.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
+            <version>5.3.29</version>
+        </dependency>
+    </dependencies>
+</project>"#;
+
+        let entities = extract_entities_xml(source, "pom.xml", "test-repo");
+        // Should have 1 ProjectIdentity + 1 BuildDependency
+        assert_eq!(entities.len(), 2);
+
+        let proj_ids: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::ProjectIdentity)
+            .collect();
+        assert_eq!(proj_ids.len(), 1);
+        assert_eq!(proj_ids[0].name, "com.example:test-app");
+
+        let deps: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::BuildDependency)
+            .collect();
+        assert_eq!(deps.len(), 1);
     }
 }

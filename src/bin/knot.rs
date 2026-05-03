@@ -100,6 +100,24 @@ enum Commands {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
     },
+
+    /// Show dependency graph for a repository (forward and reverse DEPENDS_ON edges)
+    Deps {
+        /// Repository name to show dependencies for
+        repo_name: String,
+
+        /// Maximum depth for transitive dependencies (default: 3)
+        #[arg(short, long, default_value = "3")]
+        depth: u32,
+
+        /// Show reverse dependencies (who depends on this repo)
+        #[arg(long)]
+        reverse: bool,
+
+        /// Output format (default: table)
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
 }
 
 fn format_output(json_value: serde_json::Value, output_format: OutputFormat) -> String {
@@ -206,6 +224,28 @@ async fn main() -> anyhow::Result<()> {
                 cli_tools::run_explore_file(&file_path, Some(target_repo), &graph_db).await?;
             let formatted = format_explore_output(&fp, json_result, output);
             print_with_pager(&formatted);
+        }
+
+        Commands::Deps {
+            repo_name,
+            depth,
+            reverse,
+            output,
+        } => {
+            let json_result = cli_tools::run_deps(&repo_name, depth, reverse, &graph_db).await?;
+            match output {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json_result).unwrap_or_default()
+                    );
+                }
+                OutputFormat::Table | OutputFormat::Markdown => {
+                    let formatted =
+                        cli_tools::format_deps_output(&repo_name, reverse, &json_result);
+                    print_with_pager(&formatted);
+                }
+            }
         }
     }
 

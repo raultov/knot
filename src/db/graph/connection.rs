@@ -35,6 +35,12 @@ impl ConnectExt for GraphDb {
             // Index on file_path for quick path-based lookups
             "CREATE INDEX entity_file_path IF NOT EXISTS \
              FOR (e:Entity) ON (e.file_path)",
+            // Repository node uniqueness constraint
+            "CREATE CONSTRAINT repo_name_unique IF NOT EXISTS \
+             FOR (r:Repository) REQUIRE r.name IS UNIQUE",
+            // Repository artifact index for cross-repo matching
+            "CREATE INDEX repo_artifact IF NOT EXISTS \
+             FOR (r:Repository) ON (r.group_id, r.artifact_id)",
         ];
 
         for stmt in &stmts {

@@ -58,6 +58,7 @@ run_test "K8s/Helm E2E" "run_k8s_helm_e2e.sh"
 run_test "Groovy E2E" "run_groovy_e2e.sh"
 run_test "Cross-Language Ref E2E" "run_cross_lang_ref_e2e.sh"
 run_test "C/C++ E2E" "run_cpp_e2e.sh"
+run_test "Cross-Repo Deps E2E" "run_cross_repo_dep_e2e.sh"
 
 # Final cleanup
 echo -e "\n${YELLOW}Final cleanup...${NC}"

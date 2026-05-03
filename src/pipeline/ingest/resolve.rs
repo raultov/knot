@@ -5,8 +5,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::db::graph::{GraphDb, UpsertExt};
-use crate::models::{ReferenceIntent, RelationshipType, ResolutionEntity};
+use crate::db::graph::{GraphDb, QueryExt, UpsertExt};
+use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEntity};
 
 /// Resolve cross-repository relationships and persist them to Neo4j.
 pub async fn resolve_and_save_relationships(
@@ -15,18 +15,27 @@ pub async fn resolve_and_save_relationships(
     cfg: &Config,
 ) -> Result<()> {
     if !entities.is_empty() {
-        // Build list of repos to include in context (current repo + dependencies)
+        // Auto-discover dependency repos from DEPENDS_ON relationships in Neo4j
+        let auto_deps = graph_db
+            .find_repo_dependencies(&cfg.repo_name, 3)
+            .await
+            .unwrap_or_default();
+
         let mut repos_to_load = vec![cfg.repo_name.clone()];
-        repos_to_load.extend(cfg.dependency_repos.clone());
+        repos_to_load.extend(cfg.dependency_repos.clone()); // manual overrides
+        repos_to_load.extend(auto_deps.clone()); // auto-discovered
+        repos_to_load.sort();
+        repos_to_load.dedup();
 
         info!("Loading global entity context from Neo4j for relationship resolution...");
         let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&repos_to_load).await?;
 
-        if !cfg.dependency_repos.is_empty() {
+        if !cfg.dependency_repos.is_empty() || !auto_deps.is_empty() {
             info!(
-                "Cross-repository resolution enabled: {} local repo(s) + {} dependency repo(s)",
+                "Cross-repository resolution enabled: {} local repo(s) + {} manual dep(s) + {} auto dep(s)",
                 1,
-                cfg.dependency_repos.len()
+                cfg.dependency_repos.len(),
+                auto_deps.len()
             );
         }
 
@@ -43,6 +52,193 @@ pub async fn resolve_and_save_relationships(
         graph_db.upsert_relationships(entities).await?;
     }
     Ok(())
+}
+
+/// Perform cross-repo dependency linking: upsert Repository nodes
+/// from ProjectIdentity entities and create DEPENDS_ON edges.
+pub async fn link_cross_repo_dependencies(
+    entities: &[ResolutionEntity],
+    graph_db: &GraphDb,
+    cfg: &Config,
+) -> Result<()> {
+    // Step 1: Find all ProjectIdentity entities and upsert Repository nodes
+    for entity in entities {
+        if entity.kind == EntityKind::ProjectIdentity {
+            let build_system = parse_build_system_from_fqn(&entity.fqn);
+            let (group_id, artifact_id) = parse_artifact_identity(&entity.fqn, build_system);
+
+            graph_db
+                .upsert_repository(
+                    &cfg.repo_name,
+                    build_system,
+                    group_id,
+                    artifact_id,
+                    parse_version_from_signature(&entity.signature),
+                )
+                .await?;
+        }
+    }
+
+    // Step 2: Match BuildDependency entities against Repository nodes
+    for entity in entities {
+        if entity.kind == EntityKind::BuildDependency
+            && let Some(matched_repo) =
+                match_dependency_to_repository(&entity.name, graph_db).await?
+            && matched_repo != cfg.repo_name
+        {
+            graph_db
+                .upsert_repo_dependency(&cfg.repo_name, &matched_repo)
+                .await?;
+            info!(
+                "Cross-repo link: '{}' -> '{}' (via build dependency: {})",
+                cfg.repo_name, matched_repo, entity.name
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_build_system_from_fqn(fqn: &str) -> &str {
+    if fqn.starts_with("maven:") {
+        "maven"
+    } else if fqn.starts_with("gradle:") {
+        "gradle"
+    } else if fqn.starts_with("cargo:") {
+        "cargo"
+    } else if fqn.starts_with("npm:") {
+        "npm"
+    } else {
+        "unknown"
+    }
+}
+
+fn parse_artifact_identity<'a>(fqn: &'a str, build_system: &str) -> (&'a str, &'a str) {
+    let prefix = format!("{}:", build_system);
+    let rest = fqn.strip_prefix(&prefix).unwrap_or(fqn);
+
+    match build_system {
+        "maven" | "gradle" => {
+            let mut parts = rest.splitn(2, ':');
+            (
+                parts.next().unwrap_or("unknown"),
+                parts.next().unwrap_or(rest),
+            )
+        }
+        "cargo" => ("", rest),
+        "npm" => {
+            if rest.starts_with('@') {
+                // Scoped package: @scope/name -> group_id = "@scope", artifact_id = "name"
+                let mut parts = rest.splitn(2, '/');
+                (
+                    parts.next().unwrap_or("unknown"),
+                    parts.next().unwrap_or(rest),
+                )
+            } else {
+                ("", rest)
+            }
+        }
+        _ => ("", rest),
+    }
+}
+
+fn parse_version_from_signature(signature: &Option<String>) -> &str {
+    signature
+        .as_deref()
+        .and_then(|s| {
+            s.strip_prefix("version: ")
+                .and_then(|v| v.split(',').next())
+        })
+        .unwrap_or("unknown")
+}
+
+async fn match_dependency_to_repository(
+    dep_name: &str,
+    graph_db: &GraphDb,
+) -> Result<Option<String>> {
+    // Maven/Gradle: groupId:artifactId:version
+    if let Some((group_id, artifact_id)) = parse_maven_style_dep(dep_name) {
+        if let Some(repo) = graph_db
+            .find_repository_by_artifact(group_id, artifact_id, "maven")
+            .await?
+        {
+            return Ok(Some(repo));
+        }
+        if let Some(repo) = graph_db
+            .find_repository_by_artifact(group_id, artifact_id, "gradle")
+            .await?
+        {
+            return Ok(Some(repo));
+        }
+    }
+
+    // Cargo: dep_name is the crate name
+    if dep_name.contains("scope: compile")
+        || dep_name.contains("scope: dev")
+        || dep_name.contains("scope: build")
+    {
+        let crate_name = dep_name.split(' ').next().unwrap_or(dep_name);
+        if let Some(repo) = graph_db
+            .find_repository_by_artifact("", crate_name, "cargo")
+            .await?
+        {
+            return Ok(Some(repo));
+        }
+    }
+
+    // npm: dep_name could be "npm:name:version"
+    if let Some(pkg) = dep_name.strip_prefix("npm:") {
+        let name = pkg.split(':').next().unwrap_or(pkg);
+        let (group_id, artifact_id) = if name.starts_with('@') {
+            let mut parts = name.splitn(2, '/');
+            (
+                parts.next().unwrap_or("unknown"),
+                parts.next().unwrap_or(name),
+            )
+        } else {
+            ("", name)
+        };
+        if let Some(repo) = graph_db
+            .find_repository_by_artifact(group_id, artifact_id, "npm")
+            .await?
+        {
+            return Ok(Some(repo));
+        }
+    }
+
+    // Helm: dep_name could be "helm:chart_name:version"
+    if let Some(chart) = dep_name.strip_prefix("helm:") {
+        let name = chart.split(':').next().unwrap_or(chart);
+        // Helm charts might be matched by artifact_id
+        if let Some(repo) = graph_db
+            .find_repository_by_artifact("", name, "helm")
+            .await?
+        {
+            return Ok(Some(repo));
+        }
+    }
+
+    Ok(None)
+}
+
+fn parse_maven_style_dep(dep_name: &str) -> Option<(&str, &str)> {
+    let after_prefix = if let Some(colon_idx) = dep_name.find(':') {
+        let prefix = &dep_name[..colon_idx];
+        if prefix.contains('.') {
+            dep_name
+        } else {
+            &dep_name[colon_idx + 1..]
+        }
+    } else {
+        dep_name
+    };
+
+    let parts: Vec<&str> = after_prefix.split(':').collect();
+    if parts.len() >= 2 {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
 }
 
 fn count_params_from_signature(sig: &str) -> Option<usize> {
@@ -462,6 +658,7 @@ mod tests {
             name: name.to_string(),
             fqn: fqn.to_string(),
             file_path: "test/file.java".to_string(),
+            kind: EntityKind::Method,
             enclosing_class: enclosing.map(|s| s.to_string()),
             signature: None,
             reference_intents: Vec::new(),
@@ -614,6 +811,7 @@ mod tests {
         // Create the two target functions with identical names
         let orphans_fn = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Function,
             name: "find_nearest_entity_by_line".to_string(),
             fqn: "knot::pipeline::parser::orphans::find_nearest_entity_by_line".to_string(),
             file_path: "src/pipeline/parser/orphans.rs".to_string(),
@@ -625,6 +823,7 @@ mod tests {
 
         let rust_fn = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Function,
             name: "find_nearest_entity_by_line".to_string(),
             fqn: "knot::pipeline::parser::languages::rust::find_nearest_entity_by_line".to_string(),
             file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
@@ -637,6 +836,7 @@ mod tests {
         // Create a caller function in rust.rs that calls find_nearest_entity_by_line
         let rust_caller = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Function,
             name: "collect_rust_type_references".to_string(),
             fqn: "knot::pipeline::parser::languages::rust::collect_rust_type_references"
                 .to_string(),
@@ -655,6 +855,7 @@ mod tests {
         // Create a caller function in orphans.rs that calls find_nearest_entity_by_line
         let orphans_caller = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Function,
             name: "collect_orphaned_references".to_string(),
             fqn: "knot::pipeline::parser::orphans::collect_orphaned_references".to_string(),
             file_path: "src/pipeline/parser/orphans.rs".to_string(),
@@ -710,6 +911,7 @@ mod tests {
 
         let animal_speak = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Class,
             name: "Animal".to_string(),
             fqn: "Animal".to_string(),
             file_path: "animals.py".to_string(),
@@ -720,6 +922,7 @@ mod tests {
         };
         let animal_speak_method = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
             name: "speak".to_string(),
             fqn: "Animal.speak".to_string(),
             file_path: "animals.py".to_string(),
@@ -731,6 +934,7 @@ mod tests {
 
         let dog_class = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Class,
             name: "Dog".to_string(),
             fqn: "Dog".to_string(),
             file_path: "animals.py".to_string(),
@@ -744,6 +948,7 @@ mod tests {
         };
         let dog_compute = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
             name: "compute".to_string(),
             fqn: "Dog.compute".to_string(),
             file_path: "animals.py".to_string(),
@@ -780,6 +985,7 @@ mod tests {
         // Module-level function (simulates lora.py:load_lora)
         let module_func = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Function,
             name: "do_thing".to_string(),
             fqn: "do_thing".to_string(),
             file_path: "lora.py".to_string(),
@@ -792,6 +998,7 @@ mod tests {
         // Class with method of same name
         let my_class = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Class,
             name: "MyLoader".to_string(),
             fqn: "MyLoader".to_string(),
             file_path: "nodes.py".to_string(),
@@ -803,6 +1010,7 @@ mod tests {
         // Class method with same name as module function (different file, different FQN)
         let class_method = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
             name: "do_thing".to_string(),
             fqn: "MyLoader.do_thing".to_string(),
             file_path: "nodes.py".to_string(),
@@ -814,6 +1022,7 @@ mod tests {
         // Another method in same class calling self.do_thing()
         let caller_method = ResolutionEntity {
             uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
             name: "caller".to_string(),
             fqn: "MyLoader.caller".to_string(),
             file_path: "nodes.py".to_string(),
@@ -946,5 +1155,92 @@ mod tests {
                 (callee_uuid, RelationshipType::References)
             );
         }
+    }
+
+    #[test]
+    fn test_parse_build_system_maven() {
+        assert_eq!(
+            parse_build_system_from_fqn("maven:com.example:app"),
+            "maven"
+        );
+    }
+
+    #[test]
+    fn test_parse_build_system_cargo() {
+        assert_eq!(parse_build_system_from_fqn("cargo:my-crate"), "cargo");
+    }
+
+    #[test]
+    fn test_parse_build_system_npm() {
+        assert_eq!(parse_build_system_from_fqn("npm:@scope/package"), "npm");
+    }
+
+    #[test]
+    fn test_parse_build_system_gradle() {
+        assert_eq!(
+            parse_build_system_from_fqn("gradle:com.example:app"),
+            "gradle"
+        );
+    }
+
+    #[test]
+    fn test_parse_artifact_identity_maven() {
+        let (gid, aid) = parse_artifact_identity("maven:com.example:my-app", "maven");
+        assert_eq!(gid, "com.example");
+        assert_eq!(aid, "my-app");
+    }
+
+    #[test]
+    fn test_parse_artifact_identity_cargo() {
+        let (gid, aid) = parse_artifact_identity("cargo:my-crate", "cargo");
+        assert_eq!(gid, "");
+        assert_eq!(aid, "my-crate");
+    }
+
+    #[test]
+    fn test_parse_artifact_identity_npm_scoped() {
+        let (gid, aid) = parse_artifact_identity("npm:@scope/my-pkg", "npm");
+        assert_eq!(gid, "@scope");
+        assert_eq!(aid, "my-pkg");
+    }
+
+    #[test]
+    fn test_parse_artifact_identity_npm_unscoped() {
+        let (gid, aid) = parse_artifact_identity("npm:my-pkg", "npm");
+        assert_eq!(gid, "");
+        assert_eq!(aid, "my-pkg");
+    }
+
+    #[test]
+    fn test_parse_version_from_signature() {
+        assert_eq!(
+            parse_version_from_signature(&Some("version: 1.0.0, build_system: maven".to_string())),
+            "1.0.0"
+        );
+    }
+
+    #[test]
+    fn test_parse_version_from_signature_none() {
+        assert_eq!(parse_version_from_signature(&None), "unknown");
+    }
+
+    #[test]
+    fn test_parse_maven_style_dep_standard() {
+        let result = parse_maven_style_dep("org.springframework:spring-core:5.3.29");
+        assert_eq!(result, Some(("org.springframework", "spring-core")));
+    }
+
+    #[test]
+    fn test_parse_maven_style_dep_with_config() {
+        let result = parse_maven_style_dep("implementation:org.springframework:spring-core:5.3.29");
+        // Result should extract the groupId:artifactId from the dep
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, "org.springframework");
+    }
+
+    #[test]
+    fn test_parse_maven_style_dep_short() {
+        let result = parse_maven_style_dep("com.example:my-lib");
+        assert_eq!(result, Some(("com.example", "my-lib")));
     }
 }

@@ -17,6 +17,15 @@ pub trait UpsertExt {
     async fn upsert_entities(&self, entities: &[EmbeddedEntity]) -> Result<()>;
     async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()>;
     async fn upsert_calls(&self, entities: &[EmbeddedEntity]) -> Result<()>;
+    async fn upsert_repository(
+        &self,
+        repo_name: &str,
+        build_system: &str,
+        group_id: &str,
+        artifact_id: &str,
+        version: &str,
+    ) -> Result<()>;
+    async fn upsert_repo_dependency(&self, from_repo: &str, to_repo: &str) -> Result<()>;
 }
 
 impl UpsertExt for GraphDb {
@@ -261,6 +270,63 @@ impl UpsertExt for GraphDb {
             .context("Failed to create CALLS relationships in Neo4j")?;
 
         info!("Created {edge_count} CALLS relationships in Neo4j");
+        Ok(())
+    }
+
+    /// Create or update a Repository node with project identity metadata.
+    async fn upsert_repository(
+        &self,
+        repo_name: &str,
+        build_system: &str,
+        group_id: &str,
+        artifact_id: &str,
+        version: &str,
+    ) -> Result<()> {
+        info!(
+            "Upserting :Repository node for '{repo_name}' ({build_system}: {group_id}:{artifact_id} v{version})"
+        );
+
+        self.graph
+            .run(
+                query(
+                    "MERGE (r:Repository {name: $repo_name})
+                     SET r.build_system = $build_system,
+                         r.group_id = $group_id,
+                         r.artifact_id = $artifact_id,
+                         r.version = $version,
+                         r.indexed_at = datetime()",
+                )
+                .param("repo_name", repo_name)
+                .param("build_system", build_system)
+                .param("group_id", group_id)
+                .param("artifact_id", artifact_id)
+                .param("version", version),
+            )
+            .await
+            .context("Failed to upsert :Repository node")?;
+
+        info!("Upserted :Repository node for '{repo_name}'");
+        Ok(())
+    }
+
+    /// Create a DEPENDS_ON relationship between two repositories.
+    async fn upsert_repo_dependency(&self, from_repo: &str, to_repo: &str) -> Result<()> {
+        self.graph
+            .run(
+                query(
+                    "MATCH (from:Repository {name: $from_repo})
+                     MATCH (to:Repository {name: $to_repo})
+                     MERGE (from)-[:DEPENDS_ON]->(to)",
+                )
+                .param("from_repo", from_repo)
+                .param("to_repo", to_repo),
+            )
+            .await
+            .context(format!(
+                "Failed to create DEPENDS_ON relationship from '{from_repo}' to '{to_repo}'"
+            ))?;
+
+        info!("Created DEPENDS_ON: {from_repo} -> {to_repo}");
         Ok(())
     }
 }

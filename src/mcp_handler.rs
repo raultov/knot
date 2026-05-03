@@ -17,6 +17,7 @@ use crate::db::{
 };
 use crate::mcp_tools::{
     explore_file::ExploreFileTool, find_callers::FindCallersTool,
+    list_repo_dependencies::ListRepoDependenciesTool,
     search_hybrid_context::SearchHybridContextTool,
 };
 use crate::pipeline::embed::Embedder;
@@ -82,6 +83,7 @@ impl ServerHandler for KnotMcpHandler {
                 SearchHybridContextTool::tool(),
                 FindCallersTool::tool(),
                 ExploreFileTool::tool(),
+                ListRepoDependenciesTool::tool(),
             ],
             meta: None,
             next_cursor: None,
@@ -106,6 +108,7 @@ impl ServerHandler for KnotMcpHandler {
             "search_hybrid_context" => SearchHybridContextTool::handle(params, self).await,
             "find_callers" => FindCallersTool::handle(params, self).await,
             "explore_file" => ExploreFileTool::handle(params, self).await,
+            "list_repo_dependencies" => ListRepoDependenciesTool::handle(params, self).await,
             _ => Err(CallToolError::unknown_tool(params.name)),
         }
     }

@@ -9,6 +9,6 @@ mod resolve;
 
 pub use batch::ingest_batch;
 pub use resolve::{
-    resolve_and_save_relationships, resolve_reference_intents,
+    link_cross_repo_dependencies, resolve_and_save_relationships, resolve_reference_intents,
     resolve_reference_intents_with_context,
 };

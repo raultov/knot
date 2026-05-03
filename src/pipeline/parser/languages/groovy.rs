@@ -784,6 +784,32 @@ pub(crate) fn extract_entities_groovy(
 ) -> Vec<ParsedEntity> {
     let mut entities = Vec::new();
 
+    // Extract Gradle project identity for cross-repo linking
+    if file_path.ends_with("build.gradle") || file_path.ends_with("build.gradle.kts") {
+        let group_id = extract_gradle_group(source).unwrap_or_else(|| "unknown".to_string());
+        let artifact_id =
+            extract_gradle_artifact_name(file_path).unwrap_or_else(|| "unknown".to_string());
+        let version = extract_gradle_version(source).unwrap_or_else(|| "unknown".to_string());
+
+        let fqn = format!("gradle:{}:{}", group_id, artifact_id);
+        entities.push(crate::models::ParsedEntity::new(
+            format!("{}:{}", group_id, artifact_id),
+            EntityKind::ProjectIdentity,
+            &fqn,
+            Some(format!("version: {}, build_system: gradle", version)),
+            Some(format!(
+                "Gradle project identity: {}:{}",
+                group_id, artifact_id
+            )),
+            "groovy",
+            file_path,
+            1,
+            1,
+            None,
+            repo_name,
+        ));
+    }
+
     for (line_idx, line) in source.lines().enumerate() {
         let line_num = line_idx + 1;
         let trimmed = line.trim();
@@ -883,6 +909,45 @@ pub(crate) fn extract_entities_groovy(
     }
 
     entities
+}
+
+fn extract_gradle_group(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("group")
+            && let Some(after_keyword) = trimmed.strip_prefix("group")
+        {
+            let rest = after_keyword.trim_start_matches([' ', '=']).trim();
+            if let Some(quoted) = extract_single_quoted(rest) {
+                return Some(quoted);
+            }
+        }
+    }
+    None
+}
+
+fn extract_gradle_version(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("version")
+            && let Some(after_keyword) = trimmed.strip_prefix("version")
+        {
+            let rest = after_keyword.trim_start_matches([' ', '=']).trim();
+            if let Some(quoted) = extract_single_quoted(rest) {
+                return Some(quoted);
+            }
+        }
+    }
+    None
+}
+
+fn extract_gradle_artifact_name(file_path: &str) -> Option<String> {
+    use std::path::Path;
+    let path = Path::new(file_path);
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
 }
 
 fn try_extract_gradle_dependency(line: &str) -> Option<String> {
@@ -1110,7 +1175,13 @@ task myTask {
 }"#;
         let entities = extract_entities_groovy(source, "build.gradle", "test-repo");
 
-        assert_eq!(entities.len(), 4);
+        assert_eq!(entities.len(), 5);
+
+        // Project identity
+        let proj_id = entities
+            .iter()
+            .find(|e| e.kind == EntityKind::ProjectIdentity);
+        assert!(proj_id.is_some());
 
         // Plugin
         let plugin = entities.iter().find(|e| e.kind == EntityKind::BuildPlugin);
@@ -1131,6 +1202,59 @@ task myTask {
 
         // Repo name preserved
         assert!(entities.iter().all(|e| e.repo_name == "test-repo"));
+    }
+
+    #[test]
+    fn test_gradle_project_identity_extraction() {
+        let source = r#"group = 'com.example'
+version = '1.0.0'
+plugins {
+    id 'java'
+}
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web:2.7.14'
+}"#;
+        let entities = extract_entities_groovy(source, "/tmp/my-app/build.gradle", "test-repo");
+
+        let proj_ids: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::ProjectIdentity)
+            .collect();
+        assert_eq!(proj_ids.len(), 1);
+        assert_eq!(proj_ids[0].name, "com.example:my-app");
+        assert_eq!(proj_ids[0].fqn, "gradle:com.example:my-app");
+        assert!(
+            proj_ids[0]
+                .signature
+                .as_ref()
+                .unwrap()
+                .contains("build_system: gradle")
+        );
+        assert!(
+            proj_ids[0]
+                .signature
+                .as_ref()
+                .unwrap()
+                .contains("version: 1.0.0")
+        );
+    }
+
+    #[test]
+    fn test_gradle_project_identity_group_with_equals() {
+        let source = r#"group='com.acme'
+version='2.5.0'
+dependencies {
+    implementation 'com.example:dep:1.0'
+}"#;
+        let entities = extract_entities_groovy(source, "/tmp/acme-lib/build.gradle", "test-repo");
+
+        let proj_ids: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::ProjectIdentity)
+            .collect();
+        assert_eq!(proj_ids.len(), 1);
+        assert_eq!(proj_ids[0].name, "com.acme:acme-lib");
+        assert_eq!(proj_ids[0].fqn, "gradle:com.acme:acme-lib");
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::pipeline::{
         calculate_files_to_delete, calculate_files_to_parse, classify_files_for_indexing,
         update_index_state,
     },
-    ingest::{ingest_batch, resolve_and_save_relationships},
+    ingest::{ingest_batch, link_cross_repo_dependencies, resolve_and_save_relationships},
     input::discover_files,
     parser::{ParseConfig, parse_files_stream},
     prepare::prepare_entities,
@@ -233,6 +233,11 @@ pub async fn run_indexing_pipeline(
         // The ingest task drops res_tx on exit, which closes the channel
         // and causes res_handle to finish naturally.
         let mut resolution_entities = res_handle.await?;
+
+        // Cross-repo dependency linking: upsert Repository nodes and create DEPENDS_ON edges.
+        // Must run BEFORE relationship resolution so that auto-discovered dependencies
+        // are available for cross-repo call resolution.
+        link_cross_repo_dependencies(&resolution_entities, graph_db, cfg).await?;
 
         resolve_and_save_relationships(&mut resolution_entities, graph_db, cfg).await?;
 

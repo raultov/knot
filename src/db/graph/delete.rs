@@ -9,6 +9,7 @@ use super::GraphDb;
 pub trait DeleteExt {
     async fn delete_by_repo(&self, repo_name: &str) -> Result<()>;
     async fn delete_by_file_paths(&self, repo_name: &str, file_paths: &[String]) -> Result<()>;
+    async fn delete_repository(&self, repo_name: &str) -> Result<()>;
 }
 
 impl DeleteExt for GraphDb {
@@ -62,6 +63,27 @@ impl DeleteExt for GraphDb {
             )
             .await
             .context("Failed to delete Neo4j nodes by file paths")?;
+
+        Ok(())
+    }
+
+    /// Delete a Repository node and its DEPENDS_ON edges when a repo is cleaned.
+    async fn delete_repository(&self, repo_name: &str) -> Result<()> {
+        warn!(
+            "Deleting :Repository node for repo '{}' from Neo4j",
+            repo_name
+        );
+
+        self.graph
+            .run(
+                query(
+                    "MATCH (r:Repository {name: $repo_name})
+                     DETACH DELETE r",
+                )
+                .param("repo_name", repo_name),
+            )
+            .await
+            .context("Failed to delete :Repository node")?;
 
         Ok(())
     }
