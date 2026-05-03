@@ -81,6 +81,26 @@ pub enum EntityKind {
     GroovyFunction,  // top-level methods/closures in scripts
     GroovyEnum,      // enum declarations
     GroovyProperty,  // fields/variables
+    // Cargo (Rust build system)
+    CargoPackage,    // [package] metadata (name, version, edition)
+    CargoFeature,    // [features] flag definitions
+    WorkspaceMember, // [workspace.members] entries
+    // Configuration entities
+    ConfigProperty, // key=value leaf in .properties, YAML, or JSON config files
+    // Kubernetes entities
+    K8sDeployment, // kind: Deployment
+    K8sService,    // kind: Service
+    K8sConfigMap,  // kind: ConfigMap
+    K8sSecret,     // kind: Secret
+    K8sIngress,    // kind: Ingress
+    K8sNamespace,  // kind: Namespace
+    K8sResource,   // Catch-all for other K8s kinds
+    // Helm entities
+    HelmChart,       // Chart.yaml metadata
+    HelmValue,       // values.yaml key-value pairs
+    HelmTemplateVar, // {{ .Values.x }} template variable usage
+    // Cross-repo linking
+    ProjectIdentity, // Build file project declaration (Maven GAV, Cargo package, npm name)
 }
 
 impl std::fmt::Display for EntityKind {
@@ -144,6 +164,21 @@ impl std::fmt::Display for EntityKind {
             EntityKind::CppMethod => "cpp_method",
             EntityKind::CppNamespace => "cpp_namespace",
             EntityKind::MacroDefinition => "macro_definition",
+            EntityKind::CargoPackage => "cargo_package",
+            EntityKind::CargoFeature => "cargo_feature",
+            EntityKind::WorkspaceMember => "workspace_member",
+            EntityKind::ConfigProperty => "config_property",
+            EntityKind::K8sDeployment => "k8s_deployment",
+            EntityKind::K8sService => "k8s_service",
+            EntityKind::K8sConfigMap => "k8s_configmap",
+            EntityKind::K8sSecret => "k8s_secret",
+            EntityKind::K8sIngress => "k8s_ingress",
+            EntityKind::K8sNamespace => "k8s_namespace",
+            EntityKind::K8sResource => "k8s_resource",
+            EntityKind::HelmChart => "helm_chart",
+            EntityKind::HelmValue => "helm_value",
+            EntityKind::HelmTemplateVar => "helm_template_var",
+            EntityKind::ProjectIdentity => "project_identity",
         };
         write!(f, "{s}")
     }
