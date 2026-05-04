@@ -58,6 +58,9 @@ pub struct ParseConfig {
     pub custom_queries_path: Option<String>,
     /// Logical repository name for multi-repository isolation.
     pub repo_name: String,
+    /// Whether to index configuration files (YAML, JSON, .properties) and
+    /// Kubernetes/Helm manifests. When `false`, these files produce no entities.
+    pub include_config_files: bool,
 }
 
 /// Parse a collection of source files in parallel and send results through a channel.
@@ -266,25 +269,50 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )
         }
-        "yml" | "yaml" => dispatch_yaml(&source, &file_path, &parse_cfg.repo_name),
-        "json" => languages::json_config::extract_entities_json_config(
-            &source,
-            &file_path,
-            &parse_cfg.repo_name,
-        ),
-        "properties" => languages::properties::extract_entities_properties(
-            &source,
-            &file_path,
-            &parse_cfg.repo_name,
-        ),
+        "yml" | "yaml" => {
+            if !parse_cfg.include_config_files {
+                Vec::new()
+            } else {
+                dispatch_yaml(&source, &file_path, &parse_cfg.repo_name)
+            }
+        }
+        "json" => {
+            if !parse_cfg.include_config_files
+                && filename != "package.json"
+                && filename != "tsconfig.json"
+            {
+                Vec::new()
+            } else {
+                languages::json_config::extract_entities_json_config(
+                    &source,
+                    &file_path,
+                    &parse_cfg.repo_name,
+                )
+            }
+        }
+        "properties" => {
+            if !parse_cfg.include_config_files {
+                Vec::new()
+            } else {
+                languages::properties::extract_entities_properties(
+                    &source,
+                    &file_path,
+                    &parse_cfg.repo_name,
+                )
+            }
+        }
         "tpl" => {
-            let chart_name = detect_chart_name(&file_path);
-            languages::helm::extract_helm_template(
-                &source,
-                &file_path,
-                &parse_cfg.repo_name,
-                &chart_name,
-            )
+            if !parse_cfg.include_config_files {
+                Vec::new()
+            } else {
+                let chart_name = detect_chart_name(&file_path);
+                languages::helm::extract_helm_template(
+                    &source,
+                    &file_path,
+                    &parse_cfg.repo_name,
+                    &chart_name,
+                )
+            }
         }
         "css" => {
             let query_src = load_query_source("css.scm", DEFAULT_CSS_QUERY, parse_cfg);
@@ -523,6 +551,7 @@ mod tests {
         let cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
+            include_config_files: true,
         };
 
         assert_eq!(cfg.repo_name, "test-repo");
@@ -534,6 +563,7 @@ mod tests {
         let cfg = ParseConfig {
             custom_queries_path: Some("/custom/queries".to_string()),
             repo_name: "my-repo".to_string(),
+            include_config_files: true,
         };
 
         assert_eq!(cfg.repo_name, "my-repo");
@@ -545,6 +575,7 @@ mod tests {
         let cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
+            include_config_files: true,
         };
 
         let default_query = "MATCH (n) RETURN n";
@@ -556,8 +587,9 @@ mod tests {
     #[test]
     fn test_load_query_source_nonexistent_custom_path() {
         let cfg = ParseConfig {
-            custom_queries_path: Some("/nonexistent/path".to_string()),
+            custom_queries_path: None,
             repo_name: "test-repo".to_string(),
+            include_config_files: true,
         };
 
         let default_query = "MATCH (n) RETURN n";
@@ -572,6 +604,7 @@ mod tests {
         let cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
+            include_config_files: true,
         };
 
         let files: Vec<PathBuf> = vec![];
@@ -588,6 +621,7 @@ mod tests {
         let cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
+            include_config_files: true,
         };
 
         // Use an empty list since we can't create real files in unit tests
@@ -740,6 +774,7 @@ int bar(const char *s);
         let cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: "myproject".to_string(),
+            include_config_files: true,
         };
 
         let path = PathBuf::from("/src/Main.java");
@@ -755,6 +790,7 @@ int bar(const char *s);
         let cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
+            include_config_files: true,
         };
 
         let files: Vec<PathBuf> = vec![];

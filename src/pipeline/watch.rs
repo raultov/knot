@@ -33,6 +33,7 @@ pub async fn setup_watch_mode(
     let (tx, mut rx) = mpsc::channel::<Vec<PathBuf>>(100);
 
     // Setup debounced filesystem watcher
+    let include_cf = cfg.include_config_files;
     let mut debouncer = notify_debouncer_mini::new_debouncer(
         std::time::Duration::from_millis(500),
         move |res: notify_debouncer_mini::DebounceEventResult| {
@@ -41,7 +42,7 @@ pub async fn setup_watch_mode(
                 let paths: Vec<PathBuf> = events
                     .into_iter()
                     .map(|e| e.path)
-                    .filter(|p| is_supported_file(p))
+                    .filter(|p| is_supported_file(p, include_cf))
                     .collect();
 
                 // Only send if we found at least one supported file
@@ -139,21 +140,21 @@ mod tests {
 
     #[test]
     fn test_watch_supported_files() {
-        assert!(is_supported_file(Path::new("test.java")));
-        assert!(is_supported_file(Path::new("test.ts")));
-        assert!(is_supported_file(Path::new("test.tsx")));
-        assert!(is_supported_file(Path::new("test.cts")));
-        assert!(is_supported_file(Path::new("test.kt")));
-        assert!(is_supported_file(Path::new("test.kts")));
-        assert!(is_supported_file(Path::new("test.html")));
-        assert!(is_supported_file(Path::new("test.css")));
-        assert!(is_supported_file(Path::new("test.scss")));
-        assert!(is_supported_file(Path::new("test.rs")));
+        assert!(is_supported_file(Path::new("test.java"), true));
+        assert!(is_supported_file(Path::new("test.ts"), true));
+        assert!(is_supported_file(Path::new("test.tsx"), true));
+        assert!(is_supported_file(Path::new("test.cts"), true));
+        assert!(is_supported_file(Path::new("test.kt"), true));
+        assert!(is_supported_file(Path::new("test.kts"), true));
+        assert!(is_supported_file(Path::new("test.html"), true));
+        assert!(is_supported_file(Path::new("test.css"), true));
+        assert!(is_supported_file(Path::new("test.scss"), true));
+        assert!(is_supported_file(Path::new("test.rs"), true));
 
-        assert!(!is_supported_file(Path::new("test.txt")));
-        assert!(is_supported_file(Path::new("test.py")));
-        assert!(is_supported_file(Path::new("test.pyi")));
-        assert!(is_supported_file(Path::new("test.pyw")));
+        assert!(!is_supported_file(Path::new("test.txt"), true));
+        assert!(is_supported_file(Path::new("test.py"), true));
+        assert!(is_supported_file(Path::new("test.pyi"), true));
+        assert!(is_supported_file(Path::new("test.pyw"), true));
     }
 
     #[test]
@@ -223,7 +224,7 @@ mod tests {
 
         for filename in supported {
             assert!(
-                is_supported_file(Path::new(filename)),
+                is_supported_file(Path::new(filename), true),
                 "File {} should be supported",
                 filename
             );
@@ -245,7 +246,7 @@ mod tests {
 
         for filename in unsupported {
             assert!(
-                !is_supported_file(Path::new(filename)),
+                !is_supported_file(Path::new(filename), true),
                 "File {} should not be supported",
                 filename
             );
@@ -264,7 +265,7 @@ mod tests {
 
         for path in supported_paths {
             assert!(
-                is_supported_file(Path::new(path)),
+                is_supported_file(Path::new(path), true),
                 "Path {} should be supported",
                 path
             );
@@ -298,8 +299,8 @@ mod tests {
     fn test_supported_files_case_sensitivity() {
         // Test that file extension matching is case-sensitive
         // (as per Rust's default behavior)
-        assert!(is_supported_file(Path::new("file.ts")));
+        assert!(is_supported_file(Path::new("file.ts"), true));
         // .TS (uppercase) should not be supported as is_supported_file uses lowercase matching
-        assert!(!is_supported_file(Path::new("file.TS")));
+        assert!(!is_supported_file(Path::new("file.TS"), true));
     }
 }

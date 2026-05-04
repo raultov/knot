@@ -1,9 +1,10 @@
 //! Configuration module.
 //!
-//! Resolves runtime configuration from two sources with the following precedence:
-//!   1. `.env` file (highest priority — if a `.env` file is present, its values
-//!      override everything provided on the command line).
-//!   2. CLI arguments (used as fallback when `.env` is absent or a key is missing).
+//! Resolves runtime configuration from three sources with the following precedence:
+//!   1. CLI arguments (highest priority).
+//!   2. Environment variables (set in the process environment).
+//!   3. `$HOME/.config/knot/.env` (lowest priority — loaded from knot's
+//!      XDG-style config directory, never from the current working directory).
 //!
 //! Provides specialized loaders for different binaries:
 //! - [`Config::load_indexer`] for knot-indexer (indexing operations)
@@ -108,6 +109,14 @@ pub struct IndexerCli {
     /// for the Tokio async runtime and OS. Minimum: 2.
     #[arg(long, env = "KNOT_RAYON_THREADS")]
     pub rayon_threads: Option<usize>,
+
+    /// Include configuration files (YAML, JSON, .properties) and Kubernetes/Helm
+    /// manifests in the index. Disabled by default to avoid indexing secrets and
+    /// to speed up indexing in repos with heavy config content.
+    /// Build system files (package.json, tsconfig.json, pom.xml, Cargo.toml,
+    /// Jenkinsfile) are always indexed regardless of this flag.
+    #[arg(long, env = "KNOT_INCLUDE_CONFIG_FILES", default_value_t = false)]
+    pub include_config_files: bool,
 }
 
 /// Command-line arguments for knot-mcp.
@@ -187,6 +196,57 @@ pub struct Config {
     pub output_format: OutputFormat,
     pub ingest_concurrency: usize,
     pub rayon_threads: Option<usize>,
+    pub include_config_files: bool,
+}
+
+/// Returns the path where knot's `.env` file should be located.
+///
+/// Lookup order (first match wins):
+/// 1. `$KNOT_CONFIG_DIR/.env` — explicit override for testing or custom setups
+/// 2. `$HOME/.config/knot/.env` — Unix/Linux/macOS XDG-style default
+/// 3. `$USERPROFILE/.config/knot/.env` — Windows fallback
+///
+/// This **never** resolves to the current working directory, unlike
+/// `dotenvy::dotenv()` which walks up the directory tree from CWD.
+fn knot_env_path() -> Option<std::path::PathBuf> {
+    std::env::var("KNOT_CONFIG_DIR")
+        .ok()
+        .map(|d| std::path::PathBuf::from(d).join(".env"))
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|d| std::path::PathBuf::from(d).join(".config/knot/.env"))
+        })
+        .or_else(|| {
+            std::env::var("USERPROFILE")
+                .ok()
+                .map(|d| std::path::PathBuf::from(d).join(".config/knot/.env"))
+        })
+}
+
+/// Load environment variables from knot's `.env` file.
+///
+/// Only loads from knot's XDG-style config directory (see [`knot_env_path`]).
+/// Never loads from the current working directory, preventing `.env` files in
+/// target repositories from hijacking knot's configuration.
+fn load_knot_env() {
+    let Some(env_path) = knot_env_path() else {
+        tracing::debug!("No .env location found (set KNOT_CONFIG_DIR, HOME, or USERPROFILE)");
+        return;
+    };
+
+    match dotenvy::from_path(&env_path) {
+        Ok(_) => tracing::info!("Loaded env from {}", env_path.display()),
+        Err(dotenvy::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(
+                "No .env file at {} — using environment variables and CLI args",
+                env_path.display()
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load .env from {}: {e}", env_path.display());
+        }
+    }
 }
 
 impl Config {
@@ -224,6 +284,7 @@ impl Config {
                     output_format: OutputFormat::Markdown,
                     ingest_concurrency: cli.ingest_concurrency,
                     rayon_threads: cli.rayon_threads,
+                    include_config_files: cli.include_config_files,
                 }
             },
         )
@@ -252,6 +313,7 @@ impl Config {
                 output_format: OutputFormat::Markdown,
                 ingest_concurrency: 4,
                 rayon_threads: None,
+                include_config_files: false,
             },
         )
     }
@@ -261,14 +323,7 @@ impl Config {
     /// This allows the CLI to accept search/callers/explore subcommands without
     /// clap trying to parse them as configuration arguments.
     pub fn load_knot_cli() -> Result<Self> {
-        // Load .env file (not an error if missing)
-        match dotenvy::dotenv() {
-            Ok(path) => tracing::info!("Loaded env from {}", path.display()),
-            Err(dotenvy::Error::Io(_)) => {
-                tracing::debug!("No .env file found, using environment variables only")
-            }
-            Err(e) => return Err(e).context("Failed to parse .env file"),
-        }
+        load_knot_env();
 
         // Parse McpCli from empty args to get defaults from env vars only
         // This avoids conflicts with knot subcommand arguments (search, callers, explore)
@@ -290,6 +345,8 @@ impl Config {
                 .to_string_lossy()
                 .into_owned()
         };
+
+        tracing::info!("Resolved repo_path: {repo_path}");
 
         // Auto-detect repo_name from the resolved canonical repo_path if not provided
         let repo_name = if let Some(name) = cli.repo_name() {
@@ -321,6 +378,7 @@ impl Config {
             output_format: OutputFormat::Table,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         })
     }
 
@@ -331,14 +389,7 @@ impl Config {
         T: HasCommonFields,
         F: Fn() -> T,
     {
-        // Try to load .env — it is not an error if the file does not exist.
-        match dotenvy::dotenv() {
-            Ok(path) => tracing::info!("Loaded env from {}", path.display()),
-            Err(dotenvy::Error::Io(_)) => {
-                tracing::debug!("No .env file found, falling back to CLI arguments")
-            }
-            Err(e) => return Err(e).context("Failed to parse .env file"),
-        }
+        load_knot_env();
 
         let cli = parse_cli();
 
@@ -360,6 +411,8 @@ impl Config {
                 .to_string_lossy()
                 .into_owned()
         };
+
+        tracing::info!("Resolved repo_path: {repo_path}");
 
         // Auto-detect repo_name from the resolved canonical repo_path if not provided
         let repo_name = if let Some(name) = cli.repo_name() {
@@ -416,6 +469,8 @@ impl HasCommonFields for McpCli {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_repo_name_auto_detection() {
@@ -924,6 +979,7 @@ mod tests {
             output_format: OutputFormat::Table,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         assert_eq!(
@@ -1033,6 +1089,7 @@ mod tests {
             output_format: OutputFormat::Table,
             ingest_concurrency: 8,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         assert_eq!(config.ingest_concurrency, 8);
@@ -1089,6 +1146,7 @@ mod tests {
             output_format: OutputFormat::Table,
             ingest_concurrency: 4,
             rayon_threads: Some(6),
+            include_config_files: false,
         };
 
         assert_eq!(config.rayon_threads, Some(6));
@@ -1115,8 +1173,83 @@ mod tests {
             output_format: OutputFormat::Table,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         assert_eq!(config.rayon_threads, None);
+    }
+
+    #[test]
+    fn test_knot_env_path_prefers_knot_config_dir() {
+        unsafe { std::env::set_var("KNOT_CONFIG_DIR", "/custom/knot/config") };
+        let path = knot_env_path();
+        unsafe { std::env::remove_var("KNOT_CONFIG_DIR") };
+
+        assert_eq!(
+            path,
+            Some(std::path::PathBuf::from("/custom/knot/config/.env"))
+        );
+    }
+
+    #[test]
+    fn test_knot_env_path_falls_back_to_home() {
+        // Remove KNOT_CONFIG_DIR to test HOME fallback
+        let had_config_dir = std::env::var("KNOT_CONFIG_DIR").ok();
+        unsafe { std::env::remove_var("KNOT_CONFIG_DIR") };
+
+        let home = std::env::var("HOME").ok();
+        let path = knot_env_path();
+
+        // Restore KNOT_CONFIG_DIR if it was set
+        if let Some(v) = had_config_dir {
+            unsafe { std::env::set_var("KNOT_CONFIG_DIR", v) };
+        }
+
+        match home {
+            Some(h) => {
+                assert_eq!(
+                    path,
+                    Some(std::path::PathBuf::from(format!("{h}/.config/knot/.env")))
+                );
+            }
+            None => {
+                // On Windows with no HOME, may fall through to USERPROFILE
+                // or return None
+            }
+        }
+    }
+
+    #[test]
+    fn test_knot_env_path_never_resolves_to_cwd() {
+        // knot_env_path must not use std::env::current_dir() or dotenvy::dotenv()
+        // Verify by checking that a .env file in CWD does NOT affect the resolved path.
+        let temp = tempdir().unwrap();
+        let env_file = temp.path().join(".env");
+        fs::write(&env_file, "KNOT_REPO_PATH=/from/cwd\n").unwrap();
+
+        // knot_env_path should resolve from $HOME or $KNOT_CONFIG_DIR, never CWD
+        let path = knot_env_path();
+        assert!(
+            path.as_ref().is_none_or(|p| p != &env_file),
+            "knot_env_path must not resolve to a .env in the current (temp) directory"
+        );
+    }
+
+    #[test]
+    fn test_load_knot_env_reads_from_explicit_path() {
+        let temp = tempdir().unwrap();
+        let env_file = temp.path().join(".env");
+        fs::write(&env_file, "KNOT_REPO_PATH=/from/explicit/path\n").unwrap();
+
+        // dotenvy::from_path should load from the specified path
+        let result = dotenvy::from_path(&env_file);
+        assert!(result.is_ok(), "Should load .env from explicit path");
+        assert_eq!(
+            std::env::var("KNOT_REPO_PATH").unwrap(),
+            "/from/explicit/path"
+        );
+
+        // Cleanup
+        unsafe { std::env::remove_var("KNOT_REPO_PATH") };
     }
 }

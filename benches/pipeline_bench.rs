@@ -41,6 +41,7 @@ fn parse_benchmark(files: &[PathBuf], label: &str) {
     let parse_cfg = ParseConfig {
         custom_queries_path: None,
         repo_name: format!("benchmark_{label}"),
+        include_config_files: true,
     };
 
     let cpus = std::thread::available_parallelism()
@@ -147,6 +148,7 @@ fn bench_preparation_stage(c: &mut Criterion) {
         let parse_cfg = ParseConfig {
             custom_queries_path: None,
             repo_name: format!("bench_prep_{lang}"),
+            include_config_files: true,
         };
 
         let cpus = std::thread::available_parallelism()

@@ -7,28 +7,41 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use crate::pipeline::input::SUPPORTED_EXTENSIONS;
+use crate::pipeline::input::{
+    BUILD_SYSTEM_NAMES, SUPPORTED_EXTENSIONS, is_build_system_json, is_config_extension,
+};
 use crate::pipeline::state::IndexState;
 
 /// Type alias for file classification result: (unchanged, modified, added, deleted)
 pub type FileClassification = (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<String>);
 
 /// Check if a file path refers to a supported source file.
-/// Uses the centralized SUPPORTED_EXTENSIONS list to ensure consistency
-/// across all pipeline stages (discovery, watching, parsing, etc.).
-pub fn is_supported_file(path: &Path) -> bool {
+/// When `include_config_files` is `false`, configuration files (`.yml`, `.yaml`,
+/// `.json`, `.properties`, `.tpl`) are excluded except for build-system files
+/// like `package.json` and `tsconfig.json`.
+pub fn is_supported_file(path: &Path, include_config_files: bool) -> bool {
     // Match by extension first
     if let Some(ext) = path.extension().and_then(|e| e.to_str())
         && SUPPORTED_EXTENSIONS.contains(&ext)
     {
+        // Config extensions are only supported when the flag is on
+        if is_config_extension(ext) && !include_config_files {
+            // .json with build-system filenames are always included
+            if ext == "json"
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && is_build_system_json(name)
+            {
+                return true;
+            }
+            return false;
+        }
         return true;
     }
-    // Match by filename for extensionless files (e.g. Jenkinsfile)
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        let known_names = ["Jenkinsfile", "pom.xml"];
-        if known_names.contains(&name) {
-            return true;
-        }
+    // Match by filename for extensionless or non-standard files
+    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+        && BUILD_SYSTEM_NAMES.contains(&name)
+    {
+        return true;
     }
     false
 }
@@ -238,18 +251,18 @@ mod tests {
 
     #[test]
     fn test_is_supported_file() {
-        assert!(is_supported_file(Path::new("test.java")));
-        assert!(is_supported_file(Path::new("test.ts")));
-        assert!(is_supported_file(Path::new("test.tsx")));
-        assert!(is_supported_file(Path::new("test.cts")));
-        assert!(is_supported_file(Path::new("test.js")));
-        assert!(is_supported_file(Path::new("test.mjs")));
-        assert!(is_supported_file(Path::new("test.cjs")));
-        assert!(is_supported_file(Path::new("test.jsx")));
-        assert!(is_supported_file(Path::new("test.rs")));
+        assert!(is_supported_file(Path::new("test.java"), true));
+        assert!(is_supported_file(Path::new("test.ts"), true));
+        assert!(is_supported_file(Path::new("test.tsx"), true));
+        assert!(is_supported_file(Path::new("test.cts"), true));
+        assert!(is_supported_file(Path::new("test.js"), true));
+        assert!(is_supported_file(Path::new("test.mjs"), true));
+        assert!(is_supported_file(Path::new("test.cjs"), true));
+        assert!(is_supported_file(Path::new("test.jsx"), true));
+        assert!(is_supported_file(Path::new("test.rs"), true));
 
-        assert!(!is_supported_file(Path::new("test.txt")));
-        assert!(!is_supported_file(Path::new("test")));
-        assert!(!is_supported_file(Path::new("test.java.bak")));
+        assert!(!is_supported_file(Path::new("test.txt"), true));
+        assert!(!is_supported_file(Path::new("test"), true));
+        assert!(!is_supported_file(Path::new("test.java.bak"), true));
     }
 }

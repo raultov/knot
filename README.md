@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — v1.2.5), **Kubernetes + Helm** (v1.2.5), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — Optional in v1.2.6), **Kubernetes + Helm** (Optional in v1.2.6), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking.
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -232,8 +232,9 @@ cargo build --release
 
 **3. Configure:**
 ```bash
-cp .env.example .env
-$EDITOR .env  # Set KNOT_REPO_PATH and Neo4j credentials
+mkdir -p ~/.config/knot
+cp .env.example ~/.config/knot/.env
+$EDITOR ~/.config/knot/.env  # Set KNOT_REPO_PATH and Neo4j credentials
 ```
 
 **4. Index a codebase:**
@@ -523,9 +524,10 @@ Similar JSON configuration in your client's MCP configuration file.
 
 ## ⚙️ Configuration Reference
 
-All options can be set via environment variables (`.env`) or CLI flags. Environment variables take precedence.
+All options can be set via CLI flags, environment variables, or a `~/.config/knot/.env` file.
+Priority (highest to lowest): CLI flags > environment variables > `.env` file.
 
-| `.env` Variable            | CLI Flag                   | Default                     | Description                                              |
+| Env Variable               | CLI Flag                   | Default                     | Description                                              |
 |----------------------------|----------------------------|-----------------------------|----------------------------------------------------------|
 | `KNOT_REPO_PATH`           | `--repo-path`              | *(required)*                | Root directory of the repository to index                |
 | `KNOT_REPO_NAME`           | `--repo-name`              | *(auto-detected)*           | Repository name for multi-repo isolation (auto-detected from last path component) |
@@ -538,6 +540,7 @@ All options can be set via environment variables (`.env`) or CLI flags. Environm
 | `KNOT_BATCH_SIZE`          | `--batch-size`             | `64`                        | Entities per batch                                       |
 | `KNOT_CLEAN`               | `--clean`                  | `false`                     | Force full re-index (delete all existing data)           |
 | `KNOT_CUSTOM_CA_CERTS`     | `--custom-ca-certs`       | *(none)*                    | Path to CA certificate bundle for corporate SSL proxies  |
+| `KNOT_INCLUDE_CONFIG_FILES` | `--include-config-files`  | `false`                     | Include YAML/JSON/properties/K8s/Helm files in the index |
 | `RUST_LOG`                 | *(env only)*              | `info`                      | Log level: `trace`, `debug`, `info`, `warn`, `error`     |
 
 ---
@@ -574,7 +577,7 @@ export KNOT_CUSTOM_CA_CERTS=/etc/ssl/certs/corporate-bundle.pem
 
 **Via `.env` file:**
 ```bash
-echo "KNOT_CUSTOM_CA_CERTS=/etc/ssl/certs/corporate-bundle.pem" >> .env
+echo "KNOT_CUSTOM_CA_CERTS=/etc/ssl/certs/corporate-bundle.pem" >> ~/.config/knot/.env
 ./target/release/knot-indexer
 ```
 
@@ -662,7 +665,11 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.2.5 — Cargo.toml, Config Files, Kubernetes + Helm, Cross-Repo Linking) ✅
+### Current Release (v1.2.6 — Optional Config Indexing & Bug Fixes) ✅
+- ✅ **Optional Config Indexing**: Added `--include-config-files` flag (disabled by default) to skip indexing generic configuration files (YAML, JSON, .properties) and Kubernetes/Helm manifests, improving performance and avoiding indexing secrets. Build-system files (`package.json`, `tsconfig.json`, `pom.xml`, `Cargo.toml`) remain always indexed.
+- ✅ **Bug Fixes**: Fixed `.env` loading to only respect knot's own config directory (`~/.config/knot/.env`) and ignore `.env` files in target repositories to prevent configuration hijacking.
+
+### Previous Release (v1.2.5 — Cargo.toml, Config Files, Kubernetes + Helm, Cross-Repo Linking) ✅
 - ✅ **Phase 12A — Cargo.toml Parser**: Package metadata, dependencies (simple/table/git/path), features, workspace members via `toml = "0.8"`
 - ✅ **Phase 12B — Configuration Files**: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with recursive walk, depth limit 10, leaf-key granularity, lock file exclusions, 500KB file size limit. package.json special handling: npm deps as BuildDependency, scripts as ConfigProperty, ProjectIdentity emission
 - ✅ **Phase 12C — Kubernetes + Helm**: 10 new EntityKind variants (K8sDeployment, K8sService, K8sConfigMap, K8sSecret, K8sIngress, K8sNamespace, K8sResource, HelmChart, HelmValue, HelmTemplateVar). K8s manifest parsing with label/annotation/reference extraction, Helm Chart.yaml/values.yaml/templates support with {{ .Values.X }} variable tracking

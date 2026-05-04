@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E Integration Test Script for Configuration File Support in knot (v1.2.0)
+# E2E Integration Test Script for Configuration File Support in knot (v1.2.6)
 #
 # This script tests YAML, JSON, .properties, and package.json extraction:
 # 1. Spins up isolated Neo4j and Qdrant instances on high ports
@@ -116,13 +116,13 @@ wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
 wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
 
-echo -e "${YELLOW}[3/5] Indexing configuration files...${NC}"
+echo -e "${YELLOW}[3/5] Phase A — Indexing WITHOUT --include-config-files (skip mode)...${NC}"
 cd "$PROJECT_ROOT"
 
 rm -rf "$TMP_REPO_DIR"
 mkdir -p "$TMP_REPO_DIR"
 cp "$TEST_FILES_DIR/sample_application.yml" "$TMP_REPO_DIR/application.yml"
-cp "$TEST_FILES_DIR/sample_config.json" "$TMP_REPO_DIR/tsconfig.json"
+cp "$TEST_FILES_DIR/sample_config.json" "$TMP_REPO_DIR/config.json"
 cp "$TEST_FILES_DIR/sample_app.properties" "$TMP_REPO_DIR/app.properties"
 cp "$TEST_FILES_DIR/sample_package.json" "$TMP_REPO_DIR/package.json"
 
@@ -137,8 +137,131 @@ export KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION"
 echo "Building knot-indexer..."
 cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
-echo "Running indexer for config files..."
+echo "Running indexer WITHOUT --include-config-files (config files should be skipped)..."
 cargo run --release --bin knot-indexer -- --clean
+
+echo -e "${GREEN}✓ Phase A indexing complete (config files skipped by default)${NC}"
+
+echo -e "${YELLOW}[3b/5] Validating skip-mode — config files NOT indexed, build-system files ARE...${NC}"
+
+echo "Building knot-mcp and knot..."
+cargo build --release --bin knot-mcp 2>&1 | grep -E "(Compiling|Finished|error)" || true
+cargo build --release --bin knot 2>&1 | grep -E "(Compiling|Finished|error)" || true
+
+# Test A1: Search for YAML config property — should NOT be found
+echo ""
+echo "Test A1: Searching for YAML property 'datasource url' (should NOT be found)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":101,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"datasource url\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "datasource url" -r "$REPO_NAME" -m 10 2>/dev/null || true)
+
+# YAML entities should NOT appear since --include-config-files was not passed
+if echo "$MCP_RESPONSE" | grep -qE "datasource|spring\.datasource" 2>/dev/null; then
+    echo -e "${RED}✗ UNEXPECTED: YAML config property was indexed (should have been skipped)${NC}"
+    echo "MCP: $MCP_RESPONSE"
+    exit 1
+fi
+if echo "$CLI_RESPONSE" | grep -qE "application\.yml" 2>/dev/null; then
+    echo -e "${RED}✗ UNEXPECTED: YAML config file appears in CLI results (should have been skipped)${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ YAML config properties correctly skipped${NC}"
+
+# Test A2: Search for .properties entry — should NOT be found
+echo ""
+echo "Test A2: Searching for properties 'app.name' (should NOT be found)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":102,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"app.name MyApplication\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -qi "MyApplication" 2>/dev/null; then
+    echo -e "${RED}✗ UNEXPECTED: .properties config was indexed (should have been skipped)${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ .properties config correctly skipped${NC}"
+
+# Test A3: Search for generic JSON config — should NOT be found
+echo ""
+echo "Test A3: Searching for generic JSON 'compilerOptions' (should NOT be found)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":103,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"compilerOptions\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "compilerOptions" -r "$REPO_NAME" -m 10 2>/dev/null || true)
+
+if echo "$MCP_RESPONSE" | grep -qi "compilerOptions" 2>/dev/null; then
+    echo -e "${RED}✗ UNEXPECTED: generic JSON config was indexed (should have been skipped)${NC}"
+    exit 1
+fi
+if echo "$CLI_RESPONSE" | grep -qi "compilerOptions" 2>/dev/null; then
+    echo -e "${RED}✗ UNEXPECTED: generic JSON config in CLI results${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Generic JSON config correctly skipped${NC}"
+
+# Test A4: Search for package.json dependency — MUST be found (build-system, always indexed)
+echo ""
+echo "Test A4: Searching for npm dependency 'express' (MUST be found — build-system)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":104,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"express dependency\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "express" -r "$REPO_NAME" -m 10 2>/dev/null || true)
+
+if echo "$MCP_RESPONSE" | grep -qi "express" 2>/dev/null; then
+    echo -e "${GREEN}✓ package.json dependency found (build-system files always indexed)${NC}"
+else
+    echo -e "${RED}✗ package.json dependency NOT found (build-system files should always be indexed)${NC}"
+    exit 1
+fi
+
+# Test A5: Explore package.json — should show entities
+echo ""
+echo "Test A5: Exploring package.json (should show entities)..."
+PKG_FILE="$TMP_REPO_DIR/package.json"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":105,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$PKG_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$PKG_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null || true)
+
+if echo "$MCP_RESPONSE" | grep -qE "express|jest" 2>/dev/null && echo "$CLI_RESPONSE" | grep -qE "express|jest|configuration" 2>/dev/null; then
+    echo -e "${GREEN}✓ package.json entities found via explore (build-system always indexed)${NC}"
+else
+    echo -e "${RED}✗ package.json entities not found${NC}"
+    exit 1
+fi
+
+# Test A6: Explore application.yml — should return empty or not be listed
+echo ""
+echo "Test A6: Exploring application.yml (should NOT show config entities)..."
+YML_FILE="$TMP_REPO_DIR/application.yml"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":106,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$YML_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -qE "port|datasource|config_property" 2>/dev/null; then
+    echo -e "${RED}✗ UNEXPECTED: YAML config entities found (should have been skipped)${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ YAML config entities correctly skipped in explore${NC}"
+
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Phase A passed — config files skipped by default${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+# Now re-index with --include-config-files for the full suite
+echo -e "${YELLOW}[3c/5] Phase B — Re-indexing WITH --include-config-files...${NC}"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR"
+cp "$TEST_FILES_DIR/sample_application.yml" "$TMP_REPO_DIR/application.yml"
+cp "$TEST_FILES_DIR/sample_config.json" "$TMP_REPO_DIR/tsconfig.json"
+cp "$TEST_FILES_DIR/sample_app.properties" "$TMP_REPO_DIR/app.properties"
+cp "$TEST_FILES_DIR/sample_package.json" "$TMP_REPO_DIR/package.json"
+
+echo "Running indexer WITH --include-config-files..."
+cargo run --release --bin knot-indexer -- --clean --include-config-files
 
 echo -e "${GREEN}✓ Config files indexed${NC}"
 

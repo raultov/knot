@@ -160,10 +160,10 @@ edition = "2024"
 **Start via:**
 ```bash
 docker compose up -d
-# Reads .env (copy from .env.example first)
+# Reads config from ~/.config/knot/.env (copy from .env.example first)
 ```
 
-**Environment variables** (CLI overrides `.env`):
+**Environment variables** (CLI arguments take highest priority, then env vars, then `~/.config/knot/.env`):
 ```bash
 KNOT_REPO_PATH=/path/to/repo
 KNOT_NEO4J_PASSWORD=<required>
@@ -180,6 +180,17 @@ Default behavior: only re-parses changed files. Tracked via `.knot/index_state.j
 ./target/release/knot-indexer          # Incremental (fast)
 ./target/release/knot-indexer --clean  # Full re-index (deletes all data)
 ./target/release/knot-indexer --watch  # Real-time watch mode
+```
+
+### Configuration File Indexing
+
+By default, configuration files (`.yml`, `.yaml`, `.json`, `.properties`, `.tpl`) and
+Kubernetes/Helm manifests are **not indexed**. Build-system files (`package.json`,
+`tsconfig.json`, `pom.xml`, `Cargo.toml`, `Jenkinsfile`) are always indexed.
+
+Use `--include-config-files` (or `KNOT_INCLUDE_CONFIG_FILES=true`) to enable config indexing:
+```bash
+./target/release/knot-indexer --include-config-files
 ```
 
 ### Entity Kinds (Type System)

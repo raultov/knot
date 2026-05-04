@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E Integration Test Script for Kubernetes + Helm support in knot (v1.2.0)
+# E2E Integration Test Script for Kubernetes + Helm support in knot (v1.2.6)
 #
 # Usage: ./tests/run_k8s_helm_e2e.sh
 # Requirements: docker, docker-compose
@@ -110,7 +110,7 @@ export KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION"
 echo "Building knot-indexer..."
 cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|error)" || true
 echo "Running indexer..."
-cargo run --release --bin knot-indexer -- --clean
+cargo run --release --bin knot-indexer -- --clean --include-config-files
 echo -e "${GREEN}✓ K8s/Helm files indexed${NC}"
 
 echo -e "${YELLOW}[4/5] Validating via MCP and CLI...${NC}"

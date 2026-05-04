@@ -177,6 +177,7 @@ mod tests {
             output_format: OutputFormat::Markdown,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         // Initially, clean should be true (from CLI/env)
@@ -215,6 +216,7 @@ mod tests {
             output_format: OutputFormat::Markdown,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         // Since watch is false, clean flag should not be modified
@@ -248,6 +250,7 @@ mod tests {
             output_format: OutputFormat::Markdown,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         // clean is already false, so no change should occur
@@ -281,6 +284,7 @@ mod tests {
             output_format: OutputFormat::Markdown,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         // Just verify the config is correctly initialized.

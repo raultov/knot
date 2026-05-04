@@ -42,7 +42,7 @@ pub async fn run_indexing_pipeline(
     index_state: &mut IndexState,
 ) -> Result<()> {
     // Stage 1: Discover and classify files.
-    let all_files = discover_files(&cfg.repo_path)?;
+    let all_files = discover_files(&cfg.repo_path, cfg.include_config_files)?;
     if all_files.is_empty() {
         info!("No supported source files found.");
         return Ok(());
@@ -99,7 +99,11 @@ pub async fn run_indexing_pipeline(
             "Stage 2: Starting parallel parsing of {} files...",
             files_to_parse.len()
         );
-        let parse_cfg = build_parse_config(cfg.custom_queries_path.clone(), cfg.repo_name.clone());
+        let parse_cfg = build_parse_config(
+            cfg.custom_queries_path.clone(),
+            cfg.repo_name.clone(),
+            cfg.include_config_files,
+        );
         let files_to_parse_clone = files_to_parse.clone();
 
         let cpus = cfg.rayon_threads.unwrap_or_else(|| {
@@ -294,10 +298,15 @@ pub async fn clean_stale_data(
 }
 
 /// Build configuration for the parsing stage.
-fn build_parse_config(custom_queries_path: Option<String>, repo_name: String) -> ParseConfig {
+fn build_parse_config(
+    custom_queries_path: Option<String>,
+    repo_name: String,
+    include_config_files: bool,
+) -> ParseConfig {
     ParseConfig {
         custom_queries_path,
         repo_name,
+        include_config_files,
     }
 }
 
@@ -308,11 +317,11 @@ mod tests {
 
     #[test]
     fn test_build_parse_config_variants() {
-        let cfg = build_parse_config(None, "repo1".to_string());
+        let cfg = build_parse_config(None, "repo1".to_string(), false);
         assert_eq!(cfg.repo_name, "repo1");
         assert!(cfg.custom_queries_path.is_none());
 
-        let cfg_custom = build_parse_config(Some("/path".to_string()), "repo2".to_string());
+        let cfg_custom = build_parse_config(Some("/path".to_string()), "repo2".to_string(), false);
         assert_eq!(cfg_custom.repo_name, "repo2");
         assert_eq!(cfg_custom.custom_queries_path, Some("/path".to_string()));
     }
@@ -418,6 +427,7 @@ mod tests {
             output_format: OutputFormat::Markdown,
             ingest_concurrency: 4,
             rayon_threads: None,
+            include_config_files: false,
         };
 
         // We need to mock DBs if we want to run the full pipeline,
