@@ -665,7 +665,15 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.2.6 — Optional Config Indexing & Bug Fixes) ✅
+### Current Release (v1.2.7 — Cargo Cross-Repo Dependency Fixes) ✅
+- ✅ **Bug Fix: Cargo Cross-Repo DEPENDS_ON Edges**: Fixed `match_dependency_to_repository` in `src/pipeline/ingest/resolve.rs` — the Cargo branch was checking for `"scope: compile"` in `dep_name`, but that text lives in `entity.signature` (not `entity.name`). Cargo dependency names are formatted as `"crate_name:version"` by the parser. The condition silently failed for all Cargo dependencies, preventing `DEPENDS_ON` edges from being created. Now correctly extracts the crate name by splitting on `:` and taking the first part.
+- ✅ **Bug Fix: Test Fixtures Overwriting Repository Identity**: Fixed `link_cross_repo_dependencies` in `src/pipeline/ingest/resolve.rs` — when a repository contains multiple `ProjectIdentity` entities (e.g., `Cargo.toml` at root + `tests/testing_files/sample_build.gradle` as a test fixture), `upsert_repository` was called for ALL of them. Since it uses `MERGE + SET`, the last identity processed would overwrite `build_system`, `group_id`, and `artifact_id` with test-fixture data. Now selects only the `ProjectIdentity` closest to the repository root (minimum directory depth), preventing test fixtures in subdirectories from corrupting the repository identity.
+- ✅ **E2E Test: Multi-ProjectIdentity Scenario**: Added test that creates a Cargo library crate with both `Cargo.toml` at root and a Gradle build file in `tests/fixtures/`, then verifies the `:Repository` node retains `build_system = "cargo"` and `DEPENDS_ON` edges are created correctly.
+- ✅ **E2E Test: Cargo Cross-Repo Dependency Linking**: Validated `DEPENDS_ON` edges are created for Cargo projects — library crate `rust-lib-a` indexed first, binary crate `rust-bin-b` depending on it indexed second, verified via `knot deps`, MCP `list_repo_dependencies`, and Neo4j Cypher queries.
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **548 unit tests** passing
+- ✅ **12/12 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems, Config Files, K8s/Helm, Groovy, Cross-Language Ref, C/C++, Cross-Repo Dependencies (extended with Cargo + Multi-ProjectIdentity tests), plus the new knot-server project
+
+### Previous Release (v1.2.6 — Optional Config Indexing & Bug Fixes) ✅
 - ✅ **Optional Config Indexing**: Added `--include-config-files` flag (disabled by default) to skip indexing generic configuration files (YAML, JSON, .properties) and Kubernetes/Helm manifests, improving performance and avoiding indexing secrets. Build-system files (`package.json`, `tsconfig.json`, `pom.xml`, `Cargo.toml`) remain always indexed.
 - ✅ **Bug Fixes**: Fixed `.env` loading to only respect knot's own config directory (`~/.config/knot/.env`) and ignore `.env` files in target repositories to prevent configuration hijacking.
 

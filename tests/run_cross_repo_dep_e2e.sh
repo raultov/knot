@@ -74,7 +74,7 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_LIB_DIR" "$TMP_CLIENT_DIR" 2>/dev/null || true
+    rm -rf "$TMP_LIB_DIR" "$TMP_CLIENT_DIR" "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR" "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -313,6 +313,262 @@ LIB_DEPS=$(cargo run --release --bin knot -- deps "$LIB_REPO_NAME" --depth 1 2>/
 # auth-lib depends on gson (we excluded -- it's not indexed as a repo, so no DEPENDS_ON edge)
 # Actually, gson won't match any repo since it's not indexed. So dependencies should be empty.
 echo -e "${GREEN}✓ Library dependency lookup completed${NC}"
+
+# Test 7: Cargo cross-repo dependency linking
+echo ""
+echo "Test 7: Cargo cross-repo dependency linking..."
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}knot Cross-Repo Cargo Dependency Linking E2E Test${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+CARGO_LIB_NAME="rust-lib-a"
+CARGO_BIN_NAME="rust-bin-b"
+
+TMP_CARGO_LIB_DIR="$SCRIPT_DIR/.e2e_cross_repo_cargo_lib"
+TMP_CARGO_BIN_DIR="$SCRIPT_DIR/.e2e_cross_repo_cargo_bin"
+
+rm -rf "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR"
+mkdir -p "$TMP_CARGO_LIB_DIR/src"
+mkdir -p "$TMP_CARGO_BIN_DIR/src"
+
+# Create Cargo.toml for library crate
+cat > "$TMP_CARGO_LIB_DIR/Cargo.toml" << 'TOML_EOF'
+[package]
+name = "rust-lib-a"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+TOML_EOF
+
+# Create lib.rs source file
+cat > "$TMP_CARGO_LIB_DIR/src/lib.rs" << 'RUST_EOF'
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+RUST_EOF
+
+# Create Cargo.toml for binary crate depending on rust-lib-a
+cat > "$TMP_CARGO_BIN_DIR/Cargo.toml" << 'TOML_EOF'
+[package]
+name = "rust-bin-b"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rust-lib-a = "0.1.0"
+TOML_EOF
+
+# Create main.rs that calls rust-lib-a
+cat > "$TMP_CARGO_BIN_DIR/src/main.rs" << 'RUST_EOF'
+fn main() {
+    let msg = rust_lib_a::greet("world");
+    println!("{}", msg);
+}
+RUST_EOF
+
+# Index library crate
+echo "Indexing Cargo library crate '${CARGO_LIB_NAME}'..."
+export KNOT_REPO_PATH="$TMP_CARGO_LIB_DIR"
+export KNOT_REPO_NAME="$CARGO_LIB_NAME"
+cargo run --release --bin knot-indexer -- --clean
+
+echo -e "${GREEN}✓ Cargo library indexed${NC}"
+
+# Index binary crate (this should discover the dep on rust-lib-a)
+echo "Indexing Cargo binary crate '${CARGO_BIN_NAME}'..."
+export KNOT_REPO_PATH="$TMP_CARGO_BIN_DIR"
+export KNOT_REPO_NAME="$CARGO_BIN_NAME"
+cargo run --release --bin knot-indexer -- --clean
+
+echo -e "${GREEN}✓ Cargo binary indexed${NC}"
+
+echo "Building knot and knot-mcp..."
+cargo build --release --bin knot 2>&1 | grep -E "(Compiling|Finished|error)" || true
+cargo build --release --bin knot-mcp 2>&1 | grep -E "(Compiling|Finished|error)" || true
+
+# Test 7a: knot deps forward shows rust-bin-b depends on rust-lib-a
+echo ""
+echo "Test 7a: Forward dependency lookup 'knot deps rust-bin-b'..."
+CARGO_DEPS_OUTPUT=$(cargo run --release --bin knot -- deps "$CARGO_BIN_NAME" --depth 1 2>/dev/null)
+if echo "$CARGO_DEPS_OUTPUT" | grep -q "rust-lib-a"; then
+    echo -e "${GREEN}✓ Forward lookup: rust-bin-b depends on rust-lib-a${NC}"
+else
+    echo -e "${RED}✗ Forward lookup failed. Output:${NC}"
+    echo "$CARGO_DEPS_OUTPUT"
+    exit 1
+fi
+
+# Test 7b: knot deps --reverse shows rust-lib-a dependents
+echo ""
+echo "Test 7b: Reverse dependency lookup 'knot deps --reverse rust-lib-a'..."
+CARGO_REV_OUTPUT=$(cargo run --release --bin knot -- deps "$CARGO_LIB_NAME" --reverse 2>/dev/null)
+if echo "$CARGO_REV_OUTPUT" | grep -q "rust-bin-b"; then
+    echo -e "${GREEN}✓ Reverse lookup: rust-lib-a is depended on by rust-bin-b${NC}"
+else
+    echo -e "${RED}✗ Reverse lookup failed. Output:${NC}"
+    echo "$CARGO_REV_OUTPUT"
+    exit 1
+fi
+
+# Test 7c: list_repo_dependencies MCP tool for Cargo
+echo ""
+echo "Test 7c: MCP list_repo_dependencies for Cargo..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"list_repo_dependencies\",\"arguments\":{\"repo_name\":\"$CARGO_BIN_NAME\"}}}"
+MCP_CARGO_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_CARGO_BIN_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_CARGO_RESPONSE" | grep -q "rust-lib-a"; then
+    echo -e "${GREEN}✓ MCP list_repo_dependencies returns rust-lib-a as Cargo dependency${NC}"
+else
+    echo -e "${RED}✗ MCP list_repo_dependencies failed for Cargo. Response:${NC}"
+    echo "$MCP_CARGO_RESPONSE"
+    exit 1
+fi
+
+# Test 7d: Knot deps JSON output for Cargo
+echo ""
+echo "Test 7d: knot deps JSON output for Cargo..."
+CARGO_JSON_OUTPUT=$(cargo run --release --bin knot -- deps "$CARGO_BIN_NAME" --depth 1 --output json 2>/dev/null)
+if echo "$CARGO_JSON_OUTPUT" | grep -q "rust-lib-a"; then
+    echo -e "${GREEN}✓ JSON output contains rust-lib-a${NC}"
+else
+    echo -e "${RED}✗ JSON output failed${NC}"
+    exit 1
+fi
+
+# Clean up cargo test directories
+rm -rf "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR"
+
+echo -e "${GREEN}✓ All Cargo cross-repo dependency tests passed${NC}"
+
+# Test 8: Multi-ProjectIdentity scenario — test fixtures do NOT overwrite
+# repository identity set by the root-level build file
+echo ""
+echo "Test 8: Multi-ProjectIdentity — test fixtures don't overwrite repo identity..."
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}knot Multi-ProjectIdentity E2E Test${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+PROJ_LIB_NAME="lib-pri-a"
+PROJ_BIN_NAME="bin-pri-b"
+
+TMP_PROJ_LIB_DIR="$SCRIPT_DIR/.e2e_cross_repo_proj_lib"
+TMP_PROJ_BIN_DIR="$SCRIPT_DIR/.e2e_cross_repo_proj_bin"
+
+rm -rf "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR"
+mkdir -p "$TMP_PROJ_LIB_DIR/src"
+mkdir -p "$TMP_PROJ_LIB_DIR/tests/fixtures"
+mkdir -p "$TMP_PROJ_BIN_DIR/src"
+
+# Create Cargo.toml at root (depth 0)
+cat > "$TMP_PROJ_LIB_DIR/Cargo.toml" << 'TOML_EOF'
+[package]
+name = "lib-pri-a"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+TOML_EOF
+
+# Create lib.rs source
+cat > "$TMP_PROJ_LIB_DIR/src/lib.rs" << 'RUST_EOF'
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+RUST_EOF
+
+# Create a build.gradle test fixture buried at depth 2 (tests/fixtures/)
+# to simulate the exact bug scenario: a secondary ProjectIdentity from a
+# test fixture must NOT overwrite the Cargo identity from the root.
+cat > "$TMP_PROJ_LIB_DIR/tests/fixtures/sample_build.gradle" << 'GRADLE_EOF'
+plugins {
+    id 'java'
+}
+
+group = 'com.example'
+version = '1.0.0'
+GRADLE_EOF
+
+# Create Cargo.toml for binary crate depending on lib-pri-a
+cat > "$TMP_PROJ_BIN_DIR/Cargo.toml" << 'TOML_EOF'
+[package]
+name = "bin-pri-b"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lib-pri-a = "0.1.0"
+TOML_EOF
+
+# Create main.rs
+cat > "$TMP_PROJ_BIN_DIR/src/main.rs" << 'RUST_EOF'
+fn main() {
+    let result = lib_pri_a::add(1, 2);
+    println!("{}", result);
+}
+RUST_EOF
+
+# Index library crate (has Cargo.toml at root + build.gradle in tests/fixtures/)
+echo "Indexing multi-identity library crate '${PROJ_LIB_NAME}'..."
+export KNOT_REPO_PATH="$TMP_PROJ_LIB_DIR"
+export KNOT_REPO_NAME="$PROJ_LIB_NAME"
+cargo run --release --bin knot-indexer -- --clean
+
+echo -e "${GREEN}✓ Library indexed${NC}"
+
+# Index binary crate
+echo "Indexing Cargo binary crate '${PROJ_BIN_NAME}'..."
+export KNOT_REPO_PATH="$TMP_PROJ_BIN_DIR"
+export KNOT_REPO_NAME="$PROJ_BIN_NAME"
+cargo run --release --bin knot-indexer -- --clean
+
+echo -e "${GREEN}✓ Binary indexed${NC}"
+
+# Test 8a: Verify Repository node has cargo identity (NOT gradle)
+echo ""
+echo "Test 8a: Repository node '${PROJ_LIB_NAME}' retains cargo identity..."
+BUILD_SYSTEM=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${PROJ_LIB_NAME}'}) RETURN r.build_system AS build_system" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$BUILD_SYSTEM" = "cargo" ]; then
+    echo -e "${GREEN}✓ Repository build_system = cargo (NOT overwritten by gradle fixture)${NC}"
+else
+    echo -e "${RED}✗ Repository build_system = '$BUILD_SYSTEM' (expected 'cargo')${NC}"
+    echo -e "${RED}  The test fixture build.gradle overwrote the Cargo identity!${NC}"
+    exit 1
+fi
+
+ARTIFACT_ID=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${PROJ_LIB_NAME}'}) RETURN r.artifact_id AS artifact_id" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$ARTIFACT_ID" = "lib-pri-a" ]; then
+    echo -e "${GREEN}✓ Repository artifact_id = lib-pri-a (NOT overwritten by gradle fixture)${NC}"
+else
+    echo -e "${RED}✗ Repository artifact_id = '$ARTIFACT_ID' (expected 'lib-pri-a')${NC}"
+    exit 1
+fi
+
+# Test 8b: Verify DEPENDS_ON edge exists
+echo ""
+echo "Test 8b: DEPENDS_ON edge from bin-pri-b to lib-pri-a..."
+DEPS_EDGE=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (from:Repository {name: '${PROJ_BIN_NAME}'})-[d:DEPENDS_ON]->(to:Repository {name: '${PROJ_LIB_NAME}'}) RETURN count(d) AS cnt" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$DEPS_EDGE" -ge 1 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ DEPENDS_ON edge exists: bin-pri-b -> lib-pri-a${NC}"
+else
+    echo -e "${RED}✗ No DEPENDS_ON edge from bin-pri-b to lib-pri-a${NC}"
+    echo -e "${RED}  The Cargo dependency was not matched because the Repository identity was overwritten!${NC}"
+    exit 1
+fi
+
+# Clean up project identity test directories
+rm -rf "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR"
+
+echo -e "${GREEN}✓ All Multi-ProjectIdentity tests passed${NC}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"

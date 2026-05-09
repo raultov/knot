@@ -61,22 +61,41 @@ pub async fn link_cross_repo_dependencies(
     graph_db: &GraphDb,
     cfg: &Config,
 ) -> Result<()> {
-    // Step 1: Find all ProjectIdentity entities and upsert Repository nodes
-    for entity in entities {
-        if entity.kind == EntityKind::ProjectIdentity {
-            let build_system = parse_build_system_from_fqn(&entity.fqn);
-            let (group_id, artifact_id) = parse_artifact_identity(&entity.fqn, build_system);
+    // Step 1: Select the primary ProjectIdentity (closest to repo root)
+    // and upsert a single Repository node.
+    //
+    // When a repo contains multiple build files (e.g., Cargo.toml at the root
+    // plus test fixtures like tests/testing_files/sample_build.gradle), each
+    // emits a ProjectIdentity.  upsert_repository uses MERGE + SET, so the
+    // last identity processed would overwrite the fields (build_system,
+    // group_id, artifact_id) with test-fixture data.  We avoid this by picking
+    // the ProjectIdentity whose file is closest to the repository root.
+    let project_identities: Vec<&ResolutionEntity> = entities
+        .iter()
+        .filter(|e| e.kind == EntityKind::ProjectIdentity)
+        .collect();
 
-            graph_db
-                .upsert_repository(
-                    &cfg.repo_name,
-                    build_system,
-                    group_id,
-                    artifact_id,
-                    parse_version_from_signature(&entity.signature),
-                )
-                .await?;
-        }
+    if let Some(primary) = project_identities.iter().min_by_key(|e| {
+        // Compute directory depth relative to the repo root.
+        // Cargo.toml at root              → 0
+        // tests/testing_files/build.gradle → 2
+        std::path::Path::new(&e.file_path)
+            .strip_prefix(std::path::Path::new(&cfg.repo_path))
+            .map(|p| p.components().count().saturating_sub(1))
+            .unwrap_or(usize::MAX) // fallback: treat as deepest so it loses
+    }) {
+        let build_system = parse_build_system_from_fqn(&primary.fqn);
+        let (group_id, artifact_id) = parse_artifact_identity(&primary.fqn, build_system);
+
+        graph_db
+            .upsert_repository(
+                &cfg.repo_name,
+                build_system,
+                group_id,
+                artifact_id,
+                parse_version_from_signature(&primary.signature),
+            )
+            .await?;
     }
 
     // Step 2: Match BuildDependency entities against Repository nodes
@@ -172,18 +191,20 @@ async fn match_dependency_to_repository(
         }
     }
 
-    // Cargo: dep_name is the crate name
-    if dep_name.contains("scope: compile")
-        || dep_name.contains("scope: dev")
-        || dep_name.contains("scope: build")
-    {
-        let crate_name = dep_name.split(' ').next().unwrap_or(dep_name);
-        if let Some(repo) = graph_db
+    // Cargo: dep_name is formatted as "crate_name:version" (e.g., "serde:1.0").
+    // The "scope: compile" text lives in entity.signature, not entity.name.
+    // We extract the crate name by splitting on ':' and taking the first part.
+    // No other build system uses the plain "word:version" format, so this
+    // is a reliable heuristic for Cargo dependencies.
+    if let Some(crate_name) = dep_name.split(':').next()
+        && !crate_name.contains('.')
+        && crate_name != "helm"
+        && crate_name != "npm"
+        && let Some(repo) = graph_db
             .find_repository_by_artifact("", crate_name, "cargo")
             .await?
-        {
-            return Ok(Some(repo));
-        }
+    {
+        return Ok(Some(repo));
     }
 
     // npm: dep_name could be "npm:name:version"
