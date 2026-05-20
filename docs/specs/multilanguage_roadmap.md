@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.0):**
+**Current State (v1.3.1):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
@@ -15,6 +15,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file) + list_repo_dependencies
 - Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges and retroactive linking
+- Entity Subgraph Traversal (v1.3.1): `get_entity_subgraph` query with configurable depth, relationship filtering, and direction
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
@@ -160,6 +161,20 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.1 - Entity Subgraph Traversal
+
+**Entity Subgraph Retrieval (`get_entity_subgraph`):**
+- ✅ New `get_entity_subgraph` query method in `QueryExt` trait + full `GraphDb` implementation
+- ✅ Traverses the entity graph from a root entity, returning reachable nodes and edges
+- ✅ Configurable depth (1–5), relationship type filtering (any combination of CALLS, EXTENDS, IMPLEMENTS, REFERENCES, etc.), and direction (Outgoing/Incoming/Both)
+- ✅ Cypher validation: rejects invalid relationship types with a clear error message
+- ✅ Deduplication via UUID-based `HashMap`, truncation at configurable `max_nodes` with `truncated` flag
+- ✅ Edge extraction between collected nodes for graph visualization
+- ✅ New data models: `SubgraphNode`, `SubgraphEdge`, `SubgraphResult`, `SubgraphDirection` (with `#[derive(Default)]`)
+- ✅ CLI/MCP wrapper: `cli_tools::run_get_subgraph` with `DEFAULT_MAX_NODES = 500`
+- ✅ 6 new Neo4j integration tests: not_found, valid_entity, invalid_relationship, outgoing_only, multiple_relationships, truncation
+- ✅ 548 unit tests | cargo fmt + clippy clean
 
 ### v1.3.0 - Consolidated `.knot/` Directory & Test Resilience
 

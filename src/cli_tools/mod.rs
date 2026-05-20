@@ -9,8 +9,10 @@ pub mod explore_file;
 pub mod find_callers;
 pub mod formatters;
 pub mod search_hybrid_context;
+pub mod subgraph;
 
 pub use deps::{format_deps_output, run_deps};
 pub use explore_file::{format_file_entities, run_explore_file};
 pub use find_callers::{format_reference_entry, format_references_result, run_find_callers};
 pub use search_hybrid_context::run_search_hybrid_context;
+pub use subgraph::{DEFAULT_MAX_NODES, run_get_subgraph};

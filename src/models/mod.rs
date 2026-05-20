@@ -8,6 +8,8 @@
 
 mod entity;
 mod relationship;
+mod subgraph;
 
 pub use entity::{EmbeddedEntity, EntityKind, NAMESPACE_KNOT, ParsedEntity, ResolutionEntity};
 pub use relationship::{CallIntent, ReferenceIntent, RelationshipType};
+pub use subgraph::{SubgraphDirection, SubgraphEdge, SubgraphNode, SubgraphResult};

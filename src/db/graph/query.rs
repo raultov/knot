@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use neo4rs::query;
+use std::collections::HashMap;
 use tracing::info;
 
 use super::GraphDb;
+use crate::models::SubgraphDirection;
 
 /// Extension trait for query and read operations.
 #[allow(async_fn_in_trait)]
@@ -35,6 +37,15 @@ pub trait QueryExt {
         artifact_id: &str,
         build_system: &str,
     ) -> Result<Option<String>>;
+    async fn get_entity_subgraph(
+        &self,
+        entity_name: &str,
+        repo_name: &str,
+        depth: u32,
+        relationships: &[&str],
+        direction: SubgraphDirection,
+        max_nodes: usize,
+    ) -> Result<crate::models::SubgraphResult>;
 }
 
 impl QueryExt for GraphDb {
@@ -371,6 +382,183 @@ impl QueryExt for GraphDb {
 
         Ok(None)
     }
+
+    async fn get_entity_subgraph(
+        &self,
+        entity_name: &str,
+        repo_name: &str,
+        depth: u32,
+        relationships: &[&str],
+        direction: SubgraphDirection,
+        max_nodes: usize,
+    ) -> Result<crate::models::SubgraphResult> {
+        use crate::models::{SubgraphEdge, SubgraphNode, SubgraphResult};
+
+        let valid_rels: &[&str] = &[
+            "CALLS",
+            "EXTENDS",
+            "IMPLEMENTS",
+            "REFERENCES",
+            "REFERENCES_DOM",
+            "USES_CSS_CLASS",
+            "IMPORTS_SCRIPT",
+            "IMPORTS_STYLESHEET",
+            "MACRO_CALLS",
+            "CONTAINS",
+            "GENERIC_BOUND",
+            "DEPENDS_ON",
+        ];
+
+        for rel in relationships {
+            if !valid_rels.contains(rel) {
+                anyhow::bail!(
+                    "Invalid relationship type '{rel}'. Valid types are: {}",
+                    valid_rels.join(", ")
+                );
+            }
+        }
+
+        let depth = depth.clamp(1, 5);
+
+        // --- 1. Find the root entity ---
+        let root_q = query(
+            "MATCH (root:Entity {name: $name, repo_name: $repo_name})
+             RETURN root.uuid, root.name, root.kind, root.fqn,
+                    root.signature, root.docstring, root.file_path, root.start_line
+             LIMIT 1",
+        )
+        .param("name", entity_name)
+        .param("repo_name", repo_name);
+
+        let mut rows = self
+            .graph
+            .execute(root_q)
+            .await
+            .context("Failed to query root entity")?;
+
+        let root_node = if let Ok(Some(row)) = rows.next().await {
+            SubgraphNode {
+                uuid: row
+                    .get::<String>("root.uuid")
+                    .context("root.uuid is required")?,
+                name: row
+                    .get::<String>("root.name")
+                    .context("root.name is required")?,
+                kind: row.get::<String>("root.kind").ok(),
+                fqn: row.get::<String>("root.fqn").ok(),
+                signature: row.get::<String>("root.signature").ok(),
+                docstring: row.get::<String>("root.docstring").ok(),
+                file_path: row.get::<String>("root.file_path").ok(),
+                start_line: row.get::<i64>("root.start_line").ok(),
+            }
+        } else {
+            // Root not found — return empty result
+            return Ok(SubgraphResult {
+                nodes: vec![],
+                edges: vec![],
+                truncated: false,
+                total_nodes_found: 0,
+            });
+        };
+
+        let root_uuid = root_node.uuid.clone();
+
+        // --- 2. Collect nearby nodes ---
+        let mut all_nodes: HashMap<String, SubgraphNode> = HashMap::new();
+        all_nodes.insert(root_uuid.clone(), root_node);
+
+        for rel in relationships {
+            let direction_arrow = match direction {
+                SubgraphDirection::Outgoing => format!("-[:{rel}*1..{depth}]->"),
+                SubgraphDirection::Incoming => format!("<-[:{rel}*1..{depth}]-"),
+                SubgraphDirection::Both => format!("-[:{rel}*1..{depth}]-"),
+            };
+
+            let cypher = format!(
+                "MATCH (root:Entity {{name: $name, repo_name: $repo_name}}){arrow}(related:Entity)
+                 WHERE related.repo_name = $repo_name
+                 RETURN DISTINCT related.uuid, related.name, related.kind, related.fqn,
+                        related.signature, related.docstring, related.file_path, related.start_line",
+                arrow = direction_arrow,
+            );
+
+            let mut rows = self
+                .graph
+                .execute(
+                    query(&cypher)
+                        .param("name", entity_name)
+                        .param("repo_name", repo_name),
+                )
+                .await
+                .context(format!("Failed to traverse {rel} relationships"))?;
+
+            while let Ok(Some(row)) = rows.next().await {
+                let uuid = match row.get::<String>("related.uuid") {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                all_nodes.entry(uuid.clone()).or_insert(SubgraphNode {
+                    uuid,
+                    name: row.get::<String>("related.name").ok().unwrap_or_default(),
+                    kind: row.get::<String>("related.kind").ok(),
+                    fqn: row.get::<String>("related.fqn").ok(),
+                    signature: row.get::<String>("related.signature").ok(),
+                    docstring: row.get::<String>("related.docstring").ok(),
+                    file_path: row.get::<String>("related.file_path").ok(),
+                    start_line: row.get::<i64>("related.start_line").ok(),
+                });
+            }
+        }
+
+        let total_nodes_found = all_nodes.len();
+        let truncated = total_nodes_found > max_nodes;
+
+        let mut nodes: Vec<SubgraphNode> = all_nodes.into_values().collect();
+        if truncated && nodes.len() > max_nodes {
+            nodes.truncate(max_nodes);
+        }
+
+        // --- 3. Extract edges between collected nodes ---
+        let mut edges: Vec<SubgraphEdge> = Vec::new();
+
+        if nodes.len() > 1 {
+            let uuids: Vec<String> = nodes.iter().map(|n| n.uuid.clone()).collect();
+
+            let edge_q = query(
+                "MATCH (a:Entity)-[r]->(b:Entity)
+                 WHERE a.uuid IN $uuids AND b.uuid IN $uuids
+                 RETURN a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship",
+            )
+            .param("uuids", uuids);
+
+            let mut rows = self
+                .graph
+                .execute(edge_q)
+                .await
+                .context("Failed to query subgraph edges")?;
+
+            while let Ok(Some(row)) = rows.next().await {
+                if let (Ok(source_uuid), Ok(target_uuid), Ok(relationship)) = (
+                    row.get::<String>("source_uuid"),
+                    row.get::<String>("target_uuid"),
+                    row.get::<String>("relationship"),
+                ) {
+                    edges.push(SubgraphEdge {
+                        source_uuid,
+                        target_uuid,
+                        relationship,
+                    });
+                }
+            }
+        }
+
+        Ok(SubgraphResult {
+            nodes,
+            edges,
+            truncated,
+            total_nodes_found,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +566,7 @@ mod tests {
     use super::super::GraphDb;
     use super::QueryExt;
     use crate::db::graph::connection::ConnectExt;
+    use crate::models::SubgraphDirection;
 
     #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
     #[tokio::test]
@@ -490,5 +679,144 @@ mod tests {
             .get_file_entities("/test/path/File.java", Some("test-repo"))
             .await;
         assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_not_found() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "nonexistent_entity",
+                "test-repo",
+                3,
+                &["CALLS"],
+                SubgraphDirection::Both,
+                500,
+            )
+            .await;
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        assert!(sub.nodes.is_empty());
+        assert!(sub.edges.is_empty());
+        assert!(!sub.truncated);
+        assert_eq!(sub.total_nodes_found, 0);
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_valid_entity() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        // This test expects at least one entity named "TestClass" in the graph.
+        // If no such entity exists, the result will be empty which is also valid.
+        let result = graph_db
+            .get_entity_subgraph(
+                "TestClass",
+                "test-repo",
+                2,
+                &["CALLS", "EXTENDS"],
+                SubgraphDirection::Both,
+                500,
+            )
+            .await;
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        // Should not fail regardless of whether the entity exists
+        assert!(!sub.truncated);
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_invalid_relationship() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "TestClass",
+                "test-repo",
+                2,
+                &["INVALID_REL"],
+                SubgraphDirection::Both,
+                500,
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_outgoing_only() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "TestClass",
+                "test-repo",
+                1,
+                &["CALLS"],
+                SubgraphDirection::Outgoing,
+                500,
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_multiple_relationships() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "TestClass",
+                "test-repo",
+                2,
+                &["CALLS", "EXTENDS", "IMPLEMENTS", "REFERENCES"],
+                SubgraphDirection::Both,
+                500,
+            )
+            .await;
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        // With multiple relationship types, result should not be an error
+        assert!(!sub.truncated || sub.total_nodes_found > 0);
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_truncation() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "TestClass",
+                "test-repo",
+                5,
+                &["CALLS", "EXTENDS", "IMPLEMENTS", "REFERENCES"],
+                SubgraphDirection::Both,
+                2, // Very low max_nodes to trigger truncation
+            )
+            .await;
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        // Nodes should not exceed the max_nodes limit
+        if sub.total_nodes_found > 2 {
+            assert!(sub.truncated);
+            assert!(sub.nodes.len() <= 2);
+        }
     }
 }

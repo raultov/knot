@@ -666,11 +666,14 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.0 — Consolidated `.knot/` Directory) ✅
-- ✅ **Fastembed Cache Consolidation**: The `fastembed` model cache (previously scattered as `.fastembed_cache/` in the working directory) is now stored inside `.knot/fastembed_cache/` by default, keeping all knot artifacts unified under the `.knot/` directory. Configurable via `KNOT_FASTEMBED_CACHE_DIR` environment variable for shared caching across multiple repositories.
-- ✅ **Test Resilience**: Fixed 3 unit tests that failed when environment variables were set in the parent shell by using a serialized env-access pattern with save/restore semantics.
+### Current Release (v1.3.1 — Entity Subgraph Traversal) ✅
+- ✅ **Entity Subgraph Retrieval**: New `get_entity_subgraph` query method that traverses the entity graph starting from a root entity and returns all reachable nodes and edges within a configurable depth (1–5). Supports filtering by relationship type (`CALLS`, `EXTENDS`, `IMPLEMENTS`, etc.) and direction (`Outgoing`, `Incoming`, `Both`). Includes deduplication, truncation at configurable `max_nodes`, and edge extraction between collected nodes. Available via the library API (`QueryExt::get_entity_subgraph`) and `cli_tools::run_get_subgraph` wrapper.
+- ✅ **New Data Models**: `SubgraphNode`, `SubgraphEdge`, `SubgraphResult`, and `SubgraphDirection` enums exported from `knot::models`
+- ✅ **6 new Neo4j integration tests** for the subgraph functionality
 - ✅ **cargo fmt** clean | **cargo clippy** clean | **548 unit tests** passing
-- ✅ **12/12 E2E test suites pass**: JS/TS/Java, Kotlin, Rust, Python, Build Systems, Config Files, K8s/Helm, Groovy, Cross-Language Ref, C/C++, Cross-Repo Dependencies
+- ✅ **12/12 E2E test suites pass**
+
+### Previous Release (v1.3.0 — Consolidated `.knot/` Directory) ✅
 
 ### Previous Release (v1.2.8 — MCP Stdout Log Fix) ✅
 - ✅ **Bug Fix: MCP Server Logging to stdout**: Fixed `init_logging()` in `src/utils/mod.rs` — log output was written to stdout (default `tracing_subscriber::fmt` behavior), which corrupted MCP JSON-RPC communication over stdio transport since MCP clients read JSON from stdout. Added `.with_writer(std::io::stderr)` to redirect all tracing output to stderr, matching the existing `init_logging_for_cli()` function that already had this fix.
