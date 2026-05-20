@@ -6,19 +6,21 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.2.0):**
+**Current State (v1.3.0):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
 - Configuration Files: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with leaf-key granularity and package.json special handling
 - Kubernetes + Helm: K8s manifest parsing (Deployment, Service, ConfigMap, Secret, Ingress, Namespace) and Helm chart indexing (Chart.yaml, values.yaml, templates)
 - Dual-database architecture (Qdrant + Neo4j)
-- Three MCP tools (search_hybrid_context, find_callers, explore_file)
+- Three MCP tools (search_hybrid_context, find_callers, explore_file) + list_repo_dependencies
+- Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges and retroactive linking
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
-- 520 unit tests | 100+ E2E tests across all languages
+- Consolidated `.knot/` directory: fastembed model cache now stored in `.knot/fastembed_cache/` (configurable via `KNOT_FASTEMBED_CACHE_DIR`)
+- 548 unit tests | 100+ E2E tests across all languages
 
 **Goal:** Extend `knot` to become the standard indexer for hybrid projects with full cross-language dependency resolution.
 
@@ -158,6 +160,20 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.0 - Consolidated `.knot/` Directory & Test Resilience
+
+**Fastembed Cache Consolidation:**
+- ✅ The `fastembed` model cache (previously `.fastembed_cache/` in CWD) now stores inside `.knot/fastembed_cache/` by default
+- ✅ Configurable via `KNOT_FASTEMBED_CACHE_DIR` env var for shared caching across multiple repos
+- ✅ All three binaries (knot-indexer, knot, knot-mcp) pass the cache dir to `Embedder::init(cache_dir: PathBuf)`
+- ✅ New `fastembed_cache_dir()` helper in `src/pipeline/state.rs` with env var override support
+
+**Test Resilience:**
+- ✅ Fixed 3 unit tests that failed when `KNOT_INGEST_CONCURRENCY` / `KNOT_RAYON_THREADS` env vars were set in the parent shell
+- ✅ Introduced serialized env-access pattern via `Mutex` with save/restore semantics for process-wide env var modifications
+- ✅ 548 unit tests passing | cargo fmt + clippy clean
+- ✅ 12/12 E2E test suites pass
 
 ### v1.2.0 - Cargo.toml, Configuration Files, Kubernetes + Helm
 
