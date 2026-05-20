@@ -17,6 +17,16 @@ const STATE_DIR: &str = ".knot";
 /// State file name containing file hashes.
 const STATE_FILE: &str = "index_state.json";
 
+/// Returns the cache directory for fastembed models.
+/// Prioritises the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
+/// If not set, defaults to `<repo_path>/.knot/fastembed_cache/`.
+pub fn fastembed_cache_dir(repo_path: &str) -> PathBuf {
+    if let Ok(custom_dir) = std::env::var("KNOT_FASTEMBED_CACHE_DIR") {
+        return PathBuf::from(custom_dir);
+    }
+    Path::new(repo_path).join(STATE_DIR).join("fastembed_cache")
+}
+
 /// Classification of a file based on state comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileStatus {

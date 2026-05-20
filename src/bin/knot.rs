@@ -179,7 +179,9 @@ async fn main() -> anyhow::Result<()> {
             .await?,
     );
 
-    let embedder = Arc::new(Mutex::new(Embedder::init()?));
+    let embedder = Arc::new(Mutex::new(Embedder::init(
+        knot::pipeline::state::fastembed_cache_dir(&cfg.repo_path),
+    )?));
 
     match cli.command {
         Commands::Search {

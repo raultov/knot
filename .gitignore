@@ -13,7 +13,7 @@ publish_at_utc.sh
 /tests/.e2e_*_repo/
 !/tests/.e2e_config_repo/
 
-# fastembed cache (downloaded models)
+# fastembed cache (downloaded models, now lives in .knot/fastembed_cache by default)
 .fastembed_cache/
 
 # Environment variables (local configuration)

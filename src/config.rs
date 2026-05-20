@@ -470,7 +470,10 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_repo_name_auto_detection() {
@@ -1022,6 +1025,9 @@ mod tests {
 
     #[test]
     fn test_ingest_concurrency_default() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev = std::env::var("KNOT_INGEST_CONCURRENCY").ok();
+        unsafe { std::env::remove_var("KNOT_INGEST_CONCURRENCY") };
         let args = vec![
             "knot-indexer",
             "--repo-path",
@@ -1033,6 +1039,10 @@ mod tests {
         let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
         // Default should be 4
         assert_eq!(cli.ingest_concurrency, 4);
+        // Restore previous env var if it was set
+        if let Some(val) = prev {
+            unsafe { std::env::set_var("KNOT_INGEST_CONCURRENCY", val) };
+        }
     }
 
     #[test]
@@ -1055,6 +1065,9 @@ mod tests {
     fn test_ingest_concurrency_env_var() {
         // Test that the env var is mapped correctly (check the attribute)
         // Clap sets env = "KNOT_INGEST_CONCURRENCY" for this field
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev = std::env::var("KNOT_INGEST_CONCURRENCY").ok();
+        unsafe { std::env::set_var("KNOT_INGEST_CONCURRENCY", "16") };
         let args = vec![
             "knot-indexer",
             "--repo-path",
@@ -1063,9 +1076,14 @@ mod tests {
             "secret",
         ];
 
-        // Without the env var set, should get default
         let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
-        assert_eq!(cli.ingest_concurrency, 4);
+        assert_eq!(cli.ingest_concurrency, 16);
+        // Restore previous env var value
+        if let Some(val) = prev {
+            unsafe { std::env::set_var("KNOT_INGEST_CONCURRENCY", val) };
+        } else {
+            unsafe { std::env::remove_var("KNOT_INGEST_CONCURRENCY") };
+        }
     }
 
     #[test]
@@ -1097,6 +1115,9 @@ mod tests {
 
     #[test]
     fn test_rayon_threads_default() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev = std::env::var("KNOT_RAYON_THREADS").ok();
+        unsafe { std::env::remove_var("KNOT_RAYON_THREADS") };
         let args = vec![
             "knot-indexer",
             "--repo-path",
@@ -1107,6 +1128,10 @@ mod tests {
 
         let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
         assert_eq!(cli.rayon_threads, None);
+        // Restore previous env var if it was set
+        if let Some(val) = prev {
+            unsafe { std::env::set_var("KNOT_RAYON_THREADS", val) };
+        }
     }
 
     #[test]

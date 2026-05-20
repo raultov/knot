@@ -42,11 +42,18 @@ impl Embedder {
     ///
     /// On first run this will download the ONNX model weights (~23 MB for
     /// AllMiniLML6V2) and cache them locally. Subsequent runs load from cache.
-    pub fn init() -> Result<Self> {
-        info!("Initialising fastembed model ({DEFAULT_MODEL:?})…");
+    pub fn init(cache_dir: std::path::PathBuf) -> Result<Self> {
+        info!(
+            "Initialising fastembed model ({DEFAULT_MODEL:?}) in {}…",
+            cache_dir.display()
+        );
+
+        std::fs::create_dir_all(&cache_dir).context("Failed to create fastembed cache dir")?;
 
         let model = TextEmbedding::try_new(
-            InitOptions::new(DEFAULT_MODEL).with_show_download_progress(true),
+            InitOptions::new(DEFAULT_MODEL)
+                .with_cache_dir(cache_dir)
+                .with_show_download_progress(true),
         )
         .context("Failed to initialise fastembed TextEmbedding model")?;
 
@@ -115,7 +122,7 @@ impl Embedder {
 #[cfg(not(feature = "indexer"))]
 impl Embedder {
     /// Stub initialiser for the lightweight "only-clients" mode.
-    pub fn init() -> Result<Self> {
+    pub fn init(_cache_dir: std::path::PathBuf) -> Result<Self> {
         info!("Running in lightweight 'only-clients' mode: embedding feature disabled");
         Ok(Self)
     }
@@ -161,7 +168,9 @@ mod tests {
     #[ignore = "Downloads ONNX model (~23MB) and requires significant memory/CPU"]
     #[test]
     fn test_embedder_init_and_embed_basic() {
-        let mut embedder = Embedder::init().expect("Failed to init embedder");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut embedder =
+            Embedder::init(temp_dir.path().to_path_buf()).expect("Failed to init embedder");
 
         let entity = ParsedEntity::new(
             "TestClass",
@@ -189,7 +198,9 @@ mod tests {
     #[ignore = "Downloads ONNX model (~23MB) and requires significant memory/CPU"]
     #[test]
     fn test_embedder_embed_query() {
-        let mut embedder = Embedder::init().expect("Failed to init embedder");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut embedder =
+            Embedder::init(temp_dir.path().to_path_buf()).expect("Failed to init embedder");
         let vector = embedder
             .embed_query("How to implement a singleton in Java?")
             .expect("Failed to embed query");

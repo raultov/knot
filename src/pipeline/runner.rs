@@ -118,7 +118,8 @@ pub async fn run_indexing_pipeline(
         });
 
         // Stage 3 & 4: Batching & Embedding (CPU)
-        let embedder = Arc::new(tokio::sync::Mutex::new(Embedder::init()?));
+        let cache_dir = crate::pipeline::state::fastembed_cache_dir(&cfg.repo_path);
+        let embedder = Arc::new(tokio::sync::Mutex::new(Embedder::init(cache_dir)?));
         let embed_handle = {
             let batch_size = cfg.batch_size;
             let embedder = Arc::clone(&embedder);

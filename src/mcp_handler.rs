@@ -46,10 +46,11 @@ impl KnotMcpHandler {
         neo4j_user: &str,
         neo4j_password: &str,
         embed_dim: u64,
+        cache_dir: std::path::PathBuf,
     ) -> anyhow::Result<Self> {
         let vector_db = VectorDb::connect(qdrant_url, qdrant_collection, embed_dim).await?;
         let graph_db = GraphDb::connect(neo4j_uri, neo4j_user, neo4j_password).await?;
-        let embedder = Embedder::init()?;
+        let embedder = Embedder::init(cache_dir)?;
 
         Ok(Self {
             vector_db: Some(Arc::new(vector_db)),

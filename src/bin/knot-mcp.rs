@@ -107,6 +107,7 @@ async fn main() -> SdkResult<()> {
             &cfg.neo4j_user,
             &cfg.neo4j_password,
             cfg.embed_dim,
+            knot::pipeline::state::fastembed_cache_dir(&cfg.repo_path),
         )
         .await
         .expect("Failed to initialize MCP handler");

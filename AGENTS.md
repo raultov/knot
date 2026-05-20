@@ -148,7 +148,7 @@ edition = "2024"
 
 ### Build Artifacts to Ignore
 - `target/` — Compiled binaries, intermediate objects
-- `.knot/` — Index state (.json file tracking file hashes for incremental indexing)
+- `.knot/` — Index state (`index_state.json` file for incremental indexing) and fastembed model cache (`fastembed_cache/`)
 - `.e2e_*` — Ephemeral test databases (cleaned up by `run_all_e2e.sh`)
 - `node_modules/` — Only for tree-sitter-groovy npm package
 
