@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.1):**
+**Current State (v1.3.2):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
@@ -15,7 +15,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file) + list_repo_dependencies
 - Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges and retroactive linking
-- Entity Subgraph Traversal (v1.3.1): `get_entity_subgraph` query with configurable depth, relationship filtering, and direction
+- Entity Subgraph Traversal (v1.3.2): `get_entity_subgraph` query with configurable depth, relationship filtering, and direction
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
@@ -162,7 +162,7 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 
 ## Changelog
 
-### v1.3.1 - Entity Subgraph Traversal
+### v1.3.2 - Entity Subgraph Traversal
 
 **Entity Subgraph Retrieval (`get_entity_subgraph`):**
 - ✅ New `get_entity_subgraph` query method in `QueryExt` trait + full `GraphDb` implementation

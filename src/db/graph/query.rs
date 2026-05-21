@@ -454,6 +454,7 @@ impl QueryExt for GraphDb {
         } else {
             // Root not found — return empty result
             return Ok(SubgraphResult {
+                root_id: None,
                 nodes: vec![],
                 edges: vec![],
                 truncated: false,
@@ -553,6 +554,7 @@ impl QueryExt for GraphDb {
         }
 
         Ok(SubgraphResult {
+            root_id: Some(root_uuid),
             nodes,
             edges,
             truncated,

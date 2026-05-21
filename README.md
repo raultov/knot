@@ -666,7 +666,7 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.1 — Entity Subgraph Traversal) ✅
+### Current Release (v1.3.2 — Entity Subgraph Traversal) ✅
 - ✅ **Entity Subgraph Retrieval**: New `get_entity_subgraph` query method that traverses the entity graph starting from a root entity and returns all reachable nodes and edges within a configurable depth (1–5). Supports filtering by relationship type (`CALLS`, `EXTENDS`, `IMPLEMENTS`, etc.) and direction (`Outgoing`, `Incoming`, `Both`). Includes deduplication, truncation at configurable `max_nodes`, and edge extraction between collected nodes. Available via the library API (`QueryExt::get_entity_subgraph`) and `cli_tools::run_get_subgraph` wrapper.
 - ✅ **New Data Models**: `SubgraphNode`, `SubgraphEdge`, `SubgraphResult`, and `SubgraphDirection` enums exported from `knot::models`
 - ✅ **6 new Neo4j integration tests** for the subgraph functionality

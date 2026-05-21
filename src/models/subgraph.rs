@@ -37,6 +37,7 @@ pub struct SubgraphEdge {
 /// Result of a subgraph traversal query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubgraphResult {
+    pub root_id: Option<String>,
     pub nodes: Vec<SubgraphNode>,
     pub edges: Vec<SubgraphEdge>,
     /// True when the total number of nodes found exceeds the requested limit.
