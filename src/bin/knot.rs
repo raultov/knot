@@ -21,7 +21,6 @@ fn inject_custom_ca_certs(cert_path: &Option<String>) {
     if let Some(path) = cert_path {
         unsafe {
             std::env::set_var("SSL_CERT_FILE", path);
-            std::env::set_var("SSL_CERT_DIR", path);
         }
         tracing::info!("Injected custom CA certificate path: {}", path);
     }

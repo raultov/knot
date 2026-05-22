@@ -45,7 +45,7 @@ impl VectorUpsertExt for VectorDb {
             .collect();
 
         self.client
-            .upsert_points(UpsertPointsBuilder::new(&self.collection, points))
+            .upsert_points(UpsertPointsBuilder::new(&self.collection, points).wait(true))
             .await
             .context("Failed to upsert points into Qdrant")?;
 

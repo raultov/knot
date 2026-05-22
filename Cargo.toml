@@ -1,6 +1,6 @@
 [package]
 name = "knot"
-version = "1.3.2"
+version = "1.3.3"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, Groovy, C/C++, Build Systems, and HTML/CSS codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
@@ -52,7 +52,7 @@ tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 
 # --- Local Embeddings ---
-fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub", "image-models"], optional = true }
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls", "image-models"], optional = true }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
 
 # --- Vector Database ---

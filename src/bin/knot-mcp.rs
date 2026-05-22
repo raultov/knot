@@ -36,7 +36,6 @@ fn inject_custom_ca_certs(cert_path: &Option<String>) {
         // 3. Tokio runtime hasn't been entered yet
         unsafe {
             std::env::set_var("SSL_CERT_FILE", path);
-            std::env::set_var("SSL_CERT_DIR", path);
         }
         tracing::info!("Injected custom CA certificate path: {}", path);
     }

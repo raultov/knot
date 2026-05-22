@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.2):**
+**Current State (v1.3.3):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
@@ -23,11 +23,10 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Consolidated `.knot/` directory: fastembed model cache now stored in `.knot/fastembed_cache/` (configurable via `KNOT_FASTEMBED_CACHE_DIR`)
 - 548 unit tests | 100+ E2E tests across all languages
 
-**Goal:** Extend `knot` to become the standard indexer for hybrid projects with full cross-language dependency resolution.
-
 ---
 
 ## Phase 8: Python Support (v0.9.x)
+
 
 ### Objective
 Enable `knot` to index Python codebases with full semantic understanding of AST, classes, decorators, and module dependencies.
@@ -161,6 +160,14 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.3 - Fix Custom CA Certs behind Proxy
+
+**TLS & Proxy Support:**
+- ✅ Switched `fastembed` feature to `hf-hub-native-tls` to support corporate proxies via OpenSSL/native-tls.
+- ✅ Fixed `inject_custom_ca_certs` to only set `SSL_CERT_FILE`, avoiding incorrect `SSL_CERT_DIR` file-path assignments.
+- ✅ 548 unit tests passing | cargo fmt + clippy clean
+- ✅ 12/12 E2E test suites pass
 
 ### v1.3.2 - Entity Subgraph Traversal
 
