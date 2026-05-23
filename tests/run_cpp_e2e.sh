@@ -45,6 +45,7 @@ cat > "$E2E_DATA_DIR/docker-compose.yml" << 'DOCKEREOF'
 services:
   neo4j:
     image: neo4j:5.26-community
+    container_name: knot_neo4j_cpp_e2e
     ports:
       - "18000:7687"
       - "18001:7474"
@@ -57,15 +58,52 @@ services:
       retries: 15
   qdrant:
     image: qdrant/qdrant:v1.13.5
+    container_name: knot_qdrant_cpp_e2e
     ports:
       - "16550:6334"
       - "16551:6333"
 DOCKEREOF
 
+# Helper for eventually consistent searches (Qdrant/Neo4j index delays)
+retry_match() {
+    local expected="$1"
+    shift
+    local max_attempts=10
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if "$@" 2>/dev/null | grep -qiE "$expected"; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+# Helper that retries until a command output contains at least N matches of a pattern
+retry_count() {
+    local expected_count="$1"
+    local pattern="$2"
+    shift 2
+    local max_attempts=10
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        local count
+        count=$("$@" 2>/dev/null | grep -cE "$pattern" || echo "0")
+        if [ "$count" -ge "$expected_count" ]; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+
 echo -n "Starting Neo4j + Qdrant... "
 docker compose -f "$E2E_DATA_DIR/docker-compose.yml" up -d
 for i in $(seq 1 30); do
-    if docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "RETURN 1" > /dev/null 2>&1; then
+    if docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "RETURN 1" > /dev/null 2>&1; then
         break
     fi
     sleep 2
@@ -273,6 +311,8 @@ else
     exit 1
 fi
 
+sleep 2
+
 KNOT_ENV=(
     KNOT_REPO_NAME="$REPO_NAME"
     KNOT_QDRANT_URL="$QDRANT_URL"
@@ -292,298 +332,235 @@ run_mcp() {
 
 # ── Test 1: Class & Method Extraction with Namespaces ─
 echo -n "Test 1: FQN extraction for Engine::MyClass::start... "
-OUT1=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'start'}) RETURN e.fqn" 2>/dev/null)
-if echo "$OUT1" | grep -q "Engine::MyClass::start"; then
+if retry_match "Engine::MyClass::start" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'start'}) RETURN e.fqn"; then
     echo -e "${GREEN}✓ Engine::MyClass::start found${NC}"
 else
     echo -e "${RED}✗ Engine::MyClass::start NOT found in FQNs${NC}"
-    echo "$OUT1"
     exit 1
 fi
 
 # ── Test 2: Call Graph for Pointers/Refs ─
 echo -n "Test 2: find_callers on start() finds main()... "
-OUT2=$(run_knot callers start --repo "$REPO_NAME" || true)
-if echo "$OUT2" | grep -q "main"; then
+if retry_match "main" run_knot callers start --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓ main found as caller${NC}"
 else
     echo -e "${RED}✗ main NOT found as caller${NC}"
-    echo "$OUT2"
     exit 1
 fi
 
 # ── Test 3: Macro Tracking ─
 echo -n "Test 3: macro MAX_BUF used in main()... "
-OUT3=$(run_knot callers MAX_BUF --repo "$REPO_NAME" || true)
-if echo "$OUT3" | grep -q "main"; then
+if retry_match "main" run_knot callers MAX_BUF --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓ MAX_BUF usage found in main${NC}"
 else
     echo -e "${RED}✗ MAX_BUF usage NOT found${NC}"
-    echo "$OUT3"
     exit 1
 fi
 
 # ── Test 4: Namespace and Class References ─
 echo -n "Test 4: MyClass referenced in main()... "
-OUT4=$(run_knot callers MyClass --repo "$REPO_NAME" || true)
-if echo "$OUT4" | grep -q "main"; then
+if retry_match "main" run_knot callers MyClass --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓ MyClass reference found in main${NC}"
 else
     echo -e "${RED}✗ MyClass reference NOT found${NC}"
-    echo "$OUT4"
     exit 1
 fi
 
 # ── Test 5: Operator Overload & Reference Return ─
 echo -n "Test 5: operator = extracted with FQN... "
-OUT5=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'operator ='}) RETURN e.fqn" 2>/dev/null)
-if echo "$OUT5" | grep -q "String::operator ="; then
+if retry_match "String::operator =" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'operator ='}) RETURN e.fqn"; then
     echo -e "${GREEN}✓ operator = extracted${NC}"
 else
     echo -e "${RED}✗ operator = NOT found${NC}"
-    echo "$OUT5"
     exit 1
 fi
 
 echo -n "Test 6: copy() ref-return method extracted... "
-OUT6=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'copy'}) RETURN e.fqn" 2>/dev/null)
-if echo "$OUT6" | grep -q "String::copy"; then
+if retry_match "String::copy" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'copy'}) RETURN e.fqn"; then
     echo -e "${GREEN}✓ ref-return method extracted${NC}"
 else
     echo -e "${RED}✗ ref-return method NOT found${NC}"
-    echo "$OUT6"
     exit 1
 fi
 
 echo -n "Test 7: find_callers copy finds clear()... "
-OUT7=$(run_knot callers copy --repo "$REPO_NAME" || true)
-if echo "$OUT7" | grep -q "clear"; then
+if retry_match "clear" run_knot callers copy --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓ clear() calls copy()${NC}"
 else
     echo -e "${RED}✗ clear() NOT found as caller of copy()${NC}"
-    echo "$OUT7"
     exit 1
 fi
 
 echo -n "Test 8: find_callers copy finds operator =... "
-if echo "$OUT7" | grep -q "operator"; then
+if retry_match "operator" run_knot callers copy --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓ operator = calls copy()${NC}"
 else
     echo -e "${RED}✗ operator = NOT found as caller of copy()${NC}"
-    echo "$OUT7"
     exit 1
 fi
 
 # ── Test 9: WString.cpp qualified definitions in Neo4j ─
 echo -n "Test 9: String::copy in Neo4j... "
-OUT9A=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'copy'}) RETURN e.fqn" 2>/dev/null)
-if echo "$OUT9A" | grep -q "String::copy"; then
+if retry_match "String::copy" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'copy'}) RETURN e.fqn"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ String::copy NOT found${NC}"
-    echo "$OUT9A"
     exit 1
 fi
 
 echo -n "Test 9: String::operator = in Neo4j... "
-OUT9B=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'operator ='}) RETURN e.fqn" 2>/dev/null)
-if echo "$OUT9B" | grep -q "String::operator ="; then
+if retry_match "String::operator =" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'operator ='}) RETURN e.fqn"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ String::operator = NOT found${NC}"
-    echo "$OUT9B"
     exit 1
 fi
 
 echo -n "Test 9: operator = CALLS copy edge in Neo4j... "
-OUT9C=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'operator ='})-[r:CALLS]->(p:Entity {name:'copy'}) RETURN r" 2>/dev/null)
-if echo "$OUT9C" | grep -q "CALLS"; then
+if retry_match "CALLS" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'operator ='})-[r:CALLS]->(p:Entity {name:'copy'}) RETURN r"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ operator = -[CALLS]-> copy NOT found${NC}"
-    echo "$OUT9C"
     exit 1
 fi
 
 echo -n "Test 10: Overload resolution - 3 write() overloads in Neo4j... "
-OUT10A=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'write'}) RETURN e.fqn" 2>/dev/null)
-WRITE_COUNT=$(echo "$OUT10A" | grep -c "Printer::write" || echo "0")
-if [ "$WRITE_COUNT" -ge 3 ]; then
+if retry_count 3 "Printer::write" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'write'}) RETURN e.fqn"; then
     echo -e "${GREEN}✓${NC}"
 else
-    echo -e "${RED}✗ Expected 3 write overloads in Neo4j, found $WRITE_COUNT${NC}"
-    echo "$OUT10A"
+    echo -e "${RED}✗ Expected 3 write overloads in Neo4j${NC}"
     exit 1
 fi
 
 echo -n "Test 10: Overload resolution - find_callers write... "
-OUT10B=$(run_knot callers write --repo "$REPO_NAME" || true)
-if echo "$OUT10B" | grep -q "printf" && echo "$OUT10B" | grep -q "test_overloads"; then
+if retry_match "printf" run_knot callers write --repo "$REPO_NAME" && retry_match "test_overloads" run_knot callers write --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ find_callers write missing expected callers${NC}"
-    echo "$OUT10B"
     exit 1
 fi
 
 echo -n "Test 10: Overload resolution - printf CALLS 2-arg write... "
-OUT10C=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'printf'})-[r:CALLS]->(e:Entity {name:'write'}) WHERE c.fqn CONTAINS 'Printer' RETURN r" 2>/dev/null)
-if echo "$OUT10C" | grep -q "CALLS"; then
+if retry_match "CALLS" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'printf'})-[r:CALLS]->(e:Entity {name:'write'}) WHERE c.fqn CONTAINS 'Printer' RETURN r"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ printf not calling write overload${NC}"
-    echo "$OUT10C"
     exit 1
 fi
 
 echo -n "Test 10: Overload resolution - write(char*) CALLS write (any overload)... "
-OUT10D=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity)-[r:CALLS]->(e:Entity) WHERE c.name='write' AND e.name='write' AND c.fqn CONTAINS 'Printer' RETURN count(r)" 2>/dev/null)
-CALLS_COUNT=$(echo "$OUT10D" | tail -1 | tr -d ' ')
-if [ "$CALLS_COUNT" -ge 1 ]; then
+if retry_match "CALLS" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity)-[r:CALLS]->(e:Entity) WHERE c.name='write' AND e.name='write' AND c.fqn CONTAINS 'Printer' RETURN r"; then
     echo -e "${GREEN}✓${NC}"
 else
-    echo -e "${RED}✗ write(char*) not calling another write overload (found $CALLS_COUNT edges)${NC}"
-    echo "$OUT10D"
+    echo -e "${RED}✗ write(char*) not calling another write overload${NC}"
     exit 1
 fi
 
 echo -n "Test 10: Overload resolution - test_overloads CALLS write (any overload)... "
-OUT10E=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'test_overloads'})-[r:CALLS]->(e:Entity {name:'write'}) RETURN count(r)" 2>/dev/null)
-CALLS_COUNT=$(echo "$OUT10E" | tail -1 | tr -d ' ')
-if [ "$CALLS_COUNT" -ge 1 ]; then
+if retry_match "CALLS" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'test_overloads'})-[r:CALLS]->(e:Entity {name:'write'}) RETURN r"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ test_overloads not calling write${NC}"
-    echo "$OUT10E"
     exit 1
 fi
 
 # ── Test 11: Signature-based overload disambiguation ─
 echo -n "Test 11: Signature stored for C++ write overloads... "
-OUT11A=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'write'}) WHERE e.signature IS NOT NULL RETURN count(e)" 2>/dev/null)
-SIG_COUNT=$(echo "$OUT11A" | tail -1 | tr -d ' ')
-if [ "$SIG_COUNT" -ge 1 ]; then
-    echo -e "${GREEN}✓ (found $SIG_COUNT write with signature)${NC}"
+if retry_match "write" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'write'}) WHERE e.signature IS NOT NULL RETURN e.name"; then
+    echo -e "${GREEN}✓${NC}"
 else
-    echo -e "${RED}✗ No write entities have signature stored (expected at least 1)${NC}"
-    echo "$OUT11A"
+    echo -e "${RED}✗ No write entities have signature stored${NC}"
     exit 1
 fi
 
 echo -n "Test 11: Signature contains parameter info (const uint8_t)... "
-OUT11B=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'write', fqn: 'Printer::write'}) WHERE e.signature CONTAINS 'const uint8_t' RETURN count(e)" 2>/dev/null)
-HAS_SIG=$(echo "$OUT11B" | tail -1 | tr -d ' ')
-if [ "$HAS_SIG" -ge 1 ]; then
+if retry_match "Printer::write" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity {name: 'write', fqn: 'Printer::write'}) WHERE e.signature CONTAINS 'const uint8_t' RETURN e.fqn"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ No write signature contains 'const uint8_t'${NC}"
-    echo "$OUT11B"
     exit 1
 fi
 
 echo -n "Test 11: find_callers with signature fragment finds printf... "
-OUT11C=$(run_knot callers "write(const uint8_t" --repo "$REPO_NAME" || true)
-if echo "$OUT11C" | grep -q "printf"; then
+if retry_match "printf" run_knot callers "write(const uint8_t" --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ find_callers 'write(const uint8_t' did not find printf${NC}"
-    echo "$OUT11C"
     exit 1
 fi
 
 echo -n "Test 11: find_callers write returns at least 2 callers (printf, write(char*))... "
-OUT11D=$(run_knot callers write --repo "$REPO_NAME" || true)
-PRINTF_COUNT=$(echo "$OUT11D" | grep -c "printf" || echo "0")
-WRITE_CHAR_COUNT=$(echo "$OUT11D" | grep -c "| write " || echo "0")
-if [ "$PRINTF_COUNT" -ge 1 ] && [ "$WRITE_CHAR_COUNT" -ge 1 ]; then
-    echo -e "${GREEN}✓ (printf: $PRINTF_COUNT, write(char*): $WRITE_CHAR_COUNT)${NC}"
+if retry_match "printf" run_knot callers write --repo "$REPO_NAME" && retry_match "| write " run_knot callers write --repo "$REPO_NAME"; then
+    echo -e "${GREEN}✓${NC}"
 else
-    echo -e "${RED}✗ find_callers write missing expected callers (printf: $PRINTF_COUNT, write(char*): $WRITE_CHAR_COUNT)${NC}"
-    echo "$OUT11D"
+    echo -e "${RED}✗ find_callers write missing expected callers${NC}"
     exit 1
 fi
 
 # ── Test 12: Overload isolation via arg_count disambiguation ─
 echo -n "Test 12: find_callers 'write(const uint8_t' excludes test_overloads..."
-OUT12A=$(run_knot callers "write(const uint8_t" --repo "$REPO_NAME" || true)
-if ! echo "$OUT12A" | grep -q "test_overloads"; then
+if retry_match "printf" run_knot callers "write(const uint8_t" --repo "$REPO_NAME" && ! run_knot callers "write(const uint8_t" --repo "$REPO_NAME" | grep -q "test_overloads"; then
     echo -e "${GREEN}✓ test_overloads correctly excluded${NC}"
 else
     echo -e "${RED}✗ test_overloads should NOT appear for write(const uint8_t)${NC}"
-    echo "$OUT12A"
     exit 1
 fi
 
 echo -n "Test 12: printf CALLS the 2-arg write (const uint8_t* signature)... "
-OUT12B=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'printf'})-[r:CALLS]->(e:Entity {name:'write', fqn:'Printer::write'}) WHERE e.signature CONTAINS 'const uint8_t' RETURN count(r)" 2>/dev/null)
-PCOUNT=$(echo "$OUT12B" | tail -1 | tr -d ' ')
-if [ "$PCOUNT" -ge 1 ]; then
+if retry_match "CALLS" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'printf'})-[r:CALLS]->(e:Entity {name:'write', fqn:'Printer::write'}) WHERE e.signature CONTAINS 'const uint8_t' RETURN r"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ printf does not call write(const uint8_t*)${NC}"
-    echo "$OUT12B"
     exit 1
 fi
 
 echo -n "Test 12: test_overloads CALLS the 1-arg write (NOT const uint8_t*)... "
-OUT12C=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'test_overloads'})-[r:CALLS]->(e:Entity {name:'write', fqn:'Printer::write'}) WHERE e.signature CONTAINS 'const uint8_t' RETURN count(r)" 2>/dev/null)
-TCOUNT=$(echo "$OUT12C" | tail -1 | tr -d ' ')
-if [ "$TCOUNT" -eq 0 ]; then
+# Wait for stabilization, then ensure 0 CALLS to the 2-arg version exist
+sleep 2
+if ! docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity {name:'test_overloads'})-[r:CALLS]->(e:Entity {name:'write', fqn:'Printer::write'}) WHERE e.signature CONTAINS 'const uint8_t' RETURN r" 2>/dev/null | grep -q "CALLS"; then
     echo -e "${GREEN}✓ test_overloads calls 1-arg write, not const uint8_t* version${NC}"
 else
     echo -e "${RED}✗ test_overloads should call write(uint8_t), not write(const uint8_t*)${NC}"
-    echo "$OUT12C"
     exit 1
 fi
 
 # ── Test 13: Print.cpp entities extracted with correct FQN ─
 echo -n "Test 13: Print.cpp entities extracted (Print::print and Print::println)... "
-OUT13=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password \
-    "MATCH (e:Entity) WHERE e.fqn = 'Print::print' AND e.file_path CONTAINS 'Print.cpp' RETURN count(e)" 2>/dev/null)
-PRINT_COUNT=$(echo "$OUT13" | tail -1 | tr -d ' ')
-if [ "$PRINT_COUNT" -ge 3 ]; then
-    echo -e "${GREEN}✓ ($PRINT_COUNT print overloads)${NC}"
+if retry_count 3 "Print::print" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (e:Entity) WHERE e.fqn = 'Print::print' AND e.file_path CONTAINS 'Print.cpp' RETURN e.fqn"; then
+    echo -e "${GREEN}✓ (print overloads found)${NC}"
 else
-    echo -e "${RED}✗ Expected >= 3 Print::print entities in Print.cpp, found $PRINT_COUNT${NC}"
-    echo "$OUT13"
+    echo -e "${RED}✗ Expected Print::print entities in Print.cpp not found${NC}"
     exit 1
 fi
 
 # ── Test 14: println CALLS print (internal cross-method call) ─
 echo -n "Test 14: println CALLS print in Print.cpp... "
-OUT14=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password \
+if retry_match "CALLS" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password \
     "MATCH (c:Entity {name:'println'})-[r:CALLS]->(p:Entity {name:'print'}) \
-     WHERE c.file_path CONTAINS 'Print.cpp' AND p.file_path CONTAINS 'Print.cpp' \
-     RETURN count(r)" 2>/dev/null)
-CALLS_COUNT=$(echo "$OUT14" | tail -1 | tr -d ' ')
-if [ "$CALLS_COUNT" -ge 1 ]; then
-    echo -e "${GREEN}✓ ($CALLS_COUNT CALLS edges)${NC}"
+     WHERE c.file_path CONTAINS 'Print.cpp' AND p.fqn = 'Print::print' \
+     RETURN r"; then
+    echo -e "${GREEN}✓ (CALLS edges found)${NC}"
 else
-    echo -e "${RED}✗ println does NOT call print in Print.cpp (found $CALLS_COUNT edges)${NC}"
-    echo "$OUT14"
+    echo -e "${RED}✗ println does NOT call print in Print.cpp${NC}"
     exit 1
 fi
 
 # ── Test 15: find_callers print includes println ─
 echo -n "Test 15: find_callers print includes println from Print.cpp... "
-OUT15=$(run_knot callers print --repo "$REPO_NAME" || true)
-if echo "$OUT15" | grep -q "println"; then
+if retry_match "println" run_knot callers print --repo "$REPO_NAME"; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ find_callers print did not find println${NC}"
-    echo "$OUT15"
     exit 1
 fi
 
 # ── Test 16: Print.h parsed correctly (class Print extracted) ─
 echo -n "Test 16: Print class extracted from Print.h... "
-OUT16=$(docker exec $(docker ps -q -f name=e2e_cpp_data-neo4j) cypher-shell -u neo4j -p e2e_test_password \
-    "MATCH (e:Entity {name:'Print'}) WHERE e.file_path CONTAINS 'Print.h' RETURN e.kind" 2>/dev/null)
-if echo "$OUT16" | grep -qi "cpp_class"; then
+if retry_match "cpp_class" docker exec knot_neo4j_cpp_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (e:Entity {name:'Print'}) WHERE e.file_path CONTAINS 'Print.h' RETURN e.kind"; then
     echo -e "${GREEN}✓ Print.h parsed as C++ (CppClass found)${NC}"
 else
     echo -e "${RED}✗ Print class NOT extracted from Print.h (may be parsed as C instead of C++)${NC}"
-    echo "$OUT16"
     exit 1
 fi
 

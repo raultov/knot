@@ -154,6 +154,22 @@ call_cli() {
         cargo run --release --bin knot -- "$@" 2>/dev/null
 }
 
+# Helper for eventually consistent searches (Qdrant)
+retry_match() {
+    local expected="$1"
+    shift
+    local max_attempts=10
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if "$@" | grep -qiE "$expected"; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
 # ═══════════════════════════════════════════════════════════
 # GROUP A: Entity Extraction
 # ═══════════════════════════════════════════════════════════
@@ -167,13 +183,14 @@ mkdir -p "$TMP_REPO_DIR"
 cp "$TEST_FILES_DIR/sample_full.groovy" "$TMP_REPO_DIR/"
 
 run_indexer "$REPO_A" "$COLL_A" "--clean"
+sleep 2
 
 # Test A1: Search for Groovy class
 echo ""
 echo "Test A1: Searching for Groovy class BaseService..."
-if call_mcp "$REPO_A" "$COLL_A" \
-    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"BaseService Groovy class","max_results":10,"repo_name":"'"$REPO_A"'"}}}' | grep -q "BaseService" \
-    && call_cli "$REPO_A" "$COLL_A" search "BaseService" -r "$REPO_A" -m 10 | grep -q "BaseService"; then
+if retry_match "BaseService" call_mcp "$REPO_A" "$COLL_A" \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"BaseService Groovy class","max_results":10,"repo_name":"'"$REPO_A"'"}}}' \
+    && retry_match "BaseService" call_cli "$REPO_A" "$COLL_A" search "BaseService" -r "$REPO_A" -m 10; then
     echo -e "${GREEN}✓ Found Groovy class BaseService (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Groovy class BaseService not found${NC}"
@@ -183,9 +200,9 @@ fi
 # Test A2: Search for Groovy interface
 echo ""
 echo "Test A2: Searching for Groovy interface Repository..."
-if call_mcp "$REPO_A" "$COLL_A" \
-    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository interface","max_results":10,"repo_name":"'"$REPO_A"'"}}}' | grep -q "Repository" \
-    && call_cli "$REPO_A" "$COLL_A" search "Repository" -r "$REPO_A" -m 10 | grep -q "Repository"; then
+if retry_match "Repository" call_mcp "$REPO_A" "$COLL_A" \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository interface","max_results":10,"repo_name":"'"$REPO_A"'"}}}' \
+    && retry_match "Repository" call_cli "$REPO_A" "$COLL_A" search "Repository" -r "$REPO_A" -m 10; then
     echo -e "${GREEN}✓ Found Groovy interface Repository (MCP & CLI)${NC}"
 else
     echo -e "${RED}✗ Groovy interface Repository not found${NC}"
@@ -195,8 +212,8 @@ fi
 # Test A3: Search for Groovy Enum & Trait
 echo ""
 echo "Test A3: Searching for Groovy enum Status and trait Auditable..."
-if call_cli "$REPO_A" "$COLL_A" search "Status" -r "$REPO_A" -m 10 | grep -q "Status" \
-    && call_cli "$REPO_A" "$COLL_A" search "Auditable" -r "$REPO_A" -m 10 | grep -q "Auditable"; then
+if retry_match "Status" call_cli "$REPO_A" "$COLL_A" search "Status" -r "$REPO_A" -m 10 \
+    && retry_match "Auditable" call_cli "$REPO_A" "$COLL_A" search "Auditable" -r "$REPO_A" -m 10; then
     echo -e "${GREEN}✓ Found Groovy enum Status and trait Auditable (CLI)${NC}"
 else
     echo -e "${RED}✗ Groovy enum/trait not found${NC}"
@@ -206,8 +223,8 @@ fi
 # Test A4: Search for Script-Level Variables & Closures
 echo ""
 echo "Test A4: Searching for Groovy closures and global variables..."
-if call_cli "$REPO_A" "$COLL_A" search "globalConfig" -r "$REPO_A" -m 10 | grep -q "globalConfig" \
-    && call_cli "$REPO_A" "$COLL_A" search "processDataClosure" -r "$REPO_A" -m 10 | grep -q "processDataClosure"; then
+if retry_match "globalConfig" call_cli "$REPO_A" "$COLL_A" search "globalConfig" -r "$REPO_A" -m 10 \
+    && retry_match "processDataClosure" call_cli "$REPO_A" "$COLL_A" search "processDataClosure" -r "$REPO_A" -m 10; then
     echo -e "${GREEN}✓ Found Script-level variable globalConfig and closure processDataClosure (CLI)${NC}"
 else
     echo -e "${RED}✗ Groovy script-level elements not found${NC}"
@@ -273,6 +290,7 @@ class ClientB {
 GROOVY
 
 run_indexer "$REPO_B" "$COLL_B"
+sleep 2
 
 # Test B1: find_callers for Calculator.add
 echo ""
@@ -431,6 +449,7 @@ class UIPattern {
 EOF
 
 run_indexer "$REPO_C" "$COLL_C"
+sleep 2
 
 # Test C1: find_callers restartHttpServer (typed caller)
 echo ""
