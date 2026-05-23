@@ -11,6 +11,10 @@ NC='\033[0m' # No Color
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# Share the ONNX fastembed model cache across all E2E suites
+# so only the first suite downloads the model.
+export KNOT_FASTEMBED_CACHE_DIR="${KNOT_FASTEMBED_CACHE_DIR:-$HOME/.cache/knot/fastembed_cache}"
+
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}knot E2E Test Suite (All Languages)${NC}"
 echo -e "${BLUE}========================================${NC}"
@@ -37,6 +41,8 @@ run_test() {
     echo -e "\n${YELLOW}Cleaning up Docker...${NC}"
     cd "$PROJECT_ROOT/tests"
     docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+    docker compose -f .e2e_cpp_data/docker-compose.yml down -v 2>/dev/null || true
+    docker compose -f .e2e_crosslang_data/docker-compose.yml down -v 2>/dev/null || true
     sudo rm -rf .e2e_* 2>/dev/null || rm -rf .e2e_* 2>/dev/null || true
     sleep 3
     cd "$PROJECT_ROOT"
@@ -64,6 +70,8 @@ run_test "Cross-Repo Deps E2E" "run_cross_repo_dep_e2e.sh"
 echo -e "\n${YELLOW}Final cleanup...${NC}"
 cd "$PROJECT_ROOT/tests"
 docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+docker compose -f .e2e_cpp_data/docker-compose.yml down -v 2>/dev/null || true
+docker compose -f .e2e_crosslang_data/docker-compose.yml down -v 2>/dev/null || true
 rm -rf .e2e_* 2>/dev/null || true
 cd "$PROJECT_ROOT"
 

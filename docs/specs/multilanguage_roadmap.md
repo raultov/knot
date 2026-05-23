@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.3):**
+**Current State (v1.3.4):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
@@ -21,7 +21,8 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
 - Consolidated `.knot/` directory: fastembed model cache now stored in `.knot/fastembed_cache/` (configurable via `KNOT_FASTEMBED_CACHE_DIR`)
-- 548 unit tests | 100+ E2E tests across all languages
+- 550+ unit tests | 100+ E2E tests across all languages
+- Fix Indexer Ambiguity & Context Deduplication (v1.3.4)
 
 ---
 
@@ -160,6 +161,15 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.4 - Fix Indexer Ambiguity & Context Deduplication
+
+**Relationship Resolution Accuracy:**
+- ✅ **Fix Indexer Ambiguity**: Implemented strict uniqueness guards in relationship resolution. Global fallbacks now only create links if exactly one unambiguous candidate exists.
+- ✅ **Context Deduplication**: Added sorting and deduplication for UUID mappings in `name_to_uuids`, preventing redundant entries from interfering with uniqueness checks.
+- ✅ **Improved Resolution Priority**: Reordered fallback logic to prioritize local same-file matches before global filters.
+- ✅ **Enhanced Test Coverage**: Added comprehensive unit tests in `resolve.rs` for uniqueness guards and deduplication.
+- ✅ 12/12 E2E test suites pass (C++, Groovy, and Cross-Language suites fixed).
 
 ### v1.3.3 - Fix Custom CA Certs behind Proxy
 

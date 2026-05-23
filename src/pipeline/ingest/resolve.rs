@@ -326,6 +326,14 @@ pub fn resolve_reference_intents_with_context(
             .push(e.uuid);
     }
 
+    // Deduplicate UUIDs in name_to_uuids to avoid false positives when checking len() == 1.
+    // This happens because load_entity_mappings may have already loaded the entities from Neo4j
+    // that are also in the current batch.
+    for uuids in name_to_uuids.values_mut() {
+        uuids.sort();
+        uuids.dedup();
+    }
+
     // Resolve reference intents for each entity — parallelized via Rayon.
     // All context maps (fqn_to_uuid, name_to_uuids, etc.) are read-only
     // at this point, so no synchronization is needed.
@@ -599,18 +607,25 @@ fn resolve_single_call_intent(
 
         // Fallback: just match on method name.
         if let Some(uuids) = name_to_uuids.get(&intent.method) {
-            if let Some(ac) = intent.arg_count
-                && let Some(ac_map) = uuid_to_arg_count
-                && let Some(&matching_uuid) = uuids.iter().find(|u| ac_map.get(u) == Some(&ac))
-            {
-                return Some(matching_uuid);
-            }
             if let Some(same_file_uuid) =
                 find_entity_in_same_file(uuids, &caller_file_path, uuid_to_file)
             {
                 return Some(same_file_uuid);
             }
-            return uuids.first().copied();
+            if let Some(ac) = intent.arg_count
+                && let Some(ac_map) = uuid_to_arg_count
+            {
+                let ac_matches: Vec<&Uuid> = uuids
+                    .iter()
+                    .filter(|u| ac_map.get(u) == Some(&ac))
+                    .collect();
+                if ac_matches.len() == 1 {
+                    return Some(*ac_matches[0]);
+                }
+            }
+            if uuids.len() == 1 {
+                return uuids.first().copied();
+            }
         }
     }
 
@@ -618,18 +633,25 @@ fn resolve_single_call_intent(
     if intent.receiver.is_none()
         && let Some(uuids) = name_to_uuids.get(&intent.method)
     {
-        if let Some(ac) = intent.arg_count
-            && let Some(ac_map) = uuid_to_arg_count
-            && let Some(&matching_uuid) = uuids.iter().find(|u| ac_map.get(u) == Some(&ac))
-        {
-            return Some(matching_uuid);
-        }
         if let Some(same_file_uuid) =
             find_entity_in_same_file(uuids, &caller_file_path, uuid_to_file)
         {
             return Some(same_file_uuid);
         }
-        return uuids.first().copied();
+        if let Some(ac) = intent.arg_count
+            && let Some(ac_map) = uuid_to_arg_count
+        {
+            let ac_matches: Vec<&Uuid> = uuids
+                .iter()
+                .filter(|u| ac_map.get(u) == Some(&ac))
+                .collect();
+            if ac_matches.len() == 1 {
+                return Some(*ac_matches[0]);
+            }
+        }
+        if uuids.len() == 1 {
+            return uuids.first().copied();
+        }
     }
 
     None
@@ -1263,5 +1285,103 @@ mod tests {
     fn test_parse_maven_style_dep_short() {
         let result = parse_maven_style_dep("com.example:my-lib");
         assert_eq!(result, Some(("com.example", "my-lib")));
+    }
+
+    fn mock_resolution_entity_at(
+        name: &str,
+        fqn: &str,
+        enclosing: Option<&str>,
+        file_path: &str,
+    ) -> ResolutionEntity {
+        ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: name.to_string(),
+            fqn: fqn.to_string(),
+            file_path: file_path.to_string(),
+            kind: EntityKind::Method,
+            enclosing_class: enclosing.map(|s| s.to_string()),
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_fallback_uniqueness_guard() {
+        // Scenario: Two entities named "new" in different files. Fallback should return None (ambiguous).
+        let mut caller = mock_resolution_entity("main", "App.main", None);
+        let callee1 =
+            mock_resolution_entity_at("new", "Class1.new", Some("Class1"), "test/file1.java");
+        let callee2 =
+            mock_resolution_entity_at("new", "Class2.new", Some("Class2"), "test/file2.java");
+
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "new".to_string(),
+            receiver: None,
+            line: 10,
+            arg_count: None,
+        });
+
+        let mut entities = vec![caller, callee1, callee2];
+        resolve_reference_intents(&mut entities);
+
+        // Should NOT have resolved to either (ambiguous)
+        assert_eq!(entities[0].relationships.len(), 0);
+    }
+
+    #[test]
+    fn test_resolve_fallback_arg_count_disambiguation() {
+        // Scenario: Two entities named "add" in different files, but with different arg counts.
+        let mut caller = mock_resolution_entity("main", "App.main", None);
+        let mut callee1 =
+            mock_resolution_entity_at("add", "Calc.add", Some("Calc"), "test/calc.java");
+        callee1.signature = Some("add(int, int)".to_string()); // 2 args
+
+        let mut callee2 =
+            mock_resolution_entity_at("add", "List.add", Some("List"), "test/list.java");
+        callee2.signature = Some("add(int)".to_string()); // 1 arg
+
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "add".to_string(),
+            receiver: None,
+            line: 10,
+            arg_count: Some(2),
+        });
+
+        let mut entities = vec![caller, callee1, callee2];
+        resolve_reference_intents(&mut entities);
+
+        // Should have resolved to callee1 (2 args)
+        assert_eq!(entities[0].relationships.len(), 1);
+        assert_eq!(entities[0].relationships[0].0, entities[1].uuid);
+    }
+
+    #[test]
+    fn test_resolve_context_deduplication() {
+        // Scenario: Entity exists in Neo4j (already loaded) AND in current batch.
+        // name_to_uuids should be deduplicated.
+        let mut caller = mock_resolution_entity("caller", "caller", None);
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "unique_func".to_string(),
+            receiver: None,
+            line: 1,
+            arg_count: None,
+        });
+
+        let entity =
+            mock_resolution_entity_at("unique_func", "unique_func", None, "test/unique.java");
+        let uuid = entity.uuid;
+
+        // Simulate duplicate: same UUID in context and batch
+        let fqn_to_uuid = HashMap::from([("unique_func".to_string(), uuid)]);
+        let name_to_uuids = HashMap::from([("unique_func".to_string(), vec![uuid])]);
+
+        let mut batch = vec![caller, entity];
+
+        resolve_reference_intents_with_context(&mut batch, fqn_to_uuid, name_to_uuids);
+
+        // Verification: If deduplication works, len() == 1 and it resolves.
+        assert_eq!(batch[0].relationships.len(), 1);
+        assert_eq!(batch[0].relationships[0].0, uuid);
     }
 }

@@ -24,15 +24,10 @@ cleanup() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Cross-lang reference E2E tests failed!${NC}"
-        echo -e "${YELLOW}To clean up manually:${NC}"
-        echo "  rm -rf $E2E_DATA_DIR $TMP_REPO_DIR"
-        return 0
     fi
-    echo -e "\n${YELLOW}Cleaning up cross-lang reference E2E environment...${NC}"
     docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v 2>/dev/null || true
     sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
-    echo -e "${GREEN}Cleanup complete${NC}"
 }
 trap cleanup EXIT INT TERM
 

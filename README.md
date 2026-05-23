@@ -666,7 +666,17 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.3 — Fix Custom CA Certs behind Proxy) ✅
+### Current Release (v1.3.4 — Fix Indexer Ambiguity, Context Deduplication & E2E Resilience) ✅
+- ✅ **Fix Indexer Ambiguity**: Implemented strict uniqueness guards in relationship resolution. Global fallbacks now only create links if exactly one unambiguous candidate exists, eliminating massive false-positive relationships for common methods like `new`, `get`, or `from`.
+- ✅ **Context Deduplication**: Added UUID deduplication to the entity mapping phase. Prevents redundant entries from Neo4j and current batches from interfering with resolution logic, especially during incremental indexing.
+- ✅ **Improved Resolution Priority**: Reordered fallback logic to prioritize local same-file matches before global filters, ensuring deterministic results for internal method calls.
+- ✅ **Enhanced Test Coverage**: Added comprehensive unit tests in `resolve.rs` for uniqueness guards and deduplication.
+- ✅ **Qdrant Ingestion Fix**: Removed `.wait(true)` from `upsert_points` to prevent semaphore deadlocks during collection index creation.
+- ✅ **E2E Test Resilience**: Fixed all E2E suites to always tear down Docker containers on exit (preventing port conflicts and orphaned containers). Shared ONNX model cache via `KNOT_FASTEMBED_CACHE_DIR` so only the first suite downloads the embedding model.
+- ✅ **Qdrant Client Timeouts**: Added configurable connection and request timeouts to Qdrant client.
+- ✅ **12/12 E2E test suites pass** (including C++, Groovy, and Cross-Language suites)
+
+### Previous Release (v1.3.3 — Fix Custom CA Certs behind Proxy) ✅
 - ✅ **Fix Custom CA Certs behind Proxy**: Switched `fastembed` feature from `hf-hub` to `hf-hub-native-tls`. This ensures that model downloads respect `SSL_CERT_FILE` and the system's CA trust store by using OpenSSL/native-tls instead of the static Mozilla bundle (webpki-roots) bundled with rustls.
 - ✅ **Fixed `inject_custom_ca_certs`**: Removed incorrect setting of `SSL_CERT_DIR` to a file path, ensuring proper TLS initialization.
 - ✅ **cargo fmt** clean | **cargo clippy** clean | **548 unit tests** passing

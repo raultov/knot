@@ -20,6 +20,8 @@ impl VectorConnectExt for VectorDb {
     /// Connect to Qdrant and return a ready-to-use [`VectorDb`].
     async fn connect(url: &str, collection: &str, embed_dim: u64) -> Result<VectorDb> {
         let client = qdrant_client::Qdrant::from_url(url)
+            .timeout(std::time::Duration::from_secs(300))
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .context("Failed to build Qdrant client")?;
 
