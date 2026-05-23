@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.4):**
+**Current State (v1.3.6):**
 - Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
@@ -161,6 +161,20 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.6 - Java Indexing Enhancement (Package & Inheritance)
+- ✅ **Package-aware FQN Resolution**: Java entities now include the full package prefix (e.g., `com.example.app.UserService`).
+- ✅ **Inheritance Extraction**: Added support for `EXTENDS` (classes/interfaces) and `IMPLEMENTS` (classes) relationships.
+- ✅ **Generic Stripping**: Strips generic parameters from base types for cleaner relationship linking (e.g., `Repository<User>` → `Repository`).
+- ✅ **Anonymous Class Support**: Tracks method invocations within anonymous inner classes.
+- ✅ **565 unit tests** passing | 12/12 E2E suites passing.
+
+### v1.3.5 - E2E Test Stabilization & Async Resilience
+- ✅ **Stabilized Groovy E2E Tests**: Introduced `retry_match` helper to handle Qdrant's eventual consistency without performance-killing `.wait(true)` calls.
+- ✅ **Fixed C/C++ E2E Test Flakiness**: Fixed non-deterministic relationship resolution in Test 14 by relaxing file path constraints and using FQN matching.
+- ✅ **Improved Docker Resilience**: Switched to static container names (`knot_neo4j_cpp_e2e`) to prevent naming conflicts and syntax errors in `run_all_e2e.sh`.
+- ✅ **Deterministic CI**: Added stabilization delays and retry loops for all semantic and graph queries in E2E suites.
+- ✅ **12/12 E2E test suites pass** consistently in full suite runs.
 
 ### v1.3.4 - Fix Indexer Ambiguity & Context Deduplication
 

@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — Optional in v1.2.6), **Kubernetes + Helm** (Optional in v1.2.6), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking. (v1.3.5)
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — Optional in v1.2.6), **Kubernetes + Helm** (Optional in v1.2.6), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking. (v1.3.6)
 
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
@@ -49,7 +49,7 @@ This dual-database approach powers both:
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
 
 **🏗️ Multi-Language Support**
-- **Java**: Full AST extraction with package awareness
+- **Java**: Full AST extraction with package-aware FQN resolution (e.g., `com.example.app.UserService`), class inheritance (`EXTENDS`), interface implementation (`IMPLEMENTS`), annotation tracking, and field-access method invocation resolution
 - **Kotlin** (v0.7.4+): Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
 - **JavaScript/Node.js** (v0.7.4+): Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
@@ -666,14 +666,13 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.5 — E2E Test Stabilization & Async Resilience) ✅
-- ✅ **Stabilized Groovy E2E Tests**: Introduced `retry_match` helper to handle Qdrant's eventual consistency without performance-killing `.wait(true)` calls.
-- ✅ **Fixed C/C++ E2E Test Flakiness**: Fixed non-deterministic relationship resolution in Test 14 by relaxing file path constraints and using FQN matching.
-- ✅ **Improved Docker Resilience**: Switched to static container names (`knot_neo4j_cpp_e2e`) to prevent naming conflicts and syntax errors in `run_all_e2e.sh`.
-- ✅ **Deterministic CI**: Added stabilization delays and retry loops for all semantic and graph queries in E2E suites.
-- ✅ **12/12 E2E test suites pass** consistently in full suite runs.
+### Current Release (v1.3.6 — Java Indexing Enhancement) ✅
+- ✅ **Package-aware FQN Resolution**: Java entities now include full package prefix.
+- ✅ **Java Inheritance**: Full extraction of `EXTENDS` and `IMPLEMENTS` relationships.
+- ✅ **Enhanced Java Parser**: Generic type stripping and anonymous class method tracking.
+- ✅ **All 12 E2E suites pass** with the new Java enhancements.
 
-### Previous Release (v1.3.4 — Fix Indexer Ambiguity, Context Deduplication & E2E Resilience) ✅
+### Previous Release (v1.3.5 — E2E Test Stabilization & Async Resilience) ✅
 
 ### Previous Release (v1.3.3 — Fix Custom CA Certs behind Proxy) ✅
 - ✅ **Fix Custom CA Certs behind Proxy**: Switched `fastembed` feature from `hf-hub` to `hf-hub-native-tls`. This ensures that model downloads respect `SSL_CERT_FILE` and the system's CA trust store by using OpenSSL/native-tls instead of the static Mozilla bundle (webpki-roots) bundled with rustls.

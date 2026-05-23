@@ -65,13 +65,13 @@ impl QueryExt for GraphDb {
             let query_str = if repo_name.is_some() {
                 "MATCH (m:Entity) WHERE m.uuid = $uuid AND m.repo_name = $repo_name
                  OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-                 RETURN m.name, m.kind, m.signature, m.docstring, m.file_path, 
+                 RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path, 
                         m.start_line, collect(dep.name) as dependencies"
                     .to_string()
             } else {
                 "MATCH (m:Entity) WHERE m.uuid = $uuid
                  OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-                 RETURN m.name, m.kind, m.signature, m.docstring, m.file_path, 
+                 RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path, 
                         m.start_line, collect(dep.name) as dependencies"
                     .to_string()
             };
@@ -90,6 +90,7 @@ impl QueryExt for GraphDb {
             if let Ok(Some(row_data)) = row.next().await {
                 let name = row_data.get::<String>("m.name").ok();
                 let kind = row_data.get::<String>("m.kind").ok();
+                let fqn = row_data.get::<String>("m.fqn").ok();
                 let signature = row_data.get::<String>("m.signature").ok();
                 let docstring = row_data.get::<String>("m.docstring").ok();
                 let file_path = row_data.get::<String>("m.file_path").ok();
@@ -102,6 +103,7 @@ impl QueryExt for GraphDb {
                     "uuid": uuid,
                     "name": name,
                     "kind": kind,
+                    "fqn": fqn,
                     "signature": signature,
                     "docstring": docstring,
                     "file_path": file_path,
@@ -145,6 +147,7 @@ impl QueryExt for GraphDb {
                      WHERE target.repo_name = $repo_name
                        AND (target.name = $name 
                         OR target.fqn = $name
+                        OR target.fqn CONTAINS $name
                         OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
                      RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                             target.name as target_name, target.file_path as target_file_path,
@@ -155,6 +158,7 @@ impl QueryExt for GraphDb {
                     "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
                      WHERE target.name = $name
                         OR target.fqn = $name
+                        OR target.fqn CONTAINS $name
                         OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
                      RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                             target.name as target_name, target.file_path as target_file_path,

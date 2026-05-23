@@ -74,9 +74,13 @@ pub(crate) fn compute_fqn_and_context(
         | EntityKind::CppClass
         | EntityKind::CStruct
         | EntityKind::CppNamespace => {
-            // For Java/Kotlin/C++, we'd want to include package/namespace name here
+            // For Java/Kotlin/C++, include enclosing class for nested declarations
             // For C++, the FQN will be updated dynamically in the extractor later
-            name.to_string()
+            if let Some(class_name) = &enclosing_class {
+                format!("{}.{}", class_name, name)
+            } else {
+                name.to_string()
+            }
         }
         EntityKind::Method | EntityKind::KotlinMethod | EntityKind::CppMethod => {
             // Method FQN: ClassName.methodName

@@ -650,6 +650,107 @@ else
     exit 1
 fi
 
+# Test 26: Java inheritance — IMPLEMENTS edge (normal class → interface)
+echo ""
+echo "Test 26: Verifying Java IMPLEMENTS edge for LoggingHandler → MessageHandler..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"MessageHandler\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "MessageHandler" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "LoggingHandler" || echo "$CLI_RESPONSE" | grep -q "LoggingHandler"; then
+    echo -e "${GREEN}✓ MCP: Found IMPLEMENTS edge LoggingHandler → MessageHandler${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing IMPLEMENTS edge LoggingHandler → MessageHandler${NC}"
+    exit 1
+fi
+
+# Test 27: Java inheritance — IMPLEMENTS edge (UserRepository → Repository)
+echo ""
+echo "Test 27: Verifying Java IMPLEMENTS edge for UserRepository → Repository..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"Repository\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Repository" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "UserRepository" || echo "$CLI_RESPONSE" | grep -q "UserRepository"; then
+    echo -e "${GREEN}✓ MCP: Found IMPLEMENTS edge UserRepository → Repository${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing IMPLEMENTS edge UserRepository → Repository${NC}"
+    exit 1
+fi
+
+# Test 28: Java inheritance — EXTENDS edge (AdminUser → User)
+echo ""
+echo "Test 28: Verifying Java EXTENDS edge for AdminUser → User..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"User\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "User" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "AdminUser" || echo "$CLI_RESPONSE" | grep -q "AdminUser"; then
+    echo -e "${GREEN}✓ MCP: Found EXTENDS edge AdminUser → User${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing EXTENDS edge AdminUser → User${NC}"
+    exit 1
+fi
+
+# Test 29: Java interface extending interface (AuditableRepository → Repository)
+echo ""
+echo "Test 29: Verifying Java interface EXTENDS edge AuditableRepository → Repository..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"Repository\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Repository" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "AuditableRepository" || echo "$CLI_RESPONSE" | grep -q "AuditableRepository"; then
+    echo -e "${GREEN}✓ MCP: Found EXTENDS edge AuditableRepository → Repository${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing EXTENDS edge AuditableRepository → Repository${NC}"
+    exit 1
+fi
+
+# Test 30: Java package FQN resolution
+echo ""
+echo "Test 30: Verifying Java FQN includes package name..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"UserService\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_RESPONSE" | grep -q "com.example.knot.test.UserService"; then
+    echo -e "${GREEN}✓ MCP: FQN includes package prefix com.example.knot.test${NC}"
+else
+    echo -e "${RED}✗ MCP: FQN missing package prefix${NC}"
+    exit 1
+fi
+
+# Test 31: Java anonymous class implements interface
+echo ""
+echo "Test 31: Verifying anonymous class implementing interface (EventBroadcaster calls handle on MessageHandler)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"handle\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "handle" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "sendMessage" || echo "$CLI_RESPONSE" | grep -q "sendMessage"; then
+    echo -e "${GREEN}✓ MCP: Found caller sendMessage invoking handle on anonymous MessageHandler${NC}"
+else
+    echo -e "${RED}✗ MCP: Anonymous class handle() invocation not tracked${NC}"
+    exit 1
+fi
+
+# Test 32: Java search_hybrid_context finds MessageHandler interface
+echo ""
+echo "Test 32: Verifying MessageHandler interface is searchable..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"MessageHandler\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_RESPONSE" | grep -q "MessageHandler"; then
+    echo -e "${GREEN}✓ MCP: MessageHandler interface found in search results${NC}"
+else
+    echo -e "${RED}✗ MCP: MessageHandler interface not found in search${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -663,6 +764,10 @@ echo "  ✓ Type reference extraction (constructor DI)"
 echo "  ✓ JavaScript class parsing and JSX components"
 echo "  ✓ Java annotation extraction"
 echo "  ✓ Java field_access method invocations and FQN-based caller resolution"
+echo "  ✓ Java inheritance extraction (EXTENDS + IMPLEMENTS)"
+echo "  ✓ Java interface inheritance (interface extends interface)"
+echo "  ✓ Java package declaration parsing and FQN prefixing"
+echo "  ✓ Java anonymous class interface implementation"
 echo "  ✓ HTML custom elements extraction (Angular components)"
 echo "  ✓ HTML id and class attributes indexing"
 echo "  ✓ JSX id and className attributes indexing"

@@ -33,6 +33,14 @@ pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
         output.push_str(&format!("**File:** `{}`\n\n", file_path));
     }
 
+    // Show FQN when it differs from the entity name (e.g., package-qualified Java names)
+    if let Some(fqn) = entity.get("fqn").and_then(|v| v.as_str()) {
+        let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if fqn != name && !fqn.is_empty() {
+            output.push_str(&format!("**FQN:** `{}`\n\n", fqn));
+        }
+    }
+
     if let Some(signature) = entity.get("signature").and_then(|v| v.as_str()) {
         output.push_str(&format!("**Signature:**\n```\n{}\n```\n\n", signature));
     }

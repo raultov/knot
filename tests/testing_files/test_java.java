@@ -6,6 +6,10 @@
 // - JavaDoc comments
 // - Multiple classes in one file
 // - Enum declarations
+// - Package declaration and FQN resolution
+// - Class inheritance (extends) and interface implementation (implements)
+
+package com.example.knot.test;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -284,5 +288,70 @@ class ChatMemoryAdvisor {
     public void before(String msg) {
         // This is a test for field_access as a receiver
         this.chatMemory.add(msg);
+    }
+}
+
+/**
+ * Tests: Class extending another class + implementing multiple interfaces.
+ */
+class AdminUser extends User implements Serializable, Comparable<AdminUser> {
+    private String role;
+
+    public AdminUser(String username, String email, String role) {
+        super(username, email);
+        this.role = role;
+    }
+
+    @Override
+    public int compareTo(AdminUser other) {
+        return this.role.compareTo(other.role);
+    }
+}
+
+/**
+ * Tests: Interface extending another interface.
+ */
+interface AuditableRepository<T> extends Repository<T> {
+    List<T> findModifiedSince(long timestamp);
+}
+
+// Placeholder interfaces for inheritance testing
+interface Serializable {}
+interface Comparable<T> { int compareTo(T other); }
+
+/**
+ * Callback interface used by EventHandler.
+ * Tests: normal class implements this interface.
+ */
+interface MessageHandler {
+    void handle(String message);
+}
+
+/**
+ * Tests: Normal class implementing MessageHandler interface.
+ * Should produce IMPLEMENTS edge: LoggingHandler → MessageHandler.
+ */
+class LoggingHandler implements MessageHandler {
+    @Override
+    public void handle(String message) {
+        System.out.println("LOG: " + message);
+    }
+}
+
+/**
+ * Tests: Anonymous class implementing MessageHandler interface.
+ * The anonymous inner class itself won't produce a named entity,
+ * but the method call to handle() should be tracked.
+ */
+class EventBroadcaster {
+    public void sendMessage(String msg) {
+        // Anonymous class implementing MessageHandler
+        MessageHandler handler = new MessageHandler() {
+            @Override
+            public void handle(String message) {
+                System.out.println("Broadcast: " + message);
+            }
+        };
+        handler.handle(msg);
     }
 }

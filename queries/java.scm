@@ -58,3 +58,23 @@
 ; Matches patterns like: new MyClass()
 (object_creation_expression
   type: (type_identifier) @call.method)
+
+; --- Package declarations ---
+(package_declaration
+  [(identifier) (scoped_identifier)] @package.name)
+
+; --- Class inheritance ---
+(class_declaration
+  superclass: (superclass
+    [(type_identifier) (scoped_type_identifier) (generic_type)] @class.extends))
+
+(class_declaration
+  interfaces: (super_interfaces
+    (type_list
+      [(type_identifier) (scoped_type_identifier) (generic_type)] @class.implements)))
+
+; --- Interface inheritance ---
+(interface_declaration
+  (extends_interfaces
+    (type_list
+      [(type_identifier) (scoped_type_identifier) (generic_type)] @interface.extends)))

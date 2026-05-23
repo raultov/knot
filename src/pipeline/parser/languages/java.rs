@@ -373,6 +373,93 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
     intents
 }
 
+pub(crate) fn extract_package_name(root: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut child = root.child(0);
+    while let Some(c) = child {
+        if c.kind() == "package_declaration" {
+            let mut pkg_child = c.child(0);
+            while let Some(pc) = pkg_child {
+                if pc.kind() == "identifier" || pc.kind() == "scoped_identifier" {
+                    return Some(node_text(pc, source));
+                }
+                pkg_child = pc.next_sibling();
+            }
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
+pub(crate) fn extract_class_inheritance_java(
+    class_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = class_node.start_position().row + 1;
+
+    let mut child = class_node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "superclass" => {
+                extract_type_names_from_children(c, source, |name| {
+                    intents.push(ReferenceIntent::Extends { parent: name, line });
+                });
+            }
+            "super_interfaces" => {
+                if let Some(type_list) = find_child_by_kind(c, "type_list") {
+                    extract_type_names_from_children(type_list, source, |name| {
+                        intents.push(ReferenceIntent::Implements {
+                            interface: name,
+                            line,
+                        });
+                    });
+                }
+            }
+            "extends_interfaces" => {
+                if let Some(type_list) = find_child_by_kind(c, "type_list") {
+                    extract_type_names_from_children(type_list, source, |name| {
+                        intents.push(ReferenceIntent::Extends { parent: name, line });
+                    });
+                }
+            }
+            _ => {}
+        }
+        child = c.next_sibling();
+    }
+}
+
+fn extract_type_names_from_children(node: Node<'_>, source: &[u8], mut emit: impl FnMut(String)) {
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "type_identifier" => {
+                emit(node_text(c, source));
+            }
+            "scoped_type_identifier" => {
+                emit(node_text(c, source));
+            }
+            "generic_type" => {
+                if let Some(inner) = c.child(0) {
+                    emit(node_text(inner, source));
+                }
+            }
+            _ => {}
+        }
+        child = c.next_sibling();
+    }
+}
+
+fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == kind {
+            return Some(c);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +552,144 @@ mod tests {
         assert!(!intents.is_empty());
         assert_eq!(intents[0].method, "add");
         assert_eq!(intents[0].receiver, Some("this.chatMemory".to_string()));
+    }
+
+    fn find_node_in_tree<'a>(
+        node: tree_sitter::Node<'a>,
+        kind: &str,
+    ) -> Option<tree_sitter::Node<'a>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut i = 0u32;
+        while let Some(child) = node.child(i) {
+            if let Some(found) = find_node_in_tree(child, kind) {
+                return Some(found);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    #[test]
+    fn test_extract_package_name() {
+        let code = "package com.example.app;\n\nclass Foo {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let pkg = extract_package_name(tree.root_node(), code.as_bytes());
+        assert_eq!(pkg, Some("com.example.app".to_string()));
+    }
+
+    #[test]
+    fn test_extract_package_name_none() {
+        let code = "class Foo {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let pkg = extract_package_name(tree.root_node(), code.as_bytes());
+        assert_eq!(pkg, None);
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_extends() {
+        let code = "class Child extends Parent {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let class_node = find_node_in_tree(tree.root_node(), "class_declaration").unwrap();
+        let mut intents = Vec::new();
+        extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
+        assert_eq!(intents.len(), 1);
+        assert!(
+            matches!(&intents[0], ReferenceIntent::Extends { parent, .. } if parent == "Parent")
+        );
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_implements() {
+        let code = "class Foo implements Bar, Baz {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let class_node = find_node_in_tree(tree.root_node(), "class_declaration").unwrap();
+        let mut intents = Vec::new();
+        extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
+        assert_eq!(intents.len(), 2);
+        assert!(
+            matches!(&intents[0], ReferenceIntent::Implements { interface, .. } if interface == "Bar")
+        );
+        assert!(
+            matches!(&intents[1], ReferenceIntent::Implements { interface, .. } if interface == "Baz")
+        );
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_generic_stripping() {
+        let code = "class Repo implements Repository<User> {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let class_node = find_node_in_tree(tree.root_node(), "class_declaration").unwrap();
+        let mut intents = Vec::new();
+        extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
+        assert_eq!(intents.len(), 1);
+        assert!(
+            matches!(&intents[0], ReferenceIntent::Implements { interface, .. } if interface == "Repository")
+        );
+    }
+
+    #[test]
+    fn test_extract_interface_extends() {
+        let code = "interface Child extends Parent {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let class_node = find_node_in_tree(tree.root_node(), "interface_declaration").unwrap();
+        let mut intents = Vec::new();
+        extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
+        assert_eq!(intents.len(), 1);
+        assert!(
+            matches!(&intents[0], ReferenceIntent::Extends { parent, .. } if parent == "Parent")
+        );
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_extends_and_implements() {
+        let code = "class Admin extends User implements Serializable, Comparable<Admin> {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let class_node = find_node_in_tree(tree.root_node(), "class_declaration").unwrap();
+        let mut intents = Vec::new();
+        extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
+        assert_eq!(intents.len(), 3);
+        let extends: Vec<_> = intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends { parent, .. } = r {
+                    Some(parent.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let implements: Vec<_> = intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Implements { interface, .. } = r {
+                    Some(interface.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(extends, ["User"]);
+        assert!(implements.contains(&"Serializable"));
+        assert!(implements.contains(&"Comparable"));
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_no_inheritance() {
+        let code = "class Simple {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let class_node = find_node_in_tree(tree.root_node(), "class_declaration").unwrap();
+        let mut intents = Vec::new();
+        extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
+        assert!(intents.is_empty());
     }
 }

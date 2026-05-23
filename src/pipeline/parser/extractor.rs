@@ -46,6 +46,13 @@ pub(crate) fn extract_entities(
     let mut class_contexts: Vec<ClassContext> = Vec::new();
     extract_class_contexts(tree.root_node(), source_bytes, &mut class_contexts);
 
+    // Extract Java package name for FQN prefixing
+    let java_package = if lang_name == "java" {
+        java::extract_package_name(tree.root_node(), source_bytes)
+    } else {
+        None
+    };
+
     // Second pass: extract entities and resolve their contexts
     let mut matches = cursor.matches(&query, tree.root_node(), source_bytes);
     let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
@@ -558,6 +565,11 @@ pub(crate) fn extract_entities(
             let (mut fqn, mut enclosing_class) =
                 compute_fqn_and_context(&name, &kind, start_line, lang_name, &class_contexts);
 
+            // Prefix FQN with Java package name if available
+            if let Some(ref pkg) = java_package {
+                fqn = format!("{}.{}", pkg, fqn);
+            }
+
             if matches!(
                 kind,
                 EntityKind::CppMethod
@@ -624,6 +636,12 @@ pub(crate) fn extract_entities(
                         &mut reference_intents,
                     );
                 } else if lang_name == "java" {
+                    // Extract extends/implements from Java class/interface declarations
+                    java::extract_class_inheritance_java(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
                     // Extract annotation references (e.g., @Component, @Autowired)
                     java::extract_annotation_references(
                         class_node,
@@ -2951,5 +2969,138 @@ class MyService:
             method.fqn, "MyService.handle",
             "PythonMethod FQN should be ClassName.methodName"
         );
+    }
+
+    // ============================================================
+    // Java inheritance and package FQN tests
+    // ============================================================
+
+    #[test]
+    fn test_extract_entities_java_implements() {
+        let source = "class Repo implements Repository<User> {\n  void save(User u) {}\n}";
+        let entities = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            include_str!("../../../queries/java.scm"),
+            "java",
+            "/test.java",
+            "test-repo",
+        )
+        .unwrap();
+        let repo = entities.iter().find(|e| e.name == "Repo").unwrap();
+        assert!(repo.reference_intents.iter().any(|r| matches!(
+            r,
+            ReferenceIntent::Implements { interface, .. } if interface == "Repository"
+        )));
+    }
+
+    #[test]
+    fn test_extract_entities_java_extends() {
+        let source = "class Parent {}\nclass Child extends Parent {}";
+        let entities = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            include_str!("../../../queries/java.scm"),
+            "java",
+            "/test.java",
+            "test-repo",
+        )
+        .unwrap();
+        let child = entities.iter().find(|e| e.name == "Child").unwrap();
+        assert!(child.reference_intents.iter().any(|r| matches!(
+            r,
+            ReferenceIntent::Extends { parent, .. } if parent == "Parent"
+        )));
+    }
+
+    #[test]
+    fn test_extract_entities_java_package_fqn() {
+        let source = "package com.example;\n\nclass Foo {}";
+        let entities = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            include_str!("../../../queries/java.scm"),
+            "java",
+            "/test.java",
+            "test-repo",
+        )
+        .unwrap();
+        let foo = entities.iter().find(|e| e.name == "Foo").unwrap();
+        assert_eq!(foo.fqn, "com.example.Foo");
+    }
+
+    #[test]
+    fn test_extract_entities_java_nested_class_package_fqn() {
+        let source = "package com.example;\n\nclass Outer {\n    class Inner {}\n}";
+        let entities = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            include_str!("../../../queries/java.scm"),
+            "java",
+            "/test.java",
+            "test-repo",
+        )
+        .unwrap();
+        let inner = entities.iter().find(|e| e.name == "Inner").unwrap();
+        assert_eq!(inner.fqn, "com.example.Outer.Inner");
+    }
+
+    #[test]
+    fn test_extract_entities_java_interface_extends() {
+        let source = "interface Child extends Parent {}";
+        let entities = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            include_str!("../../../queries/java.scm"),
+            "java",
+            "/test.java",
+            "test-repo",
+        )
+        .unwrap();
+        let child = entities.iter().find(|e| e.name == "Child").unwrap();
+        assert!(child.reference_intents.iter().any(|r| matches!(
+            r,
+            ReferenceIntent::Extends { parent, .. } if parent == "Parent"
+        )));
+    }
+
+    #[test]
+    fn test_extract_entities_java_extends_and_implements() {
+        let source = "class Admin extends User implements Serializable, Comparable<Admin> {}";
+        let entities = extract_entities(
+            source,
+            tree_sitter_java::LANGUAGE.into(),
+            include_str!("../../../queries/java.scm"),
+            "java",
+            "/test.java",
+            "test-repo",
+        )
+        .unwrap();
+        let admin = entities.iter().find(|e| e.name == "Admin").unwrap();
+        let extends: Vec<_> = admin
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends { parent, .. } = r {
+                    Some(parent.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let implements: Vec<_> = admin
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Implements { interface, .. } = r {
+                    Some(interface.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(extends, ["User"]);
+        assert!(implements.contains(&"Serializable"));
+        assert!(implements.contains(&"Comparable"));
     }
 }
