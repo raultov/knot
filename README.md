@@ -666,13 +666,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.6 — Java Indexing Enhancement) ✅
-- ✅ **Package-aware FQN Resolution**: Java entities now include full package prefix.
-- ✅ **Java Inheritance**: Full extraction of `EXTENDS` and `IMPLEMENTS` relationships.
-- ✅ **Enhanced Java Parser**: Generic type stripping and anonymous class method tracking.
-- ✅ **All 12 E2E suites pass** with the new Java enhancements.
+### Current Release (v1.3.7 — Kind-Aware Subgraph Traversal) ✅
+- ✅ **Kind-Aware Subgraph Traversal**: New `visible_kinds` parameter for `get_entity_subgraph`.
+- ✅ **Synthetic Edge Roll-up**: Automatically connects visible nodes through hidden intermediaries (e.g., methods/functions) when filtering by kind.
+- ✅ **Improved Graph Connectivity**: Prevents disconnected subgraphs when focusing on specific entity kinds.
 
-### Previous Release (v1.3.5 — E2E Test Stabilization & Async Resilience) ✅
+### Previous Release (v1.3.6 — Java Indexing Enhancement) ✅
 
 ### Previous Release (v1.3.3 — Fix Custom CA Certs behind Proxy) ✅
 - ✅ **Fix Custom CA Certs behind Proxy**: Switched `fastembed` feature from `hf-hub` to `hf-hub-native-tls`. This ensures that model downloads respect `SSL_CERT_FILE` and the system's CA trust store by using OpenSSL/native-tls instead of the static Mozilla bundle (webpki-roots) bundled with rustls.

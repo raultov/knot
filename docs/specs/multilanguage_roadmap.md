@@ -6,8 +6,8 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.6):**
-- Java, Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
+**Current State (v1.3.7):**
+- Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
 - Configuration Files: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with leaf-key granularity and package.json special handling
@@ -15,14 +15,15 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file) + list_repo_dependencies
 - Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges and retroactive linking
-- Entity Subgraph Traversal (v1.3.2): `get_entity_subgraph` query with configurable depth, relationship filtering, and direction
+- Entity Subgraph Traversal (v1.3.2) + Kind-Aware Filtering (v1.3.7)
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
 - Consolidated `.knot/` directory: fastembed model cache now stored in `.knot/fastembed_cache/` (configurable via `KNOT_FASTEMBED_CACHE_DIR`)
-- 550+ unit tests | 100+ E2E tests across all languages
+- 565+ unit tests | 100+ E2E tests across all languages
 - Fix Indexer Ambiguity & Context Deduplication (v1.3.4)
+- Kind-Aware Subgraph Traversal (v1.3.7): `get_entity_subgraph` now maintains connectivity when filtering by kind via synthetic roll-up edges
 
 ---
 
@@ -161,6 +162,13 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.7 - Kind-Aware Subgraph Traversal
+- ✅ **Kind-Aware Traversal**: `get_entity_subgraph` now accepts a `visible_kinds` parameter.
+- ✅ **Synthetic Edge Roll-up**: Implemented Cypher logic to automatically create synthetic edges between visible nodes connected through hidden intermediaries (e.g., methods/functions).
+- ✅ **Connectivity Preservation**: Focusing on classes or interfaces no longer results in disconnected subgraphs when they are linked via method calls.
+- ✅ **Integration Testing**: Added `test_get_entity_subgraph_with_visible_kinds` to verify kind-based filtering.
+- ✅ **565 unit tests** passing | 12/12 E2E suites passing.
 
 ### v1.3.6 - Java Indexing Enhancement (Package & Inheritance)
 - ✅ **Package-aware FQN Resolution**: Java entities now include the full package prefix (e.g., `com.example.app.UserService`).

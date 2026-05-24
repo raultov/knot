@@ -37,6 +37,7 @@ pub trait QueryExt {
         artifact_id: &str,
         build_system: &str,
     ) -> Result<Option<String>>;
+    #[allow(clippy::too_many_arguments)]
     async fn get_entity_subgraph(
         &self,
         entity_name: &str,
@@ -45,6 +46,8 @@ pub trait QueryExt {
         relationships: &[&str],
         direction: SubgraphDirection,
         max_nodes: usize,
+        entity_uuid: Option<&str>,
+        visible_kinds: Option<&[&str]>,
     ) -> Result<crate::models::SubgraphResult>;
 }
 
@@ -387,6 +390,7 @@ impl QueryExt for GraphDb {
         Ok(None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn get_entity_subgraph(
         &self,
         entity_name: &str,
@@ -395,6 +399,8 @@ impl QueryExt for GraphDb {
         relationships: &[&str],
         direction: SubgraphDirection,
         max_nodes: usize,
+        entity_uuid: Option<&str>,
+        visible_kinds: Option<&[&str]>,
     ) -> Result<crate::models::SubgraphResult> {
         use crate::models::{SubgraphEdge, SubgraphNode, SubgraphResult};
 
@@ -425,14 +431,27 @@ impl QueryExt for GraphDb {
         let depth = depth.clamp(1, 5);
 
         // --- 1. Find the root entity ---
-        let root_q = query(
-            "MATCH (root:Entity {name: $name, repo_name: $repo_name})
-             RETURN root.uuid, root.name, root.kind, root.fqn,
-                    root.signature, root.docstring, root.file_path, root.start_line
-             LIMIT 1",
-        )
-        .param("name", entity_name)
-        .param("repo_name", repo_name);
+        let (root_q, root_match_clause) = if let Some(uuid) = entity_uuid {
+            let q = query(
+                "MATCH (root:Entity {uuid: $uuid, repo_name: $repo_name})
+                 RETURN root.uuid, root.name, root.kind, root.fqn,
+                        root.signature, root.docstring, root.file_path, root.start_line
+                 LIMIT 1",
+            )
+            .param("uuid", uuid)
+            .param("repo_name", repo_name);
+            (q, "uuid: $uuid".to_string())
+        } else {
+            let q = query(
+                "MATCH (root:Entity {name: $name, repo_name: $repo_name})
+                 RETURN root.uuid, root.name, root.kind, root.fqn,
+                        root.signature, root.docstring, root.file_path, root.start_line
+                 LIMIT 1",
+            )
+            .param("name", entity_name)
+            .param("repo_name", repo_name);
+            (q, "name: $name".to_string())
+        };
 
         let mut rows = self
             .graph
@@ -472,47 +491,62 @@ impl QueryExt for GraphDb {
         let mut all_nodes: HashMap<String, SubgraphNode> = HashMap::new();
         all_nodes.insert(root_uuid.clone(), root_node);
 
-        for rel in relationships {
-            let direction_arrow = match direction {
-                SubgraphDirection::Outgoing => format!("-[:{rel}*1..{depth}]->"),
-                SubgraphDirection::Incoming => format!("<-[:{rel}*1..{depth}]-"),
-                SubgraphDirection::Both => format!("-[:{rel}*1..{depth}]-"),
+        let rel_filter = relationships.join("|");
+        let direction_arrow = match direction {
+            SubgraphDirection::Outgoing => format!("-[:{rel_filter}*1..{depth}]->"),
+            SubgraphDirection::Incoming => format!("<-[:{rel_filter}*1..{depth}]-"),
+            SubgraphDirection::Both => format!("-[:{rel_filter}*1..{depth}]-"),
+        };
+
+        let kind_filter = if let Some(kinds) = visible_kinds
+            && !kinds.is_empty()
+        {
+            let quoted: Vec<String> = kinds.iter().map(|k| format!("'{}'", k)).collect();
+            format!("\n   AND related.kind IN [{}]", quoted.join(", "))
+        } else {
+            String::new()
+        };
+
+        let cypher = format!(
+            "MATCH (root:Entity {{{root_match}, repo_name: $repo_name}}){arrow}(related:Entity)
+             WHERE related.repo_name = $repo_name{kind_filter}
+             RETURN DISTINCT related.uuid, related.name, related.kind, related.fqn,
+                    related.signature, related.docstring, related.file_path, related.start_line",
+            root_match = root_match_clause,
+            arrow = direction_arrow,
+            kind_filter = kind_filter,
+        );
+
+        let traversal_q = if let Some(uuid) = entity_uuid {
+            query(&cypher)
+                .param("uuid", uuid)
+                .param("repo_name", repo_name)
+        } else {
+            query(&cypher)
+                .param("name", entity_name)
+                .param("repo_name", repo_name)
+        };
+        let mut rows = self
+            .graph
+            .execute(traversal_q)
+            .await
+            .context("Failed to traverse relationships")?;
+
+        while let Ok(Some(row)) = rows.next().await {
+            let uuid = match row.get::<String>("related.uuid") {
+                Ok(u) => u,
+                Err(_) => continue,
             };
-
-            let cypher = format!(
-                "MATCH (root:Entity {{name: $name, repo_name: $repo_name}}){arrow}(related:Entity)
-                 WHERE related.repo_name = $repo_name
-                 RETURN DISTINCT related.uuid, related.name, related.kind, related.fqn,
-                        related.signature, related.docstring, related.file_path, related.start_line",
-                arrow = direction_arrow,
-            );
-
-            let mut rows = self
-                .graph
-                .execute(
-                    query(&cypher)
-                        .param("name", entity_name)
-                        .param("repo_name", repo_name),
-                )
-                .await
-                .context(format!("Failed to traverse {rel} relationships"))?;
-
-            while let Ok(Some(row)) = rows.next().await {
-                let uuid = match row.get::<String>("related.uuid") {
-                    Ok(u) => u,
-                    Err(_) => continue,
-                };
-                all_nodes.entry(uuid.clone()).or_insert(SubgraphNode {
-                    uuid,
-                    name: row.get::<String>("related.name").ok().unwrap_or_default(),
-                    kind: row.get::<String>("related.kind").ok(),
-                    fqn: row.get::<String>("related.fqn").ok(),
-                    signature: row.get::<String>("related.signature").ok(),
-                    docstring: row.get::<String>("related.docstring").ok(),
-                    file_path: row.get::<String>("related.file_path").ok(),
-                    start_line: row.get::<i64>("related.start_line").ok(),
-                });
-            }
+            all_nodes.entry(uuid.clone()).or_insert(SubgraphNode {
+                uuid,
+                name: row.get::<String>("related.name").ok().unwrap_or_default(),
+                kind: row.get::<String>("related.kind").ok(),
+                fqn: row.get::<String>("related.fqn").ok(),
+                signature: row.get::<String>("related.signature").ok(),
+                docstring: row.get::<String>("related.docstring").ok(),
+                file_path: row.get::<String>("related.file_path").ok(),
+                start_line: row.get::<i64>("related.start_line").ok(),
+            });
         }
 
         let total_nodes_found = all_nodes.len();
@@ -529,12 +563,56 @@ impl QueryExt for GraphDb {
         if nodes.len() > 1 {
             let uuids: Vec<String> = nodes.iter().map(|n| n.uuid.clone()).collect();
 
-            let edge_q = query(
-                "MATCH (a:Entity)-[r]->(b:Entity)
-                 WHERE a.uuid IN $uuids AND b.uuid IN $uuids
-                 RETURN a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship",
-            )
-            .param("uuids", uuids);
+            let edge_q = if let Some(kinds) = visible_kinds
+                && !kinds.is_empty()
+            {
+                let visible_list: Vec<String> = kinds.iter().map(|k| format!("'{}'", k)).collect();
+                let visible_kind_list = visible_list.join(", ");
+                let rel_filter = relationships.join("|");
+
+                let edge_cypher = format!(
+                    "MATCH (a:Entity)-[r]->(b:Entity)
+                     WHERE a.uuid IN $uuids AND b.uuid IN $uuids
+                     RETURN DISTINCT a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship
+                     UNION
+                     MATCH (m1:Entity {{repo_name: $repo_name}})-[r:{rel_filter}]->(m2:Entity {{repo_name: $repo_name}})
+                     WHERE NOT m1.kind IN [{visible_kind_list}]
+                       AND NOT m2.kind IN [{visible_kind_list}]
+                       AND m1.enclosing_class <> '' AND m2.enclosing_class <> ''
+                     MATCH (c1:Entity {{name: m1.enclosing_class, repo_name: $repo_name}})
+                     MATCH (c2:Entity {{name: m2.enclosing_class, repo_name: $repo_name}})
+                     WHERE c1.uuid IN $uuids AND c2.uuid IN $uuids AND c1.uuid <> c2.uuid
+                     RETURN DISTINCT c1.uuid AS source_uuid, c2.uuid AS target_uuid, type(r) AS relationship
+                     UNION
+                     MATCH (m1:Entity {{repo_name: $repo_name}})-[r:{rel_filter}]->(b:Entity {{repo_name: $repo_name}})
+                     WHERE NOT m1.kind IN [{visible_kind_list}]
+                       AND b.kind IN [{visible_kind_list}]
+                       AND m1.enclosing_class <> ''
+                     MATCH (c1:Entity {{name: m1.enclosing_class, repo_name: $repo_name}})
+                     WHERE c1.uuid IN $uuids AND b.uuid IN $uuids AND c1.uuid <> b.uuid
+                     RETURN DISTINCT c1.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship
+                     UNION
+                     MATCH (a:Entity {{repo_name: $repo_name}})-[r:{rel_filter}]->(m2:Entity {{repo_name: $repo_name}})
+                     WHERE a.kind IN [{visible_kind_list}]
+                       AND NOT m2.kind IN [{visible_kind_list}]
+                       AND m2.enclosing_class <> ''
+                     MATCH (c2:Entity {{name: m2.enclosing_class, repo_name: $repo_name}})
+                     WHERE a.uuid IN $uuids AND c2.uuid IN $uuids AND a.uuid <> c2.uuid
+                     RETURN DISTINCT a.uuid AS source_uuid, c2.uuid AS target_uuid, type(r) AS relationship",
+                    rel_filter = rel_filter,
+                    visible_kind_list = visible_kind_list,
+                );
+                query(&edge_cypher)
+                    .param("uuids", uuids)
+                    .param("repo_name", repo_name)
+            } else {
+                query(
+                    "MATCH (a:Entity)-[r]->(b:Entity)
+                     WHERE a.uuid IN $uuids AND b.uuid IN $uuids
+                     RETURN a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship",
+                )
+                .param("uuids", uuids)
+            };
 
             let mut rows = self
                 .graph
@@ -702,6 +780,8 @@ mod tests {
                 &["CALLS"],
                 SubgraphDirection::Both,
                 500,
+                None,
+                None,
             )
             .await;
         assert!(result.is_ok());
@@ -729,6 +809,8 @@ mod tests {
                 &["CALLS", "EXTENDS"],
                 SubgraphDirection::Both,
                 500,
+                None,
+                None,
             )
             .await;
         assert!(result.is_ok());
@@ -752,6 +834,8 @@ mod tests {
                 &["INVALID_REL"],
                 SubgraphDirection::Both,
                 500,
+                None,
+                None,
             )
             .await;
         assert!(result.is_err());
@@ -772,6 +856,8 @@ mod tests {
                 &["CALLS"],
                 SubgraphDirection::Outgoing,
                 500,
+                None,
+                None,
             )
             .await;
         assert!(result.is_ok());
@@ -792,6 +878,8 @@ mod tests {
                 &["CALLS", "EXTENDS", "IMPLEMENTS", "REFERENCES"],
                 SubgraphDirection::Both,
                 500,
+                None,
+                None,
             )
             .await;
         assert!(result.is_ok());
@@ -815,6 +903,8 @@ mod tests {
                 &["CALLS", "EXTENDS", "IMPLEMENTS", "REFERENCES"],
                 SubgraphDirection::Both,
                 2, // Very low max_nodes to trigger truncation
+                None,
+                None,
             )
             .await;
         assert!(result.is_ok());
@@ -823,6 +913,39 @@ mod tests {
         if sub.total_nodes_found > 2 {
             assert!(sub.truncated);
             assert!(sub.nodes.len() <= 2);
+        }
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_with_visible_kinds() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "TestClass",
+                "test-repo",
+                3,
+                &["CALLS", "EXTENDS", "IMPLEMENTS"],
+                SubgraphDirection::Both,
+                500,
+                None,
+                Some(&["class", "interface"]),
+            )
+            .await;
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        // All returned nodes should match the visible kinds
+        if !sub.nodes.is_empty() {
+            for node in &sub.nodes {
+                let kind = node.kind.as_deref().unwrap_or("");
+                assert!(
+                    kind == "class" || kind == "interface",
+                    "Expected node kind in ['class', 'interface'], got '{kind}'"
+                );
+            }
         }
     }
 }
