@@ -178,6 +178,23 @@ impl UpsertExt for GraphDb {
         }
 
         info!("Upserted {} entity nodes into Neo4j", entities.len());
+
+        // Auto-link entities using their enclosing_class property to create physical CONTAINS edges.
+        // This is critical for subgraph connectivity in languages like Java.
+        if let Some(first) = entities.first() {
+            let repo_name = &first.entity.repo_name;
+            let link_cypher = "
+                MATCH (m:Entity {repo_name: $repo_name})
+                WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
+                MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})
+                MERGE (c)-[:CONTAINS]->(m)
+            ";
+            self.graph
+                .run(query(link_cypher).param("repo_name", repo_name.clone()))
+                .await
+                .context("Failed to auto-link CONTAINS relationships")?;
+        }
+
         Ok(())
     }
 

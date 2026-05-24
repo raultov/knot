@@ -6,7 +6,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 
 ## Overview
 
-**Current State (v1.3.7):**
+**Current State (v1.3.8):**
 - Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
@@ -15,7 +15,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Dual-database architecture (Qdrant + Neo4j)
 - Three MCP tools (search_hybrid_context, find_callers, explore_file) + list_repo_dependencies
 - Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges and retroactive linking
-- Entity Subgraph Traversal (v1.3.2) + Kind-Aware Filtering (v1.3.7)
+- Entity Subgraph Traversal (v1.3.2) + Kind-Aware Filtering (v1.3.7) + Connectivity Fix (v1.3.8)
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
@@ -23,7 +23,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - Consolidated `.knot/` directory: fastembed model cache now stored in `.knot/fastembed_cache/` (configurable via `KNOT_FASTEMBED_CACHE_DIR`)
 - 565+ unit tests | 100+ E2E tests across all languages
 - Fix Indexer Ambiguity & Context Deduplication (v1.3.4)
-- Kind-Aware Subgraph Traversal (v1.3.7): `get_entity_subgraph` now maintains connectivity when filtering by kind via synthetic roll-up edges
+- Kind-Aware Subgraph Traversal (v1.3.8): `get_entity_subgraph` now maintains connectivity when filtering by kind via synthetic roll-up edges and fixed edge extraction bug.
 
 ---
 
@@ -162,6 +162,12 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.3.8 - Subgraph Connectivity & Edge Extraction Fix
+- ✅ **Fixed Subgraph Disconnection**: Injected `CONTAINS` into traversal relationships to discovery class-to-class paths.
+- ✅ **UUID List Binding Fix**: Replaced `$uuids` parameter with string literal interpolation to fix missing edges.
+- ✅ **Constrained Relationship Result**: Constrained direct edges to requested types.
+- ✅ **565 unit tests** passing | 12/12 E2E suites passing.
 
 ### v1.3.7 - Kind-Aware Subgraph Traversal
 - ✅ **Kind-Aware Traversal**: `get_entity_subgraph` now accepts a `visible_kinds` parameter.

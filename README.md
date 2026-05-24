@@ -666,7 +666,12 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.7 — Kind-Aware Subgraph Traversal) ✅
+### Current Release (v1.3.8 — Subgraph Connectivity & Edge Extraction Fix) ✅
+- ✅ **Fixed Subgraph Disconnection**: Automatically injects `CONTAINS` relationships in traversal paths when kind-filtering is active, ensuring class-to-class paths through methods are discovered.
+- ✅ **Fixed Edge Extraction Bug**: Replaced parameter binding for UUID lists with direct Cypher interpolation to bypass a driver-level serialization bug that caused missing edges (0 edges found).
+- ✅ **Constrained Relationship Output**: Constrains direct edges to the requested types, preventing internal structural edges from leaking into the result.
+
+### Previous Release (v1.3.7 — Kind-Aware Subgraph Traversal) ✅
 - ✅ **Kind-Aware Subgraph Traversal**: New `visible_kinds` parameter for `get_entity_subgraph`.
 - ✅ **Synthetic Edge Roll-up**: Automatically connects visible nodes through hidden intermediaries (e.g., methods/functions) when filtering by kind.
 - ✅ **Improved Graph Connectivity**: Prevents disconnected subgraphs when focusing on specific entity kinds.

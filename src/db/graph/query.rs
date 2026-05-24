@@ -491,11 +491,16 @@ impl QueryExt for GraphDb {
         let mut all_nodes: HashMap<String, SubgraphNode> = HashMap::new();
         all_nodes.insert(root_uuid.clone(), root_node);
 
-        let rel_filter = relationships.join("|");
+        let mut traversal_rels = relationships.to_vec();
+        if visible_kinds.is_some() && !traversal_rels.contains(&"CONTAINS") {
+            traversal_rels.push("CONTAINS");
+        }
+        let traversal_rel_filter = traversal_rels.join("|");
+
         let direction_arrow = match direction {
-            SubgraphDirection::Outgoing => format!("-[:{rel_filter}*1..{depth}]->"),
-            SubgraphDirection::Incoming => format!("<-[:{rel_filter}*1..{depth}]-"),
-            SubgraphDirection::Both => format!("-[:{rel_filter}*1..{depth}]-"),
+            SubgraphDirection::Outgoing => format!("-[:{traversal_rel_filter}*1..{depth}]->"),
+            SubgraphDirection::Incoming => format!("<-[:{traversal_rel_filter}*1..{depth}]-"),
+            SubgraphDirection::Both => format!("-[:{traversal_rel_filter}*1..{depth}]-"),
         };
 
         let kind_filter = if let Some(kinds) = visible_kinds
@@ -561,57 +566,57 @@ impl QueryExt for GraphDb {
         let mut edges: Vec<SubgraphEdge> = Vec::new();
 
         if nodes.len() > 1 {
-            let uuids: Vec<String> = nodes.iter().map(|n| n.uuid.clone()).collect();
+            let uuids_list: Vec<String> = nodes.iter().map(|n| format!("'{}'", n.uuid)).collect();
+            let uuids_str = uuids_list.join(", ");
 
             let edge_q = if let Some(kinds) = visible_kinds
                 && !kinds.is_empty()
             {
                 let visible_list: Vec<String> = kinds.iter().map(|k| format!("'{}'", k)).collect();
                 let visible_kind_list = visible_list.join(", ");
-                let rel_filter = relationships.join("|");
+                
+                // Ensure CONTAINS is included in the output filter if we are in kind-aware mode
+                // to maintain structural connectivity (e.g. Inner Classes).
+                let mut edge_rels = relationships.to_vec();
+                if !edge_rels.contains(&"CONTAINS") {
+                    edge_rels.push("CONTAINS");
+                }
+                let rel_filter = edge_rels.join("|");
 
                 let edge_cypher = format!(
-                    "MATCH (a:Entity)-[r]->(b:Entity)
-                     WHERE a.uuid IN $uuids AND b.uuid IN $uuids
+                    "MATCH (a:Entity)-[r:{rel_filter}]->(b:Entity)
+                     WHERE a.uuid IN [{uuids_str}] AND b.uuid IN [{uuids_str}]
                      RETURN DISTINCT a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship
                      UNION
-                     MATCH (m1:Entity {{repo_name: $repo_name}})-[r:{rel_filter}]->(m2:Entity {{repo_name: $repo_name}})
-                     WHERE NOT m1.kind IN [{visible_kind_list}]
+                     MATCH (c1:Entity)-[:CONTAINS]->(m1:Entity)-[r:{rel_filter}]->(m2:Entity)<-[:CONTAINS]-(c2:Entity)
+                     WHERE c1.uuid IN [{uuids_str}] AND c2.uuid IN [{uuids_str}] AND c1.uuid <> c2.uuid
+                       AND NOT m1.kind IN [{visible_kind_list}]
                        AND NOT m2.kind IN [{visible_kind_list}]
-                       AND m1.enclosing_class <> '' AND m2.enclosing_class <> ''
-                     MATCH (c1:Entity {{name: m1.enclosing_class, repo_name: $repo_name}})
-                     MATCH (c2:Entity {{name: m2.enclosing_class, repo_name: $repo_name}})
-                     WHERE c1.uuid IN $uuids AND c2.uuid IN $uuids AND c1.uuid <> c2.uuid
                      RETURN DISTINCT c1.uuid AS source_uuid, c2.uuid AS target_uuid, type(r) AS relationship
                      UNION
-                     MATCH (m1:Entity {{repo_name: $repo_name}})-[r:{rel_filter}]->(b:Entity {{repo_name: $repo_name}})
-                     WHERE NOT m1.kind IN [{visible_kind_list}]
+                     MATCH (c1:Entity)-[:CONTAINS]->(m1:Entity)-[r:{rel_filter}]->(b:Entity)
+                     WHERE c1.uuid IN [{uuids_str}] AND b.uuid IN [{uuids_str}] AND c1.uuid <> b.uuid
+                       AND NOT m1.kind IN [{visible_kind_list}]
                        AND b.kind IN [{visible_kind_list}]
-                       AND m1.enclosing_class <> ''
-                     MATCH (c1:Entity {{name: m1.enclosing_class, repo_name: $repo_name}})
-                     WHERE c1.uuid IN $uuids AND b.uuid IN $uuids AND c1.uuid <> b.uuid
                      RETURN DISTINCT c1.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship
                      UNION
-                     MATCH (a:Entity {{repo_name: $repo_name}})-[r:{rel_filter}]->(m2:Entity {{repo_name: $repo_name}})
-                     WHERE a.kind IN [{visible_kind_list}]
+                     MATCH (a:Entity)-[r:{rel_filter}]->(m2:Entity)<-[:CONTAINS]-(c2:Entity)
+                     WHERE a.uuid IN [{uuids_str}] AND c2.uuid IN [{uuids_str}] AND a.uuid <> c2.uuid
+                       AND a.kind IN [{visible_kind_list}]
                        AND NOT m2.kind IN [{visible_kind_list}]
-                       AND m2.enclosing_class <> ''
-                     MATCH (c2:Entity {{name: m2.enclosing_class, repo_name: $repo_name}})
-                     WHERE a.uuid IN $uuids AND c2.uuid IN $uuids AND a.uuid <> c2.uuid
                      RETURN DISTINCT a.uuid AS source_uuid, c2.uuid AS target_uuid, type(r) AS relationship",
                     rel_filter = rel_filter,
                     visible_kind_list = visible_kind_list,
+                    uuids_str = uuids_str,
                 );
                 query(&edge_cypher)
-                    .param("uuids", uuids)
-                    .param("repo_name", repo_name)
             } else {
-                query(
+                query(&format!(
                     "MATCH (a:Entity)-[r]->(b:Entity)
-                     WHERE a.uuid IN $uuids AND b.uuid IN $uuids
+                     WHERE a.uuid IN [{uuids_str}] AND b.uuid IN [{uuids_str}]
                      RETURN a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship",
-                )
-                .param("uuids", uuids)
+                    uuids_str = uuids_str,
+                ))
             };
 
             let mut rows = self
@@ -947,5 +952,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn test_get_entity_subgraph_connectivity() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let result = graph_db
+            .get_entity_subgraph(
+                "ClassA",
+                "test-repo",
+                3,
+                &["CALLS"],
+                SubgraphDirection::Outgoing,
+                500,
+                None,
+                Some(&["class", "rust_struct"]),
+            )
+            .await;
+        assert!(result.is_ok());
     }
 }
