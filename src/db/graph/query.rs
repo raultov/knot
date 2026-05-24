@@ -574,7 +574,7 @@ impl QueryExt for GraphDb {
             {
                 let visible_list: Vec<String> = kinds.iter().map(|k| format!("'{}'", k)).collect();
                 let visible_kind_list = visible_list.join(", ");
-                
+
                 // Ensure CONTAINS is included in the output filter if we are in kind-aware mode
                 // to maintain structural connectivity (e.g. Inner Classes).
                 let mut edge_rels = relationships.to_vec();
