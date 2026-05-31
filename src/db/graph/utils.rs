@@ -16,6 +16,7 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::KotlinFunction => "KotlinFunction",
         EntityKind::KotlinMethod => "KotlinMethod",
         EntityKind::KotlinProperty => "KotlinProperty",
+        EntityKind::KotlinEnum => "KotlinEnum",
         EntityKind::HtmlElement => "HtmlElement",
         EntityKind::HtmlId => "HtmlId",
         EntityKind::HtmlClass => "HtmlClass",

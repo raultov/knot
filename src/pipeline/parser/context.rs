@@ -10,7 +10,7 @@ pub(crate) struct ClassContext {
     pub(crate) end_line: usize,
 }
 
-/// Extract all class/interface declarations and their line ranges.
+/// Extract all class/interface/object declarations and their line ranges.
 pub(crate) fn extract_class_contexts(
     node: Node<'_>,
     source: &[u8],
@@ -22,6 +22,7 @@ pub(crate) fn extract_class_contexts(
             | "interface_declaration"
             | "abstract_class_declaration"
             | "class_definition" // Python
+            | "object_declaration"
     ) {
         // Find the name child
         let mut child = node.child(0);
@@ -71,6 +72,7 @@ pub(crate) fn compute_fqn_and_context(
         | EntityKind::Interface
         | EntityKind::KotlinClass
         | EntityKind::KotlinInterface
+        | EntityKind::KotlinEnum
         | EntityKind::CppClass
         | EntityKind::CStruct
         | EntityKind::CppNamespace => {
@@ -123,8 +125,12 @@ pub(crate) fn compute_fqn_and_context(
         EntityKind::ScssFunction => format!("@function {}", name),
         // Kotlin-specific entities that don't nest like classes
         EntityKind::KotlinObject | EntityKind::KotlinCompanionObject => {
-            // These are top-level entities, just use the name
-            name.to_string()
+            // For nested objects/companions, include enclosing class name
+            if let Some(class_name) = &enclosing_class {
+                format!("{}.{}", class_name, name)
+            } else {
+                name.to_string()
+            }
         }
         // Rust entities
         EntityKind::RustStruct
@@ -303,5 +309,87 @@ mod tests {
         // Both outer and inner classes should be captured
         assert!(!contexts.is_empty());
         assert!(contexts.iter().any(|c| c.name == "Outer"));
+    }
+
+    #[test]
+    fn test_extract_class_contexts_kotlin_object() {
+        let code = "object NodeUtils { fun stream() {} }";
+        let tree = crate::pipeline::parser::test_utils::parse_kotlin_snippet(code)
+            .expect("Failed to parse Kotlin code");
+
+        let source = code.as_bytes();
+        let mut contexts: Vec<ClassContext> = Vec::new();
+        extract_class_contexts(tree.root_node(), source, &mut contexts);
+
+        assert_eq!(contexts.len(), 1, "Expected 1 context for object NodeUtils");
+        assert!(contexts.iter().any(|c| c.name == "NodeUtils"));
+    }
+
+    #[test]
+    fn test_extract_class_contexts_kotlin_companion() {
+        // tree-sitter-kotlin-ng v1.1.0 requires newlines in class body for companion_object.
+        let code = "class Foo {\n    companion object {\n        fun bar() {}\n    }\n}";
+        let tree = crate::pipeline::parser::test_utils::parse_kotlin_snippet(code)
+            .expect("Failed to parse Kotlin code");
+
+        let source = code.as_bytes();
+        let mut contexts: Vec<ClassContext> = Vec::new();
+        extract_class_contexts(tree.root_node(), source, &mut contexts);
+
+        // Class Foo is captured via class_declaration.
+        // companion_object does NOT create its own context (parent class already covers it).
+        assert!(
+            contexts.iter().any(|c| c.name == "Foo"),
+            "Expected class Foo to be captured as context. Found: {:?}",
+            contexts.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_kotlin_method_in_object() {
+        let contexts = vec![ClassContext {
+            name: "NodeUtils".to_string(),
+            start_line: 1,
+            end_line: 3,
+        }];
+        let (fqn, enclosing_class) =
+            compute_fqn_and_context("stream", &EntityKind::KotlinMethod, 2, "kotlin", &contexts);
+        assert_eq!(fqn, "NodeUtils.stream");
+        assert_eq!(enclosing_class, Some("NodeUtils".to_string()));
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_kotlin_object_nested() {
+        let contexts = vec![ClassContext {
+            name: "OuterClass".to_string(),
+            start_line: 1,
+            end_line: 50,
+        }];
+        let (fqn, enclosing_class) = compute_fqn_and_context(
+            "InnerObject",
+            &EntityKind::KotlinObject,
+            25,
+            "kotlin",
+            &contexts,
+        );
+        assert_eq!(fqn, "OuterClass.InnerObject");
+        assert_eq!(enclosing_class, Some("OuterClass".to_string()));
+    }
+
+    #[test]
+    fn test_compute_fqn_and_context_kotlin_function_top_level() {
+        let contexts = vec![];
+        let (fqn, enclosing_class) = compute_fqn_and_context(
+            "greetUser",
+            &EntityKind::KotlinFunction,
+            5,
+            "kotlin",
+            &contexts,
+        );
+        assert_eq!(fqn, "greetUser");
+        assert!(
+            enclosing_class.is_none(),
+            "Top-level functions should have no enclosing class"
+        );
     }
 }

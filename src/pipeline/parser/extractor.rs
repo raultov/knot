@@ -11,6 +11,41 @@ use super::orphans::*;
 use super::utils::*;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 
+/// Detect whether a Kotlin `class_declaration` AST node is really a class, interface, or enum.
+///
+/// In tree-sitter-kotlin-ng v1.1.0, `class`, `interface`, and `enum class` declarations all use
+/// the same `class_declaration` node type. We distinguish them by inspecting the source text
+/// for the keyword after visibility/modifier tokens.
+fn detect_kotlin_class_kind(node: Node<'_>, source: &[u8]) -> EntityKind {
+    let text = node_text(node, source);
+    let first_kw = text
+        .split_whitespace()
+        .find(|t| {
+            !matches!(
+                *t,
+                "public"
+                    | "private"
+                    | "protected"
+                    | "internal"
+                    | "abstract"
+                    | "open"
+                    | "sealed"
+                    | "data"
+                    | "annotation"
+                    | "final"
+                    | "override"
+                    | "inner"
+            )
+        })
+        .unwrap_or("");
+
+    match first_kw {
+        "enum" => EntityKind::KotlinEnum,
+        "interface" => EntityKind::KotlinInterface,
+        _ => EntityKind::KotlinClass,
+    }
+}
+
 /// Run a Tree-sitter query against `source` and convert matches to [`ParsedEntity`].
 pub(crate) fn extract_entities(
     source: &str,
@@ -85,9 +120,9 @@ pub(crate) fn extract_entities(
                 }
                 "kotlin_class.name" => {
                     name = Some(text.clone());
-                    kind = Some(EntityKind::KotlinClass);
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "class_declaration");
+                    kind = entity_node.map(|n| detect_kotlin_class_kind(n, source_bytes));
                 }
                 "interface.name" => {
                     name = Some(text.clone());
@@ -189,10 +224,33 @@ pub(crate) fn extract_entities(
                 }
                 "kotlin_function.name" => {
                     name = Some(text.clone());
-                    kind = Some(EntityKind::KotlinFunction);
                     start_line = node.start_position().row + 1;
                     entity_node = find_parent_by_kind(node, "function_declaration");
-                    // For Kotlin functions, extract reference intents from the function body
+
+                    // Determine if this function is actually a method (enclosed in a
+                    // class_declaration, object_declaration, companion_object, or interface_declaration).
+                    let is_method = entity_node.is_some_and(|n| {
+                        let mut current = n.parent();
+                        while let Some(p) = current {
+                            match p.kind() {
+                                "class_declaration"
+                                | "object_declaration"
+                                | "companion_object"
+                                | "interface_declaration" => return true,
+                                _ => {}
+                            }
+                            current = p.parent();
+                        }
+                        false
+                    });
+
+                    if is_method {
+                        kind = Some(EntityKind::KotlinMethod);
+                    } else {
+                        kind = Some(EntityKind::KotlinFunction);
+                    }
+
+                    // For Kotlin methods/functions, extract reference intents from the function body
                     if let Some(func_node) = entity_node
                         && lang_name == "kotlin"
                     {
@@ -201,6 +259,16 @@ pub(crate) fn extract_entities(
                             source_bytes,
                             &mut reference_intents,
                         );
+
+                        // Extract type references from method signatures (parameters, return types)
+                        // for functions that are really methods inside a class/object
+                        if is_method {
+                            kotlin::extract_type_references(
+                                func_node,
+                                source_bytes,
+                                &mut reference_intents,
+                            );
+                        }
                     }
                 }
                 "kotlin_property.name" => {
@@ -593,6 +661,8 @@ pub(crate) fn extract_entities(
                     | EntityKind::Interface
                     | EntityKind::KotlinClass
                     | EntityKind::KotlinInterface
+                    | EntityKind::KotlinObject
+                    | EntityKind::KotlinEnum
             ) && let Some(class_node) = entity_node
             {
                 if lang_name == "javascript" {
@@ -651,6 +721,12 @@ pub(crate) fn extract_entities(
                     // Extract type references (e.g., constructor parameters, field types)
                     java::extract_type_references(class_node, source_bytes, &mut reference_intents);
                 } else if lang_name == "kotlin" {
+                    // Extract extends/implements from Kotlin class/interface declarations
+                    kotlin::extract_class_inheritance_kotlin(
+                        class_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
                     // Extract annotation references (e.g., @Component, @Composable)
                     kotlin::extract_annotation_references(
                         class_node,
@@ -732,6 +808,21 @@ pub(crate) fn extract_entities(
             && a.kind == b.kind
             && a.start_line == b.start_line
     });
+
+    // Kotlin: extract anonymous object implementations (e.g., object : Interface inside method bodies)
+    // Must run AFTER entity dedup so existing_entities have correct line ranges.
+    if lang_name == "kotlin" {
+        let mut anon_entities = Vec::new();
+        kotlin::extract_anonymous_object_implementations(
+            tree.root_node(),
+            source_bytes,
+            file_path,
+            repo_name,
+            &entities,
+            &mut anon_entities,
+        );
+        entities.extend(anon_entities);
+    }
 
     // Third pass: capture orphaned reference intents (calls in top-level statements,
     // callbacks, etc. that were not captured by any named entity)

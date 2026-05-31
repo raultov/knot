@@ -1,4 +1,4 @@
-use super::languages::{java, javascript, python, typescript};
+use super::languages::{java, javascript, kotlin, python, typescript};
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use tree_sitter::Node;
 
@@ -139,6 +139,10 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
                 0, // Byte pos not strictly needed for C++ basic resolution
             ));
         }
+    } else if lang_name == "kotlin" {
+        // collect_all_reference_intents_kotlin emits each intent with its correct byte_pos,
+        // ensuring calls inside method bodies fall within covered ranges and are NOT orphaned.
+        kotlin::collect_all_reference_intents_kotlin(node, source, intents);
     }
 }
 

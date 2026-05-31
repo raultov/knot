@@ -1,9 +1,8 @@
-use crate::models::{CallIntent, ReferenceIntent};
+use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 
 /// Recursively extract all call intents from Kotlin.
-#[allow(dead_code)]
 pub(crate) fn collect_all_reference_intents_kotlin(
     node: Node<'_>,
     source: &[u8],
@@ -161,6 +160,190 @@ pub(crate) fn extract_type_references(
         extract_type_references(c, source, intents);
         child = c.next_sibling();
     }
+}
+
+/// Extract extends/implements relationships from Kotlin class/interface declarations.
+///
+/// In Kotlin, both superclass and superinterface declarations follow the `:` token as
+/// delegation specifiers:
+/// - `class Foo : Base(), Iface1, Iface2 by delegate`
+/// - `interface Bar : SuperIface1, SuperIface2`
+///
+/// In tree-sitter-kotlin-ng v1.1.0, the AST for these is:
+/// ```text
+/// (delegation_specifiers
+///   (delegation_specifier
+///     (constructor_invocation  ← present → EXTENDS (parent class)
+///       (user_type (identifier)))
+///     (value_arguments))
+///   (delegation_specifier
+///     (user_type (identifier)))  ← no parens → IMPLEMENTS (interface)
+/// )
+/// ```
+///
+/// For interface declarations, all delegation specifiers are treated as EXTENDS
+/// because interfaces extend other interfaces (they do not implement).
+pub(crate) fn extract_class_inheritance_kotlin(
+    class_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    // Determine if this class_node is actually an interface declaration.
+    // (For interfaces, everything after : is EXTENDS, not IMPLEMENTS.)
+    let is_interface = {
+        let text = node_text(class_node, source);
+        text.split_whitespace()
+            .find(|t| {
+                !matches!(
+                    *t,
+                    "public"
+                        | "private"
+                        | "protected"
+                        | "internal"
+                        | "abstract"
+                        | "open"
+                        | "sealed"
+                        | "annotation"
+                        | "final"
+                        | "override"
+                )
+            })
+            .is_some_and(|kw| kw == "interface")
+    };
+
+    // Find the delegation_specifiers node
+    let mut child = class_node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "delegation_specifiers" {
+            extract_delegation_specifiers(c, source, intents, is_interface);
+            return;
+        }
+        child = c.next_sibling();
+    }
+}
+
+/// Recursively walk delegation_specifier nodes and emit EXTENDS/IMPLEMENTS intents.
+fn extract_delegation_specifiers(
+    specifiers_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+    is_interface: bool,
+) {
+    let mut child = specifiers_node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "delegation_specifier" {
+            extract_single_delegation(c, source, intents, is_interface);
+        }
+        child = c.next_sibling();
+    }
+}
+
+/// Extract a single delegation_specifier into an EXTENDS or IMPLEMENTS intent.
+fn extract_single_delegation(
+    specifier: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+    is_interface: bool,
+) {
+    let line = specifier.start_position().row + 1;
+
+    // Extract the type name from user_type → identifier
+    let type_name = extract_delegation_type_name(specifier, source);
+
+    if type_name.is_none() {
+        return;
+    }
+    let type_name = type_name.unwrap();
+
+    // Determine if this is a constructor invocation (EXTENDS) or plain user_type (IMPLEMENTS)
+    let has_constructor_invocation = specifier
+        .child(0)
+        .is_some_and(|c| c.kind() == "constructor_invocation");
+
+    let has_explicit_delegation = specifier
+        .children(&mut specifier.walk())
+        .any(|c| c.kind() == "explicit_delegation");
+
+    if has_constructor_invocation {
+        // Parent class — always EXTENDS
+        intents.push(ReferenceIntent::Extends {
+            parent: type_name,
+            line,
+        });
+    } else if has_explicit_delegation || !is_interface {
+        // Delegation by `by` or regular interface implementation
+        intents.push(ReferenceIntent::Implements {
+            interface: type_name,
+            line,
+        });
+    } else {
+        // Interface extending another interface — use EXTENDS
+        intents.push(ReferenceIntent::Extends {
+            parent: type_name,
+            line,
+        });
+    }
+}
+
+/// Walk down from a delegation_specifier to find the user_type → identifier text.
+fn extract_delegation_type_name(specifier: Node<'_>, source: &[u8]) -> Option<String> {
+    // Structure: (delegation_specifier (constructor_invocation (user_type (identifier))) ...)
+    //           or: (delegation_specifier (user_type (identifier)))
+    // We need to find the deepest identifier.
+
+    // First try: direct user_type child
+    let mut user_type = None;
+    let mut child = specifier.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "user_type" => {
+                user_type = Some(c);
+                break;
+            }
+            "constructor_invocation" => {
+                // Navigate into constructor_invocation to find user_type
+                let mut ci_child = c.child(0);
+                while let Some(cc) = ci_child {
+                    if cc.kind() == "user_type" {
+                        user_type = Some(cc);
+                        break;
+                    }
+                    ci_child = cc.next_sibling();
+                }
+                break;
+            }
+            "explicit_delegation" => {
+                // Navigate into explicit_delegation to find user_type
+                let mut ed_child = c.child(0);
+                while let Some(ec) = ed_child {
+                    if ec.kind() == "user_type" {
+                        user_type = Some(ec);
+                        break;
+                    }
+                    ed_child = ec.next_sibling();
+                }
+                break;
+            }
+            _ => {}
+        }
+        child = c.next_sibling();
+    }
+
+    // From user_type, extract the identifier
+    if let Some(ut) = user_type {
+        let mut ident_child = ut.child(0);
+        while let Some(ic) = ident_child {
+            if matches!(
+                ic.kind(),
+                "identifier" | "type_identifier" | "simple_identifier"
+            ) {
+                return Some(node_text(ic, source));
+            }
+            ident_child = ic.next_sibling();
+        }
+    }
+
+    None
 }
 
 /// Extract reference intents from a Kotlin method body (wrapper for backward compatibility).
@@ -353,6 +536,142 @@ pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -
     intents
 }
 
+/// Extract anonymous object implementations from Kotlin method bodies.
+///
+/// Kotlin frequently uses `object : Interface { ... }` expressions (anonymous objects)
+/// to implement interfaces inline. These `object_literal` nodes in the AST contain
+/// `delegation_specifiers` just like named class declarations.
+///
+/// This function walks the entire AST looking for `object_literal` nodes with delegation
+/// specifiers, finds the enclosing named entity, and creates a synthetic `ParsedEntity`
+/// (name: `<anonymous>`, kind: `KotlinObject`) with the appropriate `Implements`/`Extends`
+/// reference intents.
+pub(crate) fn extract_anonymous_object_implementations(
+    root: Node<'_>,
+    source: &[u8],
+    file_path: &str,
+    repo_name: &str,
+    existing_entities: &[ParsedEntity],
+    out: &mut Vec<ParsedEntity>,
+) {
+    extract_anonymous_objects_recursive(
+        root,
+        source,
+        file_path,
+        repo_name,
+        existing_entities,
+        out,
+        &mut 0u32,
+    );
+}
+
+fn extract_anonymous_objects_recursive(
+    node: Node<'_>,
+    source: &[u8],
+    file_path: &str,
+    repo_name: &str,
+    existing_entities: &[ParsedEntity],
+    out: &mut Vec<ParsedEntity>,
+    counter: &mut u32,
+) {
+    if node.kind() == "object_literal" {
+        // Check if this anonymous object has delegation specifiers (i.e., `object : X, Y`)
+        let has_delegation = node
+            .children(&mut node.walk())
+            .any(|c| c.kind() == "delegation_specifiers");
+
+        if has_delegation {
+            let line = node.start_position().row + 1;
+            let end_line = node.end_position().row + 1;
+
+            // Find enclosing entity (method, class, etc.) by line range
+            let enclosing_fqn = find_enclosing_fqn(line, existing_entities);
+
+            // Synthesize an FQN that includes the line number for uniqueness
+            let name = "<anonymous>".to_string();
+            let fqn = if let Some(ref enclosing) = enclosing_fqn {
+                format!("{enclosing}.<anonymous@{line}>")
+            } else {
+                format!("<anonymous@{line}>")
+            };
+
+            // Extract delegation specifiers using the existing helper
+            let mut intents = Vec::new();
+            let mut child = node.child(0);
+            while let Some(c) = child {
+                if c.kind() == "delegation_specifiers" {
+                    // Anonymous objects always create IMPLEMENTS for interfaces
+                    // and EXTENDS for constructor invocations.
+                    extract_delegation_specifiers(c, source, &mut intents, false);
+                    break;
+                }
+                child = c.next_sibling();
+            }
+
+            if !intents.is_empty() {
+                *counter += 1;
+                let mut entity = ParsedEntity::new(
+                    &name,
+                    EntityKind::KotlinObject,
+                    &fqn,
+                    None,
+                    None,
+                    "kotlin",
+                    file_path,
+                    line,
+                    end_line,
+                    enclosing_fqn,
+                    repo_name,
+                );
+                entity.reference_intents = intents;
+                out.push(entity);
+            }
+        }
+        // Even if no delegation, don't recurse into children of object_literal
+        // (they are method overrides, not new anonymous objects).
+        return;
+    }
+
+    // Recursively walk children
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_anonymous_objects_recursive(
+            c,
+            source,
+            file_path,
+            repo_name,
+            existing_entities,
+            out,
+            counter,
+        );
+        child = c.next_sibling();
+    }
+}
+
+/// Find the FQN of the nearest enclosing entity that contains the given line.
+fn find_enclosing_fqn(line: usize, entities: &[ParsedEntity]) -> Option<String> {
+    let mut best: Option<&ParsedEntity> = None;
+    for e in entities {
+        if e.name == "<anonymous>" {
+            continue; // Skip synthetic entities
+        }
+        if line >= e.start_line && line <= e.end_line {
+            match best {
+                None => best = Some(e),
+                Some(b) => {
+                    // Pick the innermost (smallest range)
+                    let b_range = b.end_line - b.start_line;
+                    let e_range = e.end_line - e.start_line;
+                    if e_range < b_range {
+                        best = Some(e);
+                    }
+                }
+            }
+        }
+    }
+    best.map(|e| e.fqn.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,5 +802,241 @@ mod tests {
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].method, "getUser");
         assert!(intents[0].receiver.as_ref().unwrap().contains("Config"));
+    }
+
+    // --- Inheritance extraction tests ---
+
+    fn get_class_declaration(root: Node<'_>) -> Node<'_> {
+        let mut child = root.child(0);
+        while let Some(c) = child {
+            if c.kind() == "class_declaration" {
+                return c;
+            }
+            child = c.next_sibling();
+        }
+        panic!("class_declaration not found in AST");
+    }
+
+    fn parse_kotlin(code: &str) -> tree_sitter::Tree {
+        let lang = tree_sitter_kotlin_ng::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_class_with_parent_and_interface() {
+        let source = "class Foo : Base(), Iface {\n    fun bar() {}\n}";
+        let tree = parse_kotlin(source);
+        let node = get_class_declaration(tree.root_node());
+        let mut intents = Vec::new();
+        extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
+
+        let extends: Vec<_> = intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends { parent, .. } = r {
+                    Some(parent.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let implements: Vec<_> = intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Implements { interface, .. } = r {
+                    Some(interface.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            extends,
+            &["Base"],
+            "Expected EXTENDS Base (constructor invocation)"
+        );
+        assert_eq!(
+            implements,
+            &["Iface"],
+            "Expected IMPLEMENTS Iface (no constructor)"
+        );
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_interface_extends() {
+        let source = "interface Bar : Iface {\n    fun baz()\n}";
+        let tree = parse_kotlin(source);
+        let node = get_class_declaration(tree.root_node());
+        let mut intents = Vec::new();
+        extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
+
+        let extends: Vec<_> = intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Extends { parent, .. } = r {
+                    Some(parent.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            extends,
+            &["Iface"],
+            "Interface extending another interface should use EXTENDS"
+        );
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_no_inheritance() {
+        let source = "class Foo {\n    fun bar() {}\n}";
+        let tree = parse_kotlin(source);
+        let node = get_class_declaration(tree.root_node());
+        let mut intents = Vec::new();
+        extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
+
+        assert!(
+            intents.is_empty(),
+            "Expected no inheritance intents for class without supertypes"
+        );
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_delegation() {
+        let source = "class Foo : Iface by delegate {\n    fun bar() {}\n}";
+        let tree = parse_kotlin(source);
+        let node = get_class_declaration(tree.root_node());
+        let mut intents = Vec::new();
+        extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
+
+        let implements: Vec<_> = intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Implements { interface, .. } = r {
+                    Some(interface.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            implements,
+            &["Iface"],
+            "Expected IMPLEMENTS Iface via delegation"
+        );
+    }
+
+    #[test]
+    fn test_extract_anonymous_object_implements() {
+        let source = "class Foo {\n    fun bar() {\n        val x = object : Iface {\n            fun foo() {}\n        }\n    }\n}";
+        let tree = parse_kotlin(source);
+        // Build enclosing entity to test line-range resolution
+        let mut existing = Vec::new();
+        existing.push(ParsedEntity::new(
+            "Foo",
+            EntityKind::KotlinClass,
+            "Foo",
+            None,
+            None,
+            "kotlin",
+            "test.kt",
+            1,
+            7,
+            None,
+            "test",
+        ));
+        existing.push(ParsedEntity::new(
+            "bar",
+            EntityKind::KotlinMethod,
+            "Foo.bar",
+            None,
+            None,
+            "kotlin",
+            "test.kt",
+            2,
+            6,
+            Some("Foo".to_string()),
+            "test",
+        ));
+
+        let mut out = Vec::new();
+        extract_anonymous_object_implementations(
+            tree.root_node(),
+            source.as_bytes(),
+            "test.kt",
+            "test",
+            &existing,
+            &mut out,
+        );
+
+        assert_eq!(out.len(), 1, "Expected 1 anonymous object entity");
+        assert_eq!(out[0].name, "<anonymous>");
+        assert_eq!(out[0].kind, EntityKind::KotlinObject);
+        assert!(
+            out[0].fqn.contains("Foo.bar"),
+            "FQN should contain enclosing method: {}",
+            out[0].fqn
+        );
+        assert!(
+            out[0].fqn.contains("<anonymous@"),
+            "FQN should contain <anonymous@LINE>"
+        );
+
+        let implements: Vec<_> = out[0]
+            .reference_intents
+            .iter()
+            .filter_map(|r| {
+                if let ReferenceIntent::Implements { interface, .. } = r {
+                    Some(interface.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            implements,
+            &["Iface"],
+            "Expected IMPLEMENTS Iface from anonymous object"
+        );
+    }
+
+    #[test]
+    fn test_extract_anonymous_object_no_inheritance() {
+        let source = "fun main() { val x = object { fun foo() {} } }";
+        let tree = parse_kotlin(source);
+        let mut existing = Vec::new();
+        existing.push(ParsedEntity::new(
+            "main",
+            EntityKind::KotlinFunction,
+            "main",
+            None,
+            None,
+            "kotlin",
+            "test.kt",
+            1,
+            1,
+            None,
+            "test",
+        ));
+
+        let mut out = Vec::new();
+        extract_anonymous_object_implementations(
+            tree.root_node(),
+            source.as_bytes(),
+            "test.kt",
+            "test",
+            &existing,
+            &mut out,
+        );
+
+        assert!(
+            out.is_empty(),
+            "Anonymous object without inheritance should not create entity"
+        );
     }
 }

@@ -28,6 +28,7 @@ pub enum EntityKind {
     KotlinFunction,        // top-level and extension functions
     KotlinMethod,          // methods inside classes
     KotlinProperty,        // properties (val/var)
+    KotlinEnum,            // enum class declarations
     // HTML/Web Components entities
     HtmlElement, // Custom elements like <app-profile>, <web-component>
     HtmlId,      // id="..." attributes
@@ -119,6 +120,7 @@ impl std::fmt::Display for EntityKind {
             EntityKind::KotlinFunction => "kotlin_function",
             EntityKind::KotlinMethod => "kotlin_method",
             EntityKind::KotlinProperty => "kotlin_property",
+            EntityKind::KotlinEnum => "kotlin_enum",
             EntityKind::HtmlElement => "html_element",
             EntityKind::HtmlId => "html_id",
             EntityKind::HtmlClass => "html_class",
