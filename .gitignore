@@ -5,6 +5,7 @@
 /package-lock.json
 publish_at_utc.sh
 .knot/
+.antigravitycli/
 
 # Local Database Persistent Storage
 /data/
