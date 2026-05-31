@@ -173,13 +173,7 @@ pub(crate) fn extract_entities(
                         }
 
                         // Extract type references from method signatures (parameters, return types)
-                        if lang_name == "typescript" {
-                            typescript::extract_type_references(
-                                method_node,
-                                source_bytes,
-                                &mut reference_intents,
-                            );
-                        } else if lang_name == "java" {
+                        if lang_name == "java" {
                             java::extract_type_references(
                                 method_node,
                                 source_bytes,
@@ -772,6 +766,10 @@ pub(crate) fn extract_entities(
                 repo_name,
             );
             entity.reference_intents = reference_intents;
+            // Filter self-references (TypeReference to own name)
+            entity.reference_intents.retain(|intent| {
+                !matches!(intent, ReferenceIntent::TypeReference { type_name, .. } if type_name == entity.name.as_str())
+            });
             entity.inline_comments = inline_comments;
             entity.decorators = decorators;
 
@@ -3193,5 +3191,32 @@ class MyService:
         assert_eq!(extends, ["User"]);
         assert!(implements.contains(&"Serializable"));
         assert!(implements.contains(&"Comparable"));
+    }
+
+    #[test]
+    fn test_extract_entities_self_type_reference_filtered() {
+        let source = "interface Node { next: Node; }";
+        let query = "(interface_declaration name: (type_identifier) @interface.name)";
+
+        let result = extract_entities(
+            source,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            query,
+            "typescript",
+            "test.ts",
+            "test_repo",
+        );
+
+        assert!(result.is_ok());
+        let entities = result.unwrap();
+        assert!(!entities.is_empty());
+        let node_entity = entities.iter().find(|e| e.name == "Node").unwrap();
+        let has_self_ref = node_entity.reference_intents.iter().any(|r| {
+            matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "Node")
+        });
+        assert!(
+            !has_self_ref,
+            "Self-referencing TypeReference should be filtered"
+        );
     }
 }

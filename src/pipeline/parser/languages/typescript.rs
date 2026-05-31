@@ -59,6 +59,65 @@ pub(crate) fn collect_all_reference_intents_typescript(
                 intents.push((ReferenceIntent::TypeReference { type_name, line }, byte_pos));
             }
         }
+        "export_statement" => {
+            // Handle re-exports: `export { A, B } from './x'`
+            if let Some(_source) = node.child_by_field_name("source") {
+                let is_type_export = node.children(&mut node.walk()).any(|c| c.kind() == "type");
+                let mut clause_child = node.child(0);
+                while let Some(c) = clause_child {
+                    match c.kind() {
+                        "export_clause" | "export_type_clause" => {
+                            let mut spec_child = c.child(0);
+                            while let Some(spec) = spec_child {
+                                if spec.kind() == "export_specifier"
+                                    && let Some(name_node) = spec.child_by_field_name("name")
+                                {
+                                    let name = node_text(name_node, source);
+                                    if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                                        if is_type_export || c.kind() == "export_type_clause" {
+                                            intents.push((
+                                                ReferenceIntent::TypeReference {
+                                                    type_name: name,
+                                                    line,
+                                                },
+                                                byte_pos,
+                                            ));
+                                        } else {
+                                            intents.push((
+                                                ReferenceIntent::ValueReference {
+                                                    value_name: name,
+                                                    line,
+                                                },
+                                                byte_pos,
+                                            ));
+                                        }
+                                    }
+                                }
+                                spec_child = spec.next_sibling();
+                            }
+                        }
+                        _ => {}
+                    }
+                    clause_child = c.next_sibling();
+                }
+            }
+        }
+        "identifier" => {
+            let name = node_text(node, source);
+            if name.chars().next().is_some_and(|c| c.is_uppercase())
+                && !TS_GLOBALS.contains(&name.as_str())
+                && let Some(parent) = node.parent()
+                && !is_identifier_excluded_from_value_ref(parent, node)
+            {
+                intents.push((
+                    ReferenceIntent::ValueReference {
+                        value_name: name,
+                        line,
+                    },
+                    byte_pos,
+                ));
+            }
+        }
         _ => {}
     }
 
@@ -70,44 +129,182 @@ pub(crate) fn collect_all_reference_intents_typescript(
     }
 }
 
-/// Extract class inheritance (extends/implements) from TypeScript class AST.
-/// Manually traverses the class declaration node to find extends and implements clauses.
-pub(crate) fn extract_class_inheritance(
-    class_node: Node<'_>,
+/// Extract the root type name from a TypeScript type node, stripping generics
+/// and qualified path prefixes. E.g. `Generic<T>` → "Generic", `NS.Parent` → "Parent".
+fn extract_root_type_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" | "type_identifier" => Some(node_text(node, source)),
+        "generic_type" => node.child(0).map(|c| node_text(c, source)),
+        "member_expression" | "nested_type_identifier" => node_text(node, source)
+            .split('.')
+            .next_back()
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Known JavaScript/TypeScript global builtins that should not generate ValueReference intents.
+const TS_GLOBALS: &[&str] = &[
+    "Math",
+    "JSON",
+    "Promise",
+    "String",
+    "Number",
+    "Boolean",
+    "Array",
+    "Object",
+    "Error",
+    "Date",
+    "RegExp",
+    "Map",
+    "Set",
+    "Symbol",
+    "BigInt",
+    "WeakMap",
+    "WeakSet",
+    "Proxy",
+    "Reflect",
+    "Intl",
+    "console",
+    "window",
+    "document",
+    "globalThis",
+    "undefined",
+    "NaN",
+    "Infinity",
+    "null",
+    "arguments",
+    "this",
+    "super",
+];
+
+/// Returns true if the given identifier node is excluded from value reference extraction.
+/// Excludes identifiers in declarative contexts (class/interface/function names),
+/// import/export specifiers, member expression properties, and pair keys.
+fn is_identifier_excluded_from_value_ref(parent: Node<'_>, node: Node<'_>) -> bool {
+    matches!(
+        parent.kind(),
+        "class_declaration"
+            | "interface_declaration"
+            | "function_declaration"
+            | "method_definition"
+            | "import_specifier"
+            | "export_specifier"
+            | "property_identifier"
+            | "shorthand_property_identifier"
+    ) || (parent.kind() == "member_expression"
+        && parent.child_by_field_name("property").as_ref() == Some(&node))
+        || (parent.kind() == "variable_declarator"
+            && parent.child_by_field_name("name").as_ref() == Some(&node))
+        || (parent.kind() == "pair" && parent.child_by_field_name("key").as_ref() == Some(&node))
+}
+
+/// Recursively extract capitalized identifiers used as values (not types) from TS/JS AST.
+///
+/// Emits `ValueReference` for capitalized identifiers found in:
+/// - Object literal values (`{ key: ClassName }`)
+/// - Array elements (`[ClassName]`)
+/// - Variable initializers (`const x = ClassName`)
+/// - Assignment right-hand side (`x = ClassName`)
+/// - Function call arguments (`foo(ClassName)`)
+/// - Return statements (`return ClassName`)
+/// - Spread elements (`[...arr, ClassName]`)
+///
+/// Excludes identifiers that are:
+/// - Part of a declaration (variable name, class name, function name)
+/// - Part of a `member_expression.property` (handled by enum_usages)
+/// - Known global builtins
+pub(crate) fn extract_value_references_typescript(
+    node: Node<'_>,
     source: &[u8],
     intents: &mut Vec<ReferenceIntent>,
 ) {
-    let line = class_node.start_position().row + 1;
+    let line = node.start_position().row + 1;
 
-    // Look for 'extends' keyword followed by type identifier
-    let mut child = class_node.child(0);
+    if node.kind() == "identifier" {
+        let name = node_text(node, source);
+        if name.chars().next().is_some_and(|c| c.is_uppercase())
+            && !TS_GLOBALS.contains(&name.as_str())
+            && let Some(parent) = node.parent()
+            && !is_identifier_excluded_from_value_ref(parent, node)
+        {
+            intents.push(ReferenceIntent::ValueReference {
+                value_name: name,
+                line,
+            });
+        }
+        return;
+    }
+
+    // Recurse into children
+    let mut child = node.child(0);
     while let Some(c) = child {
-        if c.kind() == "extends" {
-            // Next type identifier should be the parent class
-            if let Some(next) = c.next_sibling()
-                && next.kind() == "type_identifier"
-            {
-                let parent_name = node_text(next, source);
-                intents.push(ReferenceIntent::Extends {
-                    parent: parent_name,
-                    line,
-                });
-            }
-        } else if c.kind() == "implements_clause" {
-            // Extract type identifiers from implements clause
-            let mut impl_child = c.child(0);
-            while let Some(impl_c) = impl_child {
-                if impl_c.kind() == "type_identifier" {
-                    let interface_name = node_text(impl_c, source);
-                    intents.push(ReferenceIntent::Implements {
-                        interface: interface_name,
-                        line,
-                    });
+        extract_value_references_typescript(c, source, intents);
+        child = c.next_sibling();
+    }
+}
+
+/// Extract class inheritance (extends/implements) from TypeScript AST nodes.
+/// Handles both class_declaration and interface_declaration AST nodes.
+pub(crate) fn extract_class_inheritance(
+    entity_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    let line = entity_node.start_position().row + 1;
+
+    match entity_node.kind() {
+        "class_declaration" => {
+            let mut child = entity_node.child(0);
+            while let Some(c) = child {
+                if c.kind() == "class_heritage" {
+                    let mut hc = c.child(0);
+                    while let Some(heritage) = hc {
+                        match heritage.kind() {
+                            "extends_clause" => {
+                                if let Some(name) = heritage
+                                    .child_by_field_name("value")
+                                    .and_then(|n| extract_root_type_name(n, source))
+                                {
+                                    intents.push(ReferenceIntent::Extends { parent: name, line });
+                                }
+                            }
+                            "implements_clause" => {
+                                let mut tc = heritage.child(0);
+                                while let Some(type_child) = tc {
+                                    if let Some(name) = extract_root_type_name(type_child, source) {
+                                        intents.push(ReferenceIntent::Implements {
+                                            interface: name,
+                                            line,
+                                        });
+                                    }
+                                    tc = type_child.next_sibling();
+                                }
+                            }
+                            _ => {}
+                        }
+                        hc = heritage.next_sibling();
+                    }
                 }
-                impl_child = impl_c.next_sibling();
+                child = c.next_sibling();
             }
         }
-        child = c.next_sibling();
+        "interface_declaration" => {
+            let mut child = entity_node.child(0);
+            while let Some(c) = child {
+                if c.kind() == "extends_type_clause" {
+                    let mut tc = c.child_by_field_name("type");
+                    while let Some(type_child) = tc {
+                        if let Some(name) = extract_root_type_name(type_child, source) {
+                            intents.push(ReferenceIntent::Extends { parent: name, line });
+                        }
+                        tc = type_child.next_named_sibling();
+                    }
+                }
+                child = c.next_sibling();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -237,8 +434,9 @@ pub(crate) fn extract_reference_intents_typescript(
         });
     }
 
-    // Also extract enum/static member usages (e.g., WebWorkerEvent.Console)
     extract_enum_usages_typescript(node, source, intents);
+    extract_type_references(node, source, intents);
+    extract_value_references_typescript(node, source, intents);
 }
 
 /// Extract call expression call intents from a TypeScript function/method body.
@@ -928,7 +1126,28 @@ mod tests {
         }
     }
 
-    #[ignore = "Tree-sitter structure variations in different TypeScript versions"]
+    fn assert_extends(intents: &[ReferenceIntent], expected: &str) {
+        let found = intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == expected));
+        assert!(
+            found,
+            "Expected Extends -> '{}', got {:?}",
+            expected, intents
+        );
+    }
+
+    fn assert_implements(intents: &[ReferenceIntent], expected: &str) {
+        let found = intents.iter().any(
+            |i| matches!(i, ReferenceIntent::Implements { interface, .. } if interface == expected),
+        );
+        assert!(
+            found,
+            "Expected Implements -> '{}', got {:?}",
+            expected, intents
+        );
+    }
+
     #[test]
     fn test_extract_class_inheritance_extends() {
         let code = "class Child extends Parent { }";
@@ -950,11 +1169,174 @@ mod tests {
         }
 
         if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents: Vec<ReferenceIntent> = Vec::new();
-            extract_class_inheritance(class_node, code_bytes, &mut intents);
-            // Inheritance detection depends on AST structure
-            let _ = intents;
+            let mut intents = Vec::new();
+            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
+            assert_extends(&intents, "Parent");
+        }
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_implements() {
+        let code = "class Child implements IFoo, IBar { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class_declaration(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
+            assert_implements(&intents, "IFoo");
+            assert_implements(&intents, "IBar");
+        }
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_extends_and_implements() {
+        let code = "class Child extends Parent implements IFoo { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class_declaration(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
+            assert_extends(&intents, "Parent");
+            assert_implements(&intents, "IFoo");
+        }
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_qualified_extends() {
+        let code = "class Child extends NS.Parent { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class_declaration(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
+            assert_extends(&intents, "Parent");
+        }
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_generic_extends() {
+        let code = "class Child extends Generic<T> { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class_declaration(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
+            assert_extends(&intents, "Generic");
+        }
+    }
+
+    #[test]
+    fn test_extract_interface_extends_simple() {
+        let code = "interface IB extends IA { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_interface_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "interface_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_interface_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(iface_node) = find_interface_declaration(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_class_inheritance(iface_node, code.as_bytes(), &mut intents);
+            assert_extends(&intents, "IA");
+        }
+    }
+
+    #[test]
+    fn test_extract_interface_extends_multiple() {
+        let code = "interface IC extends IA, IB { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        fn find_interface_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "interface_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_interface_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(iface_node) = find_interface_declaration(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_class_inheritance(iface_node, code.as_bytes(), &mut intents);
+            assert_extends(&intents, "IA");
+            assert_extends(&intents, "IB");
         }
     }
 
@@ -1306,5 +1688,179 @@ mod tests {
         } else {
             panic!("No JSX self-closing element found");
         }
+    }
+
+    fn find_function_decl(root: tree_sitter::Node) -> Option<tree_sitter::Node> {
+        if root.kind() == "function_declaration"
+            || root.kind() == "arrow_function"
+            || root.kind() == "lexical_declaration"
+        {
+            return Some(root);
+        }
+        let mut i = 0u32;
+        while let Some(child) = root.child(i) {
+            if let Some(found) = find_function_decl(child) {
+                return Some(found);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    #[test]
+    fn test_extract_ref_intents_function_param_type() {
+        let code = "function foo(ctx: MyContext) { }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        if let Some(func_node) = find_function_decl(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_reference_intents_typescript(func_node, code.as_bytes(), &mut intents);
+            let found = intents.iter().any(|i| {
+                matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "MyContext")
+            });
+            assert!(found, "Expected TypeReference MyContext, got {:?}", intents);
+        }
+    }
+
+    #[test]
+    fn test_extract_ref_intents_function_return_type() {
+        let code = "function getData(): Promise<MyResult> { return null as any; }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        if let Some(func_node) = find_function_decl(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_reference_intents_typescript(func_node, code.as_bytes(), &mut intents);
+            let found = intents.iter().any(|i| {
+                matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "MyResult")
+            });
+            assert!(
+                found,
+                "Expected TypeReference MyResult in return type, got {:?}",
+                intents
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_ref_intents_const_type() {
+        let code = "const x: MyType = getValue();";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+
+        if let Some(decl_node) = find_function_decl(tree.root_node()) {
+            let mut intents = Vec::new();
+            extract_reference_intents_typescript(decl_node, code.as_bytes(), &mut intents);
+            let found = intents.iter().any(|i| {
+                matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "MyType")
+            });
+            assert!(found, "Expected TypeReference MyType, got {:?}", intents);
+        }
+    }
+
+    #[test]
+    fn test_extract_value_ref_object_literal() {
+        let code = "const REGISTRY = { ozone: HomebridgeOzoneServer }";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        extract_value_references_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let found = intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "HomebridgeOzoneServer")
+        });
+        assert!(
+            found,
+            "Expected ValueReference HomebridgeOzoneServer, got {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_extract_value_ref_array_element() {
+        let code = "const servers = [HomebridgeOzoneServer, HomebridgeAirQualityServer]";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        extract_value_references_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let found = intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "HomebridgeOzoneServer")
+        });
+        assert!(
+            found,
+            "Expected ValueReference for array element, got {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_no_value_ref_for_global() {
+        let code = "const x = Math.floor(Promise.resolve())";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        extract_value_references_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_math = intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "Math")
+        });
+        let has_promise = intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "Promise")
+        });
+        assert!(!has_math, "Math should be filtered as global");
+        assert!(!has_promise, "Promise should be filtered as global");
+    }
+
+    #[test]
+    fn test_collect_re_export_value() {
+        let code = "export { HomebridgeOzoneServer } from './foo.js'";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let found = intents.iter().any(|(i, _)| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "HomebridgeOzoneServer")
+        });
+        assert!(
+            found,
+            "Expected ValueReference from re-export, got {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_collect_re_export_type() {
+        let code = "export type { HomebridgeOzoneServer } from './foo.js'";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let found = intents.iter().any(|(i, _)| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "HomebridgeOzoneServer")
+        });
+        assert!(
+            found,
+            "Expected TypeReference from re-export type, got {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_collect_re_export_multi() {
+        let code = "export { A, B } from './bar.js'";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_a = intents.iter().any(|(i, _)| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "A")
+        });
+        let has_b = intents.iter().any(|(i, _)| {
+            matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "B")
+        });
+        assert!(
+            has_a && has_b,
+            "Expected ValueReferences for both A and B, got {:?}",
+            intents
+        );
     }
 }
