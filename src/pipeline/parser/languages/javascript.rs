@@ -64,7 +64,7 @@ pub(crate) fn collect_all_reference_intents_javascript(
 
 /// Extract class inheritance (extends clause) from JavaScript class AST.
 /// JavaScript doesn't have implements, so we only handle extends.
-/// Manually traverses the class declaration node to find the extends clause.
+/// Navigates through the `class_heritage` wrapper to find the parent class expression.
 pub(crate) fn extract_class_inheritance_js(
     class_node: Node<'_>,
     source: &[u8],
@@ -72,23 +72,38 @@ pub(crate) fn extract_class_inheritance_js(
 ) {
     let line = class_node.start_position().row + 1;
 
-    // Look for 'extends' keyword followed by identifier (no type_identifier in JS)
     let mut child = class_node.child(0);
     while let Some(c) = child {
-        if c.kind() == "extends" {
-            // Next identifier should be the parent class
-            if let Some(next) = c.next_sibling()
-                && next.kind() == "identifier"
-            {
-                let parent_name = node_text(next, source);
-                intents.push(ReferenceIntent::Extends {
-                    parent: parent_name,
-                    line,
-                });
+        if c.kind() == "class_heritage" {
+            let parent_name = extract_js_heritage_name(c, source);
+            if let Some(name) = parent_name {
+                intents.push(ReferenceIntent::Extends { parent: name, line });
             }
         }
         child = c.next_sibling();
     }
+}
+
+fn extract_js_heritage_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        match c.kind() {
+            "identifier" => return Some(node_text(c, source)),
+            "member_expression" => {
+                return node_text(c, source)
+                    .split('.')
+                    .next_back()
+                    .map(|s| s.to_string());
+            }
+            _ => {
+                if let Some(name) = extract_js_heritage_name(c, source) {
+                    return Some(name);
+                }
+            }
+        }
+        child = c.next_sibling();
+    }
+    None
 }
 
 /// Extract decorator references from JavaScript decorators (e.g., @Component, @Injectable).
@@ -949,7 +964,6 @@ mod tests {
         }
     }
 
-    #[ignore = "Tree-sitter structure variations in different JavaScript versions"]
     #[test]
     fn test_extract_class_inheritance_js() {
         let code = "class Child extends Parent { }";
@@ -976,6 +990,38 @@ mod tests {
             extract_class_inheritance_js(class_node, code_bytes, &mut intents);
             assert!(!intents.is_empty());
             // The intent should be an Extends variant
+            let has_extends = intents.iter().any(
+                |i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == "Parent"),
+            );
+            assert!(has_extends);
+        }
+    }
+
+    #[test]
+    fn test_extract_class_inheritance_js_qualified() {
+        let code = "class Child extends NS.Parent { }";
+        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+            .expect("Failed to parse JavaScript code");
+
+        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "class_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_class_declaration(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        if let Some(class_node) = find_class_declaration(tree.root_node()) {
+            let code_bytes = code.as_bytes();
+            let mut intents = Vec::new();
+            extract_class_inheritance_js(class_node, code_bytes, &mut intents);
+            assert!(!intents.is_empty());
             let has_extends = intents.iter().any(
                 |i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == "Parent"),
             );
