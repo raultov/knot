@@ -816,15 +816,16 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 ### Upcoming
 
 #### Long-Term Vision
-- [ ] Build Server/Client architecture to facilitate enterprise usage with multiple MCP clients
 - [ ] Reestructure E2E test suites to run all together at once sharing databases context avoiding Docker overhead
+- [ ] Varnish VCL support
 - [ ] Markdown documentation indexing
 - [ ] Go support
 - [ ] C# support
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)
-- [ ] Web UI for graph visualization
 - [ ] Language Server Protocol (LSP) integration
 - [ ] Automated Code Review tool (MCP-based)
+- [ ] CLI commands (opencode, claude, agy) to index repos
+- [ ] Ruby support
 
 ---
 
