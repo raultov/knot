@@ -1,10 +1,12 @@
 //! Core search_hybrid_context logic shared between CLI and MCP
 //!
 //! Performs a hybrid search combining:
-//! 1. Semantic search via Qdrant vector similarity (understands code meaning)
-//! 2. Structural expansion via Neo4j graph relationships (understands architecture)
+//! 1. Prefix name match via Neo4j (exact name prefix, case-insensitive)
+//! 2. Semantic search via Qdrant vector similarity (understands code meaning)
+//! 3. Structural expansion via Neo4j graph relationships (understands architecture)
 
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::db::{
@@ -30,24 +32,54 @@ pub async fn run_search_hybrid_context(
 
     let search_results = vector_db.search(&vector, max_results, repo_name).await?;
 
-    if search_results.is_empty() {
+    // Boost: prepend entities whose name matches the query as a case-insensitive prefix
+    let prefix_results = graph_db
+        .find_entities_by_name_prefix(query, repo_name, max_results)
+        .await
+        .unwrap_or_else(|_| json!([]));
+
+    let mut seen_uuids: HashSet<String> = HashSet::new();
+    let mut combined: Vec<serde_json::Value> = Vec::new();
+
+    if let Some(arr) = prefix_results.as_array() {
+        for entity in arr {
+            if let Some(uuid) = entity.get("uuid").and_then(|v| v.as_str())
+                && seen_uuids.insert(uuid.to_string())
+            {
+                combined.push(entity.clone());
+            }
+        }
+    }
+
+    for result in &search_results {
+        if let Some(uuid) = result.get("uuid").and_then(|v| v.as_str())
+            && seen_uuids.insert(uuid.to_string())
+        {
+            combined.push(result.clone());
+        }
+    }
+
+    if combined.is_empty() {
         return Ok(serde_json::Value::Null);
     }
 
-    let uuids: Vec<String> = search_results
+    combined.truncate(max_results);
+
+    let uuids: Vec<String> = combined
         .iter()
-        .filter_map(|result| {
-            result
+        .map(|entity| {
+            entity
                 .get("uuid")
                 .and_then(|v| v.as_str())
-                .map(String::from)
+                .unwrap_or("")
+                .to_string()
         })
         .collect();
 
-    let entity_names: Vec<String> = search_results
+    let entity_names: Vec<String> = combined
         .iter()
-        .filter_map(|result| {
-            result
+        .filter_map(|entity| {
+            entity
                 .get("name")
                 .and_then(|v| v.as_str())
                 .map(String::from)

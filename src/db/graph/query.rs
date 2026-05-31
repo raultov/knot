@@ -31,6 +31,12 @@ pub trait QueryExt {
     ) -> Result<serde_json::Value>;
     async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>>;
     async fn find_repo_dependents(&self, repo_name: &str) -> Result<Vec<String>>;
+    async fn find_entities_by_name_prefix(
+        &self,
+        prefix: &str,
+        repo_name: Option<&str>,
+        limit: usize,
+    ) -> Result<serde_json::Value>;
     async fn find_repository_by_artifact(
         &self,
         group_id: &str,
@@ -355,6 +361,62 @@ impl QueryExt for GraphDb {
             dependents.len()
         );
         Ok(dependents)
+    }
+
+    async fn find_entities_by_name_prefix(
+        &self,
+        prefix: &str,
+        repo_name: Option<&str>,
+        limit: usize,
+    ) -> Result<serde_json::Value> {
+        let query_str = if repo_name.is_some() {
+            "MATCH (m:Entity)
+             WHERE toLower(m.name) STARTS WITH toLower($prefix) AND m.repo_name = $repo_name
+             OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
+             RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
+                    m.file_path, m.start_line, collect(dep.name) as dependencies
+             LIMIT $limit"
+                .to_string()
+        } else {
+            "MATCH (m:Entity)
+             WHERE toLower(m.name) STARTS WITH toLower($prefix)
+             OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
+             RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
+                    m.file_path, m.start_line, collect(dep.name) as dependencies
+             LIMIT $limit"
+                .to_string()
+        };
+
+        let mut q = query(&query_str)
+            .param("prefix", prefix)
+            .param("limit", limit as i64);
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for entities by name prefix")?;
+
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let entity_json = serde_json::json!({
+                "uuid": row.get::<String>("uuid").ok(),
+                "name": row.get::<String>("m.name").ok(),
+                "kind": row.get::<String>("m.kind").ok(),
+                "fqn": row.get::<String>("m.fqn").ok(),
+                "signature": row.get::<String>("m.signature").ok(),
+                "docstring": row.get::<String>("m.docstring").ok(),
+                "file_path": row.get::<String>("m.file_path").ok(),
+                "start_line": row.get::<i64>("m.start_line").ok(),
+                "dependencies": row.get::<Vec<String>>("dependencies").unwrap_or_default(),
+            });
+            results.push(entity_json);
+        }
+
+        Ok(serde_json::json!(results))
     }
 
     /// Find a repository by its build system artifact identity.
