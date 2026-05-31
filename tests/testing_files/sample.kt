@@ -111,3 +111,52 @@ fun main() {
     ConfigManager.configure() // Using companion object
     DatabaseManager.connect() // Using singleton object
 }
+
+// Internal object with helper methods (like NodeUtils in ksoup)
+internal object Helpers {
+    fun greet(name: String): String = "Hello $name"
+    fun format(value: String): String = value.trim()
+}
+
+// Class that calls internal object methods (should resolve to Helpers.greet / Helpers.format)
+class Greeter {
+    fun sayHello(name: String): String {
+        return Helpers.greet(name)
+    }
+
+    fun run() {
+        val msg = Helpers.format("  hello  ")
+        println(msg)
+    }
+}
+
+// Interface with implementation (should be classified as KotlinInterface, not KotlinClass)
+interface FilterContract {
+    fun accept(item: String): Boolean
+}
+
+// Class implementing the interface (should generate IMPLEMENTS relationship)
+class UpperFilter : FilterContract {
+    override fun accept(item: String): Boolean = item == item.uppercase()
+}
+
+// Class without inheritance (regression test: no empty EXTENDS/IMPLEMENTS)
+class SimpleHelper {
+    fun doWork() {}
+}
+
+// Interface implemented via anonymous object (should generate IMPLEMENTS from anonymous)
+interface AnonContract {
+    fun ping(): String
+}
+
+class AnonHost {
+    fun build(): AnonContract = object : AnonContract {
+        override fun ping(): String = "pong"
+    }
+}
+
+// Enum class (should be classified as KotlinEnum, not KotlinClass)
+enum class Color {
+    RED, GREEN, BLUE,
+}

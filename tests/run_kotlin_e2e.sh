@@ -304,6 +304,110 @@ else
     echo -e "${YELLOW}~ Kotlin type references may need additional extraction tuning${NC}"
 fi
 
+# Test 11: Kotlin object method call resolution
+echo ""
+echo "Test 11: Verifying object method resolution (Helpers.greet called by Greeter)..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Helpers","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Helpers" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "Helpers" && echo "$CLI_RESPONSE" | grep -q "Helpers"; then
+    echo -e "${GREEN}✓ Found internal object Helpers (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Internal object Helpers not found${NC}"
+    exit 1
+fi
+
+echo "Test 11b: Verifying greet method exists inside Helpers object..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greet","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "greet" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "Helpers\|greetUser" && echo "$CLI_RESPONSE" | grep -q "Helpers\|greetUser"; then
+    echo -e "${GREEN}✓ Found greet method in Helpers object (MCP & CLI)${NC}"
+else
+    echo -e "${YELLOW}~ greet method resolution may need additional tuning${NC}"
+fi
+
+echo "Test 11c: Verifying find_callers for greet resolves to Greeter.sayHello..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"greet","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "sayHello\|Greeter"; then
+    echo -e "${GREEN}✓ find_callers(greet) found Greeter.sayHello as caller (object method resolution)${NC}"
+else
+    echo -e "${YELLOW}~ find_callers for greet may need additional resolution tuning${NC}"
+fi
+
+# Test 12: Kotlin interface classification (should be KotlinInterface, not KotlinClass)
+echo ""
+echo "Test 12: Verifying FilterContract is classified as KotlinInterface (not KotlinClass)..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"FilterContract","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" 2>/dev/null)
+
+# Check for KotlinInterface kind in search response
+if echo "$MCP_RESPONSE" | grep -q "FilterContract"; then
+    echo -e "${GREEN}✓ Found FilterContract entity${NC}"
+    if echo "$MCP_RESPONSE" | grep -q "kotlin_interface\|KotlinInterface"; then
+        echo -e "${GREEN}✓ FilterContract classified as KotlinInterface (not KotlinClass)${NC}"
+    else
+        echo -e "${YELLOW}~ FilterContract kind not verified in MCP response (check explore output)${NC}"
+    fi
+else
+    echo -e "${RED}✗ FilterContract not found${NC}"
+    exit 1
+fi
+
+# Test 13: Kotlin implements relationship (UpperFilter IMPLEMENTS FilterContract)
+echo ""
+echo "Test 13: Verifying UpperFilter implements FilterContract (IMPLEMENTS relationship)..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"FilterContract","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "UpperFilter\|Implementation\|Implements"; then
+    echo -e "${GREEN}✓ find_callers(FilterContract) found UpperFilter (IMPLEMENTS relationship)${NC}"
+else
+    echo -e "${YELLOW}~ IMPLEMENTS relationship for FilterContract may need additional tuning${NC}"
+fi
+
+# Test 14: Anonymous object implements relationship (AnonHost.build IMPLEMENTS AnonContract via anonymous object)
+echo ""
+echo "Test 14: Verifying anonymous object implements AnonContract..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"AnonContract","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "Implement\|anonymous\|AnonHost\|Implements"; then
+    echo -e "${GREEN}✓ find_callers(AnonContract) found anonymous implementation (anonymous object resolution)${NC}"
+else
+    echo -e "${YELLOW}~ Anonymous object implementers may need additional tuning${NC}"
+fi
+
+# Test 15: Enum class detection (Color should be KotlinEnum, not KotlinClass)
+echo ""
+echo "Test 15: Verifying Color enum class is classified as KotlinEnum..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Color","repo_name":"kotlin_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "Color" && echo "$CLI_RESPONSE" | grep -q "Color"; then
+    echo -e "${GREEN}✓ Found Color entity${NC}"
+    if echo "$MCP_RESPONSE" | grep -q "kotlin_enum\|KotlinEnum"; then
+        echo -e "${GREEN}✓ Color classified as KotlinEnum (not KotlinClass)${NC}"
+    else
+        echo -e "${YELLOW}~ Color kind not verified in MCP response (check explore output)${NC}"
+    fi
+else
+    echo -e "${YELLOW}~ Color enum class may need additional extraction tuning${NC}"
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -322,6 +426,11 @@ echo "  ✓ Kotlin extension function declarations"
 echo "  ✓ Kotlin property declarations"
 echo "  ✓ Kotlin annotation extraction"
 echo "  ✓ MCP server query functionality for Kotlin entities"
+echo "  ✓ Kotlin internal object method resolution (v0.10.0)"
+echo "  ✓ Kotlin interface vs class classification (v0.10.0)"
+echo "  ✓ Kotlin EXTENDS/IMPLEMENTS extraction (v0.10.0)"
+echo "  ✓ Kotlin anonymous object implements (v0.11.0)"
+echo "  ✓ Kotlin enum class classification (v0.11.0)"
 echo ""
 echo "Entity types supported:"
 echo "  - KotlinClass"

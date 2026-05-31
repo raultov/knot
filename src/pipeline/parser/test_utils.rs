@@ -67,3 +67,16 @@ pub(crate) fn parse_jsx_snippet(code: &str) -> Result<Tree, String> {
         .parse(code, None)
         .ok_or_else(|| "Failed to parse JSX code snippet".to_string())
 }
+
+/// Parse a Kotlin code snippet and return the syntax tree.
+#[cfg(test)]
+pub(crate) fn parse_kotlin_snippet(code: &str) -> Result<Tree, String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_kotlin_ng::LANGUAGE.into())
+        .map_err(|e| format!("Failed to set Kotlin language: {e}"))?;
+
+    parser
+        .parse(code, None)
+        .ok_or_else(|| "Failed to parse Kotlin code snippet".to_string())
+}
