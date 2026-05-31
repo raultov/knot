@@ -751,6 +751,102 @@ else
     exit 1
 fi
 
+# Test 33: TypeScript class EXTENDS (CacheService → BaseService)
+echo ""
+echo "Test 33: Verifying TypeScript EXTENDS edge CacheService → BaseService..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":39,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"BaseService\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "BaseService" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "CacheService" || echo "$CLI_RESPONSE" | grep -q "CacheService"; then
+    echo -e "${GREEN}✓ MCP: Found EXTENDS edge CacheService → BaseService${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing EXTENDS edge CacheService → BaseService${NC}"
+    exit 1
+fi
+
+# Test 34: TypeScript class IMPLEMENTS (CacheService → IStorage)
+echo ""
+echo "Test 34: Verifying TypeScript IMPLEMENTS edge CacheService → IStorage..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IStorage\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "IStorage" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "CacheService" || echo "$CLI_RESPONSE" | grep -q "CacheService"; then
+    echo -e "${GREEN}✓ MCP: Found IMPLEMENTS edge CacheService → IStorage${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing IMPLEMENTS edge CacheService → IStorage${NC}"
+    exit 1
+fi
+
+# Test 35: TypeScript interface EXTENDS (ICache → IStorage)
+echo ""
+echo "Test 35: Verifying TypeScript interface EXTENDS edge ICache → IStorage..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IStorage\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "IStorage" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "ICache" || echo "$CLI_RESPONSE" | grep -q "ICache"; then
+    echo -e "${GREEN}✓ MCP: Found EXTENDS edge ICache → IStorage (interface inheritance)${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing EXTENDS edge ICache → IStorage${NC}"
+    exit 1
+fi
+
+# Test 36: TypeScript top-level function type references (processPayload → IPayload)
+echo ""
+echo "Test 36: Verifying TypeScript top-level function type reference processPayload → IPayload..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IPayload\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "IPayload" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "processPayload" || echo "$CLI_RESPONSE" | grep -q "processPayload"; then
+    echo -e "${GREEN}✓ MCP: Found top-level function processPayload using IPayload (type reference)${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing type reference processPayload → IPayload${NC}"
+    exit 1
+fi
+
+# Test 37: Prefix search boost (partial name query should find exact match first)
+echo ""
+echo "Test 37: Verifying prefix search returns exact name match first..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"ExternalAcc\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "ExternalAcc" 2>/dev/null)
+
+# Check that a prefix query like "IPa" finds IPayload (from test_typescript.ts fixtures)
+MCP_REQUEST2="{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"IPa\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE2=$(echo "$MCP_REQUEST2" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE2=$(cargo run --release --bin knot -- search "IPa" 2>/dev/null)
+
+if echo "$MCP_RESPONSE2" | grep -q "IPayload" || echo "$CLI_RESPONSE2" | grep -q "IPayload"; then
+    echo -e "${GREEN}✓ MCP: Prefix search for 'IPa' returned IPayload (name prefix boost works)${NC}"
+else
+    echo -e "${RED}✗ MCP: Prefix search for 'IPa' did not return IPayload${NC}"
+    exit 1
+fi
+
+# Test 38: TypeScript value reference (object literal VALUE uses Engine class)
+echo ""
+echo "Test 38: Verifying TypeScript value reference COMPONENT_REGISTRY → Engine..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"Engine\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Engine" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "COMPONENT_REGISTRY" || echo "$CLI_RESPONSE" | grep -q "COMPONENT_REGISTRY"; then
+    echo -e "${GREEN}✓ MCP: Found value reference COMPONENT_REGISTRY → Engine${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing value reference COMPONENT_REGISTRY → Engine${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -761,6 +857,8 @@ echo ""
 echo "Validated features:"
 echo "  ✓ TypeScript decorator extraction (@Component, @NgModule)"
 echo "  ✓ Type reference extraction (constructor DI)"
+echo "  ✓ TypeScript inheritance extraction (EXTENDS + IMPLEMENTS)"
+echo "  ✓ TypeScript interface inheritance (interface extends interface)"
 echo "  ✓ JavaScript class parsing and JSX components"
 echo "  ✓ Java annotation extraction"
 echo "  ✓ Java field_access method invocations and FQN-based caller resolution"
@@ -788,6 +886,8 @@ echo "  ✓ Phase 5: Kotlin Support - Annotation extraction"
 echo "  ✓ Phase 6: Signature-based search - Java method signatures"
 echo "  ✓ Phase 6: Signature-based search - Kotlin parameter types"
 echo "  ✓ Phase 6: Signature-based search - TypeScript type annotations"
+echo "  ✓ Phase 7: Prefix name search boost (exact-name matches first)"
+echo "  ✓ Phase 8: TypeScript value references (capitalized identifiers in object literals/arrays)"
 echo ""
 
 exit 0

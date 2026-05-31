@@ -149,3 +149,66 @@ function NgModule(config: any): ClassDecorator {
 function Injectable(config: any): ClassDecorator {
     return (target: any) => target;
 }
+
+// ============================================================
+// Extends / Implements E2E test fixtures
+// ============================================================
+
+export interface IStorage {
+    save(key: string, value: any): void;
+    load(key: string): any;
+}
+
+export interface ICache extends IStorage {
+    expire(key: string): void;
+}
+
+export class BaseService {
+    protected initialized: boolean = false;
+    init(): void {
+        this.initialized = true;
+    }
+}
+
+export class CacheService extends BaseService implements IStorage {
+    private store: Map<string, any> = new Map();
+
+    save(key: string, value: any): void {
+        this.store.set(key, value);
+    }
+
+    load(key: string): any {
+        return this.store.get(key);
+    }
+
+    clear(): void {
+        this.store.clear();
+    }
+}
+
+// ============================================================
+// Top-level function type references E2E test fixtures
+// ============================================================
+
+export interface IPayload {
+    id: number;
+    data: string;
+}
+
+export function processPayload(payload: IPayload): IPayload {
+    return { id: payload.id, data: payload.data.toUpperCase() };
+}
+
+// ============================================================
+// Value reference E2E test fixtures
+// ============================================================
+
+export class Engine {
+    type: string = 'default';
+    start(): void {}
+}
+
+export const COMPONENT_REGISTRY = {
+    engine: Engine,
+    turbo: Engine,
+} as const;
