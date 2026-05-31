@@ -936,33 +936,34 @@ mod tests {
         let source = "class Foo {\n    fun bar() {\n        val x = object : Iface {\n            fun foo() {}\n        }\n    }\n}";
         let tree = parse_kotlin(source);
         // Build enclosing entity to test line-range resolution
-        let mut existing = Vec::new();
-        existing.push(ParsedEntity::new(
-            "Foo",
-            EntityKind::KotlinClass,
-            "Foo",
-            None,
-            None,
-            "kotlin",
-            "test.kt",
-            1,
-            7,
-            None,
-            "test",
-        ));
-        existing.push(ParsedEntity::new(
-            "bar",
-            EntityKind::KotlinMethod,
-            "Foo.bar",
-            None,
-            None,
-            "kotlin",
-            "test.kt",
-            2,
-            6,
-            Some("Foo".to_string()),
-            "test",
-        ));
+        let existing = vec![
+            ParsedEntity::new(
+                "Foo",
+                EntityKind::KotlinClass,
+                "Foo",
+                None,
+                None,
+                "kotlin",
+                "test.kt",
+                1,
+                7,
+                None,
+                "test",
+            ),
+            ParsedEntity::new(
+                "bar",
+                EntityKind::KotlinMethod,
+                "Foo.bar",
+                None,
+                None,
+                "kotlin",
+                "test.kt",
+                2,
+                6,
+                Some("Foo".to_string()),
+                "test",
+            ),
+        ];
 
         let mut out = Vec::new();
         extract_anonymous_object_implementations(
@@ -1009,8 +1010,7 @@ mod tests {
     fn test_extract_anonymous_object_no_inheritance() {
         let source = "fun main() { val x = object { fun foo() {} } }";
         let tree = parse_kotlin(source);
-        let mut existing = Vec::new();
-        existing.push(ParsedEntity::new(
+        let existing = vec![ParsedEntity::new(
             "main",
             EntityKind::KotlinFunction,
             "main",
@@ -1022,7 +1022,7 @@ mod tests {
             1,
             None,
             "test",
-        ));
+        )];
 
         let mut out = Vec::new();
         extract_anonymous_object_implementations(
