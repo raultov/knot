@@ -847,6 +847,66 @@ else
     exit 1
 fi
 
+# Test 39: JavaScript cross-file alias resolution (require)
+echo ""
+echo "Test 39: Verifying JavaScript cross-file alias resolution (MyJsAlias → MyJsTarget)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"MyJsTarget\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "MyJsTarget" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "callerJs" || echo "$CLI_RESPONSE" | grep -q "callerJs"; then
+    echo -e "${GREEN}✓ MCP: Found cross-file alias resolution callerJs → MyJsTarget${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing alias resolution callerJs → MyJsTarget${NC}"
+    exit 1
+fi
+
+# Test 40: TypeScript cross-file alias resolution (import)
+echo ""
+echo "Test 40: Verifying TypeScript cross-file alias resolution (MyTsAlias → MyTsTarget)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":47,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"MyTsTarget\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "MyTsTarget" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "callerTs" || echo "$CLI_RESPONSE" | grep -q "callerTs"; then
+    echo -e "${GREEN}✓ MCP: Found cross-file alias resolution callerTs → MyTsTarget${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing alias resolution callerTs → MyTsTarget${NC}"
+    exit 1
+fi
+
+# Test 41: JS circular require alias resolution — completes without hanging
+echo ""
+echo "Test 41: Verifying JS circular require alias resolution (CycleB ⇄ CycleA)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"CycleA_target\",\"repo_name\":\"$REPO_NAME\",\"max_results\":5}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "CycleA_target" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "CycleA_target" || echo "$CLI_RESPONSE" | grep -q "CycleA_target"; then
+    echo -e "${GREEN}✓ MCP: Circular require aliases resolved without deadlock; CycleA_target found${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing CycleA_target after circular alias resolution${NC}"
+    exit 1
+fi
+
+# Test 42: JS circular require — cross-file caller relationship preserved
+echo ""
+echo "Test 42: Verifying JS circular require preserves relationships (callerInB → CycleA_target)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"CycleA_target\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "CycleA_target" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "callerInB" || echo "$CLI_RESPONSE" | grep -q "callerInB"; then
+    echo -e "${GREEN}✓ MCP: callerInB → CycleA_target relationship preserved across circular alias${NC}"
+else
+    echo -e "${RED}✗ MCP: Missing callerInB → CycleA_target relationship${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -888,6 +948,8 @@ echo "  ✓ Phase 6: Signature-based search - Kotlin parameter types"
 echo "  ✓ Phase 6: Signature-based search - TypeScript type annotations"
 echo "  ✓ Phase 7: Prefix name search boost (exact-name matches first)"
 echo "  ✓ Phase 8: TypeScript value references (capitalized identifiers in object literals/arrays)"
+echo "  ✓ Phase 9: Cross-file alias resolution (require/import)"
+echo "  ✓ Phase 10: Circular alias cycle resolution (no deadlock + relationships preserved)"
 echo ""
 
 exit 0
