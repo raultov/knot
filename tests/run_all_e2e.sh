@@ -25,10 +25,20 @@ PASSED_TESTS=()
 run_test() {
     local test_name="$1"
     local test_script="$2"
-    
+
+    # Pre-flight: ensure shared Neo4j port (17687) is free before starting.
+    # If a previous suite left a container holding the port, force teardown.
+    if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':17687 '; then
+        echo -e "${YELLOW}Port 17687 still in use, forcing teardown before next suite...${NC}"
+        cd "$PROJECT_ROOT/tests"
+        docker compose -f docker-compose.e2e.yml down -v --remove-orphans 2>/dev/null || true
+        sleep 5
+        cd "$PROJECT_ROOT"
+    fi
+
     echo -e "\n${YELLOW}[Running: $test_name]${NC}"
     echo -e "${YELLOW}========================================${NC}"
-    
+
     if "$PROJECT_ROOT/tests/$test_script"; then
         echo -e "${GREEN}✓ $test_name PASSED${NC}"
         PASSED_TESTS+=("$test_name")
@@ -36,7 +46,7 @@ run_test() {
         echo -e "${RED}✗ $test_name FAILED${NC}"
         FAILED_TESTS+=("$test_name")
     fi
-    
+
     # Cleanup Docker between test suites
     echo -e "\n${YELLOW}Cleaning up Docker...${NC}"
     cd "$PROJECT_ROOT/tests"
@@ -44,7 +54,8 @@ run_test() {
     docker compose -f .e2e_cpp_data/docker-compose.yml down -v 2>/dev/null || true
     docker compose -f .e2e_crosslang_data/docker-compose.yml down -v 2>/dev/null || true
     sudo rm -rf .e2e_* 2>/dev/null || rm -rf .e2e_* 2>/dev/null || true
-    sleep 3
+    # Give Linux time to release TCP ports (TIME_WAIT) before next suite.
+    sleep 6
     cd "$PROJECT_ROOT"
 }
 

@@ -52,17 +52,19 @@ echo ""
 cleanup() {
     local exit_code=$?
 
+    # Always tear down containers — leaving them up blocks the shared port 17687
+    # for subsequent suites in run_all_e2e.sh and causes false cascading failures.
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Build Systems E2E tests failed!${NC}"
-        echo -e "${YELLOW}To clean up manually:${NC}"
-        echo "  cd $SCRIPT_DIR && docker compose -f docker-compose.e2e.yml down -v"
-        echo "  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR"
+        echo -e "${YELLOW}Test data preserved at $E2E_DATA_DIR for inspection.${NC}"
+        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR${NC}"
         return 0
     fi
 
     echo -e "\n${YELLOW}Cleaning up Build Systems E2E test environment...${NC}"
-    cd "$SCRIPT_DIR"
-    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
