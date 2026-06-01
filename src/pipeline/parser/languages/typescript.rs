@@ -951,6 +951,119 @@ pub(crate) fn extract_jsx_attributes(
     attributes
 }
 
+// ── Alias extraction (import / export default) ──────────────────
+
+/// Scan the AST for import statements and return (local_name, module_path, original_export_name, is_renamed).
+/// original_export_name is Some for named imports, None for default/namespace.
+/// is_renamed is true when `import { X as Y }` creates a new local name.
+pub(crate) fn scan_import_module_aliases(
+    root: Node<'_>,
+    source: &[u8],
+) -> Vec<(String, String, Option<String>, bool)> {
+    let mut aliases = Vec::new();
+
+    fn walk(
+        node: Node<'_>,
+        source: &[u8],
+        aliases: &mut Vec<(String, String, Option<String>, bool)>,
+    ) {
+        if node.kind() == "import_statement" {
+            let source_node = node.child_by_field_name("source");
+            let module_path = source_node.map(|n| {
+                let raw = node_text(n, source);
+                raw.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+                    .to_string()
+            });
+
+            if let Some(module_path) = module_path {
+                let mut child = node.child(0);
+                while let Some(c) = child {
+                    if c.kind() == "import_clause" {
+                        let mut inner = c.child(0);
+                        while let Some(ci) = inner {
+                            match ci.kind() {
+                                "named_imports" => {
+                                    let mut spec_child = ci.child(0);
+                                    while let Some(spec) = spec_child {
+                                        if spec.kind() == "import_specifier" {
+                                            let alias_node = spec.child_by_field_name("alias");
+                                            let original = spec.child_by_field_name("name");
+                                            let local = alias_node.or(original);
+                                            let original_name =
+                                                original.map(|n| node_text(n, source));
+                                            let is_renamed = alias_node.is_some();
+                                            if let Some(name_node) = local {
+                                                let name = node_text(name_node, source);
+                                                aliases.push((
+                                                    name,
+                                                    module_path.clone(),
+                                                    original_name,
+                                                    is_renamed,
+                                                ));
+                                            }
+                                        }
+                                        spec_child = spec.next_sibling();
+                                    }
+                                }
+                                "namespace_import" => {
+                                    if let Some(name_node) = ci.child_by_field_name("name") {
+                                        let name = node_text(name_node, source);
+                                        aliases.push((name, module_path.clone(), None, true));
+                                    }
+                                }
+                                "identifier" => {
+                                    let name = node_text(ci, source);
+                                    aliases.push((name, module_path.clone(), None, true));
+                                }
+                                _ => {}
+                            }
+                            inner = ci.next_sibling();
+                        }
+                    }
+                    child = c.next_sibling();
+                }
+            }
+        }
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            walk(c, source, aliases);
+            child = c.next_sibling();
+        }
+    }
+
+    walk(root, source, &mut aliases);
+    aliases
+}
+
+/// Scan the AST for `export default X` and return the target name.
+pub(crate) fn scan_default_export_target(root: Node<'_>, source: &[u8]) -> Option<String> {
+    fn walk(node: Node<'_>, source: &[u8]) -> Option<String> {
+        if node.kind() == "export_statement"
+            && node
+                .children(&mut node.walk())
+                .any(|c| c.kind() == "default")
+        {
+            // Find the value child that is an identifier
+            let mut child = node.child(0);
+            while let Some(c) = child {
+                if c.kind() == "identifier" {
+                    return Some(node_text(c, source));
+                }
+                child = c.next_sibling();
+            }
+        }
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if let Some(result) = walk(c, source) {
+                return Some(result);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+    walk(root, source)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1861,6 +1974,25 @@ mod tests {
             has_a && has_b,
             "Expected ValueReferences for both A and B, got {:?}",
             intents
+        );
+    }
+
+    #[test]
+    fn test_print_import_ast() {
+        let code = "import { MyTsTarget as MyTsAlias } from './alias_target_ts';";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        println!("AST: {}", tree.root_node().to_sexp());
+        let aliases = scan_import_module_aliases(tree.root_node(), code.as_bytes());
+        println!("Aliases: {:?}", aliases);
+        assert_eq!(
+            aliases,
+            vec![(
+                "MyTsAlias".to_string(),
+                "./alias_target_ts".to_string(),
+                Some("MyTsTarget".to_string()),
+                true
+            )]
         );
     }
 }

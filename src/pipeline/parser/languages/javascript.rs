@@ -745,6 +745,9 @@ pub(crate) fn extract_jsx_html_attributes(
                     impl_target: None,
                     generics: None,
                     lifetimes: None,
+                    alias_module_path: None,
+                    original_export_name: None,
+                    default_export: None,
                 });
             } else if attr_name == "className" {
                 // Split by whitespace and create HtmlClass entity for each class
@@ -774,6 +777,9 @@ pub(crate) fn extract_jsx_html_attributes(
                             impl_target: None,
                             generics: None,
                             lifetimes: None,
+                            alias_module_path: None,
+                            original_export_name: None,
+                            default_export: None,
                         });
                     }
                 }
@@ -787,6 +793,80 @@ pub(crate) fn extract_jsx_html_attributes(
         extract_jsx_html_attributes(c, source, entities, file_path, repo_name);
         child = c.next_sibling();
     }
+}
+
+// ── Alias extraction (require / module.exports) ──────────────────
+
+pub(crate) fn extract_require_module_path(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut declarator = node;
+    if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "variable_declarator" {
+                declarator = c;
+                break;
+            }
+            child = c.next_sibling();
+        }
+    }
+
+    let value = declarator.child_by_field_name("value")?;
+    if value.kind() == "new_expression" {
+        if let Some(constructor) = value.child_by_field_name("constructor") {
+            extract_require_string(constructor, source)
+        } else {
+            None
+        }
+    } else if value.kind() == "call_expression" {
+        extract_require_string(value, source)
+    } else {
+        None
+    }
+}
+
+fn extract_require_string(call_node: Node<'_>, source: &[u8]) -> Option<String> {
+    let func = call_node.child_by_field_name("function")?;
+    if func.kind() != "identifier" || node_text(func, source) != "require" {
+        return None;
+    }
+    let args = call_node.child_by_field_name("arguments")?;
+    let first_arg = args.child(1)?;
+    if first_arg.kind() != "string" {
+        return None;
+    }
+    let raw = node_text(first_arg, source);
+    Some(
+        raw.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+            .to_string(),
+    )
+}
+
+pub(crate) fn scan_module_exports_target(root: Node<'_>, source: &[u8]) -> Option<String> {
+    fn walk(node: Node<'_>, source: &[u8]) -> Option<String> {
+        if node.kind() == "assignment_expression" {
+            let left = node.child_by_field_name("left")?;
+            if left.kind() == "member_expression"
+                && let Some(obj) = left.child_by_field_name("object")
+                && node_text(obj, source) == "module"
+                && let Some(prop) = left.child_by_field_name("property")
+                && node_text(prop, source) == "exports"
+            {
+                let right = node.child_by_field_name("right")?;
+                if right.kind() == "identifier" {
+                    return Some(node_text(right, source));
+                }
+            }
+        }
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if let Some(result) = walk(c, source) {
+                return Some(result);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+    walk(root, source)
 }
 
 #[cfg(test)]
@@ -1131,5 +1211,30 @@ mod tests {
         } else {
             panic!("No JSX self-closing element found");
         }
+    }
+
+    #[test]
+    fn test_extract_require_module_path() {
+        let code = "var MyJsAlias = require('./alias_target_js');";
+        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+            .expect("Failed to parse JavaScript code");
+
+        fn find_var_decl(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "variable_declaration" {
+                return Some(node);
+            }
+            let mut i = 0u32;
+            while let Some(child) = node.child(i) {
+                if let Some(found) = find_var_decl(child) {
+                    return Some(found);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        let var_node = find_var_decl(tree.root_node()).unwrap();
+        let path = extract_require_module_path(var_node, code.as_bytes());
+        assert_eq!(path.as_deref(), Some("./alias_target_js"));
     }
 }

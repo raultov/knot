@@ -766,12 +766,29 @@ pub(crate) fn extract_entities(
                 repo_name,
             );
             entity.reference_intents = reference_intents;
-            // Filter self-references (TypeReference to own name)
-            entity.reference_intents.retain(|intent| {
-                !matches!(intent, ReferenceIntent::TypeReference { type_name, .. } if type_name == entity.name.as_str())
+            // Filter self-references (TypeReference/ValueReference to own name).
+            // A type or value reference whose target is the enclosing entity itself
+            // would produce a self-loop edge in Neo4j; useless visually and semantically.
+            entity.reference_intents.retain(|intent| match intent {
+                ReferenceIntent::TypeReference { type_name, .. } => {
+                    type_name != entity.name.as_str()
+                }
+                ReferenceIntent::ValueReference { value_name, .. } => {
+                    value_name != entity.name.as_str()
+                }
+                _ => true,
             });
             entity.inline_comments = inline_comments;
             entity.decorators = decorators;
+
+            // Extract alias module path for JS require() aliases
+            if lang_name == "javascript"
+                && entity.kind == EntityKind::Constant
+                && let Some(node) = entity_node
+            {
+                entity.alias_module_path =
+                    javascript::extract_require_module_path(node, source_bytes);
+            }
 
             // Track byte range of this entity for orphan detection
             // Must be done for ALL entities to keep indices aligned with the entities vector
@@ -884,6 +901,85 @@ pub(crate) fn extract_entities(
             file_path,
             repo_name,
         );
+    }
+
+    // Sixth pass: extract alias metadata (require/import → module path)
+    if lang_name == "javascript" {
+        // Set default_export on <module> entity from module.exports = X
+        if let Some(target) = javascript::scan_module_exports_target(tree.root_node(), source_bytes)
+        {
+            if let Some(module_entity) = entities.iter_mut().find(|e| e.name == "<module>") {
+                module_entity.default_export = Some(target);
+            } else {
+                // Create a synthetic module entity just to hold the default export
+                let mut module_entity = ParsedEntity::new(
+                    "<module>",
+                    EntityKind::Function,
+                    file_path,
+                    None,
+                    None,
+                    lang_name,
+                    file_path,
+                    1,
+                    1, // we don't have exact lines, use 1
+                    None,
+                    repo_name,
+                );
+                module_entity.default_export = Some(target);
+                entities.push(module_entity);
+            }
+        }
+    }
+    if lang_name == "typescript" {
+        // Create entities for renamed/default/namespace imports so that
+        // cross-file alias resolution can follow them. Non-renamed named
+        // imports (`import { X }`) don't need entities because the name
+        // is already captured as a type reference by the main query.
+        let aliases = typescript::scan_import_module_aliases(tree.root_node(), source_bytes);
+        for (name, module_path, original_name, is_renamed) in aliases {
+            if is_renamed && !entities.iter().any(|e| e.name == name) {
+                let mut alias_entity = ParsedEntity::new(
+                    &name,
+                    EntityKind::Constant,
+                    file_path,
+                    None,
+                    None,
+                    lang_name,
+                    file_path,
+                    1,
+                    1,
+                    None,
+                    repo_name,
+                );
+                alias_entity.alias_module_path = Some(module_path);
+                alias_entity.original_export_name = original_name;
+                entities.push(alias_entity);
+            }
+        }
+        // Set default_export on <module> from export default X
+        if let Some(target) = typescript::scan_default_export_target(tree.root_node(), source_bytes)
+        {
+            if let Some(module_entity) = entities.iter_mut().find(|e| e.name == "<module>") {
+                module_entity.default_export = Some(target);
+            } else {
+                // Create a synthetic module entity just to hold the default export
+                let mut module_entity = ParsedEntity::new(
+                    "<module>",
+                    EntityKind::Function,
+                    file_path,
+                    None,
+                    None,
+                    lang_name,
+                    file_path,
+                    1,
+                    1,
+                    None,
+                    repo_name,
+                );
+                module_entity.default_export = Some(target);
+                entities.push(module_entity);
+            }
+        }
     }
 
     Ok(entities)
@@ -3217,6 +3313,44 @@ class MyService:
         assert!(
             !has_self_ref,
             "Self-referencing TypeReference should be filtered"
+        );
+    }
+
+    #[test]
+    fn test_extract_js_require_alias() {
+        let code = "var MyJsAlias = require('./alias_target_js');";
+        let result = extract_entities(
+            code,
+            tree_sitter_javascript::LANGUAGE.into(),
+            "(variable_declaration (variable_declarator name: (identifier) @constant.name))",
+            "javascript",
+            "test.js",
+            "test_repo",
+        );
+        let entities = result.unwrap();
+        let entity = entities.iter().find(|e| e.name == "MyJsAlias").unwrap();
+        assert_eq!(
+            entity.alias_module_path.as_deref(),
+            Some("./alias_target_js")
+        );
+    }
+
+    #[test]
+    fn test_extract_ts_import_alias() {
+        let code = "import { MyTsTarget as MyTsAlias } from './alias_target_ts';";
+        let result = extract_entities(
+            code,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "", // No query needed for imports
+            "typescript",
+            "test.ts",
+            "test_repo",
+        );
+        let entities = result.unwrap();
+        let entity = entities.iter().find(|e| e.name == "MyTsAlias").unwrap();
+        assert_eq!(
+            entity.alias_module_path.as_deref(),
+            Some("./alias_target_ts")
         );
     }
 }

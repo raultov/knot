@@ -246,6 +246,21 @@ pub struct ParsedEntity {
     /// e.g., vec!["'a", "'b"]
     pub lifetimes: Option<Vec<String>>,
 
+    /// For JS/TS import aliases: if this entity is a `require()` or `import` alias,
+    /// the relative module path (e.g., "./ResolveCache", "../util/fs").
+    /// Used during resolution to follow cross-file aliases to the original definition.
+    pub alias_module_path: Option<String>,
+
+    /// For TS named imports: the original export name in the target module.
+    /// E.g., `import { MyTsTarget as MyTsAlias }` → Some("MyTsTarget").
+    /// Used by the alias resolver to look up the correct entity in the target file.
+    pub original_export_name: Option<String>,
+
+    /// For JS/TS module-level entities (`<module>`): the name exported as default
+    /// (e.g., `module.exports = ResolveCache`). Used by the alias resolver
+    /// to resolve bare module imports to the correct entity within the target file.
+    pub default_export: Option<String>,
+
     /// Source language (`"java"` or `"typescript"`).
     pub language: String,
 
@@ -304,6 +319,9 @@ pub struct ResolutionEntity {
     pub signature: Option<String>,
     pub reference_intents: Vec<ReferenceIntent>,
     pub relationships: Vec<(Uuid, RelationshipType)>,
+    pub alias_module_path: Option<String>,
+    pub original_export_name: Option<String>,
+    pub default_export: Option<String>,
 }
 
 impl From<&ParsedEntity> for ResolutionEntity {
@@ -318,6 +336,9 @@ impl From<&ParsedEntity> for ResolutionEntity {
             signature: entity.signature.clone(),
             reference_intents: entity.reference_intents.clone(),
             relationships: Vec::new(),
+            alias_module_path: entity.alias_module_path.clone(),
+            original_export_name: entity.original_export_name.clone(),
+            default_export: entity.default_export.clone(),
         }
     }
 }
@@ -382,6 +403,9 @@ impl ParsedEntity {
             impl_target: None,
             generics: None,
             lifetimes: None,
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
             embed_text: String::new(),
         }
     }
