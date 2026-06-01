@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use tracing::info;
+use std::collections::{HashMap, HashSet};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -334,6 +334,9 @@ pub fn resolve_reference_intents_with_context(
         uuids.dedup();
     }
 
+    // Build alias map for cross-file require/import resolution
+    let alias_map = build_alias_map(entities, &uuid_to_file);
+
     // Resolve reference intents for each entity — parallelized via Rayon.
     // All context maps (fqn_to_uuid, name_to_uuids, etc.) are read-only
     // at this point, so no synchronization is needed.
@@ -341,7 +344,6 @@ pub fn resolve_reference_intents_with_context(
         let reference_intents = entity.reference_intents.clone();
 
         // Deduplication set to prevent duplicate relationships.
-        use std::collections::HashSet;
         let mut seen: HashSet<(Uuid, RelationshipType)> = HashSet::new();
 
         for intent in reference_intents {
@@ -427,13 +429,194 @@ pub fn resolve_reference_intents_with_context(
                 ),
             };
 
-            if let Some(uuid) = resolved_uuid
-                && seen.insert((uuid, rel_type))
-            {
-                entity.relationships.push((uuid, rel_type));
+            if let Some(mut uuid) = resolved_uuid {
+                if let Some(&target) = alias_map.get(&uuid) {
+                    uuid = target;
+                }
+                if seen.insert((uuid, rel_type)) {
+                    entity.relationships.push((uuid, rel_type));
+                }
             }
         }
     });
+}
+
+/// Build an alias map from alias UUID → original definition UUID by resolving
+/// `require()` / `import` module paths to entities in the target file.
+///
+/// Cycles (circular requires) are resolved deterministically: the entity with the
+/// smallest UUID in the cycle is chosen as representative and all members point to
+/// it. Self-loops are skipped with a warning.
+fn build_alias_map(
+    entities: &[ResolutionEntity],
+    uuid_to_file: &HashMap<Uuid, String>,
+) -> HashMap<Uuid, Uuid> {
+    let mut alias_map: HashMap<Uuid, Uuid> = HashMap::new();
+
+    let mut file_entities: HashMap<&str, Vec<&ResolutionEntity>> = HashMap::new();
+    for e in entities {
+        file_entities
+            .entry(e.file_path.as_str())
+            .or_default()
+            .push(e);
+    }
+
+    let mut file_defaults: HashMap<&str, Uuid> = HashMap::new();
+    for e in entities {
+        if let Some(ref default_name) = e.default_export
+            && let Some(ents) = file_entities.get(e.file_path.as_str())
+            && let Some(target) = ents.iter().find(|en| en.name == *default_name)
+        {
+            file_defaults.insert(e.file_path.as_str(), target.uuid);
+        }
+    }
+
+    for entity in entities {
+        if let Some(ref module_path) = entity.alias_module_path
+            && !module_path.is_empty()
+            && let Some(source_file) = uuid_to_file.get(&entity.uuid)
+            && let Some(target_file) = resolve_module_path(source_file, module_path, &file_entities)
+            && let Some(target_entities) = file_entities.get(target_file.as_str())
+        {
+            let target = target_entities
+                .iter()
+                .find(|e| e.name == entity.name)
+                .or_else(|| {
+                    entity
+                        .original_export_name
+                        .as_ref()
+                        .and_then(|original| target_entities.iter().find(|e| e.name == *original))
+                })
+                .or_else(|| {
+                    file_defaults
+                        .get(target_file.as_str())
+                        .and_then(|&default_uuid| {
+                            target_entities.iter().find(|e| e.uuid == default_uuid)
+                        })
+                });
+            if let Some(t) = target {
+                if entity.uuid == t.uuid {
+                    warn!(
+                        "Skipping self-referential alias for entity {} in {}",
+                        entity.name, entity.file_path
+                    );
+                } else {
+                    alias_map.insert(entity.uuid, t.uuid);
+                }
+            }
+        }
+    }
+
+    // Transitive closure with cycle resolution.
+    // If A → B and B → C, collapse to A → C (single-hop).
+    // For cycles, pick the smallest UUID as the canonical representative and
+    // make all other cycle members point to it directly. The representative
+    // itself is removed from the map so it acts as the terminal.
+    let keys: Vec<Uuid> = alias_map.keys().copied().collect();
+    for key in keys {
+        if !alias_map.contains_key(&key) {
+            continue; // already processed as part of a cycle
+        }
+        let mut current = key;
+        let mut visited_order: Vec<Uuid> = vec![current];
+        let mut visited_set: HashSet<Uuid> = HashSet::from([current]);
+        let mut cycle_detected = false;
+        while let Some(&next) = alias_map.get(&current) {
+            if visited_set.contains(&next) {
+                cycle_detected = true;
+                break;
+            }
+            visited_set.insert(next);
+            visited_order.push(next);
+            current = next;
+        }
+        let terminal = if cycle_detected {
+            // Find where the cycle starts in visited_order
+            let back_edge_target = alias_map.get(&current).copied().unwrap_or(current);
+            let cycle_start_idx = visited_order
+                .iter()
+                .position(|u| *u == back_edge_target)
+                .unwrap_or(0);
+            let representative = visited_order[cycle_start_idx..]
+                .iter()
+                .min()
+                .copied()
+                .unwrap_or(current);
+            warn!(
+                "Alias cycle detected involving {} entities; collapsing to representative {}",
+                visited_order.len() - cycle_start_idx,
+                representative
+            );
+            // Redirect all cycle members to the representative.
+            for &member in &visited_order[cycle_start_idx..] {
+                if member != representative {
+                    alias_map.insert(member, representative);
+                }
+            }
+            // Remove the representative from the map so it acts as a terminal.
+            alias_map.remove(&representative);
+            representative
+        } else {
+            current
+        };
+        if !cycle_detected && terminal != key {
+            alias_map.insert(key, terminal);
+        }
+    }
+
+    alias_map
+}
+
+/// Resolve a JS/TS module specifier to a file path by matching against known entities.
+fn resolve_module_path(
+    from_file: &str,
+    module_spec: &str,
+    file_entities: &HashMap<&str, Vec<&ResolutionEntity>>,
+) -> Option<String> {
+    use std::path::{Component, Path, PathBuf};
+
+    let from = Path::new(from_file);
+    let parent = from.parent()?;
+
+    let mut resolved = PathBuf::new();
+    for component in parent.join(module_spec).components() {
+        match component {
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::Normal(c) => {
+                resolved.push(c);
+            }
+            Component::CurDir => {}
+            _ => {
+                resolved.push(component);
+            }
+        }
+    }
+
+    let extensions = ["js", "ts", "tsx", "jsx"];
+    let index_extensions = ["js", "ts"];
+
+    let exact = resolved.to_string_lossy().to_string();
+    if file_entities.contains_key(exact.as_str()) {
+        return Some(exact);
+    }
+    for ext in &extensions {
+        let with_ext = resolved.with_extension(ext).to_string_lossy().to_string();
+        if file_entities.contains_key(with_ext.as_str()) {
+            return Some(with_ext);
+        }
+    }
+    for ext in &index_extensions {
+        let index_file = resolved
+            .join(format!("index.{ext}"))
+            .to_string_lossy()
+            .to_string();
+        if file_entities.contains_key(index_file.as_str()) {
+            return Some(index_file);
+        }
+    }
+    None
 }
 
 /// When multiple entities share the same method name (overloads), use arg_count
@@ -706,6 +889,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         }
     }
 
@@ -862,6 +1048,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         let rust_fn = ResolutionEntity {
@@ -874,6 +1063,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         // Create a caller function in rust.rs that calls find_nearest_entity_by_line
@@ -893,6 +1085,9 @@ mod tests {
                 arg_count: None,
             }],
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         // Create a caller function in orphans.rs that calls find_nearest_entity_by_line
@@ -911,6 +1106,9 @@ mod tests {
                 arg_count: None,
             }],
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         let orphans_fn_uuid = orphans_fn.uuid;
@@ -962,6 +1160,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
         let animal_speak_method = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -973,6 +1174,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         let dog_class = ResolutionEntity {
@@ -988,6 +1192,9 @@ mod tests {
                 line: 10,
             }],
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
         let dog_compute = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -1004,6 +1211,9 @@ mod tests {
                 arg_count: None,
             }],
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         let mut entities = vec![animal_speak, animal_speak_method, dog_class, dog_compute];
@@ -1036,6 +1246,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         // Class with method of same name
@@ -1049,6 +1262,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
         // Class method with same name as module function (different file, different FQN)
         let class_method = ResolutionEntity {
@@ -1061,6 +1277,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
         // Another method in same class calling self.do_thing()
         let caller_method = ResolutionEntity {
@@ -1078,6 +1297,9 @@ mod tests {
                 arg_count: None,
             }],
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         };
 
         let module_uuid = module_func.uuid;
@@ -1303,6 +1525,9 @@ mod tests {
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         }
     }
 
@@ -1383,5 +1608,254 @@ mod tests {
         // Verification: If deduplication works, len() == 1 and it resolves.
         assert_eq!(batch[0].relationships.len(), 1);
         assert_eq!(batch[0].relationships[0].0, uuid);
+    }
+
+    // ── Alias map tests ──────────────────────────────────────────
+
+    fn mock_entity_with_alias(
+        name: &str,
+        file: &str,
+        alias_module_path: Option<&str>,
+        default_export: Option<&str>,
+    ) -> ResolutionEntity {
+        ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            name: name.to_string(),
+            fqn: name.to_string(),
+            file_path: file.to_string(),
+            kind: EntityKind::Constant,
+            enclosing_class: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: alias_module_path.map(|s| s.to_string()),
+            original_export_name: None,
+            default_export: default_export.map(|s| s.to_string()),
+        }
+    }
+
+    fn build_alias_map_for_test(entities: &[ResolutionEntity]) -> HashMap<Uuid, Uuid> {
+        let uuid_to_file: HashMap<Uuid, String> = entities
+            .iter()
+            .map(|e| (e.uuid, e.file_path.clone()))
+            .collect();
+        build_alias_map(entities, &uuid_to_file)
+    }
+
+    #[test]
+    fn test_alias_map_skips_self_loop() {
+        // Entity A in file_a.js has alias → file_a.js (resolves to itself)
+        let a = mock_entity_with_alias("A", "file_a.js", Some("./file_a"), None);
+        let entities = vec![a];
+        let map = build_alias_map_for_test(&entities);
+        assert!(map.is_empty(), "Self-loop should be skipped; got {:?}", map);
+    }
+
+    #[test]
+    fn test_alias_map_two_node_cycle_picks_min_uuid() {
+        // CycleX in file_a.js → file_b.js, CycleX in file_b.js → file_a.js
+        // Both share the same name ("CycleX") so the alias_map forms a cycle.
+        let a = {
+            let e = mock_entity_with_alias("CycleX", "file_a.js", Some("./file_b"), None);
+            // Override UUID for deterministic ordering
+            ResolutionEntity {
+                uuid: Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap(), // larger
+                ..e
+            }
+        };
+        let b = {
+            let e = mock_entity_with_alias("CycleX", "file_b.js", Some("./file_a"), None);
+            ResolutionEntity {
+                uuid: Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(), // smaller
+                ..e
+            }
+        };
+        let uuid_a = a.uuid;
+        let uuid_b = b.uuid;
+
+        let entities = vec![a, b];
+        let map = build_alias_map_for_test(&entities);
+
+        // b (smaller UUID) is the canonical representative → removed from keys.
+        // a (larger UUID) points to b directly (single-hop).
+        assert!(
+            !map.contains_key(&uuid_b),
+            "Smaller UUID should be terminal (not a key); map: {:?}",
+            map
+        );
+        assert_eq!(
+            map.get(&uuid_a),
+            Some(&uuid_b),
+            "Larger UUID should point to smaller; map: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn test_alias_map_three_node_cycle() {
+        // CycleX in f_a.js → f_b.js, CycleX in f_b.js → f_c.js, CycleX in f_c.js → f_a.js
+        let a = {
+            let e = mock_entity_with_alias("CycleX", "f_a.js", Some("./f_b"), None);
+            ResolutionEntity {
+                uuid: Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap(), // largest
+                ..e
+            }
+        };
+        let b = {
+            let e = mock_entity_with_alias("CycleX", "f_b.js", Some("./f_c"), None);
+            ResolutionEntity {
+                uuid: Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(), // smallest
+                ..e
+            }
+        };
+        let c = {
+            let e = mock_entity_with_alias("CycleX", "f_c.js", Some("./f_a"), None);
+            ResolutionEntity {
+                uuid: Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap(),
+                ..e
+            }
+        };
+        let uuid_a = a.uuid;
+        let uuid_b = b.uuid;
+        let uuid_c = c.uuid;
+
+        let entities = vec![a, b, c];
+        let map = build_alias_map_for_test(&entities);
+
+        // b (smallest UUID) is the canonical representative → removed from keys.
+        // a and c should point to b directly (single-hop).
+        assert!(
+            !map.contains_key(&uuid_b),
+            "Smallest UUID should be terminal; map: {:?}",
+            map
+        );
+        assert_eq!(
+            map.get(&uuid_a),
+            Some(&uuid_b),
+            "A should point to B; map: {:?}",
+            map
+        );
+        assert_eq!(
+            map.get(&uuid_c),
+            Some(&uuid_b),
+            "C should point to B; map: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn test_alias_map_long_chain_collapses() {
+        // All named "Fwd" so alias resolution by name works.
+        // Fwd in fa.js → fb.js, Fwd in fb.js → fc.js, Fwd in fc.js → fd.js, Fwd in fd.js (terminal).
+        let a = {
+            let e = mock_entity_with_alias("Fwd", "fa.js", Some("./fb"), None);
+            ResolutionEntity {
+                uuid: Uuid::new_v4(),
+                ..e
+            }
+        };
+        let b = {
+            let e = mock_entity_with_alias("Fwd", "fb.js", Some("./fc"), None);
+            ResolutionEntity {
+                uuid: Uuid::new_v4(),
+                ..e
+            }
+        };
+        let c = {
+            let e = mock_entity_with_alias("Fwd", "fc.js", Some("./fd"), None);
+            ResolutionEntity {
+                uuid: Uuid::new_v4(),
+                ..e
+            }
+        };
+        let d = {
+            let e = mock_entity_with_alias("Fwd", "fd.js", None, None);
+            ResolutionEntity {
+                uuid: Uuid::new_v4(),
+                ..e
+            }
+        };
+        let uuid_a = a.uuid;
+        let uuid_b = b.uuid;
+        let uuid_c = c.uuid;
+        let uuid_d = d.uuid;
+
+        let entities = vec![a, b, c, d];
+        let map = build_alias_map_for_test(&entities);
+
+        // All should collapse to D (single-hop)
+        assert_eq!(
+            map.get(&uuid_a),
+            Some(&uuid_d),
+            "A should point to D; map: {:?}",
+            map
+        );
+        assert_eq!(
+            map.get(&uuid_b),
+            Some(&uuid_d),
+            "B should point to D; map: {:?}",
+            map
+        );
+        assert_eq!(
+            map.get(&uuid_c),
+            Some(&uuid_d),
+            "C should point to D; map: {:?}",
+            map
+        );
+        assert!(
+            !map.contains_key(&uuid_d),
+            "D should be terminal (not a key); map: {:?}",
+            map
+        );
+    }
+
+    #[test]
+    fn test_resolve_reference_intents_terminates_with_cyclic_aliases() {
+        // CycleR in file_a.js requires ./file_b  → alias resolves to CycleR in file_b.js
+        // CycleR in file_b.js requires ./file_a  → alias resolves to CycleR in file_a.js
+        let a = {
+            let mut e = mock_entity_with_alias("CycleR", "file_a.js", Some("./file_b"), None);
+            e.uuid = Uuid::parse_str("00000000-0000-0000-0000-00000000000a").unwrap();
+            e.reference_intents = vec![ReferenceIntent::ValueReference {
+                value_name: "CycleR".to_string(),
+                line: 1,
+            }];
+            e
+        };
+        let b = {
+            let mut e = mock_entity_with_alias("CycleR", "file_b.js", Some("./file_a"), None);
+            e.uuid = Uuid::parse_str("00000000-0000-0000-0000-00000000000b").unwrap();
+            e.reference_intents = vec![ReferenceIntent::ValueReference {
+                value_name: "CycleR".to_string(),
+                line: 1,
+            }];
+            e
+        };
+        let uuid_a = a.uuid;
+        let uuid_b = b.uuid;
+
+        let mut entities = vec![a, b];
+        let fqn_map: HashMap<String, Uuid> =
+            entities.iter().map(|e| (e.fqn.clone(), e.uuid)).collect();
+        // CycleR appears in two files → name_map has 2 UUIDs
+        let name_map: HashMap<String, Vec<Uuid>> =
+            HashMap::from([("CycleR".to_string(), vec![uuid_a, uuid_b])]);
+
+        resolve_reference_intents_with_context(&mut entities, fqn_map, name_map);
+
+        // Both entities resolve their ValueReference("CycleR") via
+        // name_to_uuids["CycleR"].first() → the smaller UUID (uuid_a).
+        // uuid_a is the canonical representative (it was removed from
+        // alias_map by the cycle resolver), so no redirect happens.
+        // Both relationships should point to uuid_a.
+        let rep = std::cmp::min(uuid_a, uuid_b);
+        for e in &entities {
+            for (target, _) in &e.relationships {
+                assert_eq!(
+                    *target, rep,
+                    "All relationships should point to the cycle representative (min UUID)"
+                );
+            }
+        }
     }
 }
