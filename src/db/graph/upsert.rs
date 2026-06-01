@@ -154,6 +154,18 @@ impl UpsertExt for GraphDb {
                         "enclosing_class".to_string(),
                         e.entity.enclosing_class.clone().unwrap_or_default().into(),
                     );
+                    map.insert(
+                        "alias_module_path".to_string(),
+                        e.entity
+                            .alias_module_path
+                            .clone()
+                            .unwrap_or_default()
+                            .into(),
+                    );
+                    map.insert(
+                        "default_export".to_string(),
+                        e.entity.default_export.clone().unwrap_or_default().into(),
+                    );
                     map
                 })
                 .collect();
@@ -168,7 +180,9 @@ impl UpsertExt for GraphDb {
                      n.signature = e.signature, n.docstring = e.docstring,
                      n.inline_comments = e.inline_comments, n.decorators = e.decorators,
                      n.embed_text = e.embed_text, n.fqn = e.fqn,
-                     n.enclosing_class = e.enclosing_class"
+                     n.enclosing_class = e.enclosing_class,
+                     n.alias_module_path = e.alias_module_path,
+                     n.default_export = e.default_export"
             );
 
             self.graph

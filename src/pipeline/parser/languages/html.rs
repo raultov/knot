@@ -79,6 +79,9 @@ fn extract_html_attribute(
             impl_target: None,
             generics: None,
             lifetimes: None,
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         });
     } else if attr_name == "class" && !attr_value.is_empty() {
         for class_name in attr_value.split_whitespace() {
@@ -107,6 +110,9 @@ fn extract_html_attribute(
                     impl_target: None,
                     generics: None,
                     lifetimes: None,
+                    alias_module_path: None,
+                    original_export_name: None,
+                    default_export: None,
                 });
             }
         }
@@ -160,6 +166,9 @@ fn extract_html_elements(
                                     impl_target: None,
                                     generics: None,
                                     lifetimes: None,
+                                    alias_module_path: None,
+                                    original_export_name: None,
+                                    default_export: None,
                                 });
                             }
                         }

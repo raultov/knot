@@ -57,6 +57,9 @@ pub(crate) mod test_utils {
             impl_target: None,
             generics: None,
             lifetimes: None,
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
         }
     }
 
