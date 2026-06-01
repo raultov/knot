@@ -12,6 +12,8 @@
 
 **knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin (v0.7.4+), TypeScript, JavaScript/Node.js, Rust (v0.8.x), Python (v0.9.3), **Groovy** (v0.10.3), **C/C++** (v1.0.0), HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml** — v1.2.5), **Configuration Files** (YAML, JSON, .properties — Optional in v1.2.6), **Kubernetes + Helm** (Optional in v1.2.6), and **Cross-Repo Dependency Linking** (v1.2.5) with full cross-language linking. (v1.3.6)
 
+**NEW in v1.3.11 — Cross-File Alias Resolution**: `require()` and `import` aliases (including circular requires) are now resolved across file boundaries. Callers in file A that reference an aliased entity in file B will show the correct edge to the original definition rather than a dead-end reference. Circular require cycles (common in npm ecosystems) are handled gracefully with deterministic representative selection and no CPU busy-loops.
+
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
 - **Graph Database** (Neo4j) — architectural relationships via call graphs
@@ -666,7 +668,16 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ## 🚀 Roadmap
 
-### Current Release (v1.3.8 — Subgraph Connectivity & Edge Extraction Fix) ✅
+### Current Release (v1.3.11 — Cross-File Alias Resolution & Circular Require Fix) ✅
+- ✅ **JS/TS Cross-File Alias Extraction**: New extractor pass resolves `require()` aliases (CommonJS) and `import { X as Y }` aliases (ES Modules) across file boundaries. `module.exports = X` and `export default X` targets are tracked via default export metadata, enabling `find_callers` to trace through aliases to the original definition.
+- ✅ **Circular Require Busy-Loop Fix**: Indexing repositories with circular `require()` chains (e.g., `a.js` requires `b.js` which requires `a.js`) previously caused 100% CPU busy-loops in the reference resolution phase. Now detects cycles deterministically (picking the smallest UUID as canonical representative) and collapses the alias chain to a single hop, eliminating infinite loops.
+- ✅ **E2E Suite Port Contention Fix**: Suite cleanup (`docker compose down -v`) now runs before the failure bail-out path, preventing stale port 17687 from causing cascading failures in downstream test suites. Port pre-flight check in `run_all_e2e.sh` forces teardown of orphaned containers between suites.
+- ✅ **3 new fields** on `ParsedEntity`/`ResolutionEntity`: `alias_module_path`, `original_export_name`, `default_export` — persisted to Neo4j and wired through all db/test/benchmark layers.
+- ✅ **5 new unit tests** for alias cycle detection and resolution correctness + **4 new E2E tests** covering JS alias, TS alias, and circular require scenarios.
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **604+ unit tests** passing
+- ✅ **11/11 E2E test suites pass**
+
+### Previous Release (v1.3.10 — Prefix Name Match Boost & TypeScript Value/Emitter)
 - ✅ **Fixed Subgraph Disconnection**: Automatically injects `CONTAINS` relationships in traversal paths when kind-filtering is active, ensuring class-to-class paths through methods are discovered.
 - ✅ **Fixed Edge Extraction Bug**: Replaced parameter binding for UUID lists with direct Cypher interpolation to bypass a driver-level serialization bug that caused missing edges (0 edges found).
 - ✅ **Constrained Relationship Output**: Constrains direct edges to the requested types, preventing internal structural edges from leaking into the result.
