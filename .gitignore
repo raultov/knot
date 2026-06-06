@@ -6,6 +6,7 @@
 publish_at_utc.sh
 .knot/
 .antigravitycli/
+.idea/
 
 # Local Database Persistent Storage
 /data/
