@@ -1858,4 +1858,137 @@ mod tests {
             }
         }
     }
+
+    // ── Qualified-call resolution fix plan unit tests ──────────────
+
+    #[test]
+    fn test_resolve_rust_qualified_call_with_homonyms() {
+        // Two `new` methods with different FQNs (WidgetA::new and WidgetB::new)
+        // and a caller that invokes `WidgetA::new`. The resolver must use
+        // the receiver to land the CALLS edge on WidgetA::new, not WidgetB::new.
+        let widget_a_new = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
+            name: "new".to_string(),
+            fqn: "WidgetA::new".to_string(),
+            file_path: "test/sample.rs".to_string(),
+            enclosing_class: Some("WidgetA".to_string()),
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+        };
+        let widget_b_new = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
+            name: "new".to_string(),
+            fqn: "WidgetB::new".to_string(),
+            file_path: "test/sample.rs".to_string(),
+            enclosing_class: Some("WidgetB".to_string()),
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+        };
+        let caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::Function,
+            name: "exercise_qualified_calls".to_string(),
+            fqn: "exercise_qualified_calls".to_string(),
+            file_path: "test/sample.rs".to_string(),
+            enclosing_class: None,
+            signature: None,
+            reference_intents: vec![ReferenceIntent::Call {
+                method: "new".to_string(),
+                receiver: Some("WidgetA".to_string()),
+                line: 50,
+                arg_count: None,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+        };
+
+        let widget_a_new_uuid = widget_a_new.uuid;
+        let widget_b_new_uuid = widget_b_new.uuid;
+
+        let mut entities = vec![widget_a_new, widget_b_new, caller];
+        resolve_reference_intents(&mut entities);
+
+        // The caller must call WidgetA::new, not WidgetB::new.
+        let caller_entity = entities.last().unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(widget_a_new_uuid, RelationshipType::Calls)),
+            "Caller should resolve to WidgetA::new, got relationships: {:?}",
+            caller_entity.relationships
+        );
+        assert!(
+            !caller_entity
+                .relationships
+                .contains(&(widget_b_new_uuid, RelationshipType::Calls)),
+            "Caller must NOT resolve to WidgetB::new (homonym)"
+        );
+    }
+
+    #[test]
+    fn test_resolve_rust_self_method_call() {
+        // `Self::helper` inside an `impl Foo` produces a Call with
+        // receiver=Some("Foo") and method="helper". The caller (Foo::bar)
+        // has enclosing_class=Some("Foo"). Strategy 1 (local call) should
+        // resolve it to Foo::helper directly.
+        let foo_helper = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
+            name: "helper".to_string(),
+            fqn: "Foo::helper".to_string(),
+            file_path: "test/sample.rs".to_string(),
+            enclosing_class: Some("Foo".to_string()),
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+        };
+        let foo_bar = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::Method,
+            name: "bar".to_string(),
+            fqn: "Foo::bar".to_string(),
+            file_path: "test/sample.rs".to_string(),
+            enclosing_class: Some("Foo".to_string()),
+            signature: None,
+            reference_intents: vec![ReferenceIntent::Call {
+                method: "helper".to_string(),
+                receiver: Some("Foo".to_string()),
+                line: 30,
+                arg_count: None,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+        };
+
+        let foo_helper_uuid = foo_helper.uuid;
+
+        let mut entities = vec![foo_helper, foo_bar];
+        resolve_reference_intents(&mut entities);
+
+        let foo_bar_entity = entities.last().unwrap();
+        assert!(
+            foo_bar_entity
+                .relationships
+                .contains(&(foo_helper_uuid, RelationshipType::Calls)),
+            "Foo::bar should resolve Self::helper to Foo::helper, got: {:?}",
+            foo_bar_entity.relationships
+        );
+    }
 }
