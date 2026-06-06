@@ -92,18 +92,72 @@ pub(crate) fn collect_rust_macro_references(
 /// Reclassify functions inside impl blocks as methods.
 ///
 /// Tree-sitter captures all function_item nodes as RustFunction initially.
-/// This function identifies which functions are actually methods (inside impl_item)
-/// and changes their kind to RustMethod.
-pub(crate) fn reclassify_methods_in_impl_blocks(root: Node<'_>, entities: &mut [ParsedEntity]) {
+/// This function identifies which functions are actually methods (inside
+/// `impl_item`) and changes their kind to `RustMethod`.
+///
+/// It also re-computes the FQN because Rust methods are FQN-formatted as
+/// `Type::method` (with `::`), whereas Rust functions are stored as a bare
+/// name. Without re-computation here, methods inside `impl Foo { fn new() }`
+/// would keep the FQN `new` even though their enclosing class is `Foo`.
+pub(crate) fn reclassify_methods_in_impl_blocks(
+    root: Node<'_>,
+    source: &[u8],
+    entities: &mut [ParsedEntity],
+) {
     // Collect line numbers of all functions inside impl blocks
     let mut method_lines = std::collections::HashSet::new();
     collect_method_lines(&root, &mut method_lines);
 
-    // Reclassify entities at those line numbers from RustFunction to RustMethod
+    if method_lines.is_empty() {
+        return;
+    }
+
+    // Build class contexts from impl_item self-types. We reuse the same
+    // helper that extract_class_contexts() calls, so behaviour is identical.
+    let mut class_contexts: Vec<crate::pipeline::parser::context::ClassContext> = Vec::new();
+    collect_impl_class_contexts(&root, source, &mut class_contexts);
+
     for entity in entities.iter_mut() {
         if entity.kind == EntityKind::RustFunction && method_lines.contains(&entity.start_line) {
             entity.kind = EntityKind::RustMethod;
+            // Re-compute the FQN with the new kind so `impl Foo { fn new() }`
+            // produces `Foo::new` instead of the bare `new` that the original
+            // RustFunction pass produced.
+            let (new_fqn, new_enclosing) =
+                crate::pipeline::parser::context::compute_fqn_and_context(
+                    &entity.name,
+                    &EntityKind::RustMethod,
+                    entity.start_line,
+                    "rust",
+                    &class_contexts,
+                );
+            entity.fqn = new_fqn;
+            if entity.enclosing_class.is_none() {
+                entity.enclosing_class = new_enclosing;
+            }
         }
+    }
+}
+
+/// Walk the tree and gather `(start_line, end_line, self_type)` for every
+/// `impl_item`, so reclassification can resolve the FQN of methods inside it.
+fn collect_impl_class_contexts(
+    node: &Node<'_>,
+    source: &[u8],
+    contexts: &mut Vec<crate::pipeline::parser::context::ClassContext>,
+) {
+    if node.kind() == "impl_item"
+        && let Some(self_type) = extract_impl_self_type(*node, source)
+    {
+        contexts.push(crate::pipeline::parser::context::ClassContext {
+            name: self_type,
+            start_line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+        });
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_impl_class_contexts(&child, source, contexts);
     }
 }
 
@@ -179,6 +233,145 @@ pub(crate) fn collect_rust_trait_implementations(
                     line,
                 });
         }
+    }
+}
+
+/// Extract the self-type base name from a Rust `impl_item` node.
+///
+/// For `impl Foo { ... }` → returns `Some("Foo")`.
+/// For `impl Bar for Foo { ... }` → returns `Some("Foo")` (the self-type,
+///   not the trait).
+/// For `impl<T> Foo<T> { ... }` → returns `Some("Foo")` (generics dropped).
+/// For unrecognised shapes (lifetimes, exotic paths, parse failures) →
+///   returns `None` (the caller should skip silently).
+pub(crate) fn extract_impl_self_type(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if node.kind() != "impl_item" {
+        return None;
+    }
+
+    // Walk the impl_item children. Two shapes we must distinguish:
+    //
+    //   impl <trait> for <type> { ... }
+    //     children: impl, <trait-ish>, for, <type>, { ... }
+    //
+    //   impl <impl-generics> <type> { ... }
+    //     children: impl, generic_type(<T>), <type>, { ... }
+    //     (the impl-generics is a generic_type whose only child is a
+    //      type_parameter, not a real type — its `type` field is absent.)
+    //
+    // We pick the *first* node that has a real type identity (i.e. a
+    // `type` field or a bare `type_identifier`) as the self-type for
+    // inherent impls, and the *last* such node for `impl Trait for Type`.
+    let mut saw_for = false;
+    let mut first_type: Option<String> = None;
+    let mut last_type: Option<String> = None;
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "for" => {
+                saw_for = true;
+            }
+            // "for" keyword: switch from trait-name collection to self-type collection
+            "lifetime" | "where_clause" | "declaration_list" | "attribute_item" | "token_tree" => {
+                continue;
+            }
+            _ => {
+                if let Some(name) = extract_self_type_base_name(child, source) {
+                    if first_type.is_none() {
+                        first_type = Some(name.clone());
+                    }
+                    last_type = Some(name);
+                }
+            }
+        }
+    }
+
+    if saw_for {
+        // `impl Trait for Type` — Type is the LAST type token.
+        last_type.or(first_type)
+    } else {
+        // `impl Type` — Type is the FIRST type token.
+        first_type
+    }
+}
+
+/// Best-effort base-name extraction for the *self-type* of an impl block.
+///
+/// Unlike `extract_type_base_name` below, this one skips impl-generics
+/// (a `generic_type` whose only child is a `type_parameter`, with no `type`
+/// field of its own) so we don't confuse `impl<T> Foo<T>` with `impl<T>`.
+fn extract_self_type_base_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => Some(node_text(node, source).to_string()),
+        "scoped_type_identifier" => {
+            // The last type_identifier in a scoped path is the base name.
+            let mut last: Option<String> = None;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "type_identifier" {
+                    last = Some(node_text(child, source).to_string());
+                }
+            }
+            last
+        }
+        "generic_type" => {
+            // generic_type has a "type" field for the base name. If absent
+            // (e.g., this is the impl-generics `<T>`), skip it.
+            if let Some(type_node) = node.child_by_field_name("type") {
+                extract_type_base_name(type_node, source)
+            } else {
+                None
+            }
+        }
+        "reference_type" | "pointer_type" | "array_type" | "slice_type" | "tuple_type" => {
+            // The wrapped type is usually a named child; recurse.
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if let Some(name) = extract_type_base_name(child, source)
+                    && !name.is_empty()
+                {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Generic base-name extraction for a Rust type AST node (used inside
+/// wrappers like references, pointers, etc.). Mirrors the logic above but
+/// does not require the node to be a "self-type" — it accepts impl-generics
+/// too, which is fine when we just need any type identifier.
+fn extract_type_base_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => Some(node_text(node, source).to_string()),
+        "scoped_type_identifier" => {
+            let mut last: Option<String> = None;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "type_identifier" {
+                    last = Some(node_text(child, source).to_string());
+                }
+            }
+            last
+        }
+        "generic_type" => node
+            .child_by_field_name("type")
+            .and_then(|t| extract_type_base_name(t, source)),
+        "reference_type" | "pointer_type" | "array_type" | "slice_type" | "tuple_type" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if let Some(name) = extract_type_base_name(child, source)
+                    && !name.is_empty()
+                {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -340,6 +533,23 @@ fn collect_type_nodes(
         type_refs.push((line, type_name));
     }
 
+    // CASE 2b: identifier / type_identifier inside use_list (braced imports)
+    // e.g., use foo::{Bar, Baz}; — Bar and Baz are identifier nodes inside use_list
+    // Also handles use_as_clause path: use foo::{Bar as Renamed}; — emit Bar, not Renamed
+    if (node.kind() == "identifier" || node.kind() == "type_identifier")
+        && let Some(parent) = node.parent()
+    {
+        let is_in_use_list = parent.kind() == "use_list";
+        let is_use_as_path = parent.kind() == "use_as_clause"
+            && parent.child_by_field_name("path").as_ref() == Some(node);
+
+        if is_in_use_list || is_use_as_path {
+            let line = node.start_position().row + 1;
+            let type_name = node_text(*node, source).to_string();
+            type_refs.push((line, type_name));
+        }
+    }
+
     // CASE 3: scoped_identifier like Config::load_mcp(), EntityKind::HtmlId, or crate::models::EntityKind::Class
     // These are method calls or variant accesses on types. We want to capture the type name.
     //
@@ -354,21 +564,16 @@ fn collect_type_nodes(
     // Key insight: Only capture if the scoped_identifier is either:
     // 1. A direct child of call_expression (method call on type), OR
     // 2. In a use declaration (import statement)
-    if node.kind() == "scoped_identifier"
-        && let Some(first_child) = node.child(0)
-        && (first_child.kind() == "generic_type"
-            || first_child.kind() == "identifier"
-            || first_child.kind() == "type_identifier")
-    {
-        // Check if this is in a pattern matching context
-        // Pattern context means the scoped_identifier is directly under match_pattern
-        // (e.g., MyEnum::Variant in match arm pattern left side)
+    if node.kind() == "scoped_identifier" {
+        let parent_kind_raw = node.parent().map(|p| p.kind()).unwrap_or("");
+        let is_scoped_use_list_path = parent_kind_raw == "scoped_use_list";
+        let is_nested_scoped_in_use = parent_kind_raw == "scoped_identifier";
+
         let in_pattern_match = node
             .parent()
             .map(|p| p.kind() == "match_pattern")
             .unwrap_or(false);
 
-        // Check if this is in a use declaration (import statement)
         let in_use = 'check_ancestors: {
             let mut current = node.parent();
             while let Some(n) = current {
@@ -429,7 +634,33 @@ fn collect_type_nodes(
         };
 
         // Only process if NOT in a pattern matching context
-        if !in_pattern_match {
+        if !in_pattern_match && !is_scoped_use_list_path && !is_nested_scoped_in_use {
+            let Some(first_child) = node.child(0) else {
+                // Recurse to children
+                let child_searched_range = searched_range;
+                let mut child = node.child(0);
+                while let Some(c) = child {
+                    collect_type_nodes(&c, source, type_refs, child_searched_range);
+                    child = c.next_sibling();
+                }
+                return;
+            };
+
+            let first_child_ok = first_child.kind() == "generic_type"
+                || first_child.kind() == "identifier"
+                || first_child.kind() == "type_identifier"
+                || (in_use && first_child.kind() == "scoped_identifier");
+
+            if !first_child_ok {
+                let child_searched_range = searched_range;
+                let mut child = node.child(0);
+                while let Some(c) = child {
+                    collect_type_nodes(&c, source, type_refs, child_searched_range);
+                    child = c.next_sibling();
+                }
+                return;
+            }
+
             // Check what kind of context we're in
             let parent_kind = node.parent().map(|p| p.kind()).unwrap_or("");
 
@@ -458,15 +689,13 @@ fn collect_type_nodes(
                     }
                 }
 
-                // Determine the type name and line based on identifier count
-                let (type_name, type_line) = if identifiers.len() >= 3 {
-                    if in_use {
-                        let last_idx = identifiers.len() - 1;
-                        (identifiers[last_idx].0.clone(), identifiers[last_idx].1)
-                    } else {
-                        let idx = identifiers.len() - 2;
-                        (identifiers[idx].0.clone(), identifiers[idx].1)
-                    }
+                // Determine the type name and line based on context
+                let (type_name, type_line) = if in_use {
+                    let last_idx = identifiers.len() - 1;
+                    (identifiers[last_idx].0.clone(), identifiers[last_idx].1)
+                } else if identifiers.len() >= 3 {
+                    let idx = identifiers.len() - 2;
+                    (identifiers[idx].0.clone(), identifiers[idx].1)
                 } else {
                     (
                         identifiers
@@ -603,6 +832,16 @@ pub(crate) fn collect_rust_call_references(
     for (line, func_name, receiver) in call_intents {
         let target_idx = find_nearest_entity_by_line(entities, line);
         if target_idx < entities.len() {
+            // Translate `Self::method` to the enclosing class. Strategy 1 of
+            // the resolver (local call) keys on `caller_enclosing_class`, not
+            // the literal `Self` keyword, so we substitute here at parse time.
+            let receiver = if receiver.as_deref() == Some("Self")
+                && let Some(enclosing) = entities[target_idx].enclosing_class.clone()
+            {
+                Some(enclosing)
+            } else {
+                receiver
+            };
             entities[target_idx]
                 .reference_intents
                 .push(ReferenceIntent::Call {
@@ -657,9 +896,8 @@ fn extract_call_details(node: Node<'_>, source: &[u8]) -> Option<(String, Option
             }
             // Scoped call: scoped_identifier (Module::function or Type::method)
             "scoped_identifier" => {
-                if let Some(func_name) = extract_from_scoped_identifier(c, source) {
-                    return Some((func_name, None));
-                }
+                let (func_name, receiver) = extract_from_scoped_identifier(c, source)?;
+                return Some((func_name, receiver));
             }
             _ => {}
         }
@@ -698,25 +936,60 @@ fn extract_from_field_expression(node: Node<'_>, source: &[u8]) -> Option<(Strin
     }
 }
 
-/// Extract function name from scoped_identifier (e.g., Module::function)
-fn extract_from_scoped_identifier(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        if c.kind() == "identifier" {
-            // The last identifier in the scope is the function name
-            let mut last_identifier = node_text(c, source).to_string();
-            let mut next = c.next_sibling();
-            while let Some(n) = next {
-                if n.kind() == "identifier" {
-                    last_identifier = node_text(n, source).to_string();
-                }
-                next = n.next_sibling();
-            }
-            return Some(last_identifier);
+/// Extract function name and optional receiver from scoped_identifier.
+///
+/// Examples:
+///
+/// - `module::function` → `("function", None)` — lowercase module, no receiver.
+/// - `Type::method` → `("method", Some("Type"))` — uppercase type, receiver set.
+/// - `crate::mcp_handler::KnotMcpHandler::new` → `("new", Some("KnotMcpHandler"))`
+///   — only the penultimate segment is used as a receiver; we walk all
+///   `identifier` children (recursing into nested `scoped_identifier` nodes)
+///   and pick the last one as the method name, then treat the segment
+///   immediately before it as the receiver (only if its first character is
+///   uppercase ASCII, so modules like `std` or `crate::mcp_handler` are
+///   ignored).
+fn extract_from_scoped_identifier(
+    node: Node<'_>,
+    source: &[u8],
+) -> Option<(String, Option<String>)> {
+    let mut identifiers: Vec<String> = Vec::new();
+    collect_scoped_identifiers(node, source, &mut identifiers);
+
+    let last = identifiers.pop()?;
+    let method_name = last;
+    let receiver = if let Some(prev) = identifiers.last() {
+        let first = prev.chars().next();
+        if first.is_some_and(|c| c.is_ascii_uppercase()) {
+            Some(prev.clone())
+        } else {
+            None
         }
-        child = c.next_sibling();
+    } else {
+        None
+    };
+
+    Some((method_name, receiver))
+}
+
+/// Recursively walk a `scoped_identifier` (and its nested children) to
+/// collect every `identifier` in left-to-right order. `crate`, `::`, and
+/// `super` are treated like ordinary identifiers; if `super` appears it will
+/// be lowercase and dropped at the receiver-selection step.
+fn collect_scoped_identifiers(node: Node<'_>, source: &[u8], out: &mut Vec<String>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "identifier" | "type_identifier" => {
+                out.push(node_text(child, source).to_string());
+            }
+            "scoped_identifier" => {
+                // Recurse into nested scoped paths.
+                collect_scoped_identifiers(child, source, out);
+            }
+            _ => {}
+        }
     }
-    None
 }
 
 /// Find the entity index nearest to the given line number.
@@ -1712,5 +1985,385 @@ fn process() {
             my_type_refs.len(),
             my_type_refs
         );
+    }
+
+    #[test]
+    fn test_use_braces_captures_inner_names() {
+        let code = r#"
+use crate::db::vector::{VectorDb, VectorSearchExt};
+
+pub fn do_stuff() {}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut type_refs = Vec::new();
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
+
+        let type_names: Vec<&str> = type_refs.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(
+            type_names.contains(&"VectorDb"),
+            "Should capture VectorDb from braced use, got: {:?}",
+            type_names
+        );
+        assert!(
+            type_names.contains(&"VectorSearchExt"),
+            "Should capture VectorSearchExt from braced use, got: {:?}",
+            type_names
+        );
+    }
+
+    #[test]
+    fn test_use_nested_braces() {
+        let code = r#"
+use foo::{Bar, baz::{Qux, Quux}};
+
+pub fn do_stuff() {}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut type_refs = Vec::new();
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
+
+        let type_names: Vec<&str> = type_refs.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(
+            type_names.contains(&"Bar"),
+            "Should capture Bar, got: {:?}",
+            type_names
+        );
+        assert!(
+            type_names.contains(&"Qux"),
+            "Should capture Qux, got: {:?}",
+            type_names
+        );
+        assert!(
+            type_names.contains(&"Quux"),
+            "Should capture Quux, got: {:?}",
+            type_names
+        );
+        assert!(
+            !type_names.contains(&"foo"),
+            "Should NOT capture foo, got: {:?}",
+            type_names
+        );
+        assert!(
+            !type_names.contains(&"baz"),
+            "Should NOT capture baz, got: {:?}",
+            type_names
+        );
+    }
+
+    #[test]
+    fn test_use_as_clause_keeps_original_only() {
+        let code = r#"
+use foo::Bar as Baz;
+
+pub fn do_stuff() {}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut type_refs = Vec::new();
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
+
+        let type_names: Vec<&str> = type_refs.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(
+            type_names.contains(&"Bar"),
+            "Should capture Bar (original), got: {:?}",
+            type_names
+        );
+        assert!(
+            !type_names.contains(&"Baz"),
+            "Should NOT capture Baz (alias), got: {:?}",
+            type_names
+        );
+    }
+
+    #[test]
+    fn test_use_glob_ignored() {
+        let code = r#"
+use foo::*;
+
+pub fn do_stuff() {}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut type_refs = Vec::new();
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
+
+        let type_names: Vec<&str> = type_refs.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(
+            !type_names.contains(&"foo"),
+            "Should NOT capture foo from glob import, got: {:?}",
+            type_names
+        );
+    }
+
+    #[test]
+    fn test_use_simple_still_works() {
+        let code = r#"
+use crate::pipeline::embed::Embedder;
+
+pub fn do_stuff() {}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut type_refs = Vec::new();
+        collect_type_nodes(&tree.root_node(), code.as_bytes(), &mut type_refs, None);
+
+        let type_names: Vec<&str> = type_refs.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(
+            type_names.contains(&"Embedder"),
+            "Should capture Embedder from simple use, got: {:?}",
+            type_names
+        );
+    }
+
+    // ── Qualified-call resolution fix plan unit tests ──────────────
+
+    fn find_call_with_name<'a>(
+        calls: &'a [(usize, String, Option<String>)],
+        method: &str,
+    ) -> Option<&'a (usize, String, Option<String>)> {
+        calls.iter().find(|(_, m, _)| m == method)
+    }
+
+    #[test]
+    fn test_extract_scoped_call_returns_receiver() {
+        // `KnotMcpHandler::new(...)` should yield (method="new", receiver=Some("KnotMcpHandler")).
+        let code = "fn main() { let _ = KnotMcpHandler::new(); }";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut calls: Vec<(usize, String, Option<String>)> = Vec::new();
+        collect_call_nodes(&tree.root_node(), code.as_bytes(), &mut calls);
+
+        let entry = find_call_with_name(&calls, "new")
+            .expect("expected a call to `new` from KnotMcpHandler::new");
+        assert_eq!(entry.2.as_deref(), Some("KnotMcpHandler"));
+    }
+
+    #[test]
+    fn test_extract_scoped_call_multi_segment_uppercase() {
+        // `crate::mcp_handler::KnotMcpHandler::new(...)` → only the
+        // penultimate segment (`KnotMcpHandler`) is used as the receiver.
+        let code = "fn main() { let _ = crate::mcp_handler::KnotMcpHandler::new(); }";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut calls: Vec<(usize, String, Option<String>)> = Vec::new();
+        collect_call_nodes(&tree.root_node(), code.as_bytes(), &mut calls);
+
+        let entry = find_call_with_name(&calls, "new")
+            .expect("expected a call to `new` from crate::mcp_handler::KnotMcpHandler::new");
+        assert_eq!(entry.2.as_deref(), Some("KnotMcpHandler"));
+    }
+
+    #[test]
+    fn test_extract_scoped_call_lowercase_module_drops_receiver() {
+        // `std::env::set_var(...)` — penultimate segment is `env` (lowercase)
+        // so we drop the receiver. The call then falls through to Strategy 4
+        // (name uniqueness) just like before the fix.
+        let code = "fn main() { std::env::set_var(\"FOO\", \"1\"); }";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut calls: Vec<(usize, String, Option<String>)> = Vec::new();
+        collect_call_nodes(&tree.root_node(), code.as_bytes(), &mut calls);
+
+        let entry = find_call_with_name(&calls, "set_var")
+            .expect("expected a call to `set_var` from std::env::set_var");
+        assert!(
+            entry.2.is_none(),
+            "lowercase module should not produce a receiver, got {:?}",
+            entry.2
+        );
+    }
+
+    #[test]
+    fn test_extract_scoped_call_self_translated_to_enclosing_class() {
+        // `Self::new()` inside `impl Foo` should be attached to `foo_outer`
+        // (a method) and produce a Call with receiver=Some("Foo").
+        let code = r#"
+struct Foo;
+
+impl Foo {
+    pub fn foo_outer() -> Self {
+        let _ = Self::new();
+        Foo
+    }
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut entities = vec![ParsedEntity::new(
+            "foo_outer",
+            EntityKind::RustMethod,
+            "Foo::foo_outer",
+            None,
+            None,
+            "rust",
+            "/test.rs",
+            5,
+            8,
+            Some("Foo".to_string()),
+            "test_repo",
+        )];
+
+        collect_rust_call_references(
+            tree.root_node(),
+            code.as_bytes(),
+            &mut entities,
+            "/test.rs",
+            "test_repo",
+        );
+
+        let call = entities[0]
+            .reference_intents
+            .iter()
+            .find_map(|ri| {
+                if let ReferenceIntent::Call {
+                    method, receiver, ..
+                } = ri
+                {
+                    Some((method.clone(), receiver.clone()))
+                } else {
+                    None
+                }
+            })
+            .expect("expected a Call reference intent attached to foo_outer");
+
+        assert_eq!(call.0, "new");
+        assert_eq!(
+            call.1.as_deref(),
+            Some("Foo"),
+            "Self::new should translate `Self` to the enclosing class"
+        );
+    }
+
+    #[test]
+    fn test_rust_method_fqn_includes_impl_target_inherent() {
+        // `impl Foo { fn new() {} }` → method entity should have
+        // fqn == "Foo::new" and enclosing_class == Some("Foo").
+        let code = r#"
+struct Foo;
+impl Foo {
+    pub fn new() -> Self { Foo }
+}
+"#;
+        let entities = crate::pipeline::parser::extractor::extract_entities(
+            code,
+            tree_sitter_rust::LANGUAGE.into(),
+            include_str!("../../../../queries/rust.scm"),
+            "rust",
+            "/test.rs",
+            "test_repo",
+        )
+        .expect("Failed to extract entities");
+
+        let new_method = entities
+            .iter()
+            .find(|e| e.name == "new")
+            .expect("new method not found");
+        assert_eq!(new_method.kind, EntityKind::RustMethod);
+        assert_eq!(new_method.fqn, "Foo::new");
+        assert_eq!(new_method.enclosing_class.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn test_rust_method_fqn_includes_impl_target_trait_for() {
+        // `impl Bar for Foo { fn new() {} }` → method entity should have
+        // fqn == "Foo::new" and enclosing_class == Some("Foo") (self-type,
+        // not the trait).
+        let code = r#"
+trait Bar { fn new() -> Self; }
+struct Foo;
+impl Bar for Foo {
+    fn new() -> Self { Foo }
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let _tree = parser.parse(code, None).unwrap();
+
+        let entities = crate::pipeline::parser::extractor::extract_entities(
+            code,
+            tree_sitter_rust::LANGUAGE.into(),
+            include_str!("../../../../queries/rust.scm"),
+            "rust",
+            "/test.rs",
+            "test_repo",
+        )
+        .expect("Failed to extract entities");
+
+        let new_method = entities
+            .iter()
+            .find(|e| e.name == "new")
+            .expect("new method not found");
+        assert_eq!(new_method.kind, EntityKind::RustMethod);
+        assert_eq!(
+            new_method.fqn, "Foo::new",
+            "FQN should use self-type (Foo), not the trait (Bar)"
+        );
+        assert_eq!(new_method.enclosing_class.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn test_rust_method_fqn_with_generics() {
+        // `impl<T> Foo<T> { fn new() {} }` → generics dropped, FQN = "Foo::new".
+        let code = r#"
+struct Foo<T>(T);
+impl<T> Foo<T> {
+    pub fn new() -> Self { unimplemented!() }
+}
+"#;
+        let entities = crate::pipeline::parser::extractor::extract_entities(
+            code,
+            tree_sitter_rust::LANGUAGE.into(),
+            include_str!("../../../../queries/rust.scm"),
+            "rust",
+            "/test.rs",
+            "test_repo",
+        )
+        .expect("Failed to extract entities");
+
+        let new_method = entities
+            .iter()
+            .find(|e| e.name == "new")
+            .expect("new method not found");
+        assert_eq!(new_method.fqn, "Foo::new");
     }
 }

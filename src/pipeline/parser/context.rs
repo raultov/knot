@@ -1,3 +1,4 @@
+use super::languages::rust;
 use super::utils::*;
 use crate::models::EntityKind;
 use tree_sitter::Node;
@@ -42,6 +43,18 @@ pub(crate) fn extract_class_contexts(
                 end_line: node.end_position().row + 1,
             });
         }
+    } else if node.kind() == "impl_item"
+        && let Some(self_type) = rust::extract_impl_self_type(node, source)
+    {
+        // Rust `impl Foo` and `impl Trait for Foo` establish a class context
+        // for the self-type. The trait name (e.g. `LogSink`) is ignored — we
+        // only want the type being implemented, so methods inside get the
+        // FQN `Foo::method` rather than `LogSink::method`.
+        contexts.push(ClassContext {
+            name: self_type,
+            start_line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+        });
     }
 
     // Recursively process children
@@ -390,6 +403,63 @@ mod tests {
         assert!(
             enclosing_class.is_none(),
             "Top-level functions should have no enclosing class"
+        );
+    }
+
+    #[test]
+    fn test_extract_class_contexts_includes_rust_impl_item() {
+        // `impl Foo { ... }` should register Foo as a class context, so
+        // methods inside get the qualified FQN `Foo::method`.
+        let code = r#"
+struct Foo;
+impl Foo {
+    pub fn new() -> Self { Foo }
+}
+"#;
+        let tree = crate::pipeline::parser::test_utils::parse_rust_snippet(code)
+            .expect("Failed to parse Rust code");
+
+        let source = code.as_bytes();
+        let mut contexts: Vec<ClassContext> = Vec::new();
+        extract_class_contexts(tree.root_node(), source, &mut contexts);
+
+        let foo_ctx = contexts
+            .iter()
+            .find(|c| c.name == "Foo")
+            .expect("Expected ClassContext for Foo from impl_item");
+        // The context must encompass the inner fn (line 4 in the snippet).
+        assert!(foo_ctx.start_line <= 4 && foo_ctx.end_line >= 4);
+    }
+
+    #[test]
+    fn test_extract_class_contexts_rust_impl_trait_for_uses_self_type() {
+        // `impl Bar for Foo` should use `Foo` (self-type), NOT `Bar` (trait).
+        let code = r#"
+trait Bar { fn new() -> Self; }
+struct Foo;
+impl Bar for Foo {
+    fn new() -> Self { Foo }
+}
+"#;
+        let tree = crate::pipeline::parser::test_utils::parse_rust_snippet(code)
+            .expect("Failed to parse Rust code");
+
+        let source = code.as_bytes();
+        let mut contexts: Vec<ClassContext> = Vec::new();
+        extract_class_contexts(tree.root_node(), source, &mut contexts);
+
+        // Must include Foo (self-type) …
+        assert!(
+            contexts.iter().any(|c| c.name == "Foo"),
+            "Expected self-type Foo to appear as a context, got: {:?}",
+            contexts.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        // … and must NOT include Bar (trait) as a class context, otherwise
+        // methods inside would incorrectly get FQN `Bar::new`.
+        assert!(
+            !contexts.iter().any(|c| c.name == "Bar"),
+            "Trait name Bar should NOT appear as a class context, got: {:?}",
+            contexts.iter().map(|c| &c.name).collect::<Vec<_>>()
         );
     }
 }

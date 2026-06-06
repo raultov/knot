@@ -888,7 +888,7 @@ pub(crate) fn extract_entities(
             file_path,
             repo_name,
         );
-        rust::reclassify_methods_in_impl_blocks(tree.root_node(), &mut entities);
+        rust::reclassify_methods_in_impl_blocks(tree.root_node(), source_bytes, &mut entities);
     }
 
     // Fourth pass: extract HTML attributes from JSX elements (id, className)

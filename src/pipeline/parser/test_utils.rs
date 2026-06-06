@@ -80,3 +80,16 @@ pub(crate) fn parse_kotlin_snippet(code: &str) -> Result<Tree, String> {
         .parse(code, None)
         .ok_or_else(|| "Failed to parse Kotlin code snippet".to_string())
 }
+
+/// Parse a Rust code snippet and return the syntax tree.
+#[cfg(test)]
+pub(crate) fn parse_rust_snippet(code: &str) -> Result<Tree, String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .map_err(|e| format!("Failed to set Rust language: {e}"))?;
+
+    parser
+        .parse(code, None)
+        .ok_or_else(|| "Failed to parse Rust code snippet".to_string())
+}
