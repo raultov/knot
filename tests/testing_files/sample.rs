@@ -228,3 +228,65 @@ fn main() {
     // Access inner module function
     let inner_msg = inner_function();
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Fixtures for the qualified-call resolution fix plan.
+// Two structs share the name `new` to force disambiguation by receiver,
+// and one trait impl uses the `impl Trait for Type` syntax so we exercise
+// the self-type extraction path (not the trait name).
+// ────────────────────────────────────────────────────────────────────────
+
+/// First widget with an associated `new` constructor.
+struct WidgetA {
+    id: u32,
+}
+
+impl WidgetA {
+    pub fn new() -> Self {
+        WidgetA { id: 1 }
+    }
+}
+
+/// Second widget with a homonymous `new` constructor.
+struct WidgetB {
+    id: u32,
+}
+
+impl WidgetB {
+    pub fn new() -> Self {
+        WidgetB { id: 2 }
+    }
+}
+
+/// Trait that can be implemented by various sinks.
+trait LogSink {
+    fn log(&self, msg: &str);
+}
+
+/// Concrete type that becomes a `LogSink` via trait impl.
+struct Logger {
+    prefix: String,
+}
+
+/// `impl Trait for Type` — Logger is the self-type, LogSink is the trait.
+impl LogSink for Logger {
+    fn log(&self, msg: &str) {
+        println!("[{}] {}", self.prefix, msg);
+    }
+}
+
+impl Logger {
+    pub fn new() -> Self {
+        Logger {
+            prefix: "knot".to_string(),
+        }
+    }
+}
+
+/// External caller that exercises qualified-call resolution:
+/// `WidgetA::new` and `Logger::new` must resolve to their respective impl
+/// self-types, and `main` must be reported as a caller of both.
+fn exercise_qualified_calls() {
+    let _a = WidgetA::new();
+    let _logger = Logger::new();
+}

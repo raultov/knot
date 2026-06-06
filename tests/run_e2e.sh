@@ -907,6 +907,126 @@ else
     exit 1
 fi
 
+# Test 43: TypeScript import capture — find_callers for TsImportFoo
+echo ""
+echo "Test 43: Verifying TypeScript import capture — find_callers for TsImportFoo..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"TsImportFoo\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "TsImportFoo" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "ts_imports_uses.ts" || echo "$CLI_RESPONSE" | grep -q "ts_imports_uses.ts"; then
+    echo -e "${GREEN}✓ Found ts_imports_uses.ts as caller of TsImportFoo via import (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ ts_imports_uses.ts not found as caller of TsImportFoo${NC}"
+    exit 1
+fi
+
+# Test 44: TypeScript import capture — find_callers for TsImportQux (not alias TsImportBar)
+echo ""
+echo "Test 44: Verifying TypeScript import-as capture — find_callers for TsImportQux..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"TsImportQux\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "TsImportQux" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "ts_imports_uses.ts" || echo "$CLI_RESPONSE" | grep -q "ts_imports_uses.ts"; then
+    echo -e "${GREEN}✓ Found ts_imports_uses.ts as caller of TsImportQux via import-as (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ ts_imports_uses.ts not found as caller of TsImportQux${NC}"
+    exit 1
+fi
+
+# Test 44b: Verify alias TsImportBar does NOT appear as having callers
+echo ""
+echo "Test 44b: Verifying TypeScript alias TsImportBar does NOT have callers..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"TsImportBar\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "ts_imports_uses.ts"; then
+    echo -e "${RED}✗ Alias TsImportBar should NOT have callers (alias should resolve to TsImportQux)${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ Alias TsImportBar correctly has no callers (MCP)${NC}"
+fi
+
+# Test 45: TypeScript explore_file on ts_imports_uses.ts — verify Imports section
+echo ""
+echo "Test 45: Verifying explore_file on ts_imports_uses.ts shows Imports / Referenced Types..."
+TS_IMPORTS_FILE="$TEST_FILES_DIR/ts_imports_uses.ts"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":53,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$TS_IMPORTS_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$TS_IMPORTS_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "## Imports / Referenced Types" && echo "$CLI_RESPONSE" | grep -q "## Imports / Referenced Types"; then
+    echo -e "${GREEN}✓ explore_file shows Imports / Referenced Types section (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ explore_file missing Imports / Referenced Types section${NC}"
+    exit 1
+fi
+
+if (echo "$MCP_RESPONSE" | grep -q "TsImportFoo") && (echo "$MCP_RESPONSE" | grep -q "TsImportQux"); then
+    echo -e "${GREEN}✓ Imports section lists TsImportFoo and TsImportQux (MCP)${NC}"
+else
+    echo -e "${RED}✗ Imports section missing TsImportFoo or TsImportQux${NC}"
+    exit 1
+fi
+
+# Test 46: JavaScript import capture — find_callers for JsImportFoo
+echo ""
+echo "Test 46: Verifying JavaScript import capture — find_callers for JsImportFoo..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":54,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"JsImportFoo\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "JsImportFoo" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "js_imports_uses.js" || echo "$CLI_RESPONSE" | grep -q "js_imports_uses.js"; then
+    echo -e "${GREEN}✓ Found js_imports_uses.js as caller of JsImportFoo via import (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ js_imports_uses.js not found as caller of JsImportFoo${NC}"
+    exit 1
+fi
+
+# Test 47: JavaScript require destructuring — find_callers for JsImportQux
+echo ""
+echo "Test 47: Verifying JavaScript require destructuring — find_callers for JsImportQux..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":55,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"JsImportQux\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "JsImportQux" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "js_imports_uses.js" || echo "$CLI_RESPONSE" | grep -q "js_imports_uses.js"; then
+    echo -e "${GREEN}✓ Found js_imports_uses.js as caller of JsImportQux via require destructuring (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ js_imports_uses.js not found as caller of JsImportQux${NC}"
+    exit 1
+fi
+
+# Test 48: JavaScript explore_file on js_imports_uses.js — verify Imports section
+echo ""
+echo "Test 48: Verifying explore_file on js_imports_uses.js shows Imports / Referenced Types..."
+JS_IMPORTS_FILE="$TEST_FILES_DIR/js_imports_uses.js"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":56,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$JS_IMPORTS_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$JS_IMPORTS_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "## Imports / Referenced Types" && echo "$CLI_RESPONSE" | grep -q "## Imports / Referenced Types"; then
+    echo -e "${GREEN}✓ explore_file shows Imports / Referenced Types section for JS (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ explore_file missing Imports / Referenced Types section for JS${NC}"
+    exit 1
+fi
+
+if (echo "$MCP_RESPONSE" | grep -q "JsImportFoo") && (echo "$MCP_RESPONSE" | grep -q "JsImportQux"); then
+    echo -e "${GREEN}✓ JS Imports section lists JsImportFoo and JsImportQux (MCP)${NC}"
+else
+    echo -e "${RED}✗ JS Imports section missing JsImportFoo or JsImportQux${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -950,6 +1070,9 @@ echo "  ✓ Phase 7: Prefix name search boost (exact-name matches first)"
 echo "  ✓ Phase 8: TypeScript value references (capitalized identifiers in object literals/arrays)"
 echo "  ✓ Phase 9: Cross-file alias resolution (require/import)"
 echo "  ✓ Phase 10: Circular alias cycle resolution (no deadlock + relationships preserved)"
+echo "  ✓ Phase 11: TypeScript import capture (named imports, import-as aliases)"
+echo "  ✓ Phase 11: JavaScript import/require capture (import, require destructuring)"
+echo "  ✓ Phase 11: Explore file outgoing references (Imports / Referenced Types section)"
 echo ""
 
 exit 0

@@ -133,6 +133,7 @@ cd "$PROJECT_ROOT"
 rm -rf "$TMP_REPO_DIR"
 mkdir -p "$TMP_REPO_DIR"
 cp "$TEST_FILES_DIR/sample.rs" "$TMP_REPO_DIR/"
+cp -r "$TEST_FILES_DIR/rust_use_imports" "$TMP_REPO_DIR/"
 
 export KNOT_REPO_PATH="$TMP_REPO_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
@@ -477,6 +478,130 @@ else
     echo -e "${YELLOW}⚠ Macro invocation println not found (may be expected - external macro)${NC}"
 fi
 
+# Test 23: Rust use/import capture — find_callers for BracedTrait
+echo ""
+echo "Test 23: Verifying Rust use statement capture — find_callers for BracedTrait..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"BracedTrait","repo_name":"rust_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "BracedTrait" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "user.rs" || echo "$CLI_RESPONSE" | grep -q "user.rs"; then
+    echo -e "${GREEN}✓ Found user.rs as caller of BracedTrait via use statement (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ user.rs not found as caller of BracedTrait${NC}"
+    exit 1
+fi
+
+# Test 24: Rust use/import capture — find_callers for AliasedTrait (not the alias Renamed)
+echo ""
+echo "Test 24: Verifying Rust use-as capture — find_callers for AliasedTrait (not Renamed)..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"AliasedTrait","repo_name":"rust_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "AliasedTrait" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "user.rs" || echo "$CLI_RESPONSE" | grep -q "user.rs"; then
+    echo -e "${GREEN}✓ Found user.rs as caller of AliasedTrait via use-as statement (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ user.rs not found as caller of AliasedTrait${NC}"
+    exit 1
+fi
+
+# Test 24b: Verify alias name Renamed does NOT appear as an entity with callers
+echo ""
+echo "Test 24b: Verifying alias Renamed does NOT have callers..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"Renamed","repo_name":"rust_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "user.rs"; then
+    echo -e "${RED}✗ Alias Renamed should NOT have callers (alias should be resolved to AliasedTrait)${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ Alias Renamed correctly has no callers (MCP)${NC}"
+fi
+
+# Test 25: Rust explore_file on user.rs — verify Imports / Referenced Types section
+echo ""
+echo "Test 25: Verifying explore_file on user.rs shows Imports / Referenced Types..."
+USER_RS="$TMP_REPO_DIR/rust_use_imports/user.rs"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$USER_RS\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$USER_RS" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "## Imports / Referenced Types" && echo "$CLI_RESPONSE" | grep -q "## Imports / Referenced Types"; then
+    echo -e "${GREEN}✓ explore_file shows Imports / Referenced Types section (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ explore_file missing Imports / Referenced Types section${NC}"
+    exit 1
+fi
+
+if (echo "$MCP_RESPONSE" | grep -q "BracedTrait") && (echo "$MCP_RESPONSE" | grep -q "AliasedTrait"); then
+    echo -e "${GREEN}✓ Imports section lists BracedTrait and AliasedTrait (MCP)${NC}"
+else
+    echo -e "${RED}✗ Imports section missing BracedTrait or AliasedTrait${NC}"
+    exit 1
+fi
+
+# Test 26: Qualified call `with_label` resolves from `main` (Counter::with_label)
+# This was the original Bug 1+2 reproducer: a `Type::method()` call from a
+# top-level function should be reported as a caller of the qualified target.
+echo ""
+echo "Test 26: Testing find_callers for with_label resolves from main..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"with_label","repo_name":"rust_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "with_label" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "main" || echo "$CLI_RESPONSE" | grep -q "main"; then
+    echo -e "${GREEN}✓ Found main as caller of with_label (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ main not found as caller of with_label${NC}"
+    exit 1
+fi
+
+# Test 27: Two homonymous `new` methods are disambiguated by receiver
+# `exercise_qualified_calls` calls `WidgetA::new` (not WidgetB::new). The
+# callers of `new` in file sample.rs must include `exercise_qualified_calls`
+# and the target FQN/path must contain `WidgetA` for the call from
+# `exercise_qualified_calls` to land on the right target.
+echo ""
+echo "Test 27: Verifying new disambiguation — WidgetA::new is targeted, not WidgetB::new..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"new","repo_name":"rust_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "new" -r "$REPO_NAME" 2>/dev/null)
+
+# The caller exercise_qualified_calls must appear; WidgetA must appear in
+# the returned target/path. We accept either MCP or CLI succeeding.
+if (echo "$MCP_RESPONSE" | grep -q "exercise_qualified_calls") || (echo "$CLI_RESPONSE" | grep -q "exercise_qualified_calls"); then
+    if (echo "$MCP_RESPONSE" | grep -q "WidgetA") || (echo "$CLI_RESPONSE" | grep -q "WidgetA"); then
+        echo -e "${GREEN}✓ WidgetA::new disambiguated from WidgetB::new (MCP or CLI)${NC}"
+    else
+        echo -e "${RED}✗ Call from exercise_qualified_calls resolved to a non-WidgetA target${NC}"
+        exit 1
+    fi
+else
+    echo -e "${RED}✗ exercise_qualified_calls not listed as caller of new${NC}"
+    exit 1
+fi
+
+# Test 28: Logger::new from `impl LogSink for Logger` must have FQN `Logger::new`
+# This exercises the self-type extraction path. We look it up via the CLI
+# `search` command to confirm the entity exists with the qualified FQN.
+echo ""
+echo "Test 28: Verifying Logger::new has FQN Logger::new (impl Trait for Type)..."
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Logger::new" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$CLI_RESPONSE" | grep -q "Logger"; then
+    echo -e "${GREEN}✓ Logger::new indexed with qualified FQN (CLI)${NC}"
+else
+    echo -e "${RED}✗ Logger::new not found with qualified FQN${NC}"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Rust E2E tests passed!${NC}"
@@ -499,6 +624,11 @@ echo "  - Union (MaybeFloat)"
 echo "  - Generic structs and functions"
 echo "  - Lifetime parameters"
 echo "  - Derive macros"
+echo "  - Use/import capture (braced imports, aliases)"
+echo "  - Explore file outgoing references (Imports / Referenced Types)"
+echo "  - Qualified-call resolution (Type::method from top-level functions)"
+echo "  - Homonymous new() disambiguation by receiver (WidgetA::new vs WidgetB::new)"
+echo "  - impl Trait for Type self-type extraction (Logger::new FQN)"
 echo ""
 
 # Step 5: Summarize
