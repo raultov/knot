@@ -63,8 +63,15 @@ async fn main() -> Result<()> {
     print_startup_banner(&cfg, rayon_threads);
 
     // Initialize databases and load previous state.
+    // When --clean is set, skip loading the old state (it may be from an
+    // incompatible version) and start with an empty state instead.
     let (vector_db, graph_db) = init_databases(&cfg).await?;
-    let mut index_state = IndexState::load(&cfg.repo_path)?;
+    let mut index_state = if cfg.clean {
+        info!("Clean mode: ignoring existing index state");
+        IndexState::default()
+    } else {
+        IndexState::load(&cfg.repo_path)?
+    };
 
     let vector_db = Arc::new(vector_db);
     let graph_db = Arc::new(graph_db);
@@ -72,7 +79,7 @@ async fn main() -> Result<()> {
     // Initial indexing run
     info!("Performing initial indexing run...");
     let mut cfg = cfg; // Make config mutable for watch mode
-    run_indexing_pipeline(&cfg, &vector_db, &graph_db, &mut index_state).await?;
+    let _metrics = run_indexing_pipeline(&cfg, &vector_db, &graph_db, &mut index_state).await?;
 
     // After initial run, disable clean mode to ensure watch mode operates incrementally
     if cfg.watch && cfg.clean {

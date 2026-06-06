@@ -52,10 +52,12 @@ fn make_test_parsed_entity(id: u32) -> ParsedEntity {
         start_line: 1,
         end_line: 5,
         enclosing_class: None,
+        enclosing_class_fqn: None,
         reference_intents: Vec::new(),
         calls: Vec::new(),
         relationships: Vec::new(),
         embed_text: format!("[RustStruct] TestEntity_{id}\nSignature: fn test_{id}()"),
+        is_test_context: false,
     }
 }
 

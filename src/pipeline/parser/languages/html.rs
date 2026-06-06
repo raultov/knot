@@ -81,7 +81,9 @@ fn extract_html_attribute(
             lifetimes: None,
             alias_module_path: None,
             original_export_name: None,
+            enclosing_class_fqn: None,
             default_export: None,
+            is_test_context: false,
         });
     } else if attr_name == "class" && !attr_value.is_empty() {
         for class_name in attr_value.split_whitespace() {
@@ -112,7 +114,9 @@ fn extract_html_attribute(
                     lifetimes: None,
                     alias_module_path: None,
                     original_export_name: None,
+                    enclosing_class_fqn: None,
                     default_export: None,
+                    is_test_context: false,
                 });
             }
         }
@@ -168,7 +172,9 @@ fn extract_html_elements(
                                     lifetimes: None,
                                     alias_module_path: None,
                                     original_export_name: None,
+                                    enclosing_class_fqn: None,
                                     default_export: None,
+                                    is_test_context: false,
                                 });
                             }
                         }

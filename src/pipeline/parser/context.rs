@@ -223,6 +223,275 @@ pub(crate) fn compute_fqn_and_context(
     (fqn, enclosing_class)
 }
 
+/// Classification of a Rust file based on its location relative to the crate root.
+///
+/// Determines the FQN prefix strategy:
+/// - `CrateSrc`: files inside `<crate_root>/src/` → FQN: `<crate>::<module>::<Entity>`
+/// - `Fixture`: files inside a crate root but outside `src/` (tests, benches, examples)
+///   → FQN: `__fixture::<segments>::<Entity>`
+/// - `Loose`: files without any `Cargo.toml` ancestor
+///   → FQN: `__loose::<file_stem>::<Entity>`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RustFileKind {
+    CrateSrc { module_path: String },
+    Fixture { synthetic_path: String },
+    Loose { synthetic_path: String },
+}
+
+/// Classify a Rust file into a [`RustFileKind`] based on its location relative
+/// to the nearest `Cargo.toml` ancestor (if any).
+///
+/// - `file_path`: absolute or repo-relative path to the `.rs` file.
+/// - `crate_root`: the directory containing the nearest `Cargo.toml` (if discovered).
+/// - `repo_root`: the repository root directory.
+pub(crate) fn compute_rust_file_kind(
+    file_path: &str,
+    crate_root: Option<&std::path::Path>,
+    repo_root: &std::path::Path,
+) -> RustFileKind {
+    let file = std::path::Path::new(file_path);
+
+    if let Some(root) = crate_root {
+        // Try to strip the crate_root/src prefix — if it works, it's a normal crate source file.
+        if let Ok(rel) = file.strip_prefix(root.join("src")) {
+            let module_path = compute_module_path_from_relative(rel);
+            return RustFileKind::CrateSrc { module_path };
+        }
+
+        // File is inside the crate root but outside src/ — it's a fixture.
+        if let Ok(rel) = file.strip_prefix(root) {
+            let synthetic = path_to_synthetic_segments(rel);
+            return RustFileKind::Fixture {
+                synthetic_path: synthetic,
+            };
+        }
+    }
+
+    // No crate root or file is outside it — it's a loose file.
+    let synthetic = if let Ok(rel) = file.strip_prefix(repo_root) {
+        path_to_synthetic_segments(rel)
+    } else {
+        // Fallback: use the file stem only.
+        file.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    };
+
+    RustFileKind::Loose {
+        synthetic_path: synthetic,
+    }
+}
+
+/// Convert a file path into `::`-separated segments for use as a synthetic FQN prefix.
+/// Strips the `.rs` extension and converts path separators to `::`.
+fn path_to_synthetic_segments(path: &std::path::Path) -> String {
+    let components: Vec<String> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
+        .collect();
+
+    if components.is_empty() {
+        return "unknown".to_string();
+    }
+
+    let last = components.last().unwrap();
+    let stem = last.strip_suffix(".rs").unwrap_or(last);
+
+    let mut parts: Vec<&str> = components[..components.len() - 1]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    if !stem.is_empty() {
+        parts.push(stem);
+    }
+
+    parts.join("::")
+}
+
+/// Extract the module path from a relative path (relative to crate_root/src).
+/// Shared logic between `compute_rust_module_path` and `compute_rust_file_kind`.
+fn compute_module_path_from_relative(relative: &std::path::Path) -> String {
+    let components: Vec<&str> = relative
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+
+    if components.is_empty() {
+        return String::new();
+    }
+
+    let last = components.last().unwrap();
+    let file_stem = last.strip_suffix(".rs").unwrap_or(last);
+
+    let mut module_parts: Vec<&str> = components[..components.len() - 1].to_vec();
+
+    match file_stem {
+        "lib" | "main" => {}
+        "mod" => {}
+        other => module_parts.push(other),
+    }
+
+    module_parts.join("::")
+}
+
+/// Compute the Rust module path that owns `file_path`, relative to a crate
+/// root (the directory that contains `Cargo.toml`).
+///
+/// Returns an empty string for the crate root files (`src/lib.rs`,
+/// `src/main.rs`), the parent module for `mod.rs`, and the dotted module
+/// path otherwise (e.g. `src/db/graph.rs` → `db::graph`).
+///
+/// **Note:** prefer [`compute_rust_file_kind`] for new code; this function
+/// is retained for backward compatibility and tests.
+#[cfg(test)]
+pub(crate) fn compute_rust_module_path(file_path: &str, crate_root: &std::path::Path) -> String {
+    let file = std::path::Path::new(file_path);
+    let relative = match file.strip_prefix(crate_root.join("src")) {
+        Ok(rel) => rel,
+        Err(_) => return String::new(),
+    };
+
+    compute_module_path_from_relative(relative)
+}
+
+/// Build a fully-qualified Rust name from its crate, module path, optional
+/// enclosing impl type, and entity name.
+///
+/// The returned string is always anchored at the crate name so two files
+/// that declare a `Config` struct in different crates produce distinct FQNs
+/// (`crate_a::config::Config` vs. `crate_b::config::Config`).
+pub(crate) fn compute_rust_qualified_fqn(
+    name: &str,
+    kind: &EntityKind,
+    crate_name: &str,
+    module_path: &str,
+    enclosing_class: Option<&str>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(crate_name.to_string());
+    if !module_path.is_empty() {
+        parts.push(module_path.to_string());
+    }
+
+    let is_method = matches!(kind, EntityKind::RustMethod);
+
+    if let Some(class_name) = enclosing_class {
+        if is_method {
+            let base = if parts.is_empty() {
+                class_name.to_string()
+            } else {
+                format!("{}::{}", parts.join("::"), class_name)
+            };
+            return format!("{}::{}", base, name);
+        }
+        parts.push(class_name.to_string());
+    }
+
+    if parts.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{}", parts.join("::"), name)
+    }
+}
+
+/// Build a fully-qualified Rust name using a [`RustFileKind`] to determine
+/// the prefix strategy.
+///
+/// - `CrateSrc`: standard `<crate>::<module>::<Entity>` format.
+/// - `Fixture`: `__fixture::<segments>::<Entity>` format.
+/// - `Loose`: `__loose::<file_stem>::<Entity>` format.
+#[cfg(test)]
+pub(crate) fn compute_rust_qualified_fqn_from_kind(
+    name: &str,
+    kind: &EntityKind,
+    file_kind: &RustFileKind,
+    crate_name: &str,
+    enclosing_class: Option<&str>,
+) -> String {
+    compute_rust_qualified_fqn_with_inline_modules(
+        name,
+        kind,
+        file_kind,
+        crate_name,
+        "",
+        enclosing_class,
+    )
+}
+
+/// Same as [`compute_rust_qualified_fqn_from_kind`] but also splices in any
+/// **inline** `mod foo { ... }` blocks that contain the entity.
+///
+/// `inline_module_path` is a `::`-separated chain such as `"tests"` or
+/// `"outer::inner"`. An empty string means the entity sits at the file's
+/// top level. The inline path is inserted *between* the per-file module
+/// path and the entity name (and, for methods, before the enclosing class):
+///
+/// ```text
+/// crate::config::tests::test_foo                   // function in #[cfg(test)] mod tests
+/// crate::config::outer::inner::Bar                  // struct in nested inline mods
+/// crate::config::tests::Cache::new                  // method on Cache inside mod tests
+/// ```
+pub(crate) fn compute_rust_qualified_fqn_with_inline_modules(
+    name: &str,
+    kind: &EntityKind,
+    file_kind: &RustFileKind,
+    crate_name: &str,
+    inline_module_path: &str,
+    enclosing_class: Option<&str>,
+) -> String {
+    match file_kind {
+        RustFileKind::CrateSrc { module_path } => {
+            let combined = combine_module_paths(module_path, inline_module_path);
+            compute_rust_qualified_fqn(name, kind, crate_name, &combined, enclosing_class)
+        }
+        RustFileKind::Fixture { synthetic_path } => {
+            let combined = combine_module_paths(synthetic_path, inline_module_path);
+            build_synthetic_fqn("__fixture", &combined, name, kind, enclosing_class)
+        }
+        RustFileKind::Loose { synthetic_path } => {
+            let combined = combine_module_paths(synthetic_path, inline_module_path);
+            build_synthetic_fqn("__loose", &combined, name, kind, enclosing_class)
+        }
+    }
+}
+
+/// Join two `::`-separated module paths, ignoring empty segments.
+fn combine_module_paths(file_module_path: &str, inline_module_path: &str) -> String {
+    match (file_module_path.is_empty(), inline_module_path.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => file_module_path.to_string(),
+        (true, false) => inline_module_path.to_string(),
+        (false, false) => format!("{}::{}", file_module_path, inline_module_path),
+    }
+}
+
+/// Build an FQN with a synthetic prefix (`__fixture` or `__loose`).
+fn build_synthetic_fqn(
+    prefix: &str,
+    synthetic_path: &str,
+    name: &str,
+    kind: &EntityKind,
+    enclosing_class: Option<&str>,
+) -> String {
+    let is_method = matches!(kind, EntityKind::RustMethod);
+
+    if is_method && let Some(class_name) = enclosing_class {
+        let base = if synthetic_path.is_empty() {
+            format!("{}::{}", prefix, class_name)
+        } else {
+            format!("{}::{}::{}", prefix, synthetic_path, class_name)
+        };
+        return format!("{}::{}", base, name);
+    }
+
+    if synthetic_path.is_empty() {
+        format!("{}::{}", prefix, name)
+    } else {
+        format!("{}::{}::{}", prefix, synthetic_path, name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +729,256 @@ impl Bar for Foo {
             !contexts.iter().any(|c| c.name == "Bar"),
             "Trait name Bar should NOT appear as a class context, got: {:?}",
             contexts.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_rust_module_path_from_lib_rs() {
+        let crate_root = std::path::PathBuf::from("/repo/my_crate");
+        let path = "/repo/my_crate/src/lib.rs";
+        assert_eq!(compute_rust_module_path(path, &crate_root), "");
+    }
+
+    #[test]
+    fn test_rust_module_path_from_nested_file() {
+        let crate_root = std::path::PathBuf::from("/repo/my_crate");
+        let path = "/repo/my_crate/src/db/graph.rs";
+        assert_eq!(compute_rust_module_path(path, &crate_root), "db::graph");
+    }
+
+    #[test]
+    fn test_rust_module_path_from_mod_rs() {
+        let crate_root = std::path::PathBuf::from("/repo/my_crate");
+        let path = "/repo/my_crate/src/db/mod.rs";
+        assert_eq!(compute_rust_module_path(path, &crate_root), "db");
+    }
+
+    #[test]
+    fn test_rust_module_path_strips_main() {
+        let crate_root = std::path::PathBuf::from("/repo/my_crate");
+        let path = "/repo/my_crate/src/main.rs";
+        assert_eq!(compute_rust_module_path(path, &crate_root), "");
+    }
+
+    #[test]
+    fn test_rust_module_path_outside_crate_returns_empty() {
+        let crate_root = std::path::PathBuf::from("/repo/my_crate");
+        let path = "/other_repo/src/lib.rs";
+        assert_eq!(compute_rust_module_path(path, &crate_root), "");
+    }
+
+    #[test]
+    fn test_rust_module_path_deeply_nested() {
+        let crate_root = std::path::PathBuf::from("/repo/my_crate");
+        let path = "/repo/my_crate/src/pipeline/parser/languages/rust.rs";
+        assert_eq!(
+            compute_rust_module_path(path, &crate_root),
+            "pipeline::parser::languages::rust"
+        );
+    }
+
+    #[test]
+    fn test_rust_fqn_struct_uses_module_path() {
+        let fqn = compute_rust_qualified_fqn(
+            "Config",
+            &EntityKind::RustStruct,
+            "crate_a",
+            "config",
+            None,
+        );
+        assert_eq!(fqn, "crate_a::config::Config");
+    }
+
+    #[test]
+    fn test_rust_fqn_method_includes_module() {
+        let fqn = compute_rust_qualified_fqn(
+            "load",
+            &EntityKind::RustMethod,
+            "crate_a",
+            "config",
+            Some("Config"),
+        );
+        assert_eq!(fqn, "crate_a::config::Config::load");
+    }
+
+    #[test]
+    fn test_rust_fqn_function_no_enclosing() {
+        let fqn = compute_rust_qualified_fqn(
+            "helper",
+            &EntityKind::RustFunction,
+            "crate_a",
+            "utils",
+            None,
+        );
+        assert_eq!(fqn, "crate_a::utils::helper");
+    }
+
+    #[test]
+    fn test_rust_fqn_struct_at_crate_root_no_module() {
+        let fqn =
+            compute_rust_qualified_fqn("Config", &EntityKind::RustStruct, "crate_a", "", None);
+        assert_eq!(fqn, "crate_a::Config");
+    }
+
+    #[test]
+    fn test_rust_fqn_method_at_crate_root() {
+        let fqn = compute_rust_qualified_fqn(
+            "load",
+            &EntityKind::RustMethod,
+            "crate_a",
+            "",
+            Some("Config"),
+        );
+        assert_eq!(fqn, "crate_a::Config::load");
+    }
+
+    #[test]
+    fn test_rust_fqn_nested_struct_uses_enclosing_segment() {
+        let fqn = compute_rust_qualified_fqn(
+            "Inner",
+            &EntityKind::RustStruct,
+            "crate_a",
+            "outer",
+            Some("Outer"),
+        );
+        assert_eq!(fqn, "crate_a::outer::Outer::Inner");
+    }
+
+    // --- PR2: RustFileKind tests ---
+
+    #[test]
+    fn test_rust_file_kind_crate_src() {
+        let tmp = tempfile::tempdir().unwrap();
+        let crate_root = tmp.path();
+        let file = crate_root.join("src/config.rs");
+
+        let kind = compute_rust_file_kind(&file.to_string_lossy(), Some(crate_root), crate_root);
+        assert_eq!(
+            kind,
+            RustFileKind::CrateSrc {
+                module_path: "config".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_rust_file_kind_fixture_in_tests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let crate_root = tmp.path();
+        let file = crate_root.join("tests/testing_files/sample.rs");
+
+        let kind = compute_rust_file_kind(&file.to_string_lossy(), Some(crate_root), crate_root);
+        match &kind {
+            RustFileKind::Fixture { synthetic_path } => {
+                assert_eq!(
+                    synthetic_path, "tests::testing_files::sample",
+                    "fixture path should use :: separators"
+                );
+            }
+            _ => panic!("expected Fixture kind, got {:?}", kind),
+        }
+    }
+
+    #[test]
+    fn test_rust_file_kind_fixture_in_benches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let crate_root = tmp.path();
+        let file = crate_root.join("benches/pipeline_bench.rs");
+
+        let kind = compute_rust_file_kind(&file.to_string_lossy(), Some(crate_root), crate_root);
+        match &kind {
+            RustFileKind::Fixture { synthetic_path } => {
+                assert_eq!(synthetic_path, "benches::pipeline_bench");
+            }
+            _ => panic!("expected Fixture kind, got {:?}", kind),
+        }
+    }
+
+    #[test]
+    fn test_rust_file_kind_loose_no_cargo_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let file = repo_root.join("scripts/helper.rs");
+
+        // No crate_root (None) — should be Loose
+        let kind = compute_rust_file_kind(&file.to_string_lossy(), None, repo_root);
+        match &kind {
+            RustFileKind::Loose { synthetic_path } => {
+                assert_eq!(synthetic_path, "scripts::helper");
+            }
+            _ => panic!("expected Loose kind, got {:?}", kind),
+        }
+    }
+
+    #[test]
+    fn test_rust_fqn_fixture_entity() {
+        let kind = RustFileKind::Fixture {
+            synthetic_path: "tests::testing_files::sample".to_string(),
+        };
+        let fqn = compute_rust_qualified_fqn_from_kind(
+            "Config",
+            &EntityKind::RustStruct,
+            &kind,
+            "knot",
+            None,
+        );
+        assert_eq!(
+            fqn, "__fixture::tests::testing_files::sample::Config",
+            "fixture FQN should use __fixture:: prefix"
+        );
+    }
+
+    #[test]
+    fn test_rust_fqn_fixture_method() {
+        let kind = RustFileKind::Fixture {
+            synthetic_path: "tests::testing_files::sample".to_string(),
+        };
+        let fqn = compute_rust_qualified_fqn_from_kind(
+            "load_mcp",
+            &EntityKind::RustMethod,
+            &kind,
+            "knot",
+            Some("Config"),
+        );
+        assert_eq!(
+            fqn, "__fixture::tests::testing_files::sample::Config::load_mcp",
+            "fixture method FQN should include enclosing class"
+        );
+    }
+
+    #[test]
+    fn test_rust_fqn_loose_entity() {
+        let kind = RustFileKind::Loose {
+            synthetic_path: "scripts::helper".to_string(),
+        };
+        let fqn = compute_rust_qualified_fqn_from_kind(
+            "my_func",
+            &EntityKind::RustFunction,
+            &kind,
+            "__loose",
+            None,
+        );
+        assert_eq!(
+            fqn, "__loose::scripts::helper::my_func",
+            "loose FQN should use __loose:: prefix"
+        );
+    }
+
+    #[test]
+    fn test_rust_fqn_crate_src_unchanged() {
+        let kind = RustFileKind::CrateSrc {
+            module_path: "config".to_string(),
+        };
+        let fqn = compute_rust_qualified_fqn_from_kind(
+            "Config",
+            &EntityKind::RustStruct,
+            &kind,
+            "knot",
+            None,
+        );
+        assert_eq!(
+            fqn, "knot::config::Config",
+            "crate src FQN should be unchanged from original behavior"
         );
     }
 }

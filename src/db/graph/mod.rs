@@ -59,7 +59,9 @@ pub(crate) mod test_utils {
             lifetimes: None,
             alias_module_path: None,
             original_export_name: None,
+            enclosing_class_fqn: None,
             default_export: None,
+            is_test_context: false,
         }
     }
 

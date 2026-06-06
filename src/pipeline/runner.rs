@@ -19,7 +19,10 @@ use crate::pipeline::{
         calculate_files_to_delete, calculate_files_to_parse, classify_files_for_indexing,
         update_index_state,
     },
-    ingest::{ingest_batch, link_cross_repo_dependencies, resolve_and_save_relationships},
+    ingest::{
+        RunMetrics, ingest_batch, link_cross_repo_dependencies, print_run_summary,
+        resolve_and_save_relationships,
+    },
     input::discover_files,
     parser::{ParseConfig, parse_files_stream},
     prepare::prepare_entities,
@@ -40,12 +43,12 @@ pub async fn run_indexing_pipeline(
     vector_db: &Arc<VectorDb>,
     graph_db: &Arc<GraphDb>,
     index_state: &mut IndexState,
-) -> Result<()> {
+) -> Result<RunMetrics> {
     // Stage 1: Discover and classify files.
     let all_files = discover_files(&cfg.repo_path, cfg.include_config_files)?;
     if all_files.is_empty() {
         info!("No supported source files found.");
-        return Ok(());
+        return Ok(RunMetrics::new(0));
     }
 
     let (_, modified_files, added_files, deleted_files) =
@@ -56,7 +59,7 @@ pub async fn run_indexing_pipeline(
 
     if unchanged_count == all_files.len() && deleted_files.is_empty() {
         info!("No files changed — index is up to date!");
-        return Ok(());
+        return Ok(RunMetrics::new(0));
     }
 
     info!(
@@ -103,6 +106,7 @@ pub async fn run_indexing_pipeline(
             cfg.custom_queries_path.clone(),
             cfg.repo_name.clone(),
             cfg.include_config_files,
+            Some(cfg.repo_path.clone()),
         );
         let files_to_parse_clone = files_to_parse.clone();
 
@@ -244,7 +248,8 @@ pub async fn run_indexing_pipeline(
         // are available for cross-repo call resolution.
         link_cross_repo_dependencies(&resolution_entities, graph_db, cfg).await?;
 
-        resolve_and_save_relationships(&mut resolution_entities, graph_db, cfg).await?;
+        let metrics =
+            resolve_and_save_relationships(&mut resolution_entities, graph_db, cfg).await?;
 
         update_index_state(
             index_state,
@@ -253,12 +258,16 @@ pub async fn run_indexing_pipeline(
             &cfg.repo_path,
             total_entities,
         )?;
+
+        print_run_summary(&metrics);
+        Ok(metrics)
     } else if !deleted_files.is_empty() {
         // Only deletions occurred
         update_index_state(index_state, &[], &deleted_files, &cfg.repo_path, 0)?;
+        Ok(RunMetrics::new(0))
+    } else {
+        Ok(RunMetrics::new(0))
     }
-
-    Ok(())
 }
 
 /// Clean stale data from databases based on files to delete.
@@ -303,11 +312,13 @@ fn build_parse_config(
     custom_queries_path: Option<String>,
     repo_name: String,
     include_config_files: bool,
+    repo_path: Option<String>,
 ) -> ParseConfig {
     ParseConfig {
         custom_queries_path,
         repo_name,
         include_config_files,
+        repo_path,
     }
 }
 
@@ -318,13 +329,20 @@ mod tests {
 
     #[test]
     fn test_build_parse_config_variants() {
-        let cfg = build_parse_config(None, "repo1".to_string(), false);
+        let cfg = build_parse_config(None, "repo1".to_string(), false, None);
         assert_eq!(cfg.repo_name, "repo1");
         assert!(cfg.custom_queries_path.is_none());
+        assert!(cfg.repo_path.is_none());
 
-        let cfg_custom = build_parse_config(Some("/path".to_string()), "repo2".to_string(), false);
+        let cfg_custom = build_parse_config(
+            Some("/path".to_string()),
+            "repo2".to_string(),
+            false,
+            Some("/tmp/repo".to_string()),
+        );
         assert_eq!(cfg_custom.repo_name, "repo2");
         assert_eq!(cfg_custom.custom_queries_path, Some("/path".to_string()));
+        assert_eq!(cfg_custom.repo_path, Some("/tmp/repo".to_string()));
     }
 
     /// Verify that JoinSet + Semaphore correctly limits concurrent task execution.

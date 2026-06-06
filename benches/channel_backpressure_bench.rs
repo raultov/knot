@@ -52,6 +52,7 @@ fn bench_channel_capacity(c: &mut Criterion) {
                         custom_queries_path: None,
                         repo_name: "bench_channel".to_string(),
                         include_config_files: true,
+                        repo_path: None,
                     };
 
                     let cpus = std::thread::available_parallelism()
@@ -102,6 +103,7 @@ fn bench_concurrency_levels(c: &mut Criterion) {
                         custom_queries_path: None,
                         repo_name: "bench_concurrency".to_string(),
                         include_config_files: true,
+                        repo_path: None,
                     };
 
                     let (tx, mut rx) = mpsc::channel::<ParsedEntity>(1024);

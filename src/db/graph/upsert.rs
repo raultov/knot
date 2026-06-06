@@ -155,6 +155,14 @@ impl UpsertExt for GraphDb {
                         e.entity.enclosing_class.clone().unwrap_or_default().into(),
                     );
                     map.insert(
+                        "enclosing_class_fqn".to_string(),
+                        e.entity
+                            .enclosing_class_fqn
+                            .clone()
+                            .unwrap_or_default()
+                            .into(),
+                    );
+                    map.insert(
                         "alias_module_path".to_string(),
                         e.entity
                             .alias_module_path
@@ -165,6 +173,10 @@ impl UpsertExt for GraphDb {
                     map.insert(
                         "default_export".to_string(),
                         e.entity.default_export.clone().unwrap_or_default().into(),
+                    );
+                    map.insert(
+                        "is_test_context".to_string(),
+                        e.entity.is_test_context.into(),
                     );
                     map
                 })
@@ -180,9 +192,11 @@ impl UpsertExt for GraphDb {
                      n.signature = e.signature, n.docstring = e.docstring,
                      n.inline_comments = e.inline_comments, n.decorators = e.decorators,
                      n.embed_text = e.embed_text, n.fqn = e.fqn,
-                     n.enclosing_class = e.enclosing_class,
-                     n.alias_module_path = e.alias_module_path,
-                     n.default_export = e.default_export"
+                      n.enclosing_class = e.enclosing_class,
+                     n.enclosing_class_fqn = e.enclosing_class_fqn,
+                      n.alias_module_path = e.alias_module_path,
+                     n.default_export = e.default_export,
+                     n.is_test_context = e.is_test_context"
             );
 
             self.graph
@@ -194,13 +208,18 @@ impl UpsertExt for GraphDb {
         info!("Upserted {} entity nodes into Neo4j", entities.len());
 
         // Auto-link entities using their enclosing_class property to create physical CONTAINS edges.
-        // This is critical for subgraph connectivity in languages like Java.
+        // Uses enclosing_class_fqn (when populated by the Rust qualifier) for exact match,
+        // falling back to (name, file_path) for non-Rust languages or when FQN is unknown.
         if let Some(first) = entities.first() {
             let repo_name = &first.entity.repo_name;
             let link_cypher = "
                 MATCH (m:Entity {repo_name: $repo_name})
                 WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
-                MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})
+                OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
+                WITH m, c1
+                OPTIONAL MATCH (c2:Entity {name: m.enclosing_class, repo_name: $repo_name, file_path: m.file_path})
+                WITH m, COALESCE(c1, c2) AS c
+                WHERE c IS NOT NULL
                 MERGE (c)-[:CONTAINS]->(m)
             ";
             self.graph
@@ -734,8 +753,12 @@ mod tests {
                 .unwrap_or_default()
                 .into(),
         );
+        map.insert(
+            "is_test_context".to_string(),
+            entity.entity.is_test_context.into(),
+        );
 
-        assert_eq!(map.len(), 15);
+        assert_eq!(map.len(), 16);
         assert_eq!(map["name"], BoltType::from(entity.entity.name.clone()));
         assert_eq!(map["fqn"], BoltType::from(entity.entity.fqn.clone()));
     }
@@ -896,5 +919,100 @@ mod tests {
         assert_eq!(RelationshipType::UsesCSSClass.to_string(), "USES_CSS_CLASS");
         assert_eq!(RelationshipType::MacroCalls.to_string(), "MACRO_CALLS");
         assert_eq!(RelationshipType::Contains.to_string(), "CONTAINS");
+    }
+
+    /// Verify CONTAINS auto-link Cypher uses enclosing_class_fqn for exact match.
+    #[test]
+    fn test_contains_auto_link_uses_enclosing_class_fqn() {
+        let link_cypher = "
+            MATCH (m:Entity {repo_name: $repo_name})
+            WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
+            OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
+            WITH m, c1
+            OPTIONAL MATCH (c2:Entity {name: m.enclosing_class, repo_name: $repo_name, file_path: m.file_path})
+            WITH m, COALESCE(c1, c2) AS c
+            WHERE c IS NOT NULL
+            MERGE (c)-[:CONTAINS]->(m)
+        ";
+
+        assert!(
+            link_cypher.contains("m.enclosing_class_fqn"),
+            "Cypher should use enclosing_class_fqn for exact FQN match"
+        );
+        assert!(
+            link_cypher.contains("COALESCE(c1, c2)"),
+            "Cypher should use COALESCE to prefer FQN match over fallback"
+        );
+        assert!(
+            link_cypher.contains("file_path: m.file_path"),
+            "Cypher fallback should disambiguate by file_path"
+        );
+    }
+
+    /// Verify CONTAINS auto-link Cypher does NOT use global name-only match.
+    #[test]
+    fn test_contains_auto_link_no_global_name_match() {
+        let old_cypher = "
+            MATCH (m:Entity {repo_name: $repo_name})
+            WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
+            MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})
+            MERGE (c)-[:CONTAINS]->(m)
+        ";
+
+        let new_cypher = "
+            MATCH (m:Entity {repo_name: $repo_name})
+            WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
+            OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
+            WITH m, c1
+            OPTIONAL MATCH (c2:Entity {name: m.enclosing_class, repo_name: $repo_name, file_path: m.file_path})
+            WITH m, COALESCE(c1, c2) AS c
+            WHERE c IS NOT NULL
+            MERGE (c)-[:CONTAINS]->(m)
+        ";
+
+        // Old pattern: bare name match without file_path disambiguation
+        assert!(
+            old_cypher
+                .contains("MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})"),
+            "old Cypher had global name-only match"
+        );
+
+        // New pattern must NOT have the bare global name match
+        assert!(
+            !new_cypher
+                .contains("MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})\n"),
+            "new Cypher must NOT have global name-only MATCH"
+        );
+    }
+
+    /// Verify enclosing_class_fqn is included in entity parameter map.
+    #[test]
+    fn test_entity_param_map_includes_enclosing_class_fqn() {
+        let entity = create_embedded_test_entity("TestMethod", EntityKind::Method);
+        let mut map: HashMap<String, BoltType> = HashMap::new();
+
+        map.insert(
+            "enclosing_class".to_string(),
+            entity
+                .entity
+                .enclosing_class
+                .clone()
+                .unwrap_or_default()
+                .into(),
+        );
+        map.insert(
+            "enclosing_class_fqn".to_string(),
+            entity
+                .entity
+                .enclosing_class_fqn
+                .clone()
+                .unwrap_or_default()
+                .into(),
+        );
+
+        assert!(
+            map.contains_key("enclosing_class_fqn"),
+            "entity param map must include enclosing_class_fqn"
+        );
     }
 }

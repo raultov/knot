@@ -1,7 +1,8 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use tracing::{info, warn};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -13,7 +14,7 @@ pub async fn resolve_and_save_relationships(
     entities: &mut [ResolutionEntity],
     graph_db: &GraphDb,
     cfg: &Config,
-) -> Result<()> {
+) -> Result<RunMetrics> {
     if !entities.is_empty() {
         // Auto-discover dependency repos from DEPENDS_ON relationships in Neo4j
         let auto_deps = graph_db
@@ -45,13 +46,16 @@ pub async fn resolve_and_save_relationships(
             name_to_uuids.len()
         );
 
-        resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+        let metrics = resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
 
         // Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES)
         info!("Creating typed relationships in Neo4j...");
         graph_db.upsert_relationships(entities).await?;
+
+        Ok(metrics)
+    } else {
+        Ok(RunMetrics::new(0))
     }
-    Ok(())
 }
 
 /// Perform cross-repo dependency linking: upsert Repository nodes
@@ -276,11 +280,126 @@ fn count_params_from_signature(sig: &str) -> Option<usize> {
     }
 }
 
+pub struct RunMetrics {
+    pub entities_indexed: AtomicU64,
+    pub references_resolved: AtomicU64,
+    pub references_ambiguous_skipped: AtomicU64,
+    pub references_unresolved: AtomicU64,
+}
+
+impl RunMetrics {
+    pub fn new(entities_indexed: u64) -> Self {
+        Self {
+            entities_indexed: AtomicU64::new(entities_indexed),
+            references_resolved: AtomicU64::new(0),
+            references_ambiguous_skipped: AtomicU64::new(0),
+            references_unresolved: AtomicU64::new(0),
+        }
+    }
+
+    /// Merge another `RunMetrics` into this one (for batch accumulation).
+    pub fn accumulate(&self, other: &RunMetrics) {
+        self.entities_indexed.fetch_add(
+            other.entities_indexed.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.references_resolved.fetch_add(
+            other.references_resolved.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.references_ambiguous_skipped.fetch_add(
+            other.references_ambiguous_skipped.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.references_unresolved.fetch_add(
+            other.references_unresolved.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+    }
+}
+
+pub fn print_run_summary(metrics: &RunMetrics) {
+    let entities = metrics.entities_indexed.load(Ordering::Relaxed);
+    let resolved = metrics.references_resolved.load(Ordering::Relaxed);
+    let ambiguous = metrics.references_ambiguous_skipped.load(Ordering::Relaxed);
+    let unresolved = metrics.references_unresolved.load(Ordering::Relaxed);
+    info!(
+        "Indexing complete: {} entities, {} references resolved, {} ambiguous skipped, {} unresolved",
+        entities, resolved, ambiguous, unresolved
+    );
+    if ambiguous > 0 {
+        info!(
+            "Ambiguous references skipped: {} (set RUST_LOG=debug for details)",
+            ambiguous
+        );
+    }
+}
+
+fn resolve_non_call_reference(
+    name: &str,
+    source_file: &str,
+    enclosing_class: Option<&str>,
+    fqn_to_uuid: &HashMap<String, Uuid>,
+    name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    uuid_to_file: &HashMap<Uuid, String>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    let Some(candidate_uuids) = name_to_uuids.get(name) else {
+        metrics
+            .references_unresolved
+            .fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+
+    if candidate_uuids.is_empty() {
+        metrics
+            .references_unresolved
+            .fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+
+    if let Some(same_file_uuid) =
+        find_entity_in_same_file(candidate_uuids, source_file, uuid_to_file)
+    {
+        metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+        return Some(same_file_uuid);
+    }
+
+    if let Some(enclosing) = enclosing_class {
+        let dot_fqn = format!("{}.{}", enclosing, name);
+        if let Some(&uuid) = fqn_to_uuid.get(&dot_fqn) {
+            metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+            return Some(uuid);
+        }
+        let colon_fqn = format!("{}::{}", enclosing, name);
+        if let Some(&uuid) = fqn_to_uuid.get(&colon_fqn) {
+            metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+            return Some(uuid);
+        }
+    }
+
+    if candidate_uuids.len() == 1 {
+        metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+        return candidate_uuids.first().copied();
+    }
+
+    debug!(
+        name = name,
+        candidates = candidate_uuids.len(),
+        source_file = source_file,
+        "Ambiguous reference skipped: multiple candidates with no disambiguating context"
+    );
+    metrics
+        .references_ambiguous_skipped
+        .fetch_add(1, Ordering::Relaxed);
+    None
+}
+
 pub fn resolve_reference_intents_with_context(
     entities: &mut [ResolutionEntity],
     mut fqn_to_uuid: HashMap<String, Uuid>,
     mut name_to_uuids: HashMap<String, Vec<Uuid>>,
-) {
+) -> RunMetrics {
     let uuid_to_file: HashMap<Uuid, String> = entities
         .iter()
         .map(|e| (e.uuid, e.file_path.clone()))
@@ -337,6 +456,8 @@ pub fn resolve_reference_intents_with_context(
     // Build alias map for cross-file require/import resolution
     let alias_map = build_alias_map(entities, &uuid_to_file);
 
+    let metrics = RunMetrics::new(entities.len() as u64);
+
     // Resolve reference intents for each entity — parallelized via Rayon.
     // All context maps (fqn_to_uuid, name_to_uuids, etc.) are read-only
     // at this point, so no synchronization is needed.
@@ -378,39 +499,75 @@ pub fn resolve_reference_intents_with_context(
                     )
                 }
                 ReferenceIntent::Extends { parent, .. } => (
-                    name_to_uuids
-                        .get(parent)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        parent,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::Extends,
                 ),
                 ReferenceIntent::Implements { interface, .. } => (
-                    name_to_uuids
-                        .get(interface)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        interface,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::Implements,
                 ),
                 ReferenceIntent::TypeReference { type_name, .. } => (
-                    name_to_uuids
-                        .get(type_name)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        type_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::References,
                 ),
                 ReferenceIntent::ValueReference { value_name, .. } => (
-                    name_to_uuids
-                        .get(value_name)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        value_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::References,
                 ),
                 ReferenceIntent::DomElementReference { element_id, .. } => (
-                    name_to_uuids
-                        .get(element_id)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        element_id,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::ReferencesDOM,
                 ),
                 ReferenceIntent::CssClassUsage { class_name, .. } => (
-                    name_to_uuids
-                        .get(class_name)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        class_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::UsesCSSClass,
                 ),
                 ReferenceIntent::HtmlFileImport { file_path, .. } => (
@@ -422,9 +579,15 @@ pub fn resolve_reference_intents_with_context(
                     RelationshipType::ImportsStylesheet,
                 ),
                 ReferenceIntent::RustMacroCall { macro_name, .. } => (
-                    name_to_uuids
-                        .get(macro_name)
-                        .and_then(|uuids| uuids.first().copied()),
+                    resolve_non_call_reference(
+                        macro_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &fqn_to_uuid,
+                        &name_to_uuids,
+                        &uuid_to_file,
+                        &metrics,
+                    ),
                     RelationshipType::MacroCalls,
                 ),
             };
@@ -439,6 +602,8 @@ pub fn resolve_reference_intents_with_context(
             }
         }
     });
+
+    metrics
 }
 
 /// Build an alias map from alias UUID → original definition UUID by resolving
@@ -858,7 +1023,7 @@ fn find_entity_in_same_file(
 }
 
 /// Legacy alias for backward compatibility.
-pub fn resolve_reference_intents(entities: &mut [ResolutionEntity]) {
+pub fn resolve_reference_intents(entities: &mut [ResolutionEntity]) -> RunMetrics {
     let fqn_to_uuid: HashMap<String, Uuid> =
         entities.iter().map(|e| (e.fqn.clone(), e.uuid)).collect();
 
@@ -870,7 +1035,7 @@ pub fn resolve_reference_intents(entities: &mut [ResolutionEntity]) {
             .push(e.uuid);
     }
 
-    resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+    resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids)
 }
 
 #[cfg(test)]
@@ -886,12 +1051,14 @@ mod tests {
             file_path: "test/file.java".to_string(),
             kind: EntityKind::Method,
             enclosing_class: enclosing.map(|s| s.to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         }
     }
 
@@ -1045,12 +1212,14 @@ mod tests {
             fqn: "knot::pipeline::parser::orphans::find_nearest_entity_by_line".to_string(),
             file_path: "src/pipeline/parser/orphans.rs".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let rust_fn = ResolutionEntity {
@@ -1060,12 +1229,14 @@ mod tests {
             fqn: "knot::pipeline::parser::languages::rust::find_nearest_entity_by_line".to_string(),
             file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         // Create a caller function in rust.rs that calls find_nearest_entity_by_line
@@ -1077,6 +1248,7 @@ mod tests {
                 .to_string(),
             file_path: "src/pipeline/parser/languages/rust.rs".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "find_nearest_entity_by_line".to_string(),
@@ -1088,6 +1260,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         // Create a caller function in orphans.rs that calls find_nearest_entity_by_line
@@ -1098,6 +1271,7 @@ mod tests {
             fqn: "knot::pipeline::parser::orphans::collect_orphaned_references".to_string(),
             file_path: "src/pipeline/parser/orphans.rs".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "find_nearest_entity_by_line".to_string(),
@@ -1109,6 +1283,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let orphans_fn_uuid = orphans_fn.uuid;
@@ -1157,12 +1332,14 @@ mod tests {
             fqn: "Animal".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         let animal_speak_method = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -1171,12 +1348,14 @@ mod tests {
             fqn: "Animal.speak".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: Some("Animal".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let dog_class = ResolutionEntity {
@@ -1186,6 +1365,7 @@ mod tests {
             fqn: "Dog".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Extends {
                 parent: "Animal".to_string(),
@@ -1195,6 +1375,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         let dog_compute = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -1203,6 +1384,7 @@ mod tests {
             fqn: "Dog.compute".to_string(),
             file_path: "animals.py".to_string(),
             enclosing_class: Some("Dog".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "speak".to_string(),
@@ -1214,6 +1396,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let mut entities = vec![animal_speak, animal_speak_method, dog_class, dog_compute];
@@ -1243,12 +1426,14 @@ mod tests {
             fqn: "do_thing".to_string(),
             file_path: "lora.py".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         // Class with method of same name
@@ -1259,12 +1444,14 @@ mod tests {
             fqn: "MyLoader".to_string(),
             file_path: "nodes.py".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         // Class method with same name as module function (different file, different FQN)
         let class_method = ResolutionEntity {
@@ -1274,12 +1461,14 @@ mod tests {
             fqn: "MyLoader.do_thing".to_string(),
             file_path: "nodes.py".to_string(),
             enclosing_class: Some("MyLoader".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         // Another method in same class calling self.do_thing()
         let caller_method = ResolutionEntity {
@@ -1289,6 +1478,7 @@ mod tests {
             fqn: "MyLoader.caller".to_string(),
             file_path: "nodes.py".to_string(),
             enclosing_class: Some("MyLoader".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "do_thing".to_string(),
@@ -1300,6 +1490,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let module_uuid = module_func.uuid;
@@ -1522,12 +1713,14 @@ mod tests {
             file_path: file_path.to_string(),
             kind: EntityKind::Method,
             enclosing_class: enclosing.map(|s| s.to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         }
     }
 
@@ -1625,12 +1818,14 @@ mod tests {
             file_path: file.to_string(),
             kind: EntityKind::Constant,
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: alias_module_path.map(|s| s.to_string()),
             original_export_name: None,
             default_export: default_export.map(|s| s.to_string()),
+            is_test_context: false,
         }
     }
 
@@ -1873,12 +2068,14 @@ mod tests {
             fqn: "WidgetA::new".to_string(),
             file_path: "test/sample.rs".to_string(),
             enclosing_class: Some("WidgetA".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         let widget_b_new = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -1887,12 +2084,14 @@ mod tests {
             fqn: "WidgetB::new".to_string(),
             file_path: "test/sample.rs".to_string(),
             enclosing_class: Some("WidgetB".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         let caller = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -1901,6 +2100,7 @@ mod tests {
             fqn: "exercise_qualified_calls".to_string(),
             file_path: "test/sample.rs".to_string(),
             enclosing_class: None,
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "new".to_string(),
@@ -1912,6 +2112,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let widget_a_new_uuid = widget_a_new.uuid;
@@ -1950,12 +2151,14 @@ mod tests {
             fqn: "Foo::helper".to_string(),
             file_path: "test/sample.rs".to_string(),
             enclosing_class: Some("Foo".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: Vec::new(),
             relationships: Vec::new(),
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
         let foo_bar = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -1964,6 +2167,7 @@ mod tests {
             fqn: "Foo::bar".to_string(),
             file_path: "test/sample.rs".to_string(),
             enclosing_class: Some("Foo".to_string()),
+            enclosing_class_fqn: None,
             signature: None,
             reference_intents: vec![ReferenceIntent::Call {
                 method: "helper".to_string(),
@@ -1975,6 +2179,7 @@ mod tests {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            is_test_context: false,
         };
 
         let foo_helper_uuid = foo_helper.uuid;
@@ -1989,6 +2194,361 @@ mod tests {
                 .contains(&(foo_helper_uuid, RelationshipType::Calls)),
             "Foo::bar should resolve Self::helper to Foo::helper, got: {:?}",
             foo_bar_entity.relationships
+        );
+    }
+
+    #[test]
+    fn test_type_reference_prefers_same_file() {
+        let config_in_file_a = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "src/config.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let config_in_file_b = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "src/other/types.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustMethod,
+            name: "load".to_string(),
+            fqn: "Config::load".to_string(),
+            file_path: "src/config.rs".to_string(),
+            enclosing_class: Some("Config".to_string()),
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: vec![ReferenceIntent::TypeReference {
+                type_name: "Config".to_string(),
+                line: 10,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+
+        let config_a_uuid = config_in_file_a.uuid;
+        let config_b_uuid = config_in_file_b.uuid;
+
+        let mut entities = vec![config_in_file_a, config_in_file_b, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.last().unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(config_a_uuid, RelationshipType::References)),
+            "TypeReference should resolve to same-file Config"
+        );
+        assert!(
+            !caller_entity
+                .relationships
+                .contains(&(config_b_uuid, RelationshipType::References)),
+            "TypeReference should NOT resolve to other-file Config"
+        );
+    }
+
+    #[test]
+    fn test_type_reference_skips_when_ambiguous_no_hints() {
+        let config_file_a = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "src/a.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let config_file_b = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "src/b.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustFunction,
+            name: "do_work".to_string(),
+            fqn: "do_work".to_string(),
+            file_path: "src/c.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: vec![ReferenceIntent::TypeReference {
+                type_name: "Config".to_string(),
+                line: 5,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+
+        let mut entities = vec![config_file_a, config_file_b, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.last().unwrap();
+        assert_eq!(
+            caller_entity.relationships.len(),
+            0,
+            "Ambiguous TypeReference with no hints should NOT resolve"
+        );
+    }
+
+    #[test]
+    fn test_type_reference_enclosing_class_disambiguates() {
+        let config_struct = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "src/config.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let other_config = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "src/other.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustMethod,
+            name: "load".to_string(),
+            fqn: "Config::load".to_string(),
+            file_path: "src/other.rs".to_string(),
+            enclosing_class: Some("Config".to_string()),
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: vec![ReferenceIntent::TypeReference {
+                type_name: "Config".to_string(),
+                line: 10,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+
+        let config_uuid = config_struct.uuid;
+        let other_config_uuid = other_config.uuid;
+
+        let mut entities = vec![config_struct, other_config, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.last().unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(other_config_uuid, RelationshipType::References)),
+            "TypeReference should resolve via enclosing class match (same file)"
+        );
+        assert!(
+            !caller_entity
+                .relationships
+                .contains(&(config_uuid, RelationshipType::References)),
+            "TypeReference should NOT resolve to the other Config"
+        );
+    }
+
+    #[test]
+    fn test_extends_uses_same_ladder() {
+        let parent_in_same_file = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustTrait,
+            name: "MyTrait".to_string(),
+            fqn: "MyTrait".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let parent_other_file = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustTrait,
+            name: "MyTrait".to_string(),
+            fqn: "MyTrait".to_string(),
+            file_path: "src/other.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let child = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Child".to_string(),
+            fqn: "Child".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: vec![ReferenceIntent::Implements {
+                interface: "MyTrait".to_string(),
+                line: 5,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+
+        let same_uuid = parent_in_same_file.uuid;
+        let other_uuid = parent_other_file.uuid;
+
+        let mut entities = vec![parent_in_same_file, parent_other_file, child];
+        resolve_reference_intents(&mut entities);
+
+        let child_entity = entities.last().unwrap();
+        assert!(
+            child_entity
+                .relationships
+                .contains(&(same_uuid, RelationshipType::Implements)),
+            "Implements should prefer same-file trait"
+        );
+        assert!(
+            !child_entity
+                .relationships
+                .contains(&(other_uuid, RelationshipType::Implements)),
+            "Implements should NOT resolve to other-file trait"
+        );
+    }
+
+    #[test]
+    fn test_ambiguity_metric_increments() {
+        let config_a = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "a.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let config_b = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustStruct,
+            name: "Config".to_string(),
+            fqn: "Config".to_string(),
+            file_path: "b.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: Vec::new(),
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+        let caller = ResolutionEntity {
+            uuid: Uuid::new_v4(),
+            kind: EntityKind::RustFunction,
+            name: "work".to_string(),
+            fqn: "work".to_string(),
+            file_path: "c.rs".to_string(),
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: None,
+            reference_intents: vec![ReferenceIntent::TypeReference {
+                type_name: "Config".to_string(),
+                line: 1,
+            }],
+            relationships: Vec::new(),
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        };
+
+        let mut entities = vec![config_a, config_b, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.last().unwrap();
+        assert_eq!(
+            caller_entity.relationships.len(),
+            0,
+            "Ambiguous reference should not produce edge"
         );
     }
 }

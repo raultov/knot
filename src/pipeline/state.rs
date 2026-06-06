@@ -17,6 +17,14 @@ const STATE_DIR: &str = ".knot";
 /// State file name containing file hashes.
 const STATE_FILE: &str = "index_state.json";
 
+/// Current on-disk version of the index state file.
+///
+/// Bumping this number forces a clean re-index because earlier versions
+/// produced FQNs that are incompatible with the current schema (e.g. Rust
+/// entities now carry crate-qualified FQNs introduced in v2, and
+/// `__fixture::`/`__loose::` prefixed FQNs for non-src files in v3).
+const CURRENT_STATE_VERSION: u32 = 3;
+
 /// Returns the cache directory for fastembed models.
 /// Prioritises the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
 /// If not set, defaults to `<repo_path>/.knot/fastembed_cache/`.
@@ -44,14 +52,33 @@ pub enum FileStatus {
 pub type FileClassification = (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<String>);
 
 /// Persistent index state tracking file hashes.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexState {
+    /// Schema version of the on-disk state file. Versions older than
+    /// [`CURRENT_STATE_VERSION`] are treated as stale and force a full
+    /// re-index on load.
+    #[serde(default)]
+    pub version: u32,
     /// Map of file_path -> SHA-256 hash (hex string).
     pub file_hashes: HashMap<String, String>,
 }
 
+impl Default for IndexState {
+    fn default() -> Self {
+        Self {
+            version: CURRENT_STATE_VERSION,
+            file_hashes: HashMap::new(),
+        }
+    }
+}
+
 impl IndexState {
     /// Load the index state from disk, or return empty state if not found.
+    ///
+    /// Returns an error if the on-disk state has an older version than
+    /// [`CURRENT_STATE_VERSION`], because the FQN schema has changed and
+    /// the old index is incompatible. The caller should print instructions
+    /// and exit with code 1.
     pub fn load(repo_path: &str) -> Result<Self> {
         let state_path = Self::state_file_path(repo_path);
 
@@ -66,8 +93,19 @@ impl IndexState {
         let state: IndexState =
             serde_json::from_str(&content).context("Failed to deserialize index state JSON")?;
 
+        if state.version < CURRENT_STATE_VERSION {
+            anyhow::bail!(
+                "Detected index_state v{}; current version is v{}. \
+                 The on-disk index is incompatible.\n\
+                 Run `knot-indexer --clean` to rebuild from scratch.",
+                state.version,
+                CURRENT_STATE_VERSION
+            );
+        }
+
         info!(
-            "Loaded index state with {} tracked files",
+            "Loaded index state v{} with {} tracked files",
+            state.version,
             state.file_hashes.len()
         );
 
@@ -84,14 +122,20 @@ impl IndexState {
             format!("Failed to create state directory: {}", state_dir.display())
         })?;
 
-        let content = serde_json::to_string_pretty(self)
+        let to_persist = Self {
+            version: CURRENT_STATE_VERSION,
+            file_hashes: self.file_hashes.clone(),
+        };
+
+        let content = serde_json::to_string_pretty(&to_persist)
             .context("Failed to serialize index state to JSON")?;
 
         fs::write(&state_path, content)
             .with_context(|| format!("Failed to write state file: {}", state_path.display()))?;
 
         info!(
-            "Saved index state with {} tracked files",
+            "Saved index state v{} with {} tracked files",
+            CURRENT_STATE_VERSION,
             self.file_hashes.len()
         );
 
@@ -325,5 +369,106 @@ mod tests {
         assert_eq!(state.file_hashes.len(), 1);
         assert!(!state.file_hashes.contains_key(&path1));
         assert!(state.file_hashes.contains_key(&path2));
+    }
+
+    #[test]
+    fn test_default_state_uses_current_version() {
+        let state = IndexState::default();
+        assert_eq!(state.version, CURRENT_STATE_VERSION);
+        assert!(state.file_hashes.is_empty());
+    }
+
+    #[test]
+    fn test_save_writes_current_version() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let mut state = IndexState {
+            version: 0,
+            file_hashes: HashMap::new(),
+        };
+        state
+            .file_hashes
+            .insert("file1.rs".to_string(), "hash1".to_string());
+
+        state.save(repo_path).unwrap();
+
+        let state_file = dir.path().join(".knot").join("index_state.json");
+        let raw = fs::read_to_string(&state_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            parsed.get("version").and_then(|v| v.as_u64()),
+            Some(CURRENT_STATE_VERSION as u64)
+        );
+    }
+
+    #[test]
+    fn test_load_older_version_returns_error_with_instructions() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let state_dir = dir.path().join(".knot");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_file = state_dir.join("index_state.json");
+
+        let raw = r#"{
+            "version": 1,
+            "file_hashes": {
+                "/tmp/stale.rs": "abc123"
+            }
+        }"#;
+        fs::write(&state_file, raw).unwrap();
+
+        let err = IndexState::load(repo_path).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("incompatible"),
+            "error should mention incompatibility: {msg}"
+        );
+        assert!(
+            msg.contains("--clean"),
+            "error should suggest --clean flag: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_load_missing_version_treated_as_incompatible() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let state_dir = dir.path().join(".knot");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_file = state_dir.join("index_state.json");
+
+        let raw = r#"{
+            "file_hashes": {
+                "/tmp/legacy.rs": "deadbeef"
+            }
+        }"#;
+        fs::write(&state_file, raw).unwrap();
+
+        let err = IndexState::load(repo_path).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("incompatible"),
+            "missing version should be treated as incompatible: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_load_current_version_preserves_state() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let mut state = IndexState::default();
+        state
+            .file_hashes
+            .insert("file1.rs".to_string(), "hash1".to_string());
+        state.save(repo_path).unwrap();
+
+        let loaded = IndexState::load(repo_path).unwrap();
+        assert_eq!(loaded.version, CURRENT_STATE_VERSION);
+        assert_eq!(loaded.file_hashes.len(), 1);
+        assert_eq!(loaded.file_hashes.get("file1.rs").unwrap(), "hash1");
     }
 }

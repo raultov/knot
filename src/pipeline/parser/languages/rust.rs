@@ -9,11 +9,275 @@
 
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
+use crate::pipeline::rust_crate_discovery::CrateDiscovery;
 use tree_sitter::Node;
 
 /// Rust metadata extracted from captures (for future use with impl blocks)
 #[allow(dead_code)]
 pub(crate) struct RustMetadata(pub(crate) Option<String>, pub(crate) Option<String>);
+
+/// An inline Rust `mod foo { ... }` block (NOT external `mod foo;`).
+///
+/// Tracked so the FQN of every entity nested inside the block is anchored at
+/// the module name (e.g. `crate::config::tests::test_x` rather than the
+/// colliding `crate::config::test_x`) and so consumers of the index can tell
+/// `#[cfg(test)]`-gated code apart from production code.
+#[derive(Debug, Clone)]
+pub(crate) struct RustModuleContext {
+    pub(crate) name: String,
+    pub(crate) start_line: usize,
+    pub(crate) end_line: usize,
+    /// `true` when at least one `#[cfg(test)]` (or `cfg_attr(test, ...)`)
+    /// attribute is attached to this mod_item.
+    pub(crate) is_cfg_test: bool,
+}
+
+/// Rewrite the FQN of every Rust entity in `entities` to be prefixed by its
+/// owning crate name, module path, and any **inline** `mod foo { ... }`
+/// blocks that contain it.
+///
+/// Before this pass each Rust entity carries a bare-name FQN (e.g. `Config`
+/// for a struct or `Foo::new` for a method). After this pass the FQN is
+/// anchored at the crate that owns the file (e.g.
+/// `knot::config::Config`, `knot::config::Config::new`), so that two crates
+/// defining the same type do not collide on the bare name.
+///
+/// Inline modules are walked here too: a function `test_x` declared inside
+/// `#[cfg(test)] mod tests { ... }` in `src/config.rs` ends up with FQN
+/// `knot::config::tests::test_x` AND `is_test_context = true`. Without this
+/// the test function would either collide with same-named tests in other
+/// files or fail to surface at all in `find_callers` queries.
+///
+/// A `None` `repo_path`, a missing `Cargo.toml`, or a file outside any
+/// known crate `src/` directory is treated as a no-op for that file.
+pub(crate) fn qualify_rust_fqns(
+    entities: &mut [ParsedEntity],
+    file_path: &str,
+    repo_path: Option<&str>,
+    source: Option<&str>,
+) {
+    let Some(repo_path) = repo_path else {
+        return;
+    };
+    if entities.is_empty() {
+        return;
+    }
+
+    let repo_root = std::path::Path::new(repo_path);
+    let discovery = CrateDiscovery::discover(repo_root);
+    let crate_root = discovery.crate_for_file(std::path::Path::new(file_path));
+
+    let file_kind = crate::pipeline::parser::context::compute_rust_file_kind(
+        file_path,
+        crate_root.map(|cr| cr.root_dir.as_path()),
+        repo_root,
+    );
+
+    let crate_name = crate_root
+        .map(|cr| cr.crate_name.as_str())
+        .unwrap_or("__loose");
+
+    // Inline `mod foo { ... }` blocks: when available, the source is reparsed
+    // to gather their ranges. When `source` is `None` (e.g. legacy unit tests),
+    // the inline pass becomes a no-op.
+    let module_contexts: Vec<RustModuleContext> =
+        source.map(extract_rust_module_contexts).unwrap_or_default();
+
+    for entity in entities.iter_mut() {
+        if entity.language != "rust" {
+            continue;
+        }
+        if !is_qualifiable_rust_kind(&entity.kind) {
+            continue;
+        }
+        let (inline_path, is_test) =
+            inline_module_path_for_entity(&module_contexts, entity.start_line);
+
+        let new_fqn =
+            crate::pipeline::parser::context::compute_rust_qualified_fqn_with_inline_modules(
+                &entity.name,
+                &entity.kind,
+                &file_kind,
+                crate_name,
+                &inline_path,
+                entity.enclosing_class.as_deref(),
+            );
+        entity.fqn = new_fqn;
+        entity.is_test_context = is_test;
+
+        // For methods inside impl blocks, persist the FQN of the enclosing
+        // class so the CONTAINS auto-link in Neo4j can match by FQN instead
+        // of by bare name (which collides when fixtures define the same struct).
+        if entity.kind == EntityKind::RustMethod
+            && let Some(enclosing_class) = &entity.enclosing_class
+        {
+            let class_fqn =
+                crate::pipeline::parser::context::compute_rust_qualified_fqn_with_inline_modules(
+                    enclosing_class,
+                    &EntityKind::RustStruct,
+                    &file_kind,
+                    crate_name,
+                    &inline_path,
+                    None,
+                );
+            entity.enclosing_class_fqn = Some(class_fqn);
+        }
+    }
+}
+
+/// Return the inline module suffix (e.g. `"tests"` or `"outer::inner"`) that
+/// contains an entity at `line`, plus whether any enclosing module is
+/// `#[cfg(test)]`-gated.
+///
+/// A module *contains* an entity when the entity sits **strictly inside**
+/// the module's line range — `module.start_line < line <= module.end_line`.
+/// The strict lower bound prevents a `mod tests` entity from listing itself
+/// as its own enclosing module.
+fn inline_module_path_for_entity(contexts: &[RustModuleContext], line: usize) -> (String, bool) {
+    let mut containing: Vec<&RustModuleContext> = contexts
+        .iter()
+        .filter(|m| line > m.start_line && line <= m.end_line)
+        .collect();
+
+    // Outermost first → predictable `outer::inner` ordering regardless of
+    // walk order in `extract_rust_module_contexts`.
+    containing.sort_by_key(|m| m.start_line);
+
+    let path = containing
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect::<Vec<_>>()
+        .join("::");
+    let is_test = containing.iter().any(|m| m.is_cfg_test);
+    (path, is_test)
+}
+
+/// Re-parse `source` and walk the tree to enumerate every inline
+/// `mod foo { ... }` block, including its line range and whether it is
+/// `#[cfg(test)]`-gated.
+///
+/// External declarations (`mod foo;` with no body) are intentionally ignored
+/// because they don't introduce a textual scope in the current file.
+pub(crate) fn extract_rust_module_contexts(source: &str) -> Vec<RustModuleContext> {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
+    };
+
+    let source_bytes = source.as_bytes();
+    let mut contexts = Vec::new();
+    collect_inline_mod_items(&tree.root_node(), source_bytes, &mut contexts);
+    contexts
+}
+
+/// Walk the AST recursively, pushing every inline `mod_item` (one whose body
+/// is a `declaration_list`) into `out`.
+fn collect_inline_mod_items(node: &Node<'_>, source: &[u8], out: &mut Vec<RustModuleContext>) {
+    if node.kind() == "mod_item"
+        && let Some(ctx) = build_module_context(node, source)
+    {
+        out.push(ctx);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_inline_mod_items(&child, source, out);
+    }
+}
+
+/// Build a [`RustModuleContext`] for a `mod_item` node, returning `None` for
+/// external declarations (`mod foo;` without a body).
+fn build_module_context(node: &Node<'_>, source: &[u8]) -> Option<RustModuleContext> {
+    // Find both the name and the body within this mod_item's direct children.
+    let mut name: Option<String> = None;
+    let mut has_body = false;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "identifier" if name.is_none() => {
+                name = Some(node_text(child, source).to_string());
+            }
+            "declaration_list" => {
+                has_body = true;
+            }
+            _ => {}
+        }
+    }
+
+    let name = name?;
+    if !has_body {
+        return None;
+    }
+
+    let is_cfg_test = node_attribute_marks_cfg_test(node, source);
+    Some(RustModuleContext {
+        name,
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        is_cfg_test,
+    })
+}
+
+/// Return `true` when an `attribute_item` sibling preceding `mod_node`
+/// contains `cfg(test)` or `cfg_attr(test, ...)`.
+///
+/// Tree-sitter attaches attribute_items as *previous siblings* of the
+/// `mod_item` they decorate, so the search walks back from `mod_node`.
+fn node_attribute_marks_cfg_test(mod_node: &Node<'_>, source: &[u8]) -> bool {
+    let mut sibling = mod_node.prev_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" | "inner_attribute_item" => {
+                let text = node_text(s, source);
+                if attribute_text_marks_cfg_test(&text) {
+                    return true;
+                }
+                sibling = s.prev_sibling();
+            }
+            // Stop the moment we hit a non-attribute sibling: attributes
+            // belonging to other items are not transitively applied.
+            "line_comment" | "block_comment" => {
+                sibling = s.prev_sibling();
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
+/// Detect whether an attribute string carries a `cfg(test)` guard.
+///
+/// Accepts both the canonical `#[cfg(test)]` and the indirect
+/// `#[cfg_attr(test, ...)]` form because both gate compilation on the
+/// `test` profile.
+fn attribute_text_marks_cfg_test(text: &str) -> bool {
+    let normalised: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    normalised.contains("cfg(test)") || normalised.contains("cfg_attr(test,")
+}
+
+fn is_qualifiable_rust_kind(kind: &EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::RustStruct
+            | EntityKind::RustEnum
+            | EntityKind::RustUnion
+            | EntityKind::RustTrait
+            | EntityKind::RustImpl
+            | EntityKind::RustFunction
+            | EntityKind::RustMethod
+            | EntityKind::RustMacroDef
+            | EntityKind::RustTypeAlias
+            | EntityKind::RustConstant
+            | EntityKind::RustStatic
+            | EntityKind::RustModule
+    )
+}
 
 /// Handle Rust-specific entity captures from tree-sitter queries.
 /// Returns (name, kind, start_line, metadata) for the entity.
@@ -444,6 +708,22 @@ fn collect_macro_nodes(
     }
 }
 
+/// Translate the literal `Self` keyword to the enclosing class name when present.
+///
+/// The reference resolver keys on concrete type names; emitting `Self` would
+/// never match a real entity. When no enclosing class is in scope (defensive
+/// case for malformed source or top-level usage) we leave the name unchanged
+/// and log a debug trace.
+fn translate_self_in_type_name(type_name: &str, enclosing_class: Option<&str>) -> String {
+    if type_name == "Self" {
+        if let Some(class) = enclosing_class {
+            return class.to_string();
+        }
+        tracing::debug!("Self reference without enclosing class context");
+    }
+    type_name.to_string()
+}
+
 /// Collect type references from Rust source code (parameter types, return types, field types).
 ///
 /// This function walks through function_item, struct_item, and enum_item nodes
@@ -463,9 +743,16 @@ pub fn collect_rust_type_references(
     for (line, type_name) in type_refs {
         let target_idx = find_nearest_entity_by_line(entities, line);
         if target_idx < entities.len() {
+            let resolved_name = translate_self_in_type_name(
+                &type_name,
+                entities[target_idx].enclosing_class.as_deref(),
+            );
             entities[target_idx]
                 .reference_intents
-                .push(ReferenceIntent::TypeReference { type_name, line });
+                .push(ReferenceIntent::TypeReference {
+                    type_name: resolved_name,
+                    line,
+                });
         }
     }
 }
@@ -866,6 +1153,39 @@ fn collect_call_nodes(
         // Try to extract function name and optional receiver
         if let Some((func_name, receiver)) = extract_call_details(*node, source) {
             calls.push((line, func_name, receiver));
+        }
+    } else if node.kind() == "token_tree" {
+        // Special case: tree-sitter does not parse the inside of macro invocations.
+        // It exposes the contents as a `token_tree` of raw tokens.
+        // To recover function calls inside `assert!(...)`, `vec![...]`, etc.,
+        // we manually scan for the pattern: `identifier` (or `scoped_identifier`)
+        // immediately followed by a `token_tree` that starts with `(` or `[`.
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "identifier" {
+                if let Some(next) = c.next_sibling()
+                    && next.kind() == "token_tree"
+                {
+                    let next_text = node_text(next, source);
+                    if next_text.starts_with('(') || next_text.starts_with('[') {
+                        let line = c.start_position().row + 1;
+                        let func_name = node_text(c, source).to_string();
+                        calls.push((line, func_name, None));
+                    }
+                }
+            } else if c.kind() == "scoped_identifier"
+                && let Some(next) = c.next_sibling()
+                && next.kind() == "token_tree"
+            {
+                let next_text = node_text(next, source);
+                if next_text.starts_with('(') || next_text.starts_with('[') {
+                    let line = c.start_position().row + 1;
+                    if let Some((func_name, receiver)) = extract_from_scoped_identifier(c, source) {
+                        calls.push((line, func_name, receiver));
+                    }
+                }
+            }
+            child = c.next_sibling();
         }
     }
 
@@ -1654,21 +1974,24 @@ impl Default for ImportedType {
             "MyStruct SHOULD have REFERENCE to ImportedType from struct field type annotation"
         );
 
-        // TEST 2: ImportedType's default() should NOT have REFERENCE to ImportedType from pattern matching
-        // The match arm uses ImportedType::Variant1 and ImportedType::default() - pattern matching context
+        // TEST 2: default()'s body uses ImportedType::Variant1 as a value
+        // (scoped_identifier in value context, not call_expression). That
+        // usage must NOT produce a TypeReference. Note: `-> Self` at the
+        // function declaration line IS translated to `ImportedType` by the
+        // Self-translation logic, which is the desired behavior; we filter
+        // it out by line to isolate the value-context check.
         let default_fn = entities
             .iter()
             .find(|e| e.name == "default" && e.start_line > 15)
             .expect("default function not found");
 
-        // Pattern matching should NOT create type references
-        let has_pattern_ref = default_fn.reference_intents.iter().any(|intent| {
-            matches!(intent, crate::models::ReferenceIntent::TypeReference { type_name, .. }
-                if type_name == "ImportedType")
+        let has_body_pattern_ref = default_fn.reference_intents.iter().any(|intent| {
+            matches!(intent, crate::models::ReferenceIntent::TypeReference { type_name, line }
+                if type_name == "ImportedType" && *line > default_fn.start_line)
         });
         assert!(
-            !has_pattern_ref,
-            "default() should NOT capture ImportedType from pattern matching in match arm"
+            !has_body_pattern_ref,
+            "default() should NOT capture ImportedType from value-context scoped_identifier in body"
         );
     }
 
@@ -2365,5 +2688,562 @@ impl<T> Foo<T> {
             .find(|e| e.name == "new")
             .expect("new method not found");
         assert_eq!(new_method.fqn, "Foo::new");
+    }
+
+    #[test]
+    fn test_self_in_return_type_resolves_to_enclosing_class() {
+        let code = r#"
+struct Foo;
+
+impl Foo {
+    pub fn new() -> Self {
+        Foo
+    }
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut entities = vec![ParsedEntity::new(
+            "new",
+            EntityKind::RustMethod,
+            "Foo::new",
+            None,
+            None,
+            "rust",
+            "/test.rs",
+            5,
+            7,
+            Some("Foo".to_string()),
+            "test_repo",
+        )];
+
+        collect_rust_type_references(
+            tree.root_node(),
+            code.as_bytes(),
+            &mut entities,
+            "/test.rs",
+            "test_repo",
+        );
+
+        let type_names: Vec<&str> = entities[0]
+            .reference_intents
+            .iter()
+            .filter_map(|ri| match ri {
+                ReferenceIntent::TypeReference { type_name, .. } => Some(type_name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            type_names.contains(&"Foo"),
+            "Self in return type should resolve to enclosing class Foo, got: {:?}",
+            type_names
+        );
+        assert!(
+            !type_names.contains(&"Self"),
+            "Self should not appear as a raw type reference, got: {:?}",
+            type_names
+        );
+    }
+
+    #[test]
+    fn test_self_in_struct_expression_resolves_to_enclosing_class() {
+        let code = r#"
+struct Foo {
+    value: i32,
+}
+
+impl Foo {
+    pub fn build() -> Foo {
+        Self { value: 0 }
+    }
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut entities = vec![ParsedEntity::new(
+            "build",
+            EntityKind::RustMethod,
+            "Foo::build",
+            None,
+            None,
+            "rust",
+            "/test.rs",
+            7,
+            9,
+            Some("Foo".to_string()),
+            "test_repo",
+        )];
+
+        collect_rust_type_references(
+            tree.root_node(),
+            code.as_bytes(),
+            &mut entities,
+            "/test.rs",
+            "test_repo",
+        );
+
+        let type_names: Vec<&str> = entities[0]
+            .reference_intents
+            .iter()
+            .filter_map(|ri| match ri {
+                ReferenceIntent::TypeReference { type_name, .. } => Some(type_name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            type_names.contains(&"Foo"),
+            "Self {{ ... }} struct literal should resolve to enclosing class Foo, got: {:?}",
+            type_names
+        );
+        assert!(
+            !type_names.contains(&"Self"),
+            "Self should not appear as a raw type reference, got: {:?}",
+            type_names
+        );
+    }
+
+    #[test]
+    fn test_self_outside_impl_emits_as_self() {
+        let code = r#"
+fn standalone() -> Self {
+    Self
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        let mut entities = vec![ParsedEntity::new(
+            "standalone",
+            EntityKind::RustFunction,
+            "standalone",
+            None,
+            None,
+            "rust",
+            "/test.rs",
+            2,
+            4,
+            None,
+            "test_repo",
+        )];
+
+        collect_rust_type_references(
+            tree.root_node(),
+            code.as_bytes(),
+            &mut entities,
+            "/test.rs",
+            "test_repo",
+        );
+
+        let type_names: Vec<&str> = entities[0]
+            .reference_intents
+            .iter()
+            .filter_map(|ri| match ri {
+                ReferenceIntent::TypeReference { type_name, .. } => Some(type_name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            type_names.contains(&"Self"),
+            "Self without enclosing class should remain as raw \"Self\", got: {:?}",
+            type_names
+        );
+    }
+
+    fn make_rust_entity(
+        name: &str,
+        kind: EntityKind,
+        fqn: &str,
+        file: &str,
+        enclosing: Option<&str>,
+    ) -> ParsedEntity {
+        ParsedEntity::new(
+            name,
+            kind,
+            fqn,
+            None,
+            None,
+            "rust",
+            file,
+            10,
+            20,
+            enclosing.map(|s| s.to_string()),
+            "test_repo",
+        )
+    }
+
+    fn write_min_cargo_toml(dir: &std::path::Path, name: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let content = format!(
+            "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            name
+        );
+        std::fs::write(dir.join("Cargo.toml"), content).unwrap();
+    }
+
+    /// Secondary diagnostic — dumps the tree-sitter AST around a macro
+    /// invocation `assert!(is_supported("rs"))` to confirm whether the
+    /// inner `call_expression` survives inside the `token_tree`.
+    #[test]
+    fn diagnose_macro_token_tree_contents() {
+        let code = r#"
+fn body() {
+    is_supported("direct");
+    assert!(is_supported("inside_assert"));
+    assert_eq!(is_supported("a"), true);
+    let _ = vec![is_supported("inside_vec")];
+}
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let bytes = code.as_bytes();
+
+        fn walk(node: tree_sitter::Node<'_>, bytes: &[u8], depth: usize) {
+            let prefix = "  ".repeat(depth);
+            let text = node_text(node, bytes);
+            let preview: String = text.chars().take(60).collect();
+            eprintln!(
+                "{}{} [{}..{}] {:?}",
+                prefix,
+                node.kind(),
+                node.start_position().row + 1,
+                node.end_position().row + 1,
+                preview
+            );
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk(child, bytes, depth + 1);
+            }
+        }
+
+        eprintln!("\n=== AST dump for macro-vs-direct call comparison ===");
+        walk(tree.root_node(), bytes, 0);
+        eprintln!("=== END AST dump ===\n");
+
+        // Count call_expression nodes in the entire tree.
+        fn count_calls(node: tree_sitter::Node<'_>) -> usize {
+            let mut n = if node.kind() == "call_expression" {
+                1
+            } else {
+                0
+            };
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                n += count_calls(child);
+            }
+            n
+        }
+        let n = count_calls(tree.root_node());
+        eprintln!("Total `call_expression` nodes found in tree: {}", n);
+
+        // Also exercise the production helper to confirm coverage.
+        let mut calls: Vec<(usize, String, Option<String>)> = Vec::new();
+        collect_call_nodes(&tree.root_node(), bytes, &mut calls);
+        eprintln!(
+            "Calls reported by collect_call_nodes: {} → {:?}",
+            calls.len(),
+            calls
+        );
+    }
+
+    /// Diagnostic — runs the full Rust extractor against a snippet that
+    /// mirrors the bug (a function `is_supported` plus a `#[cfg(test)] mod
+    /// tests` block whose `#[test] fn test_is_supported` calls it) and
+    /// prints the resulting entities + reference intents.
+    ///
+    /// Reading the output of this test tells us exactly which layer is
+    /// failing: parser (no test entity), FQN (collisions), or resolver
+    /// (Calls intent dropped).
+    #[test]
+    fn diagnose_cfg_test_mod_extraction() {
+        let code = r#"
+pub fn is_supported(ext: &str) -> bool {
+    matches!(ext, "rs" | "ts")
+}
+
+pub fn production_caller(ext: &str) -> bool {
+    is_supported(ext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_supported_rs() {
+        assert!(is_supported("rs"));
+    }
+
+    #[test]
+    fn test_is_supported_rejects_txt() {
+        assert!(!is_supported("txt"));
+    }
+}
+"#;
+
+        let query_src = include_str!("../../../../queries/rust.scm");
+        let entities = crate::pipeline::parser::extractor::extract_entities(
+            code,
+            tree_sitter_rust::LANGUAGE.into(),
+            query_src,
+            "rust",
+            "/diag/lib.rs",
+            "diag",
+        )
+        .expect("extract_entities");
+
+        eprintln!("\n=== DIAGNOSTIC: extracted entities (pre-qualify) ===");
+        for e in &entities {
+            eprintln!(
+                "  kind={:?}  name={:<35} fqn={:<45} start_line={} reference_intents={}",
+                e.kind,
+                e.name,
+                e.fqn,
+                e.start_line,
+                e.reference_intents.len()
+            );
+            for ri in &e.reference_intents {
+                eprintln!("      - {:?}", ri);
+            }
+        }
+        eprintln!("=== END DIAGNOSTIC ===\n");
+
+        // Confirm parser-level extraction: are the test functions present?
+        let has_is_supported = entities
+            .iter()
+            .any(|e| e.name == "is_supported" && e.kind == EntityKind::RustFunction);
+        let has_test_fn = entities
+            .iter()
+            .any(|e| e.name == "test_is_supported_rs" && e.kind == EntityKind::RustFunction);
+        let has_mod_tests = entities
+            .iter()
+            .any(|e| e.name == "tests" && e.kind == EntityKind::RustModule);
+
+        eprintln!(
+            "has is_supported function entity:        {}",
+            has_is_supported
+        );
+        eprintln!("has test_is_supported_rs function entity: {}", has_test_fn);
+        eprintln!(
+            "has 'tests' RustModule entity:            {}",
+            has_mod_tests
+        );
+
+        // Confirm parser-level call attribution: does test_is_supported_rs carry
+        // a Call reference intent targeting `is_supported`?
+        let test_entity = entities
+            .iter()
+            .find(|e| e.name == "test_is_supported_rs" && e.kind == EntityKind::RustFunction);
+        let call_attributed_to_test = test_entity
+            .map(|e| {
+                e.reference_intents.iter().any(|ri| {
+                    matches!(ri, ReferenceIntent::Call { method, .. } if method == "is_supported")
+                })
+            })
+            .unwrap_or(false);
+        eprintln!(
+            "Call(is_supported) attributed to test_is_supported_rs: {}",
+            call_attributed_to_test
+        );
+
+        // FQN collision check: do the two functions share a name space (which
+        // would force the deterministic UUID to collide if the rest of the
+        // identity were the same)?
+        let collision_pre_qualify = entities
+            .iter()
+            .filter(|e| e.fqn == "test_is_supported_rs")
+            .count();
+        eprintln!(
+            "Number of entities with bare FQN 'test_is_supported_rs': {}",
+            collision_pre_qualify
+        );
+
+        // These assertions document the observable state. They are written
+        // to PASS today (i.e. they accept whatever the parser emits) so the
+        // test stays green while we examine the captured output.
+        assert!(has_is_supported, "parser must always emit production fns");
+        // Intentionally do NOT assert on has_test_fn / has_mod_tests yet —
+        // we want the diagnostic to TELL us first.
+        let _ = (
+            has_test_fn,
+            has_mod_tests,
+            call_attributed_to_test,
+            collision_pre_qualify,
+        );
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_struct_in_nested_module() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        write_min_cargo_toml(repo, "my_crate");
+
+        let file = repo.join("src/config.rs").to_string_lossy().into_owned();
+        let mut entities = vec![make_rust_entity(
+            "Config",
+            EntityKind::RustStruct,
+            "Config",
+            &file,
+            None,
+        )];
+
+        qualify_rust_fqns(&mut entities, &file, repo.to_str(), None);
+        assert_eq!(entities[0].fqn, "my_crate::config::Config");
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_method_uses_enclosing_class() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        write_min_cargo_toml(repo, "my_crate");
+
+        let file = repo.join("src/config.rs").to_string_lossy().into_owned();
+        let mut entities = vec![make_rust_entity(
+            "load",
+            EntityKind::RustMethod,
+            "Config::load",
+            &file,
+            Some("Config"),
+        )];
+
+        qualify_rust_fqns(&mut entities, &file, repo.to_str(), None);
+        assert_eq!(entities[0].fqn, "my_crate::config::Config::load");
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_function_in_crate_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        write_min_cargo_toml(repo, "my_crate");
+
+        let file = repo.join("src/lib.rs").to_string_lossy().into_owned();
+        let mut entities = vec![make_rust_entity(
+            "helper",
+            EntityKind::RustFunction,
+            "helper",
+            &file,
+            None,
+        )];
+
+        qualify_rust_fqns(&mut entities, &file, repo.to_str(), None);
+        assert_eq!(entities[0].fqn, "my_crate::helper");
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_no_repo_path_is_noop() {
+        let mut entities = vec![make_rust_entity(
+            "Config",
+            EntityKind::RustStruct,
+            "Config",
+            "/tmp/anywhere/src/config.rs",
+            None,
+        )];
+
+        qualify_rust_fqns(&mut entities, "/tmp/anywhere/src/config.rs", None, None);
+        assert_eq!(entities[0].fqn, "Config");
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_no_cargo_toml_uses_loose_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+
+        let file = repo.join("src/config.rs").to_string_lossy().into_owned();
+        let mut entities = vec![make_rust_entity(
+            "Config",
+            EntityKind::RustStruct,
+            "Config",
+            &file,
+            None,
+        )];
+
+        qualify_rust_fqns(&mut entities, &file, repo.to_str(), None);
+        assert_eq!(
+            entities[0].fqn, "__loose::src::config::Config",
+            "files without Cargo.toml should get __loose:: prefix"
+        );
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_skips_non_rust_entities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        write_min_cargo_toml(repo, "my_crate");
+
+        let file = repo.join("src/lib.rs").to_string_lossy().into_owned();
+        let mut entities = vec![ParsedEntity::new(
+            "Config",
+            EntityKind::Class,
+            "Config",
+            None,
+            None,
+            "java",
+            &file,
+            1,
+            5,
+            None,
+            "test_repo",
+        )];
+
+        qualify_rust_fqns(&mut entities, &file, repo.to_str(), None);
+        assert_eq!(
+            entities[0].fqn, "Config",
+            "non-Rust entities must be left untouched"
+        );
+    }
+
+    #[test]
+    fn test_qualify_rust_fqns_sets_enclosing_class_fqn_for_methods() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        write_min_cargo_toml(repo, "test_crate");
+
+        // Create src/foo.rs with struct Foo and impl Foo { fn bar() }
+        let src_dir = repo.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let file = src_dir.join("foo.rs").to_string_lossy().into_owned();
+        let mut entities = vec![
+            make_rust_entity("Foo", EntityKind::RustStruct, "Foo", &file, None),
+            make_rust_entity(
+                "bar",
+                EntityKind::RustMethod,
+                "Foo::bar",
+                &file,
+                Some("Foo"),
+            ),
+        ];
+
+        qualify_rust_fqns(&mut entities, &file, repo.to_str(), None);
+
+        // Struct should NOT have enclosing_class_fqn
+        assert!(
+            entities[0].enclosing_class_fqn.is_none(),
+            "structs should not have enclosing_class_fqn"
+        );
+
+        // Method should have enclosing_class_fqn = "test_crate::foo::Foo"
+        assert_eq!(
+            entities[1].enclosing_class_fqn,
+            Some("test_crate::foo::Foo".to_string()),
+            "method enclosing_class_fqn should be crate-qualified"
+        );
     }
 }

@@ -885,7 +885,9 @@ pub(crate) fn extract_jsx_html_attributes(
                     lifetimes: None,
                     alias_module_path: None,
                     original_export_name: None,
+                    enclosing_class_fqn: None,
                     default_export: None,
+                    is_test_context: false,
                 });
             } else if attr_name == "className" {
                 // Split by whitespace and create HtmlClass entity for each class
@@ -917,7 +919,9 @@ pub(crate) fn extract_jsx_html_attributes(
                             lifetimes: None,
                             alias_module_path: None,
                             original_export_name: None,
+                            enclosing_class_fqn: None,
                             default_export: None,
+                            is_test_context: false,
                         });
                     }
                 }

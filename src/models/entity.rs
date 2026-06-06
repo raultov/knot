@@ -278,10 +278,25 @@ pub struct ParsedEntity {
     /// `None` for class/interface entities and top-level functions.
     pub enclosing_class: Option<String>,
 
+    /// Fully qualified name of the enclosing class for CONTAINS disambiguation.
+    /// When set, the Neo4j CONTAINS auto-link uses this FQN to match the exact
+    /// parent entity instead of matching by bare `name`, which can collide
+    /// when multiple entities share the same class name (e.g. fixtures vs real).
+    /// Populated by language-specific qualifier passes; `None` for non-Rust or
+    /// when the enclosing class FQN is unknown.
+    pub enclosing_class_fqn: Option<String>,
+
     /// Logical repository name for multi-repository isolation.
     /// Used to separate entities from different codebases in shared databases.
     /// Example: "my-java-repo", "my-typescript-repo", "my-microservice"
     pub repo_name: String,
+
+    /// `true` when this entity lives under a Rust `#[cfg(test)]` module
+    /// (or any nesting depth of such modules). Surfaced as a Neo4j property
+    /// so MCP consumers can distinguish callers/callees that come from
+    /// test code (living documentation) versus production code.
+    /// Always `false` for non-Rust languages.
+    pub is_test_context: bool,
 
     /// Raw reference intents extracted from this entity.
     /// Populated during the parse stage; may be empty if no references were found.
@@ -316,12 +331,14 @@ pub struct ResolutionEntity {
     pub file_path: String,
     pub kind: EntityKind,
     pub enclosing_class: Option<String>,
+    pub enclosing_class_fqn: Option<String>,
     pub signature: Option<String>,
     pub reference_intents: Vec<ReferenceIntent>,
     pub relationships: Vec<(Uuid, RelationshipType)>,
     pub alias_module_path: Option<String>,
     pub original_export_name: Option<String>,
     pub default_export: Option<String>,
+    pub is_test_context: bool,
 }
 
 impl From<&ParsedEntity> for ResolutionEntity {
@@ -333,12 +350,14 @@ impl From<&ParsedEntity> for ResolutionEntity {
             file_path: entity.file_path.clone(),
             kind: entity.kind.clone(),
             enclosing_class: entity.enclosing_class.clone(),
+            enclosing_class_fqn: entity.enclosing_class_fqn.clone(),
             signature: entity.signature.clone(),
             reference_intents: entity.reference_intents.clone(),
             relationships: Vec::new(),
             alias_module_path: entity.alias_module_path.clone(),
             original_export_name: entity.original_export_name.clone(),
             default_export: entity.default_export.clone(),
+            is_test_context: entity.is_test_context,
         }
     }
 }
@@ -406,6 +425,8 @@ impl ParsedEntity {
             alias_module_path: None,
             original_export_name: None,
             default_export: None,
+            enclosing_class_fqn: None,
+            is_test_context: false,
             embed_text: String::new(),
         }
     }

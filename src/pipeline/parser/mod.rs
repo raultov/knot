@@ -61,6 +61,11 @@ pub struct ParseConfig {
     /// Whether to index configuration files (YAML, JSON, .properties) and
     /// Kubernetes/Helm manifests. When `false`, these files produce no entities.
     pub include_config_files: bool,
+    /// Filesystem root of the repository being indexed. Required by Rust
+    /// post-processing to discover `Cargo.toml` files and compute crate
+    /// qualified FQNs (e.g. `crate_a::config::Config`). When `None`, Rust
+    /// FQNs fall back to their bare-name form.
+    pub repo_path: Option<String>,
 }
 
 /// Parse a collection of source files in parallel and send results through a channel.
@@ -349,14 +354,21 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
         }
         "rs" => {
             let query_src = load_query_source("rust.scm", DEFAULT_RUST_QUERY, parse_cfg);
-            extractor::extract_entities(
+            let mut rust_entities = extractor::extract_entities(
                 &source,
                 tree_sitter_rust::LANGUAGE.into(),
                 &query_src,
                 "rust",
                 &file_path,
                 &parse_cfg.repo_name,
-            )?
+            )?;
+            languages::rust::qualify_rust_fqns(
+                &mut rust_entities,
+                &file_path,
+                parse_cfg.repo_path.as_deref(),
+                Some(&source),
+            );
+            rust_entities
         }
         "c" => {
             let query_src = load_query_source("c.scm", DEFAULT_C_QUERY, parse_cfg);
@@ -552,6 +564,7 @@ mod tests {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         assert_eq!(cfg.repo_name, "test-repo");
@@ -564,6 +577,7 @@ mod tests {
             custom_queries_path: Some("/custom/queries".to_string()),
             repo_name: "my-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         assert_eq!(cfg.repo_name, "my-repo");
@@ -576,6 +590,7 @@ mod tests {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         let default_query = "MATCH (n) RETURN n";
@@ -590,6 +605,7 @@ mod tests {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         let default_query = "MATCH (n) RETURN n";
@@ -605,6 +621,7 @@ mod tests {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         let files: Vec<PathBuf> = vec![];
@@ -622,6 +639,7 @@ mod tests {
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         // Use an empty list since we can't create real files in unit tests
@@ -775,6 +793,7 @@ int bar(const char *s);
             custom_queries_path: None,
             repo_name: "myproject".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         let path = PathBuf::from("/src/Main.java");
@@ -791,6 +810,7 @@ int bar(const char *s);
             custom_queries_path: None,
             repo_name: "test-repo".to_string(),
             include_config_files: true,
+            repo_path: None,
         };
 
         let files: Vec<PathBuf> = vec![];
