@@ -12,25 +12,32 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="f7dc5354-6db5-48f4-87f7-585e475ee2c1" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/AGENTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/AGENTS.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CHANGELOG.md" beforeDir="false" afterPath="$PROJECT_DIR$/CHANGELOG.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/cli_tools/explore_file.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/cli_tools/explore_file.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/cli_tools/find_callers.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/cli_tools/find_callers.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/cli_tools/formatters/table.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/cli_tools/formatters/table.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/db/graph/query.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/db/graph/query.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/benches/channel_backpressure_bench.rs" beforeDir="false" afterPath="$PROJECT_DIR$/benches/channel_backpressure_bench.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/benches/graph_upsert_bench.rs" beforeDir="false" afterPath="$PROJECT_DIR$/benches/graph_upsert_bench.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/benches/pipeline_bench.rs" beforeDir="false" afterPath="$PROJECT_DIR$/benches/pipeline_bench.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/specs/rust_qualified_calls_fix_plan.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/bin/knot-indexer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/bin/knot-indexer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/db/graph/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/db/graph/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/db/graph/upsert.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/db/graph/upsert.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/db/vector/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/db/vector/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/models/entity.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/models/entity.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline/ingest/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/ingest/mod.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/pipeline/ingest/resolve.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/ingest/resolve.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/mod.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/pipeline/parser/context.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/context.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/extractor.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/extractor.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/languages/java.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/languages/java.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/languages/html.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/languages/html.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/pipeline/parser/languages/javascript.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/languages/javascript.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/languages/kotlin.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/languages/kotlin.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/pipeline/parser/languages/rust.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/languages/rust.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/languages/typescript.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/languages/typescript.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/test_utils.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/test_utils.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/run_e2e.sh" beforeDir="false" afterPath="$PROJECT_DIR$/tests/run_e2e.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/run_rust_e2e.sh" beforeDir="false" afterPath="$PROJECT_DIR$/tests/run_rust_e2e.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/testing_files/sample.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/testing_files/sample.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline/parser/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/parser/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline/runner.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/runner.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline/state.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline/state.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/run_all_e2e.sh" beforeDir="false" afterPath="$PROJECT_DIR$/tests/run_all_e2e.sh" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -56,30 +63,30 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.MCP Project settings loaded": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.rust.reset.selective.auto.import": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "master",
-    "junie.onboarding.icon.badge.shown": "true",
-    "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "/home/raul/workspace/rust/knot",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
-    "org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon": "",
-    "to.speed.mode.migration.done": "true",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.rust.reset.selective.auto.import&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/raul/workspace/rust/knot&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;org.rust.cargo.project.model.PROJECT_DISCOVERY&quot;: &quot;true&quot;,
+    &quot;org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon&quot;: &quot;&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RustProjectSettings">
     <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
   </component>
@@ -99,7 +106,7 @@
       <option name="presentableId" value="Default" />
       <updated>1780679373331</updated>
       <workItem from="1780679374530" duration="81000" />
-      <workItem from="1780679505134" duration="11333000" />
+      <workItem from="1780679505134" duration="12022000" />
     </task>
     <servers />
   </component>

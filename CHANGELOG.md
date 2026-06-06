@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.3.13 — Rust Macro Call Resolution & Test Context Tracking
+
+- ✅ **Fixed AST Blind Spot (Macro Calls)**: The AST extractor now descends into `token_tree` nodes to recover function calls wrapped in macros (e.g., `assert!(...)`, `vec![...]`, `println!(...)`). This rescues thousands of missing references across codebases and drastically improves `find_callers` accuracy for both test suites and production code.
+- ✅ **Test Context Tracking**: Added the `is_test_context` boolean flag to entities. The indexer now tracks `#[cfg(test)]` and `#[cfg_attr(test, ...)]` module boundaries, propagating this flag to Neo4j so MCP clients can visually distinguish test-driven references from production usages.
+- ✅ **Inline Module FQNs**: Entities declared inside inline modules (`mod tests { ... }`) now include the inline path in their FQN (e.g., `crate::module::tests::test_foo`). This stops name collisions between identical test functions defined in different files.
+- ✅ **1 New E2E Test Suite**: `run_rust_test_module_e2e.sh` validates FQN isolation, test flags, and macro-wrapped call resolutions end-to-end.
+- ✅ **cargo fmt** clean | **cargo clippy** clean (repaired 4 warnings) | **717 unit tests** passing
+- ✅ **12/12 E2E test suites pass**
+
+---
+
 ## v1.3.12 — Rust Qualified-Call Resolution & Import/Use Relationship Capture
 
 - ✅ **Rust method FQN is now `Type::method`**: Methods inside `impl Foo { ... }`

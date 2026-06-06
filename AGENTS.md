@@ -95,6 +95,28 @@ Parallel Streams (MPSC channels for CPU/IO overlap)
 
 ---
 
+## Rust FQN Canonical Format
+
+All Rust entity FQNs are anchored at the owning crate and module path:
+
+```
+<crate_name>::<module_path>::<EntityName>
+<crate_name>::<module_path>::<Type>::<method>
+```
+
+- **Crate name**: `[package].name` from `Cargo.toml` (dashes → underscores).
+- **Module path**: Derived from file path relative to `src/`:
+  - `src/lib.rs`, `src/main.rs` → root (no suffix)
+  - `src/foo.rs` → `foo`
+  - `src/foo/mod.rs` → `foo`
+  - `src/foo/bar.rs` → `foo::bar`
+- **Fixtures** without `Cargo.toml`: `__fixture::<path>::Entity`
+- **Loose files** without crate root: `__loose::<filename>::Entity`
+
+Crate discovery runs before parsing and maps each `.rs` file to its nearest `Cargo.toml` ancestor. The `index_state.json` carries a `version` field; opening a v1 state file forces a full re-index automatically.
+
+---
+
 ## Testing Strategy
 
 ### Philosophy
