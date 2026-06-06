@@ -93,9 +93,13 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
             };
             for entity in arr {
                 total_refs += 1;
+                // Prefer target_fqn when available (qualified identifiers
+                // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
                 let target = entity
-                    .get("target_name")
+                    .get("target_fqn")
                     .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| entity.get("target_name").and_then(|v| v.as_str()))
                     .unwrap_or(entity_name);
                 let caller = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
                 let file = entity
@@ -130,7 +134,7 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
     header + &table.to_string()
 }
 
-pub fn format_explore_table(file_path: &str, entities: &Value) -> String {
+pub fn format_explore_table(file_path: &str, result: &Value) -> String {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::DynamicFullWidth);
     table.set_header(vec![
@@ -144,52 +148,61 @@ pub fn format_explore_table(file_path: &str, entities: &Value) -> String {
         Cell::new("Signature / Doc").fg(Color::White),
     ]);
 
-    if let Some(arr) = entities.as_array() {
-        for entity in arr {
-            let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("-");
-            let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-            let line = entity
-                .get("start_line")
-                .and_then(|v| v.as_i64())
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
+    let arr = if let Some(obj) = result.as_object() {
+        obj.get("entities")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    } else if let Some(a) = result.as_array() {
+        a.clone()
+    } else {
+        Vec::new()
+    };
 
-            let sig_or_doc = entity
-                .get("signature")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    entity
-                        .get("docstring")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.trim().is_empty())
-                        .map(|s| s.lines().next().unwrap_or("").to_string())
-                })
-                .unwrap_or_else(|| "-".to_string());
+    for entity in &arr {
+        let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("-");
+        let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
+        let line = entity
+            .get("start_line")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string());
 
-            let kind_color = match kind {
-                "class" | "python_class" => Color::Yellow,
-                "interface" => Color::Cyan,
-                "method" | "function" | "python_method" | "python_function" => Color::Blue,
-                "variable" | "field" => Color::Magenta,
-                _ => Color::White,
-            };
+        let sig_or_doc = entity
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                entity
+                    .get("docstring")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.lines().next().unwrap_or("").to_string())
+            })
+            .unwrap_or_else(|| "-".to_string());
 
-            table.add_row(vec![
-                Cell::new(kind).fg(kind_color),
-                Cell::new(name),
-                Cell::new(line).set_alignment(CellAlignment::Right),
-                Cell::new(sig_or_doc),
-            ]);
-        }
+        let kind_color = match kind {
+            "class" | "python_class" => Color::Yellow,
+            "interface" => Color::Cyan,
+            "method" | "function" | "python_method" | "python_function" => Color::Blue,
+            "variable" | "field" => Color::Magenta,
+            _ => Color::White,
+        };
+
+        table.add_row(vec![
+            Cell::new(kind).fg(kind_color),
+            Cell::new(name),
+            Cell::new(line).set_alignment(CellAlignment::Right),
+            Cell::new(sig_or_doc),
+        ]);
     }
 
     if table.row_iter().count() == 0 {
         return format!("No entities found in `{}`.\n", file_path);
     }
 
-    let count = entities.as_array().map(|a| a.len()).unwrap_or(0);
+    let count = arr.len();
     let header = format!("Entities in `{}` ({} found)\n", file_path, count);
     header + &table.to_string()
 }

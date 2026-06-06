@@ -43,6 +43,11 @@ pub trait QueryExt {
         artifact_id: &str,
         build_system: &str,
     ) -> Result<Option<String>>;
+    async fn get_file_outgoing_references(
+        &self,
+        file_path: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value>;
     #[allow(clippy::too_many_arguments)]
     async fn get_entity_subgraph(
         &self,
@@ -154,12 +159,13 @@ impl QueryExt for GraphDb {
                 format!(
                     "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
                      WHERE target.repo_name = $repo_name
-                       AND (target.name = $name 
+                       AND (target.name = $name
                         OR target.fqn = $name
                         OR target.fqn CONTAINS $name
                         OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
                      RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
-                            target.name as target_name, target.file_path as target_file_path,
+                            target.name as target_name, target.fqn as target_fqn,
+                            target.file_path as target_file_path,
                             target.start_line as target_start_line, target.signature as target_signature"
                 )
             } else {
@@ -170,7 +176,8 @@ impl QueryExt for GraphDb {
                         OR target.fqn CONTAINS $name
                         OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
                      RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
-                            target.name as target_name, target.file_path as target_file_path,
+                            target.name as target_name, target.fqn as target_fqn,
+                            target.file_path as target_file_path,
                             target.start_line as target_start_line, target.signature as target_signature"
                 )
             };
@@ -193,6 +200,7 @@ impl QueryExt for GraphDb {
                     "start_line": row.get::<i64>("entity.start_line").ok(),
                     "signature": row.get::<String>("entity.signature").ok(),
                     "target_name": row.get::<String>("target_name").ok(),
+                    "target_fqn": row.get::<String>("target_fqn").ok(),
                     "target_file_path": row.get::<String>("target_file_path").ok(),
                     "target_start_line": row.get::<i64>("target_start_line").ok(),
                     "target_signature": row.get::<String>("target_signature").ok(),
@@ -300,6 +308,64 @@ impl QueryExt for GraphDb {
                 "decorators": decorators,
             });
             results.push(entity_json);
+        }
+
+        Ok(serde_json::json!(results))
+    }
+
+    async fn get_file_outgoing_references(
+        &self,
+        file_path: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut results = Vec::new();
+
+        let query_str = if repo_name.is_some() {
+            "MATCH (src:Entity {file_path: $file_path, repo_name: $repo_name})
+                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+                  (dst:Entity)
+             WHERE dst.file_path <> $file_path OR dst.repo_name <> $repo_name
+             RETURN type(r) AS rel,
+                    dst.name AS name,
+                    dst.kind AS kind,
+                    dst.file_path AS file_path,
+                    dst.start_line AS line
+             ORDER BY rel, name"
+                .to_string()
+        } else {
+            "MATCH (src:Entity {file_path: $file_path})
+                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+                  (dst:Entity)
+             WHERE dst.file_path <> $file_path
+             RETURN type(r) AS rel,
+                    dst.name AS name,
+                    dst.kind AS kind,
+                    dst.file_path AS file_path,
+                    dst.start_line AS line
+             ORDER BY rel, name"
+                .to_string()
+        };
+
+        let mut q = query(&query_str).param("file_path", file_path);
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for file outgoing references")?;
+
+        while let Ok(Some(row)) = rows.next().await {
+            let entry = serde_json::json!({
+                "rel": row.get::<String>("rel").ok(),
+                "name": row.get::<String>("name").ok(),
+                "kind": row.get::<String>("kind").ok(),
+                "file_path": row.get::<String>("file_path").ok(),
+                "line": row.get::<i64>("line").ok(),
+            });
+            results.push(entry);
         }
 
         Ok(serde_json::json!(results))

@@ -44,6 +44,9 @@ pub(crate) fn collect_all_reference_intents_java(
                 intents.push((ReferenceIntent::TypeReference { type_name, line }, byte_pos));
             }
         }
+        "import_declaration" => {
+            collect_import_intents_java(node, source, intents, byte_pos, line);
+        }
         _ => {}
     }
 
@@ -52,6 +55,82 @@ pub(crate) fn collect_all_reference_intents_java(
     while let Some(c) = child {
         collect_all_reference_intents_java(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+fn collect_import_intents_java(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    byte_pos: usize,
+    line: usize,
+) {
+    let has_wildcard = node
+        .children(&mut node.walk())
+        .any(|c| c.kind() == "asterisk");
+    if has_wildcard {
+        return;
+    }
+
+    let is_static = node
+        .children(&mut node.walk())
+        .any(|c| c.kind() == "static");
+
+    let mut idents: Vec<String> = Vec::new();
+    fn collect_scoped_idents(n: Node<'_>, source: &[u8], out: &mut Vec<String>) {
+        let mut child = n.child(0);
+        while let Some(c) = child {
+            if c.kind() == "identifier" {
+                out.push(node_text(c, source));
+            } else if c.kind() == "scoped_identifier" {
+                collect_scoped_idents(c, source, out);
+            }
+            child = c.next_sibling();
+        }
+    }
+
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "scoped_identifier" {
+            collect_scoped_idents(c, source, &mut idents);
+            break;
+        }
+        child = c.next_sibling();
+    }
+
+    if idents.is_empty() {
+        return;
+    }
+
+    if is_static && idents.len() >= 2 {
+        let class_name = idents[idents.len() - 2].clone();
+        let member_name = idents.last().unwrap().clone();
+        if class_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            intents.push((
+                ReferenceIntent::TypeReference {
+                    type_name: class_name,
+                    line,
+                },
+                byte_pos,
+            ));
+        }
+        intents.push((
+            ReferenceIntent::ValueReference {
+                value_name: member_name,
+                line,
+            },
+            byte_pos,
+        ));
+    } else if let Some(name) = idents.last()
+        && name.chars().next().is_some_and(|c| c.is_uppercase())
+    {
+        intents.push((
+            ReferenceIntent::TypeReference {
+                type_name: name.clone(),
+                line,
+            },
+            byte_pos,
+        ));
     }
 }
 
@@ -691,5 +770,68 @@ mod tests {
         let mut intents = Vec::new();
         extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
         assert!(intents.is_empty());
+    }
+
+    #[test]
+    fn test_import_class_emits_type_reference() {
+        let code = "import com.example.Foo;\n\nclass Bar {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::TypeReference { type_name, .. } => type_name == "Foo",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit TypeReference for Foo from import, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_static_emits_type_and_value_reference() {
+        let code = "import static com.example.Util.helper;\n\nclass Bar {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_util = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::TypeReference { type_name, .. } => type_name == "Util",
+            _ => false,
+        });
+        let has_helper = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "helper",
+            _ => false,
+        });
+        assert!(
+            has_util,
+            "Should emit TypeReference for Util from static import, got: {:?}",
+            intents
+        );
+        assert!(
+            has_helper,
+            "Should emit ValueReference for helper from static import, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_wildcard_ignored() {
+        let code = "import com.example.*;\n\nclass Bar {}";
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
+            .expect("Failed to parse Java code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let import_refs: Vec<_> = intents
+            .iter()
+            .filter(|(i, _)| matches!(i, ReferenceIntent::TypeReference { .. }))
+            .collect();
+        assert!(
+            import_refs.is_empty(),
+            "Wildcard import should emit no type references, got: {:?}",
+            import_refs
+        );
     }
 }

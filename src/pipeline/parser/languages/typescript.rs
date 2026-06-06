@@ -102,6 +102,9 @@ pub(crate) fn collect_all_reference_intents_typescript(
                 }
             }
         }
+        "import_statement" => {
+            collect_import_intents_typescript(node, source, intents, byte_pos, line);
+        }
         "identifier" => {
             let name = node_text(node, source);
             if name.chars().next().is_some_and(|c| c.is_uppercase())
@@ -126,6 +129,85 @@ pub(crate) fn collect_all_reference_intents_typescript(
     while let Some(c) = child {
         collect_all_reference_intents_typescript(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+fn collect_import_intents_typescript(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    byte_pos: usize,
+    line: usize,
+) {
+    let mut cursor = node.walk();
+    let import_clause = node
+        .children(&mut cursor)
+        .find(|c| c.kind() == "import_clause");
+    let Some(clause) = import_clause else {
+        return;
+    };
+
+    let is_type_import = node.children(&mut node.walk()).any(|c| c.kind() == "type");
+
+    let mut clause_child = clause.child(0);
+    while let Some(c) = clause_child {
+        match c.kind() {
+            "named_imports" => {
+                let mut spec_child = c.child(0);
+                while let Some(spec) = spec_child {
+                    if spec.kind() == "import_specifier" {
+                        let name_node = spec.child_by_field_name("name");
+                        if let Some(nn) = name_node {
+                            let name = node_text(nn, source);
+                            if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                                if is_type_import {
+                                    intents.push((
+                                        ReferenceIntent::TypeReference {
+                                            type_name: name,
+                                            line,
+                                        },
+                                        byte_pos,
+                                    ));
+                                } else {
+                                    intents.push((
+                                        ReferenceIntent::ValueReference {
+                                            value_name: name,
+                                            line,
+                                        },
+                                        byte_pos,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    spec_child = spec.next_sibling();
+                }
+            }
+            "identifier" => {
+                let name = node_text(c, source);
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    if is_type_import {
+                        intents.push((
+                            ReferenceIntent::TypeReference {
+                                type_name: name,
+                                line,
+                            },
+                            byte_pos,
+                        ));
+                    } else {
+                        intents.push((
+                            ReferenceIntent::ValueReference {
+                                value_name: name,
+                                line,
+                            },
+                            byte_pos,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        clause_child = c.next_sibling();
     }
 }
 
@@ -1993,6 +2075,92 @@ mod tests {
                 Some("MyTsTarget".to_string()),
                 true
             )]
+        );
+    }
+
+    #[test]
+    fn test_import_named_specifier_emits_ref() {
+        let code = "import { Foo } from './types';";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Foo",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit ValueReference for Foo from named import, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_aliased_specifier_uses_original_name() {
+        let code = "import { Foo as Bar } from './types';";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Foo",
+            _ => false,
+        });
+        let has_bar = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Bar",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit ValueReference for Foo (original name), got: {:?}",
+            intents
+        );
+        assert!(
+            !has_bar,
+            "Should NOT emit ValueReference for Bar (alias), got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_default_emits_by_case() {
+        let code = "import MyComponent from './comp';";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_component = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "MyComponent",
+            _ => false,
+        });
+        assert!(
+            has_component,
+            "Should emit ValueReference for MyComponent from default import, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_side_effect_emits_nothing() {
+        let code = "import './polyfill';";
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let import_refs: Vec<_> = intents
+            .iter()
+            .filter(|(i, _)| {
+                matches!(
+                    i,
+                    ReferenceIntent::ValueReference { .. } | ReferenceIntent::TypeReference { .. }
+                )
+            })
+            .collect();
+        assert!(
+            import_refs.is_empty(),
+            "Side-effect import should emit no references, got: {:?}",
+            import_refs
         );
     }
 }

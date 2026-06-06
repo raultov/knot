@@ -39,9 +39,14 @@ pub(crate) fn collect_all_reference_intents_kotlin(
             // Extract type references in parameter lists, field types, return types
             let type_name = node_text(node, source);
             // Only capture capitalized identifiers (likely classes/interfaces)
-            if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            if type_name.chars().next().is_some_and(|c| c.is_uppercase())
+                && !is_kotlin_import_identifier(node)
+            {
                 intents.push((ReferenceIntent::TypeReference { type_name, line }, byte_pos));
             }
+        }
+        "import" => {
+            collect_import_intents_kotlin(node, source, intents, byte_pos, line);
         }
         _ => {}
     }
@@ -51,6 +56,68 @@ pub(crate) fn collect_all_reference_intents_kotlin(
     while let Some(c) = child {
         collect_all_reference_intents_kotlin(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+fn is_kotlin_import_identifier(node: Node<'_>) -> bool {
+    if node.parent().is_some_and(|p| p.kind() == "import") {
+        return true;
+    }
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "import_header" || n.kind() == "import" {
+            return true;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+fn collect_import_intents_kotlin(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    byte_pos: usize,
+    line: usize,
+) {
+    let has_wildcard = node.children(&mut node.walk()).any(|c| c.kind() == "*");
+    if has_wildcard {
+        return;
+    }
+
+    let mut imported_name: Option<String> = None;
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "as" {
+            break;
+        }
+        if c.kind() == "qualified_identifier" || c.kind() == "identifier" {
+            let text = node_text(c, source);
+            if let Some(last_segment) = text.split('.').next_back() {
+                imported_name = Some(last_segment.to_string());
+            }
+        }
+        child = c.next_sibling();
+    }
+
+    if let Some(name) = imported_name {
+        if name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            intents.push((
+                ReferenceIntent::TypeReference {
+                    type_name: name,
+                    line,
+                },
+                byte_pos,
+            ));
+        } else if !name.is_empty() {
+            intents.push((
+                ReferenceIntent::ValueReference {
+                    value_name: name,
+                    line,
+                },
+                byte_pos,
+            ));
+        }
     }
 }
 
@@ -1037,6 +1104,68 @@ mod tests {
         assert!(
             out.is_empty(),
             "Anonymous object without inheritance should not create entity"
+        );
+    }
+
+    #[test]
+    fn test_import_class_emits_type_reference() {
+        let code = "import com.example.Foo\n\nclass Bar {}";
+        let tree = crate::pipeline::parser::test_utils::parse_kotlin_snippet(code)
+            .expect("Failed to parse Kotlin code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_kotlin(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::TypeReference { type_name, .. } => type_name == "Foo",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit TypeReference for Foo from import, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_aliased_uses_original_name() {
+        let code = "import com.example.Foo as Bar\n\nclass Baz {}";
+        let tree = crate::pipeline::parser::test_utils::parse_kotlin_snippet(code)
+            .expect("Failed to parse Kotlin code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_kotlin(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::TypeReference { type_name, .. } => type_name == "Foo",
+            _ => false,
+        });
+        let has_bar = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::TypeReference { type_name, .. } => type_name == "Bar",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit TypeReference for Foo (original), got: {:?}",
+            intents
+        );
+        assert!(
+            !has_bar,
+            "Should NOT emit TypeReference for Bar (alias), got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_import_wildcard_ignored() {
+        let code = "import com.example.*\n\nclass Bar {}";
+        let tree = crate::pipeline::parser::test_utils::parse_kotlin_snippet(code)
+            .expect("Failed to parse Kotlin code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_kotlin(tree.root_node(), code.as_bytes(), &mut intents);
+        let import_type_refs: Vec<_> = intents.iter().filter(|(i, _)| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "example")
+        }).collect();
+        assert!(
+            import_type_refs.is_empty(),
+            "Wildcard import should not emit type refs for package name, got: {:?}",
+            import_type_refs
         );
     }
 }

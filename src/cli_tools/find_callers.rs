@@ -82,9 +82,13 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
             } else {
                 for (target_key, entities) in grouped {
                     let first_entity = entities[0];
+                    // Prefer target_fqn when available — qualified identifiers
+                    // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
                     let target_name = first_entity
-                        .get("target_name")
+                        .get("target_fqn")
                         .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| first_entity.get("target_name").and_then(|v| v.as_str()))
                         .unwrap_or(entity_name);
 
                     output.push_str(&format!(

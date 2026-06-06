@@ -51,6 +51,12 @@ pub(crate) fn collect_all_reference_intents_javascript(
                 intents.push((ref_intent, byte_pos));
             }
         }
+        "import_statement" => {
+            collect_import_intents_javascript(node, source, intents, byte_pos, line);
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            collect_require_destructure_intents(node, source, intents, byte_pos, line);
+        }
         _ => {}
     }
 
@@ -59,6 +65,138 @@ pub(crate) fn collect_all_reference_intents_javascript(
     while let Some(c) = child {
         collect_all_reference_intents_javascript(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+fn collect_import_intents_javascript(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    byte_pos: usize,
+    line: usize,
+) {
+    let mut cursor = node.walk();
+    let import_clause = node
+        .children(&mut cursor)
+        .find(|c| c.kind() == "import_clause");
+    let Some(clause) = import_clause else {
+        return;
+    };
+
+    let mut clause_child = clause.child(0);
+    while let Some(c) = clause_child {
+        match c.kind() {
+            "named_imports" => {
+                let mut spec_child = c.child(0);
+                while let Some(spec) = spec_child {
+                    if spec.kind() == "import_specifier" {
+                        let name_node = spec.child_by_field_name("name");
+                        if let Some(nn) = name_node {
+                            let name = node_text(nn, source);
+                            if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                                intents.push((
+                                    ReferenceIntent::ValueReference {
+                                        value_name: name,
+                                        line,
+                                    },
+                                    byte_pos,
+                                ));
+                            }
+                        }
+                    }
+                    spec_child = spec.next_sibling();
+                }
+            }
+            "identifier" => {
+                let name = node_text(c, source);
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    intents.push((
+                        ReferenceIntent::ValueReference {
+                            value_name: name,
+                            line,
+                        },
+                        byte_pos,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        clause_child = c.next_sibling();
+    }
+}
+
+fn collect_require_destructure_intents(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    byte_pos: usize,
+    line: usize,
+) {
+    let mut declarator = None;
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "variable_declarator" {
+            declarator = Some(c);
+            break;
+        }
+        child = c.next_sibling();
+    }
+    let Some(decl) = declarator else {
+        return;
+    };
+
+    let Some(value) = decl.child_by_field_name("value") else {
+        return;
+    };
+    if value.kind() != "call_expression" {
+        return;
+    }
+    let Some(func) = value.child_by_field_name("function") else {
+        return;
+    };
+    if func.kind() != "identifier" || node_text(func, source) != "require" {
+        return;
+    }
+
+    let Some(name_node) = decl.child_by_field_name("name") else {
+        return;
+    };
+    if name_node.kind() != "object_pattern" {
+        return;
+    }
+
+    let mut pattern_child = name_node.child(0);
+    while let Some(pc) = pattern_child {
+        match pc.kind() {
+            "shorthand_property_identifier_pattern" => {
+                let name = node_text(pc, source);
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    intents.push((
+                        ReferenceIntent::ValueReference {
+                            value_name: name,
+                            line,
+                        },
+                        byte_pos,
+                    ));
+                }
+            }
+            "pair_pattern" => {
+                if let Some(key) = pc.child_by_field_name("key") {
+                    let name = node_text(key, source);
+                    if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                        intents.push((
+                            ReferenceIntent::ValueReference {
+                                value_name: name,
+                                line,
+                            },
+                            byte_pos,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        pattern_child = pc.next_sibling();
     }
 }
 
@@ -1236,5 +1374,68 @@ mod tests {
         let var_node = find_var_decl(tree.root_node()).unwrap();
         let path = extract_require_module_path(var_node, code.as_bytes());
         assert_eq!(path.as_deref(), Some("./alias_target_js"));
+    }
+
+    #[test]
+    fn test_js_import_named_emits_ref() {
+        let code = "import { Foo } from './types';";
+        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+            .expect("Failed to parse JavaScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_javascript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Foo",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit ValueReference for Foo from named import, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_js_import_aliased_uses_original() {
+        let code = "import { Foo as Bar } from './types';";
+        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+            .expect("Failed to parse JavaScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_javascript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Foo",
+            _ => false,
+        });
+        let has_bar = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Bar",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit for Foo (original), got: {:?}",
+            intents
+        );
+        assert!(
+            !has_bar,
+            "Should NOT emit for Bar (alias), got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_js_require_destructure_emits_refs() {
+        let code = "const { Foo, helper } = require('./m');";
+        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+            .expect("Failed to parse JavaScript code");
+        let mut intents = Vec::new();
+        collect_all_reference_intents_javascript(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_foo = intents.iter().any(|(i, _)| match i {
+            ReferenceIntent::ValueReference { value_name, .. } => value_name == "Foo",
+            _ => false,
+        });
+        assert!(
+            has_foo,
+            "Should emit ValueReference for Foo from require destructure, got: {:?}",
+            intents
+        );
     }
 }

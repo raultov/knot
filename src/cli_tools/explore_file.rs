@@ -26,22 +26,47 @@ pub async fn run_explore_file(
         .get_file_entities(&normalized_path, repo_name)
         .await?;
 
-    Ok((display_path, entities))
+    let outgoing_refs = graph_db
+        .get_file_outgoing_references(&normalized_path, repo_name)
+        .await
+        .unwrap_or_else(|_| serde_json::json!([]));
+
+    let result = serde_json::json!({
+        "entities": entities,
+        "outgoing_references": outgoing_refs,
+    });
+
+    Ok((display_path, result))
 }
 
-pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> String {
+pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> String {
     let mut output = format!("# Entities in `{}`\n\n", file_path);
 
-    if let Some(entities_array) = entities.as_array() {
-        if entities_array.is_empty() {
-            output.push_str("No entities found in this file.\n");
-            return output;
-        }
+    let entities = if let Some(obj) = result.as_object() {
+        obj.get("entities")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    } else if let Some(arr) = result.as_array() {
+        arr.clone()
+    } else {
+        Vec::new()
+    };
 
-        output.push_str(&format!(
-            "Found {} entity/entities:\n\n",
-            entities_array.len()
-        ));
+    let outgoing_refs = result
+        .as_object()
+        .and_then(|obj| obj.get("outgoing_references"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    if entities.is_empty() && outgoing_refs.is_empty() {
+        output.push_str("No entities found in this file.\n");
+        return output;
+    }
+
+    if !entities.is_empty() {
+        output.push_str(&format!("Found {} entity/entities:\n\n", entities.len()));
 
         // Group entities by kind for better organization
         let mut classes = Vec::new();
@@ -89,7 +114,7 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
         let mut helm_values = Vec::new();
         let mut helm_template_vars = Vec::new();
 
-        for entity in entities_array {
+        for entity in &entities {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
                 match kind {
                     "class" | "kotlin_class" => classes.push(entity),
@@ -455,8 +480,30 @@ pub fn format_file_entities(file_path: &str, entities: &serde_json::Value) -> St
                 output.push_str(&format_entity_summary(entity));
             }
         }
-    } else {
-        output.push_str("No entities found.\n");
+    }
+
+    if !outgoing_refs.is_empty() {
+        output.push_str("## Imports / Referenced Types\n\n");
+        let mut seen = std::collections::HashSet::new();
+        for entry in &outgoing_refs {
+            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let fp = entry
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let line_num = entry.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+
+            let key = format!("{}:{}:{}", name, kind, fp);
+            if seen.insert(key) {
+                if line_num > 0 && !fp.is_empty() {
+                    output.push_str(&format!("- {} ({}) — {}:{}\n", name, kind, fp, line_num));
+                } else {
+                    output.push_str(&format!("- {} ({})\n", name, kind));
+                }
+            }
+        }
+        output.push('\n');
     }
 
     output
