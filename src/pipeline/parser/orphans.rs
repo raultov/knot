@@ -204,7 +204,7 @@ mod tests {
         // Create mock entities at specific lines
         let entity1 = ParsedEntity::new(
             "Entity1",
-            crate::models::EntityKind::Class,
+            EntityKind::Class,
             "Entity1",
             None,
             None,
@@ -217,7 +217,7 @@ mod tests {
         );
         let entity2 = ParsedEntity::new(
             "Entity2",
-            crate::models::EntityKind::Method,
+            EntityKind::Method,
             "Entity2",
             None,
             None,
@@ -230,7 +230,7 @@ mod tests {
         );
         let entity3 = ParsedEntity::new(
             "Entity3",
-            crate::models::EntityKind::Function,
+            EntityKind::Function,
             "Entity3",
             None,
             None,
@@ -253,7 +253,7 @@ mod tests {
     fn test_find_nearest_entity_by_line_exact() {
         let entity1 = ParsedEntity::new(
             "Entity1",
-            crate::models::EntityKind::Class,
+            EntityKind::Class,
             "Entity1",
             None,
             None,
@@ -275,7 +275,7 @@ mod tests {
     fn test_find_nearest_entity_by_line_after() {
         let entity1 = ParsedEntity::new(
             "Entity1",
-            crate::models::EntityKind::Class,
+            EntityKind::Class,
             "Entity1",
             None,
             None,
@@ -288,7 +288,7 @@ mod tests {
         );
         let entity2 = ParsedEntity::new(
             "Entity2",
-            crate::models::EntityKind::Method,
+            EntityKind::Method,
             "Entity2",
             None,
             None,
@@ -311,7 +311,7 @@ mod tests {
     fn test_find_nearest_entity_by_line_before_all() {
         let entity1 = ParsedEntity::new(
             "Entity1",
-            crate::models::EntityKind::Class,
+            EntityKind::Class,
             "Entity1",
             None,
             None,
@@ -324,7 +324,7 @@ mod tests {
         );
         let entity2 = ParsedEntity::new(
             "Entity2",
-            crate::models::EntityKind::Method,
+            EntityKind::Method,
             "Entity2",
             None,
             None,
@@ -348,7 +348,7 @@ mod tests {
         // Entity1 spans lines 10-20, Entity2 spans lines 30-40
         let entity1 = ParsedEntity::new(
             "Entity1",
-            crate::models::EntityKind::Class,
+            EntityKind::Class,
             "Entity1",
             None,
             None,
@@ -361,7 +361,7 @@ mod tests {
         );
         let entity2 = ParsedEntity::new(
             "Entity2",
-            crate::models::EntityKind::Method,
+            EntityKind::Method,
             "Entity2",
             None,
             None,
@@ -389,7 +389,7 @@ mod tests {
         // Entity1 spans lines 5-50 (large range), Entity2 spans lines 20-30 (small range)
         let entity1 = ParsedEntity::new(
             "Entity1",
-            crate::models::EntityKind::Class,
+            EntityKind::Class,
             "Entity1",
             None,
             None,
@@ -402,7 +402,7 @@ mod tests {
         );
         let entity2 = ParsedEntity::new(
             "Entity2",
-            crate::models::EntityKind::Method,
+            EntityKind::Method,
             "Entity2",
             None,
             None,

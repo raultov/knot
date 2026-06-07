@@ -1,10 +1,9 @@
 use crate::models::{EntityKind, ParsedEntity};
+use crate::pipeline::parser::utils::truncate_string;
 
 /// Maximum nesting depth for YAML tree walking to prevent pathological files.
-#[allow(dead_code)] // Used in tree walking depth checks
 const MAX_DEPTH: usize = 10;
 
-#[allow(dead_code)] // Reserved for future YAML parsing
 pub(crate) fn extract_entities_yaml(
     source: &str,
     file_path: &str,
@@ -26,7 +25,6 @@ pub(crate) fn extract_entities_yaml(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future YAML tree walking
 fn walk_yaml(
     prefix: &str,
     value: &serde_yaml::Value,
@@ -84,7 +82,6 @@ fn walk_yaml(
     }
 }
 
-#[allow(dead_code)] // Reserved for future YAML value serialization
 fn value_to_string(value: &serde_yaml::Value) -> String {
     match value {
         serde_yaml::Value::Null => "null".to_string(),
@@ -94,15 +91,6 @@ fn value_to_string(value: &serde_yaml::Value) -> String {
         serde_yaml::Value::Sequence(_)
         | serde_yaml::Value::Mapping(_)
         | serde_yaml::Value::Tagged(_) => "[complex]".to_string(),
-    }
-}
-
-#[allow(dead_code)] // Reserved for future string truncation utility
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
 
@@ -150,7 +138,7 @@ spring:
         assert!(url_entity.fqn.contains("spring.datasource.url"));
 
         let user_entity = props.iter().find(|p| p.name == "username").unwrap();
-        assert!(user_entity.signature.as_ref().unwrap() == "admin");
+        assert_eq!(user_entity.signature.as_ref().unwrap(), "admin");
         assert!(user_entity.embed_text.contains("admin"));
     }
 

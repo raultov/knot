@@ -1,6 +1,17 @@
 use crate::models::{CallIntent, ReferenceIntent};
-use crate::pipeline::parser::utils::node_text;
+use crate::pipeline::parser::utils::{
+    extract_identifiers_from_decorator, extract_type_references, is_capitalized, node_text,
+};
 use tree_sitter::Node;
+
+pub(crate) use super::javascript::extract_enum_usages_javascript as extract_enum_usages_typescript;
+pub(crate) use super::javascript::extract_jsx_component_invocation;
+pub(crate) use super::javascript::extract_single_call_intent_javascript as extract_single_call_intent_typescript;
+
+#[allow(unused_imports)]
+pub(crate) use super::javascript::{
+    extract_callback_arguments, extract_jsx_attributes, is_reserved_keyword,
+};
 
 /// Recursively extract all call intents from TypeScript/TSX, returning (intent, byte_pos) pairs.
 pub(crate) fn collect_all_reference_intents_typescript(
@@ -55,7 +66,7 @@ pub(crate) fn collect_all_reference_intents_typescript(
             // Extract type references (e.g., constructor parameters, property types)
             let type_name = node_text(node, source);
             // Only capture capitalized identifiers (likely classes/interfaces)
-            if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            if is_capitalized(&type_name) {
                 intents.push((ReferenceIntent::TypeReference { type_name, line }, byte_pos));
             }
         }
@@ -73,7 +84,7 @@ pub(crate) fn collect_all_reference_intents_typescript(
                                     && let Some(name_node) = spec.child_by_field_name("name")
                                 {
                                     let name = node_text(name_node, source);
-                                    if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                                    if is_capitalized(&name) {
                                         if is_type_export || c.kind() == "export_type_clause" {
                                             intents.push((
                                                 ReferenceIntent::TypeReference {
@@ -103,11 +114,19 @@ pub(crate) fn collect_all_reference_intents_typescript(
             }
         }
         "import_statement" => {
-            collect_import_intents_typescript(node, source, intents, byte_pos, line);
+            let is_type_import = node.children(&mut node.walk()).any(|c| c.kind() == "type");
+            super::javascript::collect_import_intents_javascript(
+                node,
+                source,
+                intents,
+                byte_pos,
+                line,
+                is_type_import,
+            );
         }
         "identifier" => {
             let name = node_text(node, source);
-            if name.chars().next().is_some_and(|c| c.is_uppercase())
+            if is_capitalized(&name)
                 && !TS_GLOBALS.contains(&name.as_str())
                 && let Some(parent) = node.parent()
                 && !is_identifier_excluded_from_value_ref(parent, node)
@@ -129,85 +148,6 @@ pub(crate) fn collect_all_reference_intents_typescript(
     while let Some(c) = child {
         collect_all_reference_intents_typescript(c, source, intents);
         child = c.next_sibling();
-    }
-}
-
-fn collect_import_intents_typescript(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<(ReferenceIntent, usize)>,
-    byte_pos: usize,
-    line: usize,
-) {
-    let mut cursor = node.walk();
-    let import_clause = node
-        .children(&mut cursor)
-        .find(|c| c.kind() == "import_clause");
-    let Some(clause) = import_clause else {
-        return;
-    };
-
-    let is_type_import = node.children(&mut node.walk()).any(|c| c.kind() == "type");
-
-    let mut clause_child = clause.child(0);
-    while let Some(c) = clause_child {
-        match c.kind() {
-            "named_imports" => {
-                let mut spec_child = c.child(0);
-                while let Some(spec) = spec_child {
-                    if spec.kind() == "import_specifier" {
-                        let name_node = spec.child_by_field_name("name");
-                        if let Some(nn) = name_node {
-                            let name = node_text(nn, source);
-                            if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
-                                if is_type_import {
-                                    intents.push((
-                                        ReferenceIntent::TypeReference {
-                                            type_name: name,
-                                            line,
-                                        },
-                                        byte_pos,
-                                    ));
-                                } else {
-                                    intents.push((
-                                        ReferenceIntent::ValueReference {
-                                            value_name: name,
-                                            line,
-                                        },
-                                        byte_pos,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    spec_child = spec.next_sibling();
-                }
-            }
-            "identifier" => {
-                let name = node_text(c, source);
-                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
-                    if is_type_import {
-                        intents.push((
-                            ReferenceIntent::TypeReference {
-                                type_name: name,
-                                line,
-                            },
-                            byte_pos,
-                        ));
-                    } else {
-                        intents.push((
-                            ReferenceIntent::ValueReference {
-                                value_name: name,
-                                line,
-                            },
-                            byte_pos,
-                        ));
-                    }
-                }
-            }
-            _ => {}
-        }
-        clause_child = c.next_sibling();
     }
 }
 
@@ -305,7 +245,7 @@ pub(crate) fn extract_value_references_typescript(
 
     if node.kind() == "identifier" {
         let name = node_text(node, source);
-        if name.chars().next().is_some_and(|c| c.is_uppercase())
+        if is_capitalized(&name)
             && !TS_GLOBALS.contains(&name.as_str())
             && let Some(parent) = node.parent()
             && !is_identifier_excluded_from_value_ref(parent, node)
@@ -390,115 +330,6 @@ pub(crate) fn extract_class_inheritance(
     }
 }
 
-/// Extract decorator references from TypeScript/TSX decorators (e.g., @NgModule, @Component).
-///
-/// Recursively searches for `decorator` nodes and extracts capitalized identifiers
-/// (likely class/component names) as TypeReference intents.
-///
-/// Example:
-/// ```typescript
-/// @NgModule({
-///   declarations: [AppComponent, UserComponent],
-///   bootstrap: [AppComponent]
-/// })
-/// export class AppModule {}
-/// ```
-///
-/// This will extract: AppComponent (twice), UserComponent
-pub(crate) fn extract_decorator_references(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-) {
-    let line = node.start_position().row + 1;
-
-    // If this is a decorator node, extract references from its arguments
-    if node.kind() == "decorator" {
-        extract_identifiers_from_decorator(node, source, intents, line);
-    }
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_decorator_references(c, source, intents);
-        child = c.next_sibling();
-    }
-}
-
-/// Extract capitalized identifiers from decorator arguments (likely class references).
-fn extract_identifiers_from_decorator(
-    decorator_node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-    line: usize,
-) {
-    // Recursively scan all children for identifiers
-    let mut child = decorator_node.child(0);
-    while let Some(c) = child {
-        match c.kind() {
-            "identifier" | "type_identifier" => {
-                let name = node_text(c, source);
-                // Only capture capitalized identifiers (likely classes/components)
-                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
-                    intents.push(ReferenceIntent::TypeReference {
-                        type_name: name,
-                        line,
-                    });
-                }
-            }
-            _ => {
-                // Recurse into nested structures (objects, arrays, etc.)
-                extract_identifiers_from_decorator(c, source, intents, line);
-            }
-        }
-        child = c.next_sibling();
-    }
-}
-
-/// Extract type references from TypeScript type annotations.
-///
-/// Recursively searches for `type_identifier` nodes in:
-/// - Constructor parameters (dependency injection)
-/// - Method parameters
-/// - Property types
-/// - Return types
-///
-/// Example:
-/// ```typescript
-/// class AppComponent {
-///   constructor(private analytics: AnalyticsService, private seo: SeoService) {}
-///   
-///   process(data: DataService): ResultType {
-///     return null;
-///   }
-/// }
-/// ```
-///
-/// This will extract: AnalyticsService, SeoService, DataService, ResultType
-pub(crate) fn extract_type_references(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-) {
-    let line = node.start_position().row + 1;
-
-    // Capture type_identifier nodes (type annotations)
-    if node.kind() == "type_identifier" {
-        let type_name = node_text(node, source);
-        // Only capture capitalized identifiers (likely classes/interfaces)
-        if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
-            intents.push(ReferenceIntent::TypeReference { type_name, line });
-        }
-    }
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_type_references(c, source, intents);
-        child = c.next_sibling();
-    }
-}
-
 /// Extract reference intents from a TypeScript function/method body (wrapper for backward compatibility).
 pub(crate) fn extract_reference_intents_typescript(
     node: Node<'_>,
@@ -536,78 +367,8 @@ pub(crate) fn extract_call_intents_typescript(
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
-    if node.kind() == "call_expression" {
-        let line = node.start_position().row + 1;
-
-        // Parse call_expression structure:
-        // - Has a 'function' field which can be:
-        //   - identifier (local call)
-        //   - member_expression (object.method call)
-
-        let mut method_name: Option<String> = None;
-        let mut receiver: Option<String> = None;
-
-        // Look for the function field in the call_expression
-        let mut child = node.child(0);
-        let mut is_bind_call = false;
-
-        while let Some(c) = child {
-            if c.kind() == "member_expression" {
-                // Use Tree-sitter API to extract fields cleanly
-                // member_expression has: object . property
-                if let Some(property_node) = c.child_by_field_name("property") {
-                    let prop_text = node_text(property_node, source);
-                    // Check if this is a .bind() call
-                    if prop_text == "bind" {
-                        is_bind_call = true;
-                    }
-                    method_name = Some(prop_text);
-                }
-
-                // For the object, we need to extract it as text to handle nested members like "this.browserService"
-                if let Some(object_node) = c.child_by_field_name("object") {
-                    receiver = Some(node_text(object_node, source));
-                }
-            } else if c.kind() == "identifier" {
-                // Direct identifier in call_expression (local call)
-                method_name = Some(node_text(c, source));
-            }
-            child = c.next_sibling();
-        }
-
-        if let Some(method) = method_name {
-            // Special handling for .bind(this) and similar patterns
-            if is_bind_call {
-                // For .bind() calls, the actual target is in the receiver
-                // e.g., this.requestPausedHandler.bind(this) -> we want to record call to requestPausedHandler
-                if let Some(receiver) = receiver {
-                    // Extract the method name from receiver (last component if it's a member expression)
-                    if let Some(last_part) = receiver.split('.').next_back() {
-                        intents.push(CallIntent {
-                            method: last_part.to_string(),
-                            receiver: if receiver.contains('.') {
-                                receiver.split('.').next().map(|s| s.to_string())
-                            } else {
-                                Some("this".to_string())
-                            },
-                            line,
-                            arg_count: None,
-                        });
-                    }
-                }
-            } else {
-                intents.push(CallIntent {
-                    method,
-                    receiver,
-                    line,
-                    arg_count: None,
-                });
-            }
-        }
-
-        // Also scan arguments for callback references (e.g., app.use(this.handler))
-        extract_callback_arguments(node, source, intents, line);
-    } else if node.kind() == "new_expression" {
+    if node.kind() == "new_expression" {
+        // TS-specific: also handles type_identifier (e.g., new MyGeneric<string>())
         let line = node.start_position().row + 1;
         let mut child = node.child(0);
         while let Some(c) = child {
@@ -622,28 +383,9 @@ pub(crate) fn extract_call_intents_typescript(
             }
             child = c.next_sibling();
         }
-    } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
-        // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
-        extract_jsx_component_invocation(node, source, intents);
-    } else if node.kind() == "member_expression" {
-        // Detect property/getter access via `this.property` (e.g., this.client, this.field)
-        // This captures accesses like:
-        //   - this.client          (getter access)
-        //   - this._field          (private field access)
-        //   - this.publicProp      (public property access)
-        if let Some(object_node) = node.child_by_field_name("object")
-            && node_text(object_node, source) == "this"
-            && let Some(property_node) = node.child_by_field_name("property")
-        {
-            let prop_text = node_text(property_node, source);
-            let line = node.start_position().row + 1;
-            intents.push(CallIntent {
-                method: prop_text,
-                receiver: Some("this".to_string()),
-                line,
-                arg_count: None,
-            });
-        }
+    } else {
+        // Delegate call_expression, jsx, member_expression to shared JS implementation
+        intents.extend(extract_single_call_intent_typescript(node, source));
     }
 
     // Recursively process children
@@ -652,385 +394,6 @@ pub(crate) fn extract_call_intents_typescript(
         extract_call_intents_typescript(c, source, intents);
         child = c.next_sibling();
     }
-}
-
-/// Extract call intents from a SINGLE node without recursive descent.
-///
-/// This is the non-recursive version of `extract_call_intents_typescript`,
-/// designed to be used in contexts where the caller already handles tree traversal
-/// (e.g., the fallback pass in `collect_all_reference_intents_typescript`).
-///
-/// By extracting only the current node's intent, we avoid double-processing children
-/// that would cause duplicate CALLS with incorrect byte_pos/line attribution.
-///
-/// Handles property/getter access (e.g., `this.client`) as well as call expressions.
-pub(crate) fn extract_single_call_intent_typescript(
-    node: Node<'_>,
-    source: &[u8],
-) -> Vec<CallIntent> {
-    let mut intents = Vec::new();
-
-    if node.kind() == "call_expression" {
-        let line = node.start_position().row + 1;
-
-        // Parse call_expression structure:
-        // - Has a 'function' field which can be:
-        //   - identifier (local call)
-        //   - member_expression (object.method call)
-
-        let mut method_name: Option<String> = None;
-        let mut receiver: Option<String> = None;
-
-        // Look for the function field in the call_expression
-        let mut child = node.child(0);
-        let mut is_bind_call = false;
-
-        while let Some(c) = child {
-            if c.kind() == "member_expression" {
-                // Use Tree-sitter API to extract fields cleanly
-                // member_expression has: object . property
-                if let Some(property_node) = c.child_by_field_name("property") {
-                    let prop_text = node_text(property_node, source);
-                    // Check if this is a .bind() call
-                    if prop_text == "bind" {
-                        is_bind_call = true;
-                    }
-                    method_name = Some(prop_text);
-                }
-
-                // For the object, we need to extract it as text to handle nested members like "this.browserService"
-                if let Some(object_node) = c.child_by_field_name("object") {
-                    receiver = Some(node_text(object_node, source));
-                }
-            } else if c.kind() == "identifier" {
-                // Direct identifier in call_expression (local call)
-                method_name = Some(node_text(c, source));
-            }
-            child = c.next_sibling();
-        }
-
-        if let Some(method) = method_name {
-            // Special handling for .bind(this) and similar patterns
-            if is_bind_call {
-                // For .bind() calls, the actual target is in the receiver
-                // e.g., this.requestPausedHandler.bind(this) -> we want to record call to requestPausedHandler
-                if let Some(receiver) = receiver {
-                    // Extract the method name from receiver (last component if it's a member expression)
-                    if let Some(last_part) = receiver.split('.').next_back() {
-                        intents.push(CallIntent {
-                            method: last_part.to_string(),
-                            receiver: if receiver.contains('.') {
-                                receiver.split('.').next().map(|s| s.to_string())
-                            } else {
-                                Some("this".to_string())
-                            },
-                            line,
-                            arg_count: None,
-                        });
-                    }
-                }
-            } else {
-                intents.push(CallIntent {
-                    method,
-                    receiver,
-                    line,
-                    arg_count: None,
-                });
-            }
-        }
-
-        // Also scan arguments for callback references (e.g., app.use(this.handler))
-        extract_callback_arguments(node, source, &mut intents, line);
-    } else if node.kind() == "new_expression" {
-        let line = node.start_position().row + 1;
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "identifier" || c.kind() == "type_identifier" {
-                intents.push(CallIntent {
-                    method: node_text(c, source),
-                    receiver: None,
-                    line,
-                    arg_count: None,
-                });
-                break;
-            }
-            child = c.next_sibling();
-        }
-    } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
-        // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
-        extract_jsx_component_invocation(node, source, &mut intents);
-    } else if node.kind() == "member_expression" {
-        // Detect property/getter access via `this.property` (e.g., this.client, this.field)
-        if let Some(object_node) = node.child_by_field_name("object")
-            && node_text(object_node, source) == "this"
-            && let Some(property_node) = node.child_by_field_name("property")
-        {
-            let prop_text = node_text(property_node, source);
-            let line = node.start_position().row + 1;
-            intents.push(CallIntent {
-                method: prop_text,
-                receiver: Some("this".to_string()),
-                line,
-                arg_count: None,
-            });
-        }
-    }
-
-    // NO recursive child processing - that's the key difference!
-    intents
-}
-
-/// Extract JSX component invocation as a call intent.
-///
-/// Handles React components rendered via JSX syntax:
-/// - `<ChartToolbar />` → CallIntent { method: "ChartToolbar", receiver: None }
-/// - `<Sheet.Content />` → CallIntent { method: "Content", receiver: Some("Sheet") }
-/// - `<Icons.Search />` → CallIntent { method: "Search", receiver: Some("Icons") }
-///
-/// Native HTML tags (lowercase) are ignored:
-/// - `<div />` → skipped
-/// - `<span />` → skipped
-pub(crate) fn extract_jsx_component_invocation(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<CallIntent>,
-) {
-    let line = node.start_position().row + 1;
-
-    // Get the name node (can be identifier, member_expression, or namespace_name)
-    if let Some(name_node) = node.child_by_field_name("name") {
-        let comp_name = node_text(name_node, source);
-
-        // React convention: Components start with uppercase, HTML tags are lowercase
-        if comp_name.chars().next().is_some_and(|c| c.is_uppercase()) {
-            // Handle namespaced components (e.g., Sheet.Content, Icons.Search)
-            if comp_name.contains('.') {
-                let mut parts = comp_name.split('.');
-                let receiver = parts.next().map(|s| s.to_string());
-                // Collect remaining parts as method name (handles deeply nested components)
-                let method = parts.collect::<Vec<_>>().join(".");
-
-                intents.push(CallIntent {
-                    method,
-                    receiver,
-                    line,
-                    arg_count: None,
-                });
-            } else {
-                // Simple component name
-                intents.push(CallIntent {
-                    method: comp_name,
-                    receiver: None,
-                    line,
-                    arg_count: None,
-                });
-            }
-        }
-        // HTML tags (lowercase first letter) are intentionally skipped
-    }
-}
-
-/// Extract callback arguments from a call expression.
-///
-/// Detects method references passed as arguments, e.g.:
-/// - `app.use(this.authHandler)` -> records call to authHandler
-/// - `emitter.on('event', this.handler)` -> records call to handler
-/// - `addEventListener('click', this.onClick)` -> records call to onClick
-pub(crate) fn extract_callback_arguments(
-    call_node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<CallIntent>,
-    line: usize,
-) {
-    // Find the arguments node
-    if let Some(args_node) = call_node.child_by_field_name("arguments") {
-        let mut arg = args_node.child(0);
-        while let Some(a) = arg {
-            // Look for member_expression arguments (e.g., this.handler, obj.method)
-            if a.kind() == "member_expression" {
-                if let Some(property_node) = a.child_by_field_name("property") {
-                    let method_name = node_text(property_node, source);
-                    if let Some(object_node) = a.child_by_field_name("object") {
-                        let receiver = node_text(object_node, source);
-                        intents.push(CallIntent {
-                            method: method_name,
-                            receiver: Some(receiver),
-                            line,
-                            arg_count: None,
-                        });
-                    }
-                }
-            } else if a.kind() == "identifier" {
-                // Sometimes callbacks are just identifiers: app.use(authHandler)
-                let name = node_text(a, source);
-                // Only treat as callback if it looks like a method name (not a keyword or literal)
-                if !is_reserved_keyword(&name)
-                    && name.chars().next().is_some_and(|c| c.is_alphabetic())
-                {
-                    intents.push(CallIntent {
-                        method: name,
-                        receiver: None,
-                        line,
-                        arg_count: None,
-                    });
-                }
-            }
-            arg = a.next_sibling();
-        }
-    }
-}
-
-/// Check if a string is a TypeScript/JavaScript reserved keyword.
-pub(crate) fn is_reserved_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "true"
-            | "false"
-            | "null"
-            | "undefined"
-            | "this"
-            | "super"
-            | "import"
-            | "export"
-            | "from"
-            | "as"
-            | "async"
-            | "await"
-            | "yield"
-            | "return"
-            | "throw"
-            | "try"
-            | "catch"
-            | "finally"
-            | "if"
-            | "else"
-            | "for"
-            | "while"
-            | "do"
-            | "break"
-            | "continue"
-            | "switch"
-            | "case"
-            | "default"
-            | "const"
-            | "let"
-            | "var"
-            | "class"
-            | "interface"
-            | "enum"
-            | "type"
-            | "function"
-            | "new"
-            | "delete"
-            | "typeof"
-            | "instanceof"
-            | "in"
-            | "of"
-            | "public"
-            | "private"
-            | "protected"
-            | "static"
-            | "readonly"
-            | "abstract"
-            | "extends"
-            | "implements"
-            | "declare"
-    )
-}
-
-/// Extract enum and static member usages from a TypeScript node (e.g., EnumName.Value, ClassName.STATIC).
-///
-/// Recursively searches for member_expression nodes where the object is a capitalized identifier,
-/// which typically represents enum or static class member access patterns like WebWorkerEvent.Console.
-pub(crate) fn extract_enum_usages_typescript(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-) {
-    if node.kind() == "member_expression" {
-        // member_expression has: object . property
-        // We only want to capture if object is a capitalized identifier (enum/class name)
-        if let Some(object_node) = node.child_by_field_name("object")
-            && object_node.kind() == "identifier"
-        {
-            let obj_text = node_text(object_node, source);
-            // Check if it starts with capital letter (typical of classes/enums)
-            if obj_text.chars().next().is_some_and(|c| c.is_uppercase()) {
-                let line = object_node.start_position().row + 1;
-                intents.push(ReferenceIntent::TypeReference {
-                    type_name: obj_text,
-                    line,
-                });
-            }
-        }
-    }
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_enum_usages_typescript(c, source, intents);
-        child = c.next_sibling();
-    }
-}
-
-/// Extract HTML attributes (id, className) from JSX elements in TypeScript/TSX.
-///
-/// Used to index React components' HTML attributes for cross-language search
-/// (e.g., finding which components use a specific CSS class).
-///
-/// Extracts:
-/// - `id="my-id"` → HtmlId entity with name "my-id"
-/// - `className="btn primary"` → HtmlClass entities for "btn" and "primary"
-///
-/// Returns a vector of tuples (attribute_name, attribute_value, line).
-#[allow(dead_code)]
-pub(crate) fn extract_jsx_attributes(
-    node: Node<'_>,
-    source: &[u8],
-) -> Vec<(String, String, usize)> {
-    use crate::pipeline::parser::utils::node_text;
-
-    let mut attributes = Vec::new();
-
-    // JSX attributes are structured as:
-    // jsx_attribute
-    //   property_identifier (e.g., "id", "className")
-    //   jsx_expression | string (the value)
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        if c.kind() == "jsx_attribute" {
-            let line = c.start_position().row + 1;
-            let mut attr_name = String::new();
-            let mut attr_value = String::new();
-
-            // Navigate children to extract property_identifier and value
-            let mut attr_child = c.child(0);
-            while let Some(ac) = attr_child {
-                if ac.kind() == "property_identifier" {
-                    attr_name = node_text(ac, source);
-                } else if ac.kind() == "string" {
-                    // String literal (e.g., "my-id")
-                    let raw = node_text(ac, source);
-                    // Remove quotes
-                    attr_value = raw.trim_matches(|c| c == '"' || c == '\'').to_string();
-                } else if ac.kind() == "jsx_expression" {
-                    // Expression (e.g., {myVar}) - we skip these for now
-                    // Only capture static string values
-                    attr_child = ac.next_sibling();
-                    continue;
-                }
-                attr_child = ac.next_sibling();
-            }
-
-            // Only capture id and className attributes with non-empty values
-            if (attr_name == "id" || attr_name == "className") && !attr_value.is_empty() {
-                attributes.push((attr_name, attr_value, line));
-            }
-        }
-        child = c.next_sibling();
-    }
-
-    attributes
 }
 
 // ── Alias extraction (import / export default) ──────────────────
@@ -1149,89 +512,30 @@ pub(crate) fn scan_default_export_target(root: Node<'_>, source: &[u8]) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_reserved_keyword_true() {
-        assert!(is_reserved_keyword("true"));
-        assert!(is_reserved_keyword("false"));
-        assert!(is_reserved_keyword("class"));
-        assert!(is_reserved_keyword("function"));
-        assert!(is_reserved_keyword("async"));
-        assert!(is_reserved_keyword("await"));
-    }
-
-    #[test]
-    fn test_is_reserved_keyword_false() {
-        assert!(!is_reserved_keyword("myVar"));
-        assert!(!is_reserved_keyword("handler"));
-        assert!(!is_reserved_keyword("MyClass"));
-        assert!(!is_reserved_keyword("someFunction"));
-    }
+    use crate::pipeline::parser::test_utils::{
+        assert_extends, assert_implements, find_call_expression, find_class_declaration,
+        find_interface_declaration, find_member_expression, find_new_expression,
+    };
+    use crate::pipeline::parser::utils::extract_decorator_references;
 
     #[test]
     fn test_extract_jsx_component_invocation_simple() {
-        let code = "function render() { return <ChartToolbar />; }";
-        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
-            .expect("Failed to parse TSX code");
-
-        fn find_jsx_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if matches!(
-                node.kind(),
-                "jsx_self_closing_element" | "jsx_opening_element"
-            ) {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx) = find_jsx_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents: Vec<CallIntent> = Vec::new();
-            extract_jsx_component_invocation(jsx, code_bytes, &mut intents);
-            assert!(!intents.is_empty());
-            assert_eq!(intents[0].method, "ChartToolbar");
-            assert!(intents[0].receiver.is_none());
-        }
+        crate::pipeline::parser::test_utils::assert_jsx_component_invocation(
+            "function render() { return <ChartToolbar />; }",
+            crate::pipeline::parser::test_utils::parse_tsx_snippet,
+            "ChartToolbar",
+            None,
+        );
     }
 
     #[test]
     fn test_extract_jsx_component_invocation_namespaced() {
-        let code = "function render() { return <Sheet.Content />; }";
-        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
-            .expect("Failed to parse TSX code");
-
-        fn find_jsx_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if matches!(
-                node.kind(),
-                "jsx_self_closing_element" | "jsx_opening_element"
-            ) {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx) = find_jsx_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents: Vec<CallIntent> = Vec::new();
-            extract_jsx_component_invocation(jsx, code_bytes, &mut intents);
-            assert!(!intents.is_empty());
-            assert_eq!(intents[0].method, "Content");
-            assert_eq!(intents[0].receiver, Some("Sheet".to_string()));
-        }
+        crate::pipeline::parser::test_utils::assert_jsx_component_invocation(
+            "function render() { return <Sheet.Content />; }",
+            crate::pipeline::parser::test_utils::parse_tsx_snippet,
+            "Content",
+            Some("Sheet"),
+        );
     }
 
     #[test]
@@ -1239,20 +543,6 @@ mod tests {
         let code = "function test() { method(); }";
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
-
-        fn find_call_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "call_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_call_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         if let Some(call) = find_call_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
@@ -1269,20 +559,6 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
 
-        fn find_call_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "call_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_call_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
         if let Some(call) = find_call_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
             let intents = extract_single_call_intent_typescript(call, code_bytes);
@@ -1298,20 +574,6 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
 
-        fn find_new_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "new_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_new_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
         if let Some(new_expr) = find_new_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
             let intents = extract_single_call_intent_typescript(new_expr, code_bytes);
@@ -1321,218 +583,61 @@ mod tests {
         }
     }
 
-    fn assert_extends(intents: &[ReferenceIntent], expected: &str) {
-        let found = intents
-            .iter()
-            .any(|i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == expected));
-        assert!(
-            found,
-            "Expected Extends -> '{}', got {:?}",
-            expected, intents
-        );
-    }
-
-    fn assert_implements(intents: &[ReferenceIntent], expected: &str) {
-        let found = intents.iter().any(
-            |i| matches!(i, ReferenceIntent::Implements { interface, .. } if interface == expected),
-        );
-        assert!(
-            found,
-            "Expected Implements -> '{}', got {:?}",
-            expected, intents
-        );
+    fn extract_inheritance_from_code(code: &str) -> Vec<ReferenceIntent> {
+        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
+            .expect("Failed to parse TypeScript code");
+        let node = find_class_declaration(tree.root_node())
+            .or_else(|| find_interface_declaration(tree.root_node()))
+            .expect("No class or interface declaration found");
+        let mut intents = Vec::new();
+        extract_class_inheritance(node, code.as_bytes(), &mut intents);
+        intents
     }
 
     #[test]
     fn test_extract_class_inheritance_extends() {
-        let code = "class Child extends Parent { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
-            assert_extends(&intents, "Parent");
-        }
+        let intents = extract_inheritance_from_code("class Child extends Parent { }");
+        assert_extends(&intents, "Parent");
     }
 
     #[test]
     fn test_extract_class_inheritance_implements() {
-        let code = "class Child implements IFoo, IBar { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
-            assert_implements(&intents, "IFoo");
-            assert_implements(&intents, "IBar");
-        }
+        let intents = extract_inheritance_from_code("class Child implements IFoo, IBar { }");
+        assert_implements(&intents, "IFoo");
+        assert_implements(&intents, "IBar");
     }
 
     #[test]
     fn test_extract_class_inheritance_extends_and_implements() {
-        let code = "class Child extends Parent implements IFoo { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
-            assert_extends(&intents, "Parent");
-            assert_implements(&intents, "IFoo");
-        }
+        let intents =
+            extract_inheritance_from_code("class Child extends Parent implements IFoo { }");
+        assert_extends(&intents, "Parent");
+        assert_implements(&intents, "IFoo");
     }
 
     #[test]
     fn test_extract_class_inheritance_qualified_extends() {
-        let code = "class Child extends NS.Parent { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
-            assert_extends(&intents, "Parent");
-        }
+        let intents = extract_inheritance_from_code("class Child extends NS.Parent { }");
+        assert_extends(&intents, "Parent");
     }
 
     #[test]
     fn test_extract_class_inheritance_generic_extends() {
-        let code = "class Child extends Generic<T> { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(class_node, code.as_bytes(), &mut intents);
-            assert_extends(&intents, "Generic");
-        }
+        let intents = extract_inheritance_from_code("class Child extends Generic<T> { }");
+        assert_extends(&intents, "Generic");
     }
 
     #[test]
     fn test_extract_interface_extends_simple() {
-        let code = "interface IB extends IA { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_interface_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "interface_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_interface_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(iface_node) = find_interface_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(iface_node, code.as_bytes(), &mut intents);
-            assert_extends(&intents, "IA");
-        }
+        let intents = extract_inheritance_from_code("interface IB extends IA { }");
+        assert_extends(&intents, "IA");
     }
 
     #[test]
     fn test_extract_interface_extends_multiple() {
-        let code = "interface IC extends IA, IB { }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        fn find_interface_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "interface_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_interface_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(iface_node) = find_interface_declaration(tree.root_node()) {
-            let mut intents = Vec::new();
-            extract_class_inheritance(iface_node, code.as_bytes(), &mut intents);
-            assert_extends(&intents, "IA");
-            assert_extends(&intents, "IB");
-        }
+        let intents = extract_inheritance_from_code("interface IC extends IA, IB { }");
+        assert_extends(&intents, "IA");
+        assert_extends(&intents, "IB");
     }
 
     #[test]
@@ -1540,20 +645,6 @@ mod tests {
         let code = "function test() { app.use(this.handler); }";
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
-
-        fn find_call_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "call_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_call_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         if let Some(call) = find_call_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
@@ -1625,20 +716,6 @@ mod tests {
         let code = "function test() { const x = this.myProperty; }";
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
-
-        fn find_member_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "member_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_member_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         if let Some(member_expr) = find_member_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
@@ -1783,123 +860,26 @@ mod tests {
 
     #[test]
     fn test_extract_jsx_attributes_id() {
-        let code = r#"function App() { return <div id="main-container">Hello</div>; }"#;
-        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
-            .expect("Failed to parse TSX code");
-
-        fn find_jsx_opening_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "jsx_opening_element" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_opening_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx_elem) = find_jsx_opening_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
-            assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].0, "id");
-            assert_eq!(attrs[0].1, "main-container");
-        } else {
-            panic!("No JSX opening element found");
-        }
+        crate::pipeline::parser::test_utils::assert_jsx_attribute(
+            r#"function App() { return <div id="main-container">Hello</div>; }"#,
+            crate::pipeline::parser::test_utils::parse_tsx_snippet,
+            "id",
+            "main-container",
+        );
     }
 
     #[test]
     fn test_extract_jsx_attributes_classname() {
-        let code =
-            r#"function Button() { return <button className="btn primary">Click</button>; }"#;
-        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
-            .expect("Failed to parse TSX code");
-
-        fn find_jsx_opening_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "jsx_opening_element" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_opening_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx_elem) = find_jsx_opening_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
-            assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].0, "className");
-            assert_eq!(attrs[0].1, "btn primary");
-        } else {
-            panic!("No JSX opening element found");
-        }
+        crate::pipeline::parser::test_utils::assert_jsx_attribute(
+            r#"function Button() { return <button className="btn primary">Click</button>; }"#,
+            crate::pipeline::parser::test_utils::parse_tsx_snippet,
+            "className",
+            "btn primary",
+        );
     }
 
-    #[test]
-    fn test_extract_jsx_attributes_multiple() {
-        let code =
-            r#"function Form() { return <input id="email-input" className="form-control" />; }"#;
-        let tree = crate::pipeline::parser::test_utils::parse_tsx_snippet(code)
-            .expect("Failed to parse TSX code");
-
-        fn find_jsx_self_closing(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "jsx_self_closing_element" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_self_closing(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx_elem) = find_jsx_self_closing(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
-            assert_eq!(attrs.len(), 2);
-
-            // attrs may be in any order depending on AST traversal
-            let has_id = attrs
-                .iter()
-                .any(|(name, val, _)| name == "id" && val == "email-input");
-            let has_classname = attrs
-                .iter()
-                .any(|(name, val, _)| name == "className" && val == "form-control");
-
-            assert!(has_id, "Should extract id attribute");
-            assert!(has_classname, "Should extract className attribute");
-        } else {
-            panic!("No JSX self-closing element found");
-        }
-    }
-
-    fn find_function_decl(root: tree_sitter::Node) -> Option<tree_sitter::Node> {
-        if root.kind() == "function_declaration"
-            || root.kind() == "arrow_function"
-            || root.kind() == "lexical_declaration"
-        {
-            return Some(root);
-        }
-        let mut i = 0u32;
-        while let Some(child) = root.child(i) {
-            if let Some(found) = find_function_decl(child) {
-                return Some(found);
-            }
-            i += 1;
-        }
-        None
+    fn find_function_decl(root: Node) -> Option<Node> {
+        crate::pipeline::parser::test_utils::find_function_decl(root)
     }
 
     #[test]

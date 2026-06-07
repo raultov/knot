@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 mod comments;
 mod context;
-mod extractor;
+pub(crate) mod extractor;
 pub mod languages;
 mod orphans;
 mod utils;
@@ -197,7 +197,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
 
     // Dispatch by filename first for extensionless files
     if filename == "Jenkinsfile" {
-        return Ok(languages::groovy::extract_entities_groovy(
+        return Ok(languages::jenkins::extract_entities_jenkins(
             &source,
             &file_path,
             &parse_cfg.repo_name,
@@ -415,13 +415,14 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )?
         }
-        "groovy" => languages::groovy::extract_entities_groovy_standard(
-            &source,
-            &file_path,
-            &parse_cfg.repo_name,
-        ),
-        "gradle" | "jenkinsfile" => {
+        "groovy" => {
             languages::groovy::extract_entities_groovy(&source, &file_path, &parse_cfg.repo_name)
+        }
+        "gradle" => {
+            languages::gradle::extract_entities_gradle(&source, &file_path, &parse_cfg.repo_name)
+        }
+        "jenkinsfile" => {
+            languages::jenkins::extract_entities_jenkins(&source, &file_path, &parse_cfg.repo_name)
         }
         "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),
         "toml" => languages::toml::extract_entities_toml(&source, &file_path, &parse_cfg.repo_name),
@@ -515,7 +516,7 @@ fn detect_chart_name(file_path: &str) -> String {
     while let Some(dir) = current {
         let chart_yaml = dir.join("Chart.yaml");
         if chart_yaml.exists() {
-            if let Ok(source) = std::fs::read_to_string(&chart_yaml)
+            if let Ok(source) = fs::read_to_string(&chart_yaml)
                 && let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&source)
                 && let Some(name) = yaml.get("name").and_then(|v| v.as_str())
             {
@@ -733,49 +734,30 @@ int bar(const char *s);
         assert_eq!(ext, "java");
     }
 
-    #[test]
-    fn test_kotlin_file_extension_detection() {
-        let extensions = vec!["kt", "kts"];
-
-        for ext_name in &extensions {
+    fn assert_extensions_detected(extensions: &[&str]) {
+        for ext_name in extensions {
             let path = PathBuf::from(format!("/test/file.{}", ext_name));
             let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or_default();
-
             assert_eq!(ext, *ext_name);
         }
+    }
+
+    #[test]
+    fn test_kotlin_file_extension_detection() {
+        assert_extensions_detected(&["kt", "kts"]);
     }
 
     #[test]
     fn test_typescript_file_extension_detection() {
-        let extensions = vec!["ts", "tsx", "cts"];
-
-        for ext_name in &extensions {
-            let path = PathBuf::from(format!("/test/file.{}", ext_name));
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or_default();
-
-            assert_eq!(ext, *ext_name);
-        }
+        assert_extensions_detected(&["ts", "tsx", "cts"]);
     }
 
     #[test]
     fn test_javascript_file_extension_detection() {
-        let extensions = vec!["js", "mjs", "cjs", "jsx"];
-
-        for ext_name in &extensions {
-            let path = PathBuf::from(format!("/test/file.{}", ext_name));
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or_default();
-
-            assert_eq!(ext, *ext_name);
-        }
+        assert_extensions_detected(&["js", "mjs", "cjs", "jsx"]);
     }
 
     #[test]

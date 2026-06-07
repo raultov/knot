@@ -249,21 +249,48 @@ fn load_knot_env() {
     }
 }
 
+fn resolve_repo_path(repo_path: Option<String>) -> Result<String> {
+    if let Some(path) = repo_path {
+        Ok(std::fs::canonicalize(&path)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or(path))
+    } else {
+        Ok(std::env::current_dir()
+            .context("Failed to determine current working directory for repo_path")?
+            .to_string_lossy()
+            .into_owned())
+    }
+}
+
+fn resolve_repo_name(repo_name: Option<String>, repo_path: &str) -> String {
+    if let Some(name) = repo_name {
+        name
+    } else {
+        std::path::Path::new(repo_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| "unnamed-repo".to_string())
+    }
+}
+
+fn parse_dependencies(deps: Option<&String>) -> Vec<String> {
+    deps.map(|s| {
+        s.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 impl Config {
     /// Load configuration for the indexer binary (knot-indexer).
     /// Parses IndexerCli and includes all indexing-specific options.
     pub fn load_indexer() -> Result<Self> {
         Self::load_env_and_parse(IndexerCli::parse).map(
             |(cli, repo_path, repo_name, neo4j_password)| {
-                let dependency_repos = if let Some(deps_str) = &cli.dependencies {
-                    deps_str
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let dependency_repos = parse_dependencies(cli.dependencies.as_ref());
 
                 Self {
                     repo_path,
@@ -334,30 +361,10 @@ impl Config {
             .or_else(|| std::env::var("KNOT_NEO4J_PASSWORD").ok())
             .context("Neo4j password is required. Provide it via KNOT_NEO4J_PASSWORD environment variable.")?;
 
-        // Resolve repo_path: if not provided, use current directory and canonicalize
-        let repo_path = if let Some(path) = cli.repo_path() {
-            std::fs::canonicalize(&path)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or(path)
-        } else {
-            std::env::current_dir()
-                .context("Failed to determine current working directory for repo_path")?
-                .to_string_lossy()
-                .into_owned()
-        };
-
+        let repo_path = resolve_repo_path(cli.repo_path())?;
         tracing::info!("Resolved repo_path: {repo_path}");
 
-        // Auto-detect repo_name from the resolved canonical repo_path if not provided
-        let repo_name = if let Some(name) = cli.repo_name() {
-            name
-        } else {
-            std::path::Path::new(&repo_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| "unnamed-repo".to_string())
-        };
+        let repo_name = resolve_repo_name(cli.repo_name(), &repo_path);
 
         Ok(Self {
             repo_path,
@@ -398,33 +405,10 @@ impl Config {
             .or_else(|| std::env::var("KNOT_NEO4J_PASSWORD").ok())
             .context("Neo4j password is required. Provide it via --neo4j-password or KNOT_NEO4J_PASSWORD environment variable.")?;
 
-        // Resolve repo_path: if not provided, use current directory and canonicalize
-        let repo_path = if let Some(path) = cli.repo_path() {
-            // If provided, canonicalize it to get an absolute path
-            std::fs::canonicalize(&path)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or(path)
-        } else {
-            // Fallback: use current working directory
-            std::env::current_dir()
-                .context("Failed to determine current working directory for repo_path")?
-                .to_string_lossy()
-                .into_owned()
-        };
-
+        let repo_path = resolve_repo_path(cli.repo_path())?;
         tracing::info!("Resolved repo_path: {repo_path}");
 
-        // Auto-detect repo_name from the resolved canonical repo_path if not provided
-        let repo_name = if let Some(name) = cli.repo_name() {
-            name
-        } else {
-            // Extract last component of the canonical repo_path as default
-            std::path::Path::new(&repo_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| "unnamed-repo".to_string())
-        };
+        let repo_name = resolve_repo_name(cli.repo_name(), &repo_path);
 
         Ok((cli, repo_path, repo_name, neo4j_password))
     }
@@ -477,39 +461,15 @@ mod tests {
 
     #[test]
     fn test_repo_name_auto_detection() {
-        // We use dummy CLI struct to test the logic
-        let repo_path = "/path/to/my-project";
-        let repo_name_opt: Option<String> = None;
-
-        let repo_name = if let Some(name) = repo_name_opt {
-            name
-        } else {
-            std::path::Path::new(repo_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| "unnamed-repo".to_string())
-        };
-
-        assert_eq!(repo_name, "my-project");
+        assert_eq!(resolve_repo_name(None, "/path/to/my-project"), "my-project");
     }
 
     #[test]
     fn test_repo_name_provided() {
-        let repo_path = "/path/to/my-project";
-        let repo_name_opt: Option<String> = Some("custom-name".to_string());
-
-        let repo_name = if let Some(name) = repo_name_opt {
-            name
-        } else {
-            std::path::Path::new(repo_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| "unnamed-repo".to_string())
-        };
-
-        assert_eq!(repo_name, "custom-name");
+        assert_eq!(
+            resolve_repo_name(Some("custom-name".to_string()), "/path/to/my-project"),
+            "custom-name"
+        );
     }
 
     #[test]
@@ -568,71 +528,42 @@ mod tests {
 
     #[test]
     fn test_parse_dependencies_single() {
-        let deps_str = "core-lib";
-        let dependency_repos: Vec<String> = deps_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        assert_eq!(dependency_repos.len(), 1);
-        assert_eq!(dependency_repos[0], "core-lib");
+        assert_eq!(
+            parse_dependencies(Some(&"core-lib".to_string())),
+            vec!["core-lib"]
+        );
     }
 
     #[test]
     fn test_parse_dependencies_multiple() {
-        let deps_str = "core-lib,shared-types,utils";
-        let dependency_repos: Vec<String> = deps_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        assert_eq!(dependency_repos.len(), 3);
-        assert_eq!(dependency_repos[0], "core-lib");
-        assert_eq!(dependency_repos[1], "shared-types");
-        assert_eq!(dependency_repos[2], "utils");
+        assert_eq!(
+            parse_dependencies(Some(&"core-lib,shared-types,utils".to_string())),
+            vec!["core-lib", "shared-types", "utils"]
+        );
     }
 
     #[test]
     fn test_parse_dependencies_with_whitespace() {
-        let deps_str = "core-lib , shared-types , utils";
-        let dependency_repos: Vec<String> = deps_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        assert_eq!(dependency_repos.len(), 3);
-        assert_eq!(dependency_repos[0], "core-lib");
-        assert_eq!(dependency_repos[1], "shared-types");
-        assert_eq!(dependency_repos[2], "utils");
+        assert_eq!(
+            parse_dependencies(Some(&"core-lib , shared-types , utils".to_string())),
+            vec!["core-lib", "shared-types", "utils"]
+        );
     }
 
     #[test]
     fn test_parse_dependencies_empty() {
-        let deps_str = "";
-        let dependency_repos: Vec<String> = deps_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        assert_eq!(dependency_repos.len(), 0);
+        assert_eq!(
+            parse_dependencies(Some(&"".to_string())),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn test_parse_dependencies_with_trailing_comma() {
-        let deps_str = "core-lib,shared-types,";
-        let dependency_repos: Vec<String> = deps_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        assert_eq!(dependency_repos.len(), 2);
-        assert_eq!(dependency_repos[0], "core-lib");
-        assert_eq!(dependency_repos[1], "shared-types");
+        assert_eq!(
+            parse_dependencies(Some(&"core-lib,shared-types,".to_string())),
+            vec!["core-lib", "shared-types"]
+        );
     }
 
     #[test]
@@ -774,65 +705,31 @@ mod tests {
 
     #[test]
     fn test_resolve_repo_path_with_dot() {
-        // Test that passing "." gets canonicalized to an absolute path
-        let repo_path_opt: Option<String> = Some(".".to_string());
-
-        let repo_path = if let Some(path) = repo_path_opt {
-            std::fs::canonicalize(&path)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or(path)
-        } else {
-            std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        };
-
-        // Should be an absolute path, not "."
+        let repo_path = resolve_repo_path(Some(".".to_string())).unwrap();
         assert!(!repo_path.contains("."));
         assert!(std::path::Path::new(&repo_path).is_absolute());
     }
 
     #[test]
     fn test_resolve_repo_path_fallback_current_dir() {
-        // Test that when repo_path is None, it defaults to current directory
-        let repo_path_opt: Option<String> = None;
-
-        let repo_path = if let Some(path) = repo_path_opt {
-            std::fs::canonicalize(&path)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or(path)
-        } else {
-            std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        };
-
+        let repo_path = resolve_repo_path(None).unwrap();
         let expected = std::env::current_dir()
             .unwrap()
             .to_string_lossy()
             .into_owned();
-
         assert_eq!(repo_path, expected);
         assert!(std::path::Path::new(&repo_path).is_absolute());
     }
 
     #[test]
     fn test_repo_name_extraction_from_canonical_path() {
-        // When repo_path is canonicalized, repo_name should extract correctly
         let current_dir = std::env::current_dir()
             .unwrap()
             .to_string_lossy()
             .into_owned();
 
-        let repo_name = std::path::Path::new(&current_dir)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-            .unwrap_or_else(|| "unnamed-repo".to_string());
+        let repo_name = resolve_repo_name(None, &current_dir);
 
-        // Should get the actual directory name, not something empty or weird
         assert!(!repo_name.is_empty());
         assert!(
             repo_name != "unnamed-repo" || std::env::current_dir().unwrap().file_name().is_none()
@@ -843,21 +740,13 @@ mod tests {
 
     #[test]
     fn test_repo_name_explicit_override() {
-        // When --repo-name is provided, it should override auto-detection
-        let repo_path = "/some/path/to/project";
-        let repo_name_opt: Option<String> = Some("custom-repo-name".to_string());
-
-        let repo_name = if let Some(name) = repo_name_opt {
-            name
-        } else {
-            std::path::Path::new(repo_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or_else(|| "unnamed-repo".to_string())
-        };
-
-        assert_eq!(repo_name, "custom-repo-name");
+        assert_eq!(
+            resolve_repo_name(
+                Some("custom-repo-name".to_string()),
+                "/some/path/to/project"
+            ),
+            "custom-repo-name"
+        );
     }
 
     #[test]
