@@ -2,6 +2,12 @@ use crate::models::{CallIntent, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 
+fn node_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = std::str::from_utf8(&source[name_node.byte_range()]).ok()?;
+    Some(name.trim().to_string())
+}
+
 /// Recursively builds the FQN for a C++ node by traversing its parents.
 /// If it's inside a `class_specifier`, it prepends `ClassName::`.
 /// If it's inside a `namespace_definition`, it prepends `NamespaceName::`.
@@ -13,18 +19,9 @@ pub(crate) fn build_cpp_fqn(node: Node<'_>, source: &[u8]) -> Option<String> {
 
     while let Some(parent) = current {
         match parent.kind() {
-            "class_specifier" | "struct_specifier" => {
-                if let Some(name_node) = parent.child_by_field_name("name")
-                    && let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()])
-                {
-                    parts.push(name.trim().to_string());
-                }
-            }
-            "namespace_definition" => {
-                if let Some(name_node) = parent.child_by_field_name("name")
-                    && let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()])
-                {
-                    parts.push(name.trim().to_string());
+            "class_specifier" | "struct_specifier" | "namespace_definition" => {
+                if let Some(name) = node_name(parent, source) {
+                    parts.push(name);
                 }
             }
             _ => {}
@@ -262,6 +259,7 @@ pub(crate) fn extract_cpp_signature(entity_node: Node<'_>, source: &[u8]) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::RelationshipType;
     use tree_sitter::Parser;
     use tree_sitter::StreamingIterator;
 
@@ -307,36 +305,57 @@ mod tests {
         assert_eq!(fqn, "Engine::Physics::Body");
     }
 
+    fn collect_query_captures(
+        source: &str,
+        language: tree_sitter::Language,
+        query_source: &str,
+        capture_name: &str,
+    ) -> Vec<String> {
+        let mut parser = Parser::new();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let query = tree_sitter::Query::new(&language, query_source).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        let mut names = Vec::new();
+        while let Some(m) = {
+            matches.advance();
+            matches.get()
+        } {
+            for capture in m.captures {
+                if query.capture_names()[capture.index as usize] == capture_name {
+                    names.push(node_text(capture.node, source.as_bytes()));
+                }
+            }
+        }
+        names
+    }
+
+    fn calls_print_relationship(
+        entity: &crate::models::ResolutionEntity,
+        resolution_entities: &[crate::models::ResolutionEntity],
+    ) -> bool {
+        entity.relationships.iter().any(|(uuid, rel_type)| {
+            *rel_type == RelationshipType::Calls
+                && resolution_entities
+                    .iter()
+                    .any(|target| target.uuid == *uuid && target.name == "print")
+        })
+    }
+
     #[test]
     fn test_cpp_operator_overload_and_ref_return() {
         let source = r#"class String {
     String & copy(const char *pstr, unsigned int length) { return *this; }
     String & operator =(const char *pstr) { if (pstr) copy(pstr, 10); return *this; }
 };"#;
-        let mut parser = get_parser();
-        let tree = parser.parse(source, None).unwrap();
 
-        let query_source = include_str!("../../../../queries/cpp.scm");
-
-        let query =
-            tree_sitter::Query::new(&tree_sitter_cpp::LANGUAGE.into(), query_source).unwrap();
-
-        let mut cursor = tree_sitter::QueryCursor::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
-        let mut entity_names = Vec::new();
-        while let Some(m) = {
-            matches.advance();
-            matches.get()
-        } {
-            for capture in m.captures {
-                let capture_name = &query.capture_names()[capture.index as usize];
-                if *capture_name == "cpp_method.name" {
-                    let text = node_text(capture.node, source.as_bytes());
-                    entity_names.push(text);
-                }
-            }
-        }
+        let entity_names = collect_query_captures(
+            source,
+            tree_sitter_cpp::LANGUAGE.into(),
+            include_str!("../../../../queries/cpp.scm"),
+            "cpp_method.name",
+        );
 
         assert!(
             entity_names.contains(&"copy".to_string()),
@@ -363,30 +382,13 @@ mod tests {
             void start() {}
             long & getRef() { long x = 0; return x; }
         "#;
-        let mut parser = get_parser();
-        let tree = parser.parse(source, None).unwrap();
 
-        let query_source = include_str!("../../../../queries/cpp.scm");
-
-        let query =
-            tree_sitter::Query::new(&tree_sitter_cpp::LANGUAGE.into(), query_source).unwrap();
-
-        let mut cursor = tree_sitter::QueryCursor::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
-        let mut entity_names = Vec::new();
-        while let Some(m) = {
-            matches.advance();
-            matches.get()
-        } {
-            for capture in m.captures {
-                let capture_name = &query.capture_names()[capture.index as usize];
-                if *capture_name == "cpp_method.name" {
-                    let text = node_text(capture.node, source.as_bytes());
-                    entity_names.push(text);
-                }
-            }
-        }
+        let entity_names = collect_query_captures(
+            source,
+            tree_sitter_cpp::LANGUAGE.into(),
+            include_str!("../../../../queries/cpp.scm"),
+            "cpp_method.name",
+        );
 
         // getPtr has pointer return (int*)
         assert!(
@@ -415,32 +417,13 @@ mod tests {
             int * getPtr() { return 0; }
             void doWork() {}
         "#;
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_c::LANGUAGE.into())
-            .unwrap();
-        let tree = parser.parse(source, None).unwrap();
 
-        let query_source = include_str!("../../../../queries/c.scm");
-
-        let query = tree_sitter::Query::new(&tree_sitter_c::LANGUAGE.into(), query_source).unwrap();
-
-        let mut cursor = tree_sitter::QueryCursor::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
-        let mut entity_names = Vec::new();
-        while let Some(m) = {
-            matches.advance();
-            matches.get()
-        } {
-            for capture in m.captures {
-                let capture_name = &query.capture_names()[capture.index as usize];
-                if *capture_name == "c_function.name" {
-                    let text = node_text(capture.node, source.as_bytes());
-                    entity_names.push(text);
-                }
-            }
-        }
+        let entity_names = collect_query_captures(
+            source,
+            tree_sitter_c::LANGUAGE.into(),
+            include_str!("../../../../queries/c.scm"),
+            "c_function.name",
+        );
 
         assert!(
             entity_names.contains(&"getPtr".to_string()),
@@ -527,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_cpp_print_println_internal_calls() {
-        use crate::models::{RelationshipType, ResolutionEntity};
+        use crate::models::ResolutionEntity;
         use crate::pipeline::parser::extractor::extract_entities;
         use std::collections::HashMap;
 
@@ -616,7 +599,7 @@ size_t Print::println(void) {
             .expect("println(char) not found");
 
         let has_print_call = println_char.reference_intents.iter().any(|intent| {
-            matches!(intent, crate::models::ReferenceIntent::Call { method, receiver, .. }
+            matches!(intent, ReferenceIntent::Call { method, receiver, .. }
                 if method == "print" && receiver.is_none())
         });
         assert!(
@@ -641,15 +624,7 @@ size_t Print::println(void) {
             })
             .expect("println(char) resolution entity not found");
 
-        let calls_print = println_char_res
-            .relationships
-            .iter()
-            .any(|(uuid, rel_type)| {
-                *rel_type == RelationshipType::Calls
-                    && resolution_entities
-                        .iter()
-                        .any(|target| target.uuid == *uuid && target.name == "print")
-            });
+        let calls_print = calls_print_relationship(println_char_res, &resolution_entities);
         assert!(
             calls_print,
             "println(char) should CALL print, relationships: {:?}",
@@ -674,12 +649,7 @@ size_t Print::println(void) {
             });
 
         if let Some(pv) = println_void_res {
-            let calls_print = pv.relationships.iter().any(|(uuid, rel_type)| {
-                *rel_type == RelationshipType::Calls
-                    && resolution_entities
-                        .iter()
-                        .any(|target| target.uuid == *uuid && target.name == "print")
-            });
+            let calls_print = calls_print_relationship(pv, &resolution_entities);
             assert!(
                 calls_print,
                 "println(void) should CALL print, relationships: {:?}",

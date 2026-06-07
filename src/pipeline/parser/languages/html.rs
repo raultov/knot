@@ -11,12 +11,35 @@ use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 use uuid::Uuid;
 
-/// Extract string value from quoted attribute value node
-#[allow(dead_code)]
-fn extract_string_value(value_node: Node<'_>, source: &[u8]) -> String {
-    let text = node_text(value_node, source);
-    // Remove quotes if present
-    text.trim_matches(|c| c == '"' || c == '\'').to_string()
+/// Extract the name and trimmed value from an attribute node.
+/// Returns (attr_name, attr_value).
+fn parse_html_attribute_node(attr_node: Node<'_>, source: &[u8]) -> (String, String) {
+    let mut attr_name = String::new();
+    let mut attr_value = String::new();
+
+    for attr_part in attr_node.children(&mut attr_node.walk()) {
+        match attr_part.kind() {
+            "attribute_name" => {
+                attr_name =
+                    String::from_utf8_lossy(&source[attr_part.start_byte()..attr_part.end_byte()])
+                        .to_string();
+            }
+            "quoted_attribute_value" => {
+                let raw_value =
+                    String::from_utf8_lossy(&source[attr_part.start_byte()..attr_part.end_byte()])
+                        .to_string();
+                attr_value = raw_value
+                    .trim_start_matches('"')
+                    .trim_start_matches('\'')
+                    .trim_end_matches('"')
+                    .trim_end_matches('\'')
+                    .to_string();
+            }
+            _ => {}
+        }
+    }
+
+    (attr_name, attr_value)
 }
 
 /// Extract id and class attributes from HTML elements
@@ -272,32 +295,7 @@ fn extract_html_file_imports(
             if child.kind() == "start_tag" {
                 for attr_child in child.children(&mut child.walk()) {
                     if attr_child.kind() == "attribute" {
-                        let mut attr_name = String::new();
-                        let mut attr_value = String::new();
-
-                        for attr_part in attr_child.children(&mut attr_child.walk()) {
-                            match attr_part.kind() {
-                                "attribute_name" => {
-                                    attr_name = String::from_utf8_lossy(
-                                        &source[attr_part.start_byte()..attr_part.end_byte()],
-                                    )
-                                    .to_string();
-                                }
-                                "quoted_attribute_value" => {
-                                    let raw_value = String::from_utf8_lossy(
-                                        &source[attr_part.start_byte()..attr_part.end_byte()],
-                                    )
-                                    .to_string();
-                                    attr_value = raw_value
-                                        .trim_start_matches('"')
-                                        .trim_start_matches('\'')
-                                        .trim_end_matches('"')
-                                        .trim_end_matches('\'')
-                                        .to_string();
-                                }
-                                _ => {}
-                            }
-                        }
+                        let (attr_name, attr_value) = parse_html_attribute_node(attr_child, source);
 
                         if attr_name == "src" && !attr_value.is_empty() {
                             // Create a reference intent for the script import
@@ -357,32 +355,8 @@ fn extract_html_file_imports(
                 if child.kind() == "start_tag" {
                     for attr_child in child.children(&mut child.walk()) {
                         if attr_child.kind() == "attribute" {
-                            let mut attr_name = String::new();
-                            let mut attr_value = String::new();
-
-                            for attr_part in attr_child.children(&mut attr_child.walk()) {
-                                match attr_part.kind() {
-                                    "attribute_name" => {
-                                        attr_name = String::from_utf8_lossy(
-                                            &source[attr_part.start_byte()..attr_part.end_byte()],
-                                        )
-                                        .to_string();
-                                    }
-                                    "quoted_attribute_value" => {
-                                        let raw_value = String::from_utf8_lossy(
-                                            &source[attr_part.start_byte()..attr_part.end_byte()],
-                                        )
-                                        .to_string();
-                                        attr_value = raw_value
-                                            .trim_start_matches('"')
-                                            .trim_start_matches('\'')
-                                            .trim_end_matches('"')
-                                            .trim_end_matches('\'')
-                                            .to_string();
-                                    }
-                                    _ => {}
-                                }
-                            }
+                            let (attr_name, attr_value) =
+                                parse_html_attribute_node(attr_child, source);
 
                             if attr_name == "rel" && attr_value.contains("stylesheet") {
                                 is_stylesheet = true;

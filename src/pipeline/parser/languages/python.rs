@@ -376,3 +376,617 @@ pub(crate) fn extract_decorator_names_python(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::parser::test_utils::parse_python_snippet;
+
+    fn parse(code: &str) -> tree_sitter::Tree {
+        parse_python_snippet(code).expect("Failed to parse Python code")
+    }
+
+    // ── handle_python_capture ────────────────────────────────────
+
+    #[test]
+    fn test_handle_python_capture_class() {
+        let code = "class Foo: pass";
+        let tree = parse(code);
+        let class_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["class_definition"],
+        )
+        .expect("class_definition not found");
+        // Find the identifier child for the class name
+        let name_node = class_node
+            .children(&mut class_node.walk())
+            .find(|c| c.kind() == "identifier")
+            .expect("identifier not found");
+        let text = node_text(name_node, code.as_bytes());
+        let result = handle_python_capture("python.class.name", &text, name_node);
+        assert_eq!(
+            result,
+            Some(("Foo".to_string(), EntityKind::PythonClass, 1))
+        );
+    }
+
+    #[test]
+    fn test_handle_python_capture_function() {
+        let code = "def foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let name_node = func_node
+            .child_by_field_name("name")
+            .expect("name field not found");
+        let text = node_text(name_node, code.as_bytes());
+        let result = handle_python_capture("python.function.name", &text, name_node);
+        assert_eq!(
+            result,
+            Some(("foo".to_string(), EntityKind::PythonFunction, 1))
+        );
+    }
+
+    #[test]
+    fn test_handle_python_capture_method() {
+        let code = "class Foo:\n    def bar(self): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let name_node = func_node
+            .child_by_field_name("name")
+            .expect("name field not found");
+        let text = node_text(name_node, code.as_bytes());
+        let result = handle_python_capture("python.function.name", &text, name_node);
+        assert_eq!(
+            result,
+            Some(("bar".to_string(), EntityKind::PythonMethod, 2))
+        );
+    }
+
+    #[test]
+    fn test_handle_python_capture_constant() {
+        let code = "FOO = 42";
+        let tree = parse(code);
+        let name_node =
+            crate::pipeline::parser::test_utils::find_first_node(tree.root_node(), &["identifier"])
+                .expect("identifier not found");
+        let text = node_text(name_node, code.as_bytes());
+        let result = handle_python_capture("python.constant.name", &text, name_node);
+        assert_eq!(
+            result,
+            Some(("FOO".to_string(), EntityKind::PythonConstant, 1))
+        );
+    }
+
+    #[test]
+    fn test_handle_python_capture_unknown() {
+        let code = "x = 1";
+        let tree = parse(code);
+        let name_node =
+            crate::pipeline::parser::test_utils::find_first_node(tree.root_node(), &["identifier"])
+                .expect("identifier not found");
+        let text = node_text(name_node, code.as_bytes());
+        let result = handle_python_capture("unknown.capture", &text, name_node);
+        assert_eq!(result, None);
+    }
+
+    // ── is_inside_class_body ─────────────────────────────────────
+
+    #[test]
+    fn test_is_inside_class_body_true() {
+        let code = "class Foo:\n    def bar(self): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        assert!(is_inside_class_body(func_node));
+    }
+
+    #[test]
+    fn test_is_inside_class_body_false() {
+        let code = "def foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        assert!(!is_inside_class_body(func_node));
+    }
+
+    // ── extract_call_intents_python ──────────────────────────────
+
+    #[test]
+    fn test_extract_call_simple_function() {
+        let code = "foo()";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_call_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].method, "foo");
+        assert_eq!(intents[0].receiver, None);
+    }
+
+    #[test]
+    fn test_extract_call_with_receiver() {
+        let code = "obj.method()";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_call_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].method, "method");
+        assert_eq!(intents[0].receiver, Some("obj".to_string()));
+    }
+
+    #[test]
+    fn test_extract_call_chained_receiver() {
+        let code = "module.obj.method()";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_call_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].method, "method");
+        assert_eq!(intents[0].receiver, Some("module.obj".to_string()));
+    }
+
+    #[test]
+    fn test_extract_call_multiple_calls() {
+        let code = "foo()\nbar()";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_call_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 2);
+        assert_eq!(intents[0].method, "foo");
+        assert_eq!(intents[1].method, "bar");
+    }
+
+    #[test]
+    fn test_extract_call_nested() {
+        let code = "foo(bar())";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_call_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 2);
+        let methods: Vec<&str> = intents.iter().map(|i| i.method.as_str()).collect();
+        assert!(methods.contains(&"foo"));
+        assert!(methods.contains(&"bar"));
+    }
+
+    // ── extract_import_intents_python ────────────────────────────
+
+    #[test]
+    fn test_extract_import_simple() {
+        let code = "import os";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_import_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        match &intents[0] {
+            ReferenceIntent::TypeReference { type_name, .. } => {
+                assert_eq!(type_name, "os");
+            }
+            _ => panic!("Expected TypeReference"),
+        }
+    }
+
+    #[test]
+    fn test_extract_import_dotted() {
+        let code = "import os.path";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_import_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        // Dotted import produces separate references for each segment
+        let has_os = intents.iter().any(
+            |i| matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "os"),
+        );
+        let has_path = intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "path")
+        });
+        assert!(
+            has_os,
+            "Should have TypeReference for os, got: {:?}",
+            intents
+        );
+        assert!(
+            has_path,
+            "Should have TypeReference for path, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_extract_import_from() {
+        let code = "from os import path";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_import_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        // Should contain a reference to the imported name
+        let has_path = intents.iter().any(|i| {
+            matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "path")
+        });
+        assert!(
+            has_path,
+            "Should have TypeReference for path, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_extract_import_aliased() {
+        let code = "import numpy as np";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_import_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        // import_statement with aliased_import: the current implementation only
+        // handles dotted_name/identifier children, not aliased_import directly,
+        // so this produces 0 intents (known limitation).
+        assert!(
+            intents.is_empty(),
+            "import with alias currently produces 0 intents, got: {:?}",
+            intents
+        );
+    }
+
+    #[test]
+    fn test_extract_import_from_aliased() {
+        let code = "from os import path as p";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_import_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        // from-import with aliased_import: extracts the alias name
+        let has_alias = intents.iter().any(
+            |i| matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "p"),
+        );
+        assert!(
+            has_alias,
+            "Should have TypeReference for alias 'p', got: {:?}",
+            intents
+        );
+    }
+
+    // ── extract_value_references_python ──────────────────────────
+
+    #[test]
+    fn test_extract_value_reference_keyword_arg() {
+        let code = "foo(bar=baz)";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        match &intents[0] {
+            ReferenceIntent::ValueReference { value_name, .. } => {
+                assert_eq!(value_name, "baz");
+            }
+            _ => panic!("Expected ValueReference"),
+        }
+    }
+
+    #[test]
+    fn test_extract_value_reference_filters_self() {
+        let code = "foo(self=x)";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        // "self" is a reserved value, should be filtered
+        let self_refs: Vec<_> = intents
+            .iter()
+            .filter(|i| matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "self"))
+            .collect();
+        assert!(
+            self_refs.is_empty(),
+            "self should be filtered as reserved value"
+        );
+    }
+
+    #[test]
+    fn test_extract_value_reference_filters_cls() {
+        let code = "foo(cls=x)";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        let cls_refs: Vec<_> = intents
+            .iter()
+            .filter(|i| matches!(i, ReferenceIntent::ValueReference { value_name, .. } if value_name == "cls"))
+            .collect();
+        assert!(
+            cls_refs.is_empty(),
+            "cls should be filtered as reserved value"
+        );
+    }
+
+    // ── extract_inheritance_intents_python ───────────────────────
+
+    #[test]
+    fn test_extract_inheritance_single_parent() {
+        let code = "class Foo(Bar): pass";
+        let tree = parse(code);
+        let class_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["class_definition"],
+        )
+        .expect("class_definition not found");
+        let mut intents = Vec::new();
+        extract_inheritance_intents_python(class_node, code.as_bytes(), &mut intents);
+
+        let extends = crate::pipeline::parser::test_utils::collect_extends(&intents);
+        assert_eq!(extends, &["Bar"]);
+    }
+
+    #[test]
+    fn test_extract_inheritance_multiple_parents() {
+        let code = "class Foo(Bar, Baz): pass";
+        let tree = parse(code);
+        let class_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["class_definition"],
+        )
+        .expect("class_definition not found");
+        let mut intents = Vec::new();
+        extract_inheritance_intents_python(class_node, code.as_bytes(), &mut intents);
+
+        let extends = crate::pipeline::parser::test_utils::collect_extends(&intents);
+        assert_eq!(extends.len(), 2);
+        assert!(extends.contains(&"Bar"));
+        assert!(extends.contains(&"Baz"));
+    }
+
+    #[test]
+    fn test_extract_inheritance_none() {
+        let code = "class Foo: pass";
+        let tree = parse(code);
+        let class_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["class_definition"],
+        )
+        .expect("class_definition not found");
+        let mut intents = Vec::new();
+        extract_inheritance_intents_python(class_node, code.as_bytes(), &mut intents);
+
+        assert!(
+            intents.is_empty(),
+            "Expected no inheritance intents for class without parents"
+        );
+    }
+
+    #[test]
+    fn test_extract_inheritance_filters_self() {
+        let code = "class Foo(self): pass";
+        let tree = parse(code);
+        let class_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["class_definition"],
+        )
+        .expect("class_definition not found");
+        let mut intents = Vec::new();
+        extract_inheritance_intents_python(class_node, code.as_bytes(), &mut intents);
+
+        let self_refs: Vec<_> = intents
+            .iter()
+            .filter(|i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == "self"))
+            .collect();
+        assert!(
+            self_refs.is_empty(),
+            "self should be filtered as reserved value"
+        );
+    }
+
+    // ── extract_decorator_intents_python ─────────────────────────
+
+    #[test]
+    fn test_extract_decorator_simple() {
+        let code = "@staticmethod\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut intents = Vec::new();
+        extract_decorator_intents_python(func_node, code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        match &intents[0] {
+            ReferenceIntent::Call {
+                method, receiver, ..
+            } => {
+                assert_eq!(method, "staticmethod");
+                assert_eq!(receiver, &None);
+            }
+            _ => panic!("Expected Call intent"),
+        }
+    }
+
+    #[test]
+    fn test_extract_decorator_with_call() {
+        let code = "@route(\"/path\")\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut intents = Vec::new();
+        extract_decorator_intents_python(func_node, code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        match &intents[0] {
+            ReferenceIntent::Call { method, .. } => {
+                assert_eq!(method, "route");
+            }
+            _ => panic!("Expected Call intent"),
+        }
+    }
+
+    #[test]
+    fn test_extract_decorator_with_attribute() {
+        let code = "@app.route\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut intents = Vec::new();
+        extract_decorator_intents_python(func_node, code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 1);
+        match &intents[0] {
+            ReferenceIntent::Call { method, .. } => {
+                assert_eq!(method, "route");
+            }
+            _ => panic!("Expected Call intent"),
+        }
+    }
+
+    #[test]
+    fn test_extract_decorator_multiple() {
+        let code = "@staticmethod\n@property\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut intents = Vec::new();
+        extract_decorator_intents_python(func_node, code.as_bytes(), &mut intents);
+
+        assert_eq!(intents.len(), 2);
+        let methods: Vec<&str> = intents
+            .iter()
+            .map(|i| match i {
+                ReferenceIntent::Call { method, .. } => method.as_str(),
+                _ => panic!("Expected Call intent"),
+            })
+            .collect();
+        assert!(methods.contains(&"staticmethod"));
+        assert!(methods.contains(&"property"));
+    }
+
+    #[test]
+    fn test_extract_decorator_no_decorator() {
+        let code = "def foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut intents = Vec::new();
+        extract_decorator_intents_python(func_node, code.as_bytes(), &mut intents);
+
+        assert!(
+            intents.is_empty(),
+            "Expected no decorator intents for undecorated function"
+        );
+    }
+
+    // ── extract_decorator_names_python ───────────────────────────
+
+    #[test]
+    fn test_extract_decorator_names_simple() {
+        let code = "@staticmethod\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut names = Vec::new();
+        extract_decorator_names_python(func_node, code.as_bytes(), &mut names);
+
+        assert_eq!(names, vec!["@staticmethod"]);
+    }
+
+    #[test]
+    fn test_extract_decorator_names_with_call() {
+        let code = "@route(\"/path\")\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut names = Vec::new();
+        extract_decorator_names_python(func_node, code.as_bytes(), &mut names);
+
+        assert_eq!(names.len(), 1);
+        assert!(names[0].starts_with("@route"));
+    }
+
+    #[test]
+    fn test_extract_decorator_names_multiple() {
+        let code = "@staticmethod\n@property\ndef foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut names = Vec::new();
+        extract_decorator_names_python(func_node, code.as_bytes(), &mut names);
+
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"@staticmethod".to_string()));
+        assert!(names.contains(&"@property".to_string()));
+    }
+
+    #[test]
+    fn test_extract_decorator_names_no_decorator() {
+        let code = "def foo(): pass";
+        let tree = parse(code);
+        let func_node = crate::pipeline::parser::test_utils::find_first_node(
+            tree.root_node(),
+            &["function_definition"],
+        )
+        .expect("function_definition not found");
+        let mut names = Vec::new();
+        extract_decorator_names_python(func_node, code.as_bytes(), &mut names);
+
+        assert!(
+            names.is_empty(),
+            "Expected no decorator names for undecorated function"
+        );
+    }
+
+    // ── extract_reference_intents_python (integration) ───────────
+
+    #[test]
+    fn test_extract_reference_intents_combined() {
+        let code = "import os\n\ndef foo():\n    os.path.join(\"a\", \"b\")";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_reference_intents_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        // Should have import reference + call intent
+        let has_import = intents.iter().any(
+            |i| matches!(i, ReferenceIntent::TypeReference { type_name, .. } if type_name == "os"),
+        );
+        let has_call = intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::Call { method, .. } if method == "join"));
+        assert!(has_import, "Should have import reference for os");
+        assert!(has_call, "Should have call intent for join");
+    }
+}

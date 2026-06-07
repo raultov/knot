@@ -4,7 +4,7 @@
 //! - CSS classes, IDs, variables
 //! - SCSS variables, mixins, functions
 
-use crate::models::{EntityKind, ReferenceIntent};
+use crate::models::EntityKind;
 use tree_sitter::Node;
 
 /// Process a CSS or SCSS capture and extract entity information.
@@ -52,22 +52,6 @@ pub(crate) fn handle_css_capture(
     }
 }
 
-/// Process CSS class usage references (e.g., classList.add('btn-primary'))
-#[allow(dead_code)]
-pub(crate) fn handle_css_class_usage(text: &str, line: usize) -> ReferenceIntent {
-    let clean_class = text
-        .trim_start_matches('"')
-        .trim_start_matches('\'')
-        .trim_end_matches('"')
-        .trim_end_matches('\'')
-        .to_string();
-
-    ReferenceIntent::CssClassUsage {
-        class_name: clean_class,
-        line,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,18 +90,5 @@ mod tests {
         let (name, kind, _) = result.unwrap();
         assert_eq!(name, "flex-center");
         assert_eq!(kind, EntityKind::ScssMixin);
-    }
-
-    #[test]
-    fn test_handle_css_class_usage() {
-        let intent = handle_css_class_usage("'btn-primary'", 10);
-
-        match intent {
-            ReferenceIntent::CssClassUsage { class_name, line } => {
-                assert_eq!(class_name, "btn-primary");
-                assert_eq!(line, 10);
-            }
-            _ => panic!("Expected CssClassUsage"),
-        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity};
+use crate::pipeline::parser::utils::truncate_string;
 
 /// Maximum nesting depth for JSON tree walking.
 #[allow(dead_code)] // Used in tree walking depth checks
@@ -215,15 +216,6 @@ fn json_value_to_string(value: &serde_json::Value) -> String {
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => "[complex]".to_string(),
-    }
-}
-
-#[allow(dead_code)] // Reserved for future string truncation utility
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
 

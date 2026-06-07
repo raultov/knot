@@ -288,6 +288,20 @@ pub(crate) fn strip_comment_markers(raw: &str) -> String {
 mod tests {
     use super::*;
 
+    fn find_class(node: Node) -> Option<Node> {
+        if node.kind() == "class_declaration" {
+            return Some(node);
+        }
+        let mut i = 0u32;
+        while let Some(child) = node.child(i) {
+            if let Some(found) = find_class(child) {
+                return Some(found);
+            }
+            i += 1;
+        }
+        None
+    }
+
     #[test]
     fn test_strip_comment_markers_java_block() {
         let raw = "/**\n * This is a doc comment\n * With multiple lines\n */";
@@ -338,21 +352,6 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
             .expect("Failed to parse Java code");
 
-        // Find the class declaration
-        fn find_class(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
         if let Some(class_node) = find_class(tree.root_node()) {
             let children = extract_child_entity_nodes(class_node, "java");
             // Should find methods
@@ -366,21 +365,6 @@ mod tests {
         let code = "class Test { method1() {} method2() {} }";
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
-
-        // Find the class declaration
-        fn find_class(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         if let Some(class_node) = find_class(tree.root_node()) {
             let children = extract_child_entity_nodes(class_node, "typescript");
@@ -403,20 +387,6 @@ class UserService {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&lang).unwrap();
         let tree = parser.parse(code, None).unwrap();
-
-        fn find_class(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         if let Some(class_node) = find_class(tree.root_node()) {
             let decorators = extract_decorators(class_node, code.as_bytes(), "kotlin");

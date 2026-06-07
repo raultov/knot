@@ -1,10 +1,9 @@
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
+use crate::pipeline::parser::utils::truncate_string;
 
 /// Maximum depth for values.yaml tree walking.
-#[allow(dead_code)] // Used in tree walking depth checks
 const MAX_DEPTH: usize = 10;
 
-#[allow(dead_code)] // Reserved for future Chart.yaml parsing
 pub(crate) fn extract_chart_yaml(
     source: &str,
     file_path: &str,
@@ -81,7 +80,6 @@ pub(crate) fn extract_chart_yaml(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future values.yaml parsing
 pub(crate) fn extract_values_yaml(
     source: &str,
     file_path: &str,
@@ -108,7 +106,6 @@ pub(crate) fn extract_values_yaml(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future values tree walking
 fn walk_helm_values(
     prefix: &str,
     value: &serde_yaml::Value,
@@ -181,7 +178,6 @@ fn walk_helm_values(
     }
 }
 
-#[allow(dead_code)] // Reserved for future Helm value serialization
 fn helm_value_to_string(value: &serde_yaml::Value) -> String {
     match value {
         serde_yaml::Value::Null => "null".to_string(),
@@ -355,15 +351,6 @@ fn extract_template_refs(
             entity.embed_text = format!("include \"{}\"", include_name);
             entities.push(entity);
         }
-    }
-}
-
-#[allow(dead_code)] // Reserved for future string truncation utility
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
 

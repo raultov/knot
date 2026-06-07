@@ -1,6 +1,8 @@
 use crate::models::{CallIntent, ReferenceIntent};
-use crate::pipeline::parser::utils::node_text;
+use crate::pipeline::parser::utils::{extract_new_expression_name, node_text};
 use tree_sitter::Node;
+
+pub(crate) use crate::pipeline::parser::utils::extract_type_references;
 
 /// Recursively extract all call intents from Java.
 pub(crate) fn collect_all_reference_intents_java(
@@ -197,56 +199,6 @@ fn extract_identifiers_from_annotation(
     }
 }
 
-/// Extract type references from Java type annotations.
-///
-/// Recursively searches for `type_identifier` nodes in:
-/// - Method parameters
-/// - Constructor parameters (dependency injection)
-/// - Field types
-/// - Return types
-///
-/// Example:
-/// ```java
-/// public class AppComponent {
-///   private final AnalyticsService analytics;
-///   private final SeoService seo;
-///   
-///   public AppComponent(AnalyticsService analytics, SeoService seo) {
-///     this.analytics = analytics;
-///     this.seo = seo;
-///   }
-///   
-///   public ResultType process(DataService data) {
-///     return null;
-///   }
-/// }
-/// ```
-///
-/// This will extract: AnalyticsService (3 times), SeoService (3 times), DataService, ResultType
-pub(crate) fn extract_type_references(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-) {
-    let line = node.start_position().row + 1;
-
-    // Capture type_identifier nodes (type annotations)
-    if node.kind() == "type_identifier" {
-        let type_name = node_text(node, source);
-        // Only capture capitalized identifiers (likely classes/interfaces)
-        if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
-            intents.push(ReferenceIntent::TypeReference { type_name, line });
-        }
-    }
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_type_references(c, source, intents);
-        child = c.next_sibling();
-    }
-}
-
 /// Extract reference intents from a Java method body (wrapper for backward compatibility).
 pub(crate) fn extract_reference_intents_java(
     node: Node<'_>,
@@ -271,84 +223,7 @@ pub(crate) fn extract_call_intents_java(
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
-    if node.kind() == "method_invocation" {
-        let mut method_name: Option<String> = None;
-        let mut receiver: Option<String> = None;
-        let line = node.start_position().row + 1;
-
-        // Parse method_invocation structure:
-        // - Has optional receiver (identifier or "this")
-        // - Has "." separator if receiver exists
-        // - Has identifier for method name
-        let mut child = node.child(0);
-        let mut found_dot = false;
-        while let Some(c) = child {
-            let kind = c.kind();
-            match kind {
-                "identifier" | "field_access" => {
-                    if found_dot {
-                        // After a dot, this is the method name
-                        method_name = Some(node_text(c, source));
-                    } else if receiver.is_none() {
-                        // Before a dot (or if no dot), could be receiver or method name
-                        receiver = Some(node_text(c, source));
-                    }
-                }
-                "this" => {
-                    receiver = Some("this".to_string());
-                }
-                "." => {
-                    found_dot = true;
-                }
-                _ => {}
-            }
-            child = c.next_sibling();
-        }
-
-        // If we found a dot, we know the last identifier is the method
-        if found_dot {
-            if let Some(method) = method_name {
-                intents.push(CallIntent {
-                    method,
-                    receiver,
-                    line,
-                    arg_count: None,
-                });
-            }
-        } else if let Some(method) = method_name {
-            // No dot found, so receiver is actually a method name (local call)
-            intents.push(CallIntent {
-                method,
-                receiver: None,
-                line,
-                arg_count: None,
-            });
-            // Revert receiver since it's not a receiver
-        } else if let Some(receiver_val) = receiver {
-            // Single identifier - treat as local call
-            intents.push(CallIntent {
-                method: receiver_val,
-                receiver: None,
-                line,
-                arg_count: None,
-            });
-        }
-    } else if node.kind() == "object_creation_expression" {
-        let line = node.start_position().row + 1;
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "type_identifier" || c.kind() == "identifier" {
-                intents.push(CallIntent {
-                    method: node_text(c, source),
-                    receiver: None,
-                    line,
-                    arg_count: None,
-                });
-                break;
-            }
-            child = c.next_sibling();
-        }
-    }
+    intents.extend(extract_single_call_intent_java(node, source));
 
     // Recursively process children
     let mut child = node.child(0);
@@ -433,18 +308,13 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
         }
     } else if node.kind() == "object_creation_expression" {
         let line = node.start_position().row + 1;
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "type_identifier" || c.kind() == "identifier" {
-                intents.push(CallIntent {
-                    method: node_text(c, source),
-                    receiver: None,
-                    line,
-                    arg_count: None,
-                });
-                break;
-            }
-            child = c.next_sibling();
+        if let Some(name) = extract_new_expression_name(node, source) {
+            intents.push(CallIntent {
+                method: name,
+                receiver: None,
+                line,
+                arg_count: None,
+            });
         }
     }
 
@@ -549,22 +419,7 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
             .expect("Failed to parse Java code");
 
-        // Find the method invocation node
-        fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
-            if node.kind() == kind {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_node(child, kind) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(invocation) = find_node(tree.root_node(), "method_invocation") {
+        if let Some(invocation) = find_node_in_tree(tree.root_node(), "method_invocation") {
             let code_bytes = code.as_bytes();
             let intents = extract_single_call_intent_java(invocation, code_bytes);
             assert!(!intents.is_empty());
@@ -579,21 +434,7 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code)
             .expect("Failed to parse Java code");
 
-        fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
-            if node.kind() == kind {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_node(child, kind) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(invocation) = find_node(tree.root_node(), "method_invocation") {
+        if let Some(invocation) = find_node_in_tree(tree.root_node(), "method_invocation") {
             let code_bytes = code.as_bytes();
             let intents = extract_single_call_intent_java(invocation, code_bytes);
             assert!(!intents.is_empty());
@@ -633,10 +474,7 @@ mod tests {
         assert_eq!(intents[0].receiver, Some("this.chatMemory".to_string()));
     }
 
-    fn find_node_in_tree<'a>(
-        node: tree_sitter::Node<'a>,
-        kind: &str,
-    ) -> Option<tree_sitter::Node<'a>> {
+    fn find_node_in_tree<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
         if node.kind() == kind {
             return Some(node);
         }
@@ -736,26 +574,8 @@ mod tests {
         let mut intents = Vec::new();
         extract_class_inheritance_java(class_node, code.as_bytes(), &mut intents);
         assert_eq!(intents.len(), 3);
-        let extends: Vec<_> = intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Extends { parent, .. } = r {
-                    Some(parent.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let implements: Vec<_> = intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Implements { interface, .. } = r {
-                    Some(interface.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let extends = crate::pipeline::parser::test_utils::collect_extends(&intents);
+        let implements = crate::pipeline::parser::test_utils::collect_implements(&intents);
         assert_eq!(extends, ["User"]);
         assert!(implements.contains(&"Serializable"));
         assert!(implements.contains(&"Comparable"));

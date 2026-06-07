@@ -1,10 +1,12 @@
 pub mod cpp;
 pub mod css;
+pub mod gradle;
 pub mod groovy;
 pub mod helm;
 pub mod html;
 pub mod java;
 pub mod javascript;
+pub mod jenkins;
 pub mod json_config;
 pub mod kotlin;
 pub mod kubernetes;

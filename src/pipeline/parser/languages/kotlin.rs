@@ -437,49 +437,8 @@ pub(crate) fn extract_call_intents_kotlin(
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
-    if node.kind() == "call_expression" {
-        let mut method_name: Option<String> = None;
-        let mut receiver: Option<String> = None;
-        let line = node.start_position().row + 1;
-
-        // Parse call_expression structure:
-        // - Has optional receiver (identifier or "this") via postfix_expression
-        // - Has navigation_suffix for method/function name
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            let kind = c.kind();
-            match kind {
-                "simple_identifier" | "identifier" => {
-                    // Direct function call
-                    method_name = Some(node_text(c, source));
-                }
-                "postfix_expression" | "navigation_expression" => {
-                    // Check for receiver.method pattern
-                    extract_receiver_and_method(c, source, &mut receiver, &mut method_name);
-                }
-                "navigation_suffix" => {
-                    // Method name in navigation suffix
-                    if let Some(nav_child) = c.child(0)
-                        && matches!(nav_child.kind(), "simple_identifier" | "identifier")
-                    {
-                        method_name = Some(node_text(nav_child, source));
-                    }
-                }
-                _ => {}
-            }
-            child = c.next_sibling();
-        }
-
-        // Push the call intent
-        if let Some(method) = method_name {
-            intents.push(CallIntent {
-                method,
-                receiver,
-                line,
-                arg_count: None,
-            });
-        }
-    }
+    // Use the non-recursive version for the current node
+    intents.extend(extract_single_call_intent_kotlin(node, source));
 
     // Recursively process children
     let mut child = node.child(0);
@@ -558,7 +517,6 @@ fn extract_receiver_and_method(
 ///
 /// By extracting only the current node's intent, we avoid double-processing children
 /// that would cause duplicate CALLS with incorrect byte_pos/line attribution.
-#[allow(dead_code)]
 pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -> Vec<CallIntent> {
     let mut intents = Vec::new();
 
@@ -899,26 +857,8 @@ mod tests {
         let mut intents = Vec::new();
         extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
 
-        let extends: Vec<_> = intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Extends { parent, .. } = r {
-                    Some(parent.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let implements: Vec<_> = intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Implements { interface, .. } = r {
-                    Some(interface.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let extends = crate::pipeline::parser::test_utils::collect_extends(&intents);
+        let implements = crate::pipeline::parser::test_utils::collect_implements(&intents);
 
         assert_eq!(
             extends,
@@ -940,16 +880,7 @@ mod tests {
         let mut intents = Vec::new();
         extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
 
-        let extends: Vec<_> = intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Extends { parent, .. } = r {
-                    Some(parent.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let extends = crate::pipeline::parser::test_utils::collect_extends(&intents);
 
         assert_eq!(
             extends,
@@ -980,16 +911,7 @@ mod tests {
         let mut intents = Vec::new();
         extract_class_inheritance_kotlin(node, source.as_bytes(), &mut intents);
 
-        let implements: Vec<_> = intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Implements { interface, .. } = r {
-                    Some(interface.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let implements = crate::pipeline::parser::test_utils::collect_implements(&intents);
 
         assert_eq!(
             implements,
@@ -1055,17 +977,8 @@ mod tests {
             "FQN should contain <anonymous@LINE>"
         );
 
-        let implements: Vec<_> = out[0]
-            .reference_intents
-            .iter()
-            .filter_map(|r| {
-                if let ReferenceIntent::Implements { interface, .. } = r {
-                    Some(interface.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let implements =
+            crate::pipeline::parser::test_utils::collect_implements(&out[0].reference_intents);
         assert_eq!(
             implements,
             &["Iface"],

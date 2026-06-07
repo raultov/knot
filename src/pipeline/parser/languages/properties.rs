@@ -1,4 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity};
+use crate::pipeline::parser::utils::truncate_string;
 
 /// Line-by-line parser for Java .properties files.
 /// Supports: key=value, key: value, key value formats.
@@ -137,15 +138,6 @@ fn process_property_line(
     );
     entity.embed_text = embed_text;
     entities.push(entity);
-}
-
-#[allow(dead_code)] // Reserved for future string truncation utility
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
-    }
 }
 
 #[cfg(test)]

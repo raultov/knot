@@ -1,5 +1,7 @@
 use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
-use crate::pipeline::parser::utils::node_text;
+use crate::pipeline::parser::utils::{
+    extract_identifiers_from_decorator, extract_new_expression_name, is_capitalized, node_text,
+};
 use tree_sitter::Node;
 use uuid::Uuid;
 
@@ -52,7 +54,7 @@ pub(crate) fn collect_all_reference_intents_javascript(
             }
         }
         "import_statement" => {
-            collect_import_intents_javascript(node, source, intents, byte_pos, line);
+            collect_import_intents_javascript(node, source, intents, byte_pos, line, false);
         }
         "lexical_declaration" | "variable_declaration" => {
             collect_require_destructure_intents(node, source, intents, byte_pos, line);
@@ -68,12 +70,13 @@ pub(crate) fn collect_all_reference_intents_javascript(
     }
 }
 
-fn collect_import_intents_javascript(
+pub(crate) fn collect_import_intents_javascript(
     node: Node<'_>,
     source: &[u8],
     intents: &mut Vec<(ReferenceIntent, usize)>,
     byte_pos: usize,
     line: usize,
+    is_type_import: bool,
 ) {
     let mut cursor = node.walk();
     let import_clause = node
@@ -93,15 +96,13 @@ fn collect_import_intents_javascript(
                         let name_node = spec.child_by_field_name("name");
                         if let Some(nn) = name_node {
                             let name = node_text(nn, source);
-                            if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
-                                intents.push((
-                                    ReferenceIntent::ValueReference {
-                                        value_name: name,
-                                        line,
-                                    },
-                                    byte_pos,
-                                ));
-                            }
+                            push_import_ref_if_capitalized(
+                                name,
+                                is_type_import,
+                                intents,
+                                byte_pos,
+                                line,
+                            );
                         }
                     }
                     spec_child = spec.next_sibling();
@@ -109,19 +110,39 @@ fn collect_import_intents_javascript(
             }
             "identifier" => {
                 let name = node_text(c, source);
-                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
-                    intents.push((
-                        ReferenceIntent::ValueReference {
-                            value_name: name,
-                            line,
-                        },
-                        byte_pos,
-                    ));
-                }
+                push_import_ref_if_capitalized(name, is_type_import, intents, byte_pos, line);
             }
             _ => {}
         }
         clause_child = c.next_sibling();
+    }
+}
+
+fn push_import_ref_if_capitalized(
+    name: String,
+    is_type_import: bool,
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    byte_pos: usize,
+    line: usize,
+) {
+    if is_capitalized(&name) {
+        if is_type_import {
+            intents.push((
+                ReferenceIntent::TypeReference {
+                    type_name: name,
+                    line,
+                },
+                byte_pos,
+            ));
+        } else {
+            intents.push((
+                ReferenceIntent::ValueReference {
+                    value_name: name,
+                    line,
+                },
+                byte_pos,
+            ));
+        }
     }
 }
 
@@ -170,7 +191,7 @@ fn collect_require_destructure_intents(
         match pc.kind() {
             "shorthand_property_identifier_pattern" => {
                 let name = node_text(pc, source);
-                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                if is_capitalized(&name) {
                     intents.push((
                         ReferenceIntent::ValueReference {
                             value_name: name,
@@ -183,7 +204,7 @@ fn collect_require_destructure_intents(
             "pair_pattern" => {
                 if let Some(key) = pc.child_by_field_name("key") {
                     let name = node_text(key, source);
-                    if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
+                    if is_capitalized(&name) {
                         intents.push((
                             ReferenceIntent::ValueReference {
                                 value_name: name,
@@ -244,71 +265,6 @@ fn extract_js_heritage_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     None
 }
 
-/// Extract decorator references from JavaScript decorators (e.g., @Component, @Injectable).
-///
-/// Recursively searches for `decorator` nodes and extracts capitalized identifiers
-/// (likely class/component names) as TypeReference intents.
-///
-/// Example:
-/// ```javascript
-/// @Component({
-///   declarations: [AppComponent, UserComponent],
-///   bootstrap: [AppComponent]
-/// })
-/// export class AppModule {}
-/// ```
-///
-/// This will extract: AppComponent (twice), UserComponent
-pub(crate) fn extract_decorator_references(
-    node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-) {
-    let line = node.start_position().row + 1;
-
-    // If this is a decorator node, extract references from its arguments
-    if node.kind() == "decorator" {
-        extract_identifiers_from_decorator(node, source, intents, line);
-    }
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_decorator_references(c, source, intents);
-        child = c.next_sibling();
-    }
-}
-
-/// Extract capitalized identifiers from decorator arguments (likely class references).
-fn extract_identifiers_from_decorator(
-    decorator_node: Node<'_>,
-    source: &[u8],
-    intents: &mut Vec<ReferenceIntent>,
-    line: usize,
-) {
-    // Recursively scan all children for identifiers
-    let mut child = decorator_node.child(0);
-    while let Some(c) = child {
-        match c.kind() {
-            "identifier" => {
-                let name = node_text(c, source);
-                // Only capture capitalized identifiers (likely classes/components)
-                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) {
-                    intents.push(ReferenceIntent::TypeReference {
-                        type_name: name,
-                        line,
-                    });
-                }
-            }
-            _ => {
-                // Recurse into nested structures (objects, arrays, etc.)
-                extract_identifiers_from_decorator(c, source, intents, line);
-            }
-        }
-        child = c.next_sibling();
-    }
-}
-
 /// Extract reference intents from a JavaScript function/method body (wrapper for backward compatibility).
 pub(crate) fn extract_reference_intents_javascript(
     node: Node<'_>,
@@ -345,105 +301,8 @@ pub(crate) fn extract_call_intents_javascript(
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
-    if node.kind() == "call_expression" {
-        let line = node.start_position().row + 1;
+    intents.extend(extract_single_call_intent_javascript(node, source));
 
-        let mut method_name: Option<String> = None;
-        let mut receiver: Option<String> = None;
-
-        // Look for the function field in the call_expression
-        let mut child = node.child(0);
-        let mut is_bind_call = false;
-
-        while let Some(c) = child {
-            if c.kind() == "member_expression" {
-                // Use Tree-sitter API to extract fields cleanly
-                if let Some(property_node) = c.child_by_field_name("property") {
-                    let prop_text = node_text(property_node, source);
-                    // Check if this is a .bind() call
-                    if prop_text == "bind" {
-                        is_bind_call = true;
-                    }
-                    method_name = Some(prop_text);
-                }
-
-                // For the object, we need to extract it as text to handle nested members
-                if let Some(object_node) = c.child_by_field_name("object") {
-                    receiver = Some(node_text(object_node, source));
-                }
-            } else if c.kind() == "identifier" {
-                // Direct identifier in call_expression (local call)
-                method_name = Some(node_text(c, source));
-            }
-            child = c.next_sibling();
-        }
-
-        if let Some(method) = method_name {
-            // Special handling for .bind(this) and similar patterns
-            if is_bind_call {
-                if let Some(receiver) = receiver {
-                    // Extract the method name from receiver (last component if it's a member expression)
-                    if let Some(last_part) = receiver.split('.').next_back() {
-                        intents.push(CallIntent {
-                            method: last_part.to_string(),
-                            receiver: if receiver.contains('.') {
-                                receiver.split('.').next().map(|s| s.to_string())
-                            } else {
-                                Some("this".to_string())
-                            },
-                            line,
-                            arg_count: None,
-                        });
-                    }
-                }
-            } else {
-                intents.push(CallIntent {
-                    method,
-                    receiver,
-                    line,
-                    arg_count: None,
-                });
-            }
-        }
-
-        // Also scan arguments for callback references (e.g., app.use(this.handler))
-        extract_callback_arguments(node, source, intents, line);
-    } else if node.kind() == "new_expression" {
-        let line = node.start_position().row + 1;
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "identifier" {
-                intents.push(CallIntent {
-                    method: node_text(c, source),
-                    receiver: None,
-                    line,
-                    arg_count: None,
-                });
-                break;
-            }
-            child = c.next_sibling();
-        }
-    } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
-        // JSX component invocation (e.g., <ChartToolbar />, <Sheet.Content />)
-        extract_jsx_component_invocation(node, source, intents);
-    } else if node.kind() == "member_expression" {
-        // Detect property/getter access via `this.property` (e.g., this.client, this.field)
-        if let Some(object_node) = node.child_by_field_name("object")
-            && node_text(object_node, source) == "this"
-            && let Some(property_node) = node.child_by_field_name("property")
-        {
-            let prop_text = node_text(property_node, source);
-            let line = node.start_position().row + 1;
-            intents.push(CallIntent {
-                method: prop_text,
-                receiver: Some("this".to_string()),
-                line,
-                arg_count: None,
-            });
-        }
-    }
-
-    // Recursively process children
     let mut child = node.child(0);
     while let Some(c) = child {
         extract_call_intents_javascript(c, source, intents);
@@ -519,18 +378,13 @@ pub(crate) fn extract_single_call_intent_javascript(
         extract_callback_arguments(node, source, &mut intents, line);
     } else if node.kind() == "new_expression" {
         let line = node.start_position().row + 1;
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "identifier" {
-                intents.push(CallIntent {
-                    method: node_text(c, source),
-                    receiver: None,
-                    line,
-                    arg_count: None,
-                });
-                break;
-            }
-            child = c.next_sibling();
+        if let Some(name) = extract_new_expression_name(node, source) {
+            intents.push(CallIntent {
+                method: name,
+                receiver: None,
+                line,
+                arg_count: None,
+            });
         }
     } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
         // JSX component invocation
@@ -578,7 +432,7 @@ pub(crate) fn extract_jsx_component_invocation(
         let comp_name = node_text(name_node, source);
 
         // React convention: Components start with uppercase, HTML tags are lowercase
-        if comp_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+        if is_capitalized(&comp_name) {
             // Handle namespaced components (e.g., Sheet.Content, Icons.Search)
             if comp_name.contains('.') {
                 let mut parts = comp_name.split('.');
@@ -700,6 +554,17 @@ pub(crate) fn is_reserved_keyword(word: &str) -> bool {
             | "in"
             | "of"
             | "static"
+            | "interface"
+            | "enum"
+            | "type"
+            | "public"
+            | "private"
+            | "protected"
+            | "readonly"
+            | "abstract"
+            | "extends"
+            | "implements"
+            | "declare"
     )
 }
 
@@ -720,7 +585,7 @@ pub(crate) fn extract_enum_usages_javascript(
         {
             let obj_text = node_text(object_node, source);
             // Check if it starts with capital letter (typical of classes)
-            if obj_text.chars().next().is_some_and(|c| c.is_uppercase()) {
+            if is_capitalized(&obj_text) {
                 let line = object_node.start_position().row + 1;
                 intents.push(ReferenceIntent::TypeReference {
                     type_name: obj_text,
@@ -1014,6 +879,9 @@ pub(crate) fn scan_module_exports_target(root: Node<'_>, source: &[u8]) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::parser::test_utils::{
+        find_call_expression, find_new_expression, find_var_decl,
+    };
 
     #[test]
     fn test_is_reserved_keyword_true() {
@@ -1035,68 +903,22 @@ mod tests {
 
     #[test]
     fn test_extract_jsx_component_invocation_simple() {
-        let code = "function render() { return <ChartToolbar />; }";
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
-
-        fn find_jsx_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if matches!(
-                node.kind(),
-                "jsx_self_closing_element" | "jsx_opening_element"
-            ) {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx) = find_jsx_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents: Vec<CallIntent> = Vec::new();
-            extract_jsx_component_invocation(jsx, code_bytes, &mut intents);
-            assert!(!intents.is_empty());
-            assert_eq!(intents[0].method, "ChartToolbar");
-            assert!(intents[0].receiver.is_none());
-        }
+        crate::pipeline::parser::test_utils::assert_jsx_component_invocation(
+            "function render() { return <ChartToolbar />; }",
+            crate::pipeline::parser::test_utils::parse_javascript_snippet,
+            "ChartToolbar",
+            None,
+        );
     }
 
     #[test]
     fn test_extract_jsx_component_invocation_namespaced() {
-        let code = "function render() { return <Sheet.Content />; }";
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
-
-        fn find_jsx_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if matches!(
-                node.kind(),
-                "jsx_self_closing_element" | "jsx_opening_element"
-            ) {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx) = find_jsx_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents: Vec<CallIntent> = Vec::new();
-            extract_jsx_component_invocation(jsx, code_bytes, &mut intents);
-            assert!(!intents.is_empty());
-            assert_eq!(intents[0].method, "Content");
-            assert_eq!(intents[0].receiver, Some("Sheet".to_string()));
-        }
+        crate::pipeline::parser::test_utils::assert_jsx_component_invocation(
+            "function render() { return <Sheet.Content />; }",
+            crate::pipeline::parser::test_utils::parse_javascript_snippet,
+            "Content",
+            Some("Sheet"),
+        );
     }
 
     #[test]
@@ -1104,20 +926,6 @@ mod tests {
         let code = "function test() { method(); }";
         let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
             .expect("Failed to parse JavaScript code");
-
-        fn find_call_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "call_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_call_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         if let Some(call) = find_call_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
@@ -1134,20 +942,6 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
             .expect("Failed to parse JavaScript code");
 
-        fn find_call_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "call_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_call_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
         if let Some(call) = find_call_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
             let intents = extract_single_call_intent_javascript(call, code_bytes);
@@ -1163,20 +957,6 @@ mod tests {
         let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
             .expect("Failed to parse JavaScript code");
 
-        fn find_new_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "new_expression" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_new_expression(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
         if let Some(new_expr) = find_new_expression(tree.root_node()) {
             let code_bytes = code.as_bytes();
             let intents = extract_single_call_intent_javascript(new_expr, code_bytes);
@@ -1188,171 +968,41 @@ mod tests {
 
     #[test]
     fn test_extract_class_inheritance_js() {
-        let code = "class Child extends Parent { }";
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents = Vec::new();
-            extract_class_inheritance_js(class_node, code_bytes, &mut intents);
-            assert!(!intents.is_empty());
-            // The intent should be an Extends variant
-            let has_extends = intents.iter().any(
-                |i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == "Parent"),
-            );
-            assert!(has_extends);
-        }
+        crate::pipeline::parser::test_utils::assert_js_class_inheritance(
+            "class Child extends Parent { }",
+            crate::pipeline::parser::test_utils::parse_javascript_snippet,
+            "Parent",
+        );
     }
 
     #[test]
     fn test_extract_class_inheritance_js_qualified() {
-        let code = "class Child extends NS.Parent { }";
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
-
-        fn find_class_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "class_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_class_declaration(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(class_node) = find_class_declaration(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let mut intents = Vec::new();
-            extract_class_inheritance_js(class_node, code_bytes, &mut intents);
-            assert!(!intents.is_empty());
-            let has_extends = intents.iter().any(
-                |i| matches!(i, ReferenceIntent::Extends { parent, .. } if parent == "Parent"),
-            );
-            assert!(has_extends);
-        }
-    }
-
-    #[test]
-    fn test_extract_jsx_attributes_id() {
-        let code = r#"function App() { return <div id="main-container">Hello</div>; }"#;
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
-
-        fn find_jsx_opening_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "jsx_opening_element" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_opening_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx_elem) = find_jsx_opening_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
-            assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].0, "id");
-            assert_eq!(attrs[0].1, "main-container");
-        } else {
-            panic!("No JSX opening element found");
-        }
-    }
-
-    #[test]
-    fn test_extract_jsx_attributes_classname() {
-        let code =
-            r#"function Button() { return <button className="btn primary">Click</button>; }"#;
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
-
-        fn find_jsx_opening_element(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "jsx_opening_element" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_opening_element(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx_elem) = find_jsx_opening_element(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
-            assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].0, "className");
-            assert_eq!(attrs[0].1, "btn primary");
-        } else {
-            panic!("No JSX opening element found");
-        }
+        crate::pipeline::parser::test_utils::assert_js_class_inheritance(
+            "class Child extends NS.Parent { }",
+            crate::pipeline::parser::test_utils::parse_javascript_snippet,
+            "Parent",
+        );
     }
 
     #[test]
     fn test_extract_jsx_attributes_multiple() {
-        let code =
-            r#"function Form() { return <input id="email-input" className="form-control" />; }"#;
-        let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
-            .expect("Failed to parse JavaScript code");
+        // Uses parse_tsx_snippet in typescript.rs (same function, TSX superset of JSX)
+        crate::pipeline::parser::test_utils::assert_jsx_attributes_multi(
+            r#"function Form() { return <input id="email-input" className="form-control" />; }"#,
+            crate::pipeline::parser::test_utils::parse_javascript_snippet,
+            2,
+            &[("id", "email-input"), ("className", "form-control")],
+        );
+    }
 
-        fn find_jsx_self_closing(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "jsx_self_closing_element" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_jsx_self_closing(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
-
-        if let Some(jsx_elem) = find_jsx_self_closing(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let attrs = extract_jsx_attributes(jsx_elem, code_bytes);
-            assert_eq!(attrs.len(), 2);
-
-            // attrs may be in any order depending on AST traversal
-            let has_id = attrs
-                .iter()
-                .any(|(name, val, _)| name == "id" && val == "email-input");
-            let has_classname = attrs
-                .iter()
-                .any(|(name, val, _)| name == "className" && val == "form-control");
-
-            assert!(has_id, "Should extract id attribute");
-            assert!(has_classname, "Should extract className attribute");
-        } else {
-            panic!("No JSX self-closing element found");
-        }
+    #[test]
+    fn test_extract_jsx_attributes_classname() {
+        crate::pipeline::parser::test_utils::assert_jsx_attribute(
+            r#"function Button() { return <button className="btn primary">Click</button>; }"#,
+            crate::pipeline::parser::test_utils::parse_javascript_snippet,
+            "className",
+            "btn primary",
+        );
     }
 
     #[test]
@@ -1360,20 +1010,6 @@ mod tests {
         let code = "var MyJsAlias = require('./alias_target_js');";
         let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
             .expect("Failed to parse JavaScript code");
-
-        fn find_var_decl(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-            if node.kind() == "variable_declaration" {
-                return Some(node);
-            }
-            let mut i = 0u32;
-            while let Some(child) = node.child(i) {
-                if let Some(found) = find_var_decl(child) {
-                    return Some(found);
-                }
-                i += 1;
-            }
-            None
-        }
 
         let var_node = find_var_decl(tree.root_node()).unwrap();
         let path = extract_require_module_path(var_node, code.as_bytes());
