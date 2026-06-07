@@ -1,11 +1,24 @@
 # Changelog
-
-All notable changes to **knot** are documented here, ordered from most recent to oldest.
-For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
-
----
-
-## v1.3.13 — Rust Macro Call Resolution & Test Context Tracking
+ 
+ All notable changes to **knot** are documented here, ordered from most recent to oldest.
+ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
+ 
+ ---
+ 
++## v1.4.0 — Major Refactor, Cleanup & Specialized Build System Parsers
++
++- ✅ **Specialized Build System Extraction**: Activated the dedicated Gradle (`.gradle`) and Jenkinsfile parsers. These now extract project identities, dependencies, plugins, and pipeline stages/steps with higher precision than the generic Groovy parser.
++- ✅ **Major Code Deduplication**: Consolidated redundant logic across the parser pipeline.
++  - Unified `extract_type_references` across TypeScript, Java, and Kotlin.
++  - Extracted shared string and AST utilities into `pipeline::parser::utils`.
++  - Centralized repo-path and dependency-list resolution in `Config`.
++- ✅ **Enhanced Test Infrastructure**: Added comprehensive AST node finders and assertions to `test_utils.rs`, significantly reducing boilerplate in parser unit tests.
++- ✅ **Bug Fixes**: Repaired indentation-sensitive Python test fixtures that were failing due to malformed raw strings.
++- ✅ **cargo fmt** clean | **cargo clippy** clean | **760 unit tests** passing
++
++---
++
+ ## v1.3.13 — Rust Macro Call Resolution & Test Context Tracking
 
 - ✅ **Fixed AST Blind Spot (Macro Calls)**: The AST extractor now descends into `token_tree` nodes to recover function calls wrapped in macros (e.g., `assert!(...)`, `vec![...]`, `println!(...)`). This rescues thousands of missing references across codebases and drastically improves `find_callers` accuracy for both test suites and production code.
 - ✅ **Test Context Tracking**: Added the `is_test_context` boolean flag to entities. The indexer now tracks `#[cfg(test)]` and `#[cfg_attr(test, ...)]` module boundaries, propagating this flag to Neo4j so MCP clients can visually distinguish test-driven references from production usages.
