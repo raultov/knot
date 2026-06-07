@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use crate::db::graph::{GraphDb, QueryExt};
 
+use crate::cli_tools::json_target_name;
+
+use crate::cli_tools::append_signature_if_present;
+
 /// Main find_callers function called by both CLI and MCP
 pub async fn run_find_callers(
     entity_name: &str,
@@ -84,12 +88,7 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
                     let first_entity = entities[0];
                     // Prefer target_fqn when available — qualified identifiers
                     // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
-                    let target_name = first_entity
-                        .get("target_fqn")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| first_entity.get("target_name").and_then(|v| v.as_str()))
-                        .unwrap_or(entity_name);
+                    let target_name = json_target_name(first_entity, entity_name);
 
                     output.push_str(&format!(
                         "### Target: `{}` at `{}`\n\n",
@@ -136,13 +135,7 @@ pub fn format_reference_entry(entity: &serde_json::Value) -> String {
 
     output.push('\n');
 
-    if let Some(signature) = entity
-        .get("signature")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        output.push_str(&format!("  - Signature: `{}`\n", signature));
-    }
+    append_signature_if_present(&mut output, entity);
 
     output.push('\n');
     output

@@ -1,10 +1,7 @@
 use anyhow::{Context, Result};
 use neo4rs::query;
-use std::collections::HashMap;
-use tracing::info;
 
 use super::GraphDb;
-use crate::models::SubgraphDirection;
 
 /// Extension trait for query and read operations.
 #[allow(async_fn_in_trait)]
@@ -29,37 +26,17 @@ pub trait QueryExt {
         file_path: &str,
         repo_name: Option<&str>,
     ) -> Result<serde_json::Value>;
-    async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>>;
-    async fn find_repo_dependents(&self, repo_name: &str) -> Result<Vec<String>>;
     async fn find_entities_by_name_prefix(
         &self,
         prefix: &str,
         repo_name: Option<&str>,
         limit: usize,
     ) -> Result<serde_json::Value>;
-    async fn find_repository_by_artifact(
-        &self,
-        group_id: &str,
-        artifact_id: &str,
-        build_system: &str,
-    ) -> Result<Option<String>>;
     async fn get_file_outgoing_references(
         &self,
         file_path: &str,
         repo_name: Option<&str>,
     ) -> Result<serde_json::Value>;
-    #[allow(clippy::too_many_arguments)]
-    async fn get_entity_subgraph(
-        &self,
-        entity_name: &str,
-        repo_name: &str,
-        depth: u32,
-        relationships: &[&str],
-        direction: SubgraphDirection,
-        max_nodes: usize,
-        entity_uuid: Option<&str>,
-        visible_kinds: Option<&[&str]>,
-    ) -> Result<crate::models::SubgraphResult>;
 }
 
 impl QueryExt for GraphDb {
@@ -313,122 +290,6 @@ impl QueryExt for GraphDb {
         Ok(serde_json::json!(results))
     }
 
-    async fn get_file_outgoing_references(
-        &self,
-        file_path: &str,
-        repo_name: Option<&str>,
-    ) -> Result<serde_json::Value> {
-        let mut results = Vec::new();
-
-        let query_str = if repo_name.is_some() {
-            "MATCH (src:Entity {file_path: $file_path, repo_name: $repo_name})
-                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
-                  (dst:Entity)
-             WHERE dst.file_path <> $file_path OR dst.repo_name <> $repo_name
-             RETURN type(r) AS rel,
-                    dst.name AS name,
-                    dst.kind AS kind,
-                    dst.file_path AS file_path,
-                    dst.start_line AS line
-             ORDER BY rel, name"
-                .to_string()
-        } else {
-            "MATCH (src:Entity {file_path: $file_path})
-                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
-                  (dst:Entity)
-             WHERE dst.file_path <> $file_path
-             RETURN type(r) AS rel,
-                    dst.name AS name,
-                    dst.kind AS kind,
-                    dst.file_path AS file_path,
-                    dst.start_line AS line
-             ORDER BY rel, name"
-                .to_string()
-        };
-
-        let mut q = query(&query_str).param("file_path", file_path);
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
-        }
-
-        let mut rows = self
-            .graph
-            .execute(q)
-            .await
-            .context("Failed to query Neo4j for file outgoing references")?;
-
-        while let Ok(Some(row)) = rows.next().await {
-            let entry = serde_json::json!({
-                "rel": row.get::<String>("rel").ok(),
-                "name": row.get::<String>("name").ok(),
-                "kind": row.get::<String>("kind").ok(),
-                "file_path": row.get::<String>("file_path").ok(),
-                "line": row.get::<i64>("line").ok(),
-            });
-            results.push(entry);
-        }
-
-        Ok(serde_json::json!(results))
-    }
-
-    /// Find all repositories that this repo depends on (transitive, up to max_depth).
-    async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>> {
-        let mut dependencies = Vec::new();
-
-        let cypher = format!(
-            "MATCH (from:Repository {{name: $repo_name}})-[:DEPENDS_ON*1..{}]->(to:Repository)
-             RETURN DISTINCT to.name AS dep_name",
-            max_depth
-        );
-
-        let mut rows = self
-            .graph
-            .execute(query(&cypher).param("repo_name", repo_name))
-            .await
-            .context("Failed to query repository dependencies")?;
-
-        while let Ok(Some(row)) = rows.next().await {
-            if let Ok(dep_name) = row.get::<String>("dep_name") {
-                dependencies.push(dep_name);
-            }
-        }
-
-        info!(
-            "Found {} repository dependencies for '{repo_name}' (depth {max_depth})",
-            dependencies.len()
-        );
-        Ok(dependencies)
-    }
-
-    /// Find all repositories that depend on this repo (reverse lookup).
-    async fn find_repo_dependents(&self, repo_name: &str) -> Result<Vec<String>> {
-        let mut dependents = Vec::new();
-
-        let mut rows = self
-            .graph
-            .execute(
-                query(
-                    "MATCH (dependent:Repository)-[:DEPENDS_ON]->(target:Repository {name: $repo_name})
-                     RETURN DISTINCT dependent.name AS dep_name",
-                )
-                .param("repo_name", repo_name),
-            )
-            .await
-            .context("Failed to query repository dependents")?;
-
-        while let Ok(Some(row)) = rows.next().await {
-            if let Ok(dep_name) = row.get::<String>("dep_name") {
-                dependents.push(dep_name);
-            }
-        }
-
-        info!(
-            "Found {} repositories that depend on '{repo_name}'",
-            dependents.len()
-        );
-        Ok(dependents)
-    }
-
     async fn find_entities_by_name_prefix(
         &self,
         prefix: &str,
@@ -487,296 +348,62 @@ impl QueryExt for GraphDb {
         Ok(serde_json::json!(results))
     }
 
-    /// Find a repository by its build system artifact identity.
-    async fn find_repository_by_artifact(
+    async fn get_file_outgoing_references(
         &self,
-        group_id: &str,
-        artifact_id: &str,
-        build_system: &str,
-    ) -> Result<Option<String>> {
-        let mut rows = self
-            .graph
-            .execute(
-                query(
-                    "MATCH (r:Repository)
-                     WHERE r.build_system = $build_system
-                       AND r.group_id = $group_id
-                       AND r.artifact_id = $artifact_id
-                     RETURN r.name AS repo_name",
-                )
-                .param("build_system", build_system)
-                .param("group_id", group_id)
-                .param("artifact_id", artifact_id),
-            )
-            .await
-            .context("Failed to query repository by artifact identity")?;
+        file_path: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut results = Vec::new();
 
-        if let Ok(Some(row)) = rows.next().await
-            && let Ok(name) = row.get::<String>("repo_name")
-        {
-            return Ok(Some(name));
-        }
-
-        Ok(None)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn get_entity_subgraph(
-        &self,
-        entity_name: &str,
-        repo_name: &str,
-        depth: u32,
-        relationships: &[&str],
-        direction: SubgraphDirection,
-        max_nodes: usize,
-        entity_uuid: Option<&str>,
-        visible_kinds: Option<&[&str]>,
-    ) -> Result<crate::models::SubgraphResult> {
-        use crate::models::{SubgraphEdge, SubgraphNode, SubgraphResult};
-
-        let valid_rels: &[&str] = &[
-            "CALLS",
-            "EXTENDS",
-            "IMPLEMENTS",
-            "REFERENCES",
-            "REFERENCES_DOM",
-            "USES_CSS_CLASS",
-            "IMPORTS_SCRIPT",
-            "IMPORTS_STYLESHEET",
-            "MACRO_CALLS",
-            "CONTAINS",
-            "GENERIC_BOUND",
-            "DEPENDS_ON",
-        ];
-
-        for rel in relationships {
-            if !valid_rels.contains(rel) {
-                anyhow::bail!(
-                    "Invalid relationship type '{rel}'. Valid types are: {}",
-                    valid_rels.join(", ")
-                );
-            }
-        }
-
-        let depth = depth.clamp(1, 5);
-
-        // --- 1. Find the root entity ---
-        let (root_q, root_match_clause) = if let Some(uuid) = entity_uuid {
-            let q = query(
-                "MATCH (root:Entity {uuid: $uuid, repo_name: $repo_name})
-                 RETURN root.uuid, root.name, root.kind, root.fqn,
-                        root.signature, root.docstring, root.file_path, root.start_line
-                 LIMIT 1",
-            )
-            .param("uuid", uuid)
-            .param("repo_name", repo_name);
-            (q, "uuid: $uuid".to_string())
+        let query_str = if repo_name.is_some() {
+            "MATCH (src:Entity {file_path: $file_path, repo_name: $repo_name})
+                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+                  (dst:Entity)
+             WHERE dst.file_path <> $file_path OR dst.repo_name <> $repo_name
+             RETURN type(r) AS rel,
+                    dst.name AS name,
+                    dst.kind AS kind,
+                    dst.file_path AS file_path,
+                    dst.start_line AS line
+             ORDER BY rel, name"
+                .to_string()
         } else {
-            let q = query(
-                "MATCH (root:Entity {name: $name, repo_name: $repo_name})
-                 RETURN root.uuid, root.name, root.kind, root.fqn,
-                        root.signature, root.docstring, root.file_path, root.start_line
-                 LIMIT 1",
-            )
-            .param("name", entity_name)
-            .param("repo_name", repo_name);
-            (q, "name: $name".to_string())
+            "MATCH (src:Entity {file_path: $file_path})
+                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+                  (dst:Entity)
+             WHERE dst.file_path <> $file_path
+             RETURN type(r) AS rel,
+                    dst.name AS name,
+                    dst.kind AS kind,
+                    dst.file_path AS file_path,
+                    dst.start_line AS line
+             ORDER BY rel, name"
+                .to_string()
         };
+
+        let mut q = query(&query_str).param("file_path", file_path);
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
 
         let mut rows = self
             .graph
-            .execute(root_q)
+            .execute(q)
             .await
-            .context("Failed to query root entity")?;
-
-        let root_node = if let Ok(Some(row)) = rows.next().await {
-            SubgraphNode {
-                uuid: row
-                    .get::<String>("root.uuid")
-                    .context("root.uuid is required")?,
-                name: row
-                    .get::<String>("root.name")
-                    .context("root.name is required")?,
-                kind: row.get::<String>("root.kind").ok(),
-                fqn: row.get::<String>("root.fqn").ok(),
-                signature: row.get::<String>("root.signature").ok(),
-                docstring: row.get::<String>("root.docstring").ok(),
-                file_path: row.get::<String>("root.file_path").ok(),
-                start_line: row.get::<i64>("root.start_line").ok(),
-            }
-        } else {
-            // Root not found — return empty result
-            return Ok(SubgraphResult {
-                root_id: None,
-                nodes: vec![],
-                edges: vec![],
-                truncated: false,
-                total_nodes_found: 0,
-            });
-        };
-
-        let root_uuid = root_node.uuid.clone();
-
-        // --- 2. Collect nearby nodes ---
-        let mut all_nodes: HashMap<String, SubgraphNode> = HashMap::new();
-        all_nodes.insert(root_uuid.clone(), root_node);
-
-        let mut traversal_rels = relationships.to_vec();
-        if visible_kinds.is_some() && !traversal_rels.contains(&"CONTAINS") {
-            traversal_rels.push("CONTAINS");
-        }
-        let traversal_rel_filter = traversal_rels.join("|");
-
-        let direction_arrow = match direction {
-            SubgraphDirection::Outgoing => format!("-[:{traversal_rel_filter}*1..{depth}]->"),
-            SubgraphDirection::Incoming => format!("<-[:{traversal_rel_filter}*1..{depth}]-"),
-            SubgraphDirection::Both => format!("-[:{traversal_rel_filter}*1..{depth}]-"),
-        };
-
-        let kind_filter = if let Some(kinds) = visible_kinds
-            && !kinds.is_empty()
-        {
-            let quoted: Vec<String> = kinds.iter().map(|k| format!("'{}'", k)).collect();
-            format!("\n   AND related.kind IN [{}]", quoted.join(", "))
-        } else {
-            String::new()
-        };
-
-        let cypher = format!(
-            "MATCH (root:Entity {{{root_match}, repo_name: $repo_name}}){arrow}(related:Entity)
-             WHERE related.repo_name = $repo_name{kind_filter}
-             RETURN DISTINCT related.uuid, related.name, related.kind, related.fqn,
-                    related.signature, related.docstring, related.file_path, related.start_line",
-            root_match = root_match_clause,
-            arrow = direction_arrow,
-            kind_filter = kind_filter,
-        );
-
-        let traversal_q = if let Some(uuid) = entity_uuid {
-            query(&cypher)
-                .param("uuid", uuid)
-                .param("repo_name", repo_name)
-        } else {
-            query(&cypher)
-                .param("name", entity_name)
-                .param("repo_name", repo_name)
-        };
-        let mut rows = self
-            .graph
-            .execute(traversal_q)
-            .await
-            .context("Failed to traverse relationships")?;
+            .context("Failed to query Neo4j for file outgoing references")?;
 
         while let Ok(Some(row)) = rows.next().await {
-            let uuid = match row.get::<String>("related.uuid") {
-                Ok(u) => u,
-                Err(_) => continue,
-            };
-            all_nodes.entry(uuid.clone()).or_insert(SubgraphNode {
-                uuid,
-                name: row.get::<String>("related.name").ok().unwrap_or_default(),
-                kind: row.get::<String>("related.kind").ok(),
-                fqn: row.get::<String>("related.fqn").ok(),
-                signature: row.get::<String>("related.signature").ok(),
-                docstring: row.get::<String>("related.docstring").ok(),
-                file_path: row.get::<String>("related.file_path").ok(),
-                start_line: row.get::<i64>("related.start_line").ok(),
+            let entry = serde_json::json!({
+                "rel": row.get::<String>("rel").ok(),
+                "name": row.get::<String>("name").ok(),
+                "kind": row.get::<String>("kind").ok(),
+                "file_path": row.get::<String>("file_path").ok(),
+                "line": row.get::<i64>("line").ok(),
             });
+            results.push(entry);
         }
 
-        let total_nodes_found = all_nodes.len();
-        let truncated = total_nodes_found > max_nodes;
-
-        let mut nodes: Vec<SubgraphNode> = all_nodes.into_values().collect();
-        if truncated && nodes.len() > max_nodes {
-            nodes.truncate(max_nodes);
-        }
-
-        // --- 3. Extract edges between collected nodes ---
-        let mut edges: Vec<SubgraphEdge> = Vec::new();
-
-        if nodes.len() > 1 {
-            let uuids_list: Vec<String> = nodes.iter().map(|n| format!("'{}'", n.uuid)).collect();
-            let uuids_str = uuids_list.join(", ");
-
-            let edge_q = if let Some(kinds) = visible_kinds
-                && !kinds.is_empty()
-            {
-                let visible_list: Vec<String> = kinds.iter().map(|k| format!("'{}'", k)).collect();
-                let visible_kind_list = visible_list.join(", ");
-
-                // Ensure CONTAINS is included in the output filter if we are in kind-aware mode
-                // to maintain structural connectivity (e.g. Inner Classes).
-                let mut edge_rels = relationships.to_vec();
-                if !edge_rels.contains(&"CONTAINS") {
-                    edge_rels.push("CONTAINS");
-                }
-                let rel_filter = edge_rels.join("|");
-
-                let edge_cypher = format!(
-                    "MATCH (a:Entity)-[r:{rel_filter}]->(b:Entity)
-                     WHERE a.uuid IN [{uuids_str}] AND b.uuid IN [{uuids_str}]
-                     RETURN DISTINCT a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship
-                     UNION
-                     MATCH (c1:Entity)-[:CONTAINS]->(m1:Entity)-[r:{rel_filter}]->(m2:Entity)<-[:CONTAINS]-(c2:Entity)
-                     WHERE c1.uuid IN [{uuids_str}] AND c2.uuid IN [{uuids_str}] AND c1.uuid <> c2.uuid
-                       AND NOT m1.kind IN [{visible_kind_list}]
-                       AND NOT m2.kind IN [{visible_kind_list}]
-                     RETURN DISTINCT c1.uuid AS source_uuid, c2.uuid AS target_uuid, type(r) AS relationship
-                     UNION
-                     MATCH (c1:Entity)-[:CONTAINS]->(m1:Entity)-[r:{rel_filter}]->(b:Entity)
-                     WHERE c1.uuid IN [{uuids_str}] AND b.uuid IN [{uuids_str}] AND c1.uuid <> b.uuid
-                       AND NOT m1.kind IN [{visible_kind_list}]
-                       AND b.kind IN [{visible_kind_list}]
-                     RETURN DISTINCT c1.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship
-                     UNION
-                     MATCH (a:Entity)-[r:{rel_filter}]->(m2:Entity)<-[:CONTAINS]-(c2:Entity)
-                     WHERE a.uuid IN [{uuids_str}] AND c2.uuid IN [{uuids_str}] AND a.uuid <> c2.uuid
-                       AND a.kind IN [{visible_kind_list}]
-                       AND NOT m2.kind IN [{visible_kind_list}]
-                     RETURN DISTINCT a.uuid AS source_uuid, c2.uuid AS target_uuid, type(r) AS relationship",
-                    rel_filter = rel_filter,
-                    visible_kind_list = visible_kind_list,
-                    uuids_str = uuids_str,
-                );
-                query(&edge_cypher)
-            } else {
-                query(&format!(
-                    "MATCH (a:Entity)-[r]->(b:Entity)
-                     WHERE a.uuid IN [{uuids_str}] AND b.uuid IN [{uuids_str}]
-                     RETURN a.uuid AS source_uuid, b.uuid AS target_uuid, type(r) AS relationship",
-                    uuids_str = uuids_str,
-                ))
-            };
-
-            let mut rows = self
-                .graph
-                .execute(edge_q)
-                .await
-                .context("Failed to query subgraph edges")?;
-
-            while let Ok(Some(row)) = rows.next().await {
-                if let (Ok(source_uuid), Ok(target_uuid), Ok(relationship)) = (
-                    row.get::<String>("source_uuid"),
-                    row.get::<String>("target_uuid"),
-                    row.get::<String>("relationship"),
-                ) {
-                    edges.push(SubgraphEdge {
-                        source_uuid,
-                        target_uuid,
-                        relationship,
-                    });
-                }
-            }
-        }
-
-        Ok(SubgraphResult {
-            root_id: Some(root_uuid),
-            nodes,
-            edges,
-            truncated,
-            total_nodes_found,
-        })
+        Ok(serde_json::json!(results))
     }
 }
 
@@ -785,7 +412,6 @@ mod tests {
     use super::super::GraphDb;
     use super::QueryExt;
     use crate::db::graph::connection::ConnectExt;
-    use crate::models::SubgraphDirection;
 
     #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
     #[tokio::test]
@@ -896,212 +522,6 @@ mod tests {
 
         let result = graph_db
             .get_file_entities("/test/path/File.java", Some("test-repo"))
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_not_found() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "nonexistent_entity",
-                "test-repo",
-                3,
-                &["CALLS"],
-                SubgraphDirection::Both,
-                500,
-                None,
-                None,
-            )
-            .await;
-        assert!(result.is_ok());
-        let sub = result.unwrap();
-        assert!(sub.nodes.is_empty());
-        assert!(sub.edges.is_empty());
-        assert!(!sub.truncated);
-        assert_eq!(sub.total_nodes_found, 0);
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_valid_entity() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        // This test expects at least one entity named "TestClass" in the graph.
-        // If no such entity exists, the result will be empty which is also valid.
-        let result = graph_db
-            .get_entity_subgraph(
-                "TestClass",
-                "test-repo",
-                2,
-                &["CALLS", "EXTENDS"],
-                SubgraphDirection::Both,
-                500,
-                None,
-                None,
-            )
-            .await;
-        assert!(result.is_ok());
-        let sub = result.unwrap();
-        // Should not fail regardless of whether the entity exists
-        assert!(!sub.truncated);
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_invalid_relationship() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "TestClass",
-                "test-repo",
-                2,
-                &["INVALID_REL"],
-                SubgraphDirection::Both,
-                500,
-                None,
-                None,
-            )
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_outgoing_only() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "TestClass",
-                "test-repo",
-                1,
-                &["CALLS"],
-                SubgraphDirection::Outgoing,
-                500,
-                None,
-                None,
-            )
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_multiple_relationships() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "TestClass",
-                "test-repo",
-                2,
-                &["CALLS", "EXTENDS", "IMPLEMENTS", "REFERENCES"],
-                SubgraphDirection::Both,
-                500,
-                None,
-                None,
-            )
-            .await;
-        assert!(result.is_ok());
-        let sub = result.unwrap();
-        // With multiple relationship types, result should not be an error
-        assert!(!sub.truncated || sub.total_nodes_found > 0);
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_truncation() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "TestClass",
-                "test-repo",
-                5,
-                &["CALLS", "EXTENDS", "IMPLEMENTS", "REFERENCES"],
-                SubgraphDirection::Both,
-                2, // Very low max_nodes to trigger truncation
-                None,
-                None,
-            )
-            .await;
-        assert!(result.is_ok());
-        let sub = result.unwrap();
-        // Nodes should not exceed the max_nodes limit
-        if sub.total_nodes_found > 2 {
-            assert!(sub.truncated);
-            assert!(sub.nodes.len() <= 2);
-        }
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_with_visible_kinds() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "TestClass",
-                "test-repo",
-                3,
-                &["CALLS", "EXTENDS", "IMPLEMENTS"],
-                SubgraphDirection::Both,
-                500,
-                None,
-                Some(&["class", "interface"]),
-            )
-            .await;
-        assert!(result.is_ok());
-        let sub = result.unwrap();
-        // All returned nodes should match the visible kinds
-        if !sub.nodes.is_empty() {
-            for node in &sub.nodes {
-                let kind = node.kind.as_deref().unwrap_or("");
-                assert!(
-                    kind == "class" || kind == "interface",
-                    "Expected node kind in ['class', 'interface'], got '{kind}'"
-                );
-            }
-        }
-    }
-
-    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
-    #[tokio::test]
-    async fn test_get_entity_subgraph_connectivity() {
-        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
-            .await
-            .expect("Failed to connect to Neo4j");
-
-        let result = graph_db
-            .get_entity_subgraph(
-                "ClassA",
-                "test-repo",
-                3,
-                &["CALLS"],
-                SubgraphDirection::Outgoing,
-                500,
-                None,
-                Some(&["class", "rust_struct"]),
-            )
             .await;
         assert!(result.is_ok());
     }

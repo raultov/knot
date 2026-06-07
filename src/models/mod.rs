@@ -6,10 +6,14 @@
 //! UUIDs are deterministic (derived from repo_name + file_path + fqn) to enable
 //! incremental indexing without breaking graph relationships.
 
+mod cli_args;
 mod entity;
 mod relationship;
 mod subgraph;
 
+pub use cli_args::{Cli, Commands};
 pub use entity::{EmbeddedEntity, EntityKind, NAMESPACE_KNOT, ParsedEntity, ResolutionEntity};
 pub use relationship::{CallIntent, ReferenceIntent, RelationshipType};
-pub use subgraph::{SubgraphDirection, SubgraphEdge, SubgraphNode, SubgraphResult};
+pub use subgraph::{
+    SubgraphDirection, SubgraphEdge, SubgraphNode, SubgraphQueryOptions, SubgraphResult,
+};

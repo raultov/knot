@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use crate::db::graph::{GraphDb, QueryExt};
 
+use crate::cli_tools::json_entities_array;
+
+use crate::cli_tools::append_signature_if_present;
+
 /// Main explore_file function called by both CLI and MCP
 pub async fn run_explore_file(
     file_path: &str,
@@ -42,16 +46,7 @@ pub async fn run_explore_file(
 pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> String {
     let mut output = format!("# Entities in `{}`\n\n", file_path);
 
-    let entities = if let Some(obj) = result.as_object() {
-        obj.get("entities")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default()
-    } else if let Some(arr) = result.as_array() {
-        arr.clone()
-    } else {
-        Vec::new()
-    };
+    let entities = json_entities_array(result);
 
     let outgoing_refs = result
         .as_object()
@@ -535,13 +530,7 @@ fn format_entity_summary(entity: &serde_json::Value) -> String {
             }
         }
 
-        if let Some(signature) = entity
-            .get("signature")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            output.push_str(&format!("  - Signature: `{}`\n", signature));
-        }
+        append_signature_if_present(&mut output, entity);
 
         if let Some(docstring) = entity
             .get("docstring")

@@ -4,45 +4,14 @@
 //! Handles CLI, database initialization, and watch mode.
 //! Delegates actual pipeline execution to the runner module.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::Arc;
 use tracing::info;
 
 use knot::{
-    config::Config,
-    db::{
-        graph::{ConnectExt, GraphDb},
-        vector::{VectorConnectExt, VectorDb},
-    },
-    pipeline::runner::run_indexing_pipeline,
-    pipeline::state::IndexState,
-    pipeline::watch::setup_watch_mode,
-    utils,
+    config::Config, db, pipeline::runner::run_indexing_pipeline, pipeline::state::IndexState,
+    pipeline::watch::setup_watch_mode, utils,
 };
-
-/// Injects custom CA certificates into the process environment for TLS connections.
-///
-/// This is required for `fastembed`/`hf-hub` to work through corporate SSL-inspecting proxies.
-/// Must be called before any async runtime threads are spawned (i.e., early in `main()`).
-///
-/// # Safety
-/// `std::env::set_var` is marked unsafe in Rust 2024 because concurrent modification
-/// from multiple threads is a data race. This function is safe because:
-/// - It is called exactly once, early in main(), before any Tokio threads exist.
-/// - The tokio runtime is not yet running at this point.
-#[inline(always)]
-fn inject_custom_ca_certs(cert_path: &Option<String>) {
-    if let Some(path) = cert_path {
-        // SAFETY: This is safe because:
-        // 1. Called before any threads exist (single-threaded main context)
-        // 2. No other code can concurrently modify env vars at this point
-        // 3. Tokio runtime hasn't been entered yet
-        unsafe {
-            std::env::set_var("SSL_CERT_FILE", path);
-        }
-        tracing::info!("Injected custom CA certificate path: {}", path);
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,18 +23,18 @@ async fn main() -> Result<()> {
 
     // Inject custom CA certificates for fastembed/hf-hub model downloads if provided.
     // This must be called before any async/tokio threads are spawned.
-    inject_custom_ca_certs(&cfg.custom_ca_certs);
+    utils::inject_custom_ca_certs(&cfg.custom_ca_certs);
 
     // Configure Rayon thread pool before any parallel parsing occurs.
     // Must be called before the tokio runtime spawns blocking tasks.
-    let rayon_threads = configure_rayon(cfg.rayon_threads)?;
+    let rayon_threads = utils::configure_rayon(cfg.rayon_threads)?;
 
-    print_startup_banner(&cfg, rayon_threads);
+    utils::print_startup_banner(&cfg, rayon_threads);
 
     // Initialize databases and load previous state.
     // When --clean is set, skip loading the old state (it may be from an
     // incompatible version) and start with an empty state instead.
-    let (vector_db, graph_db) = init_databases(&cfg).await?;
+    let (vector_db, graph_db) = db::init_databases(&cfg).await?;
     let mut index_state = if cfg.clean {
         info!("Clean mode: ignoring existing index state");
         IndexState::default()
@@ -97,63 +66,6 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Print startup banner with configuration details.
-fn print_startup_banner(cfg: &Config, rayon_threads: usize) {
-    let cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-
-    info!(
-        "knot indexer starting (v{} - parallel streaming + watch mode)",
-        env!("CARGO_PKG_VERSION")
-    );
-    info!("Repository path : {}", cfg.repo_path);
-    info!("Repository name : {}", cfg.repo_name);
-    info!("Logical CPUs    : {cpus}");
-    info!("Rayon threads   : {rayon_threads}");
-    info!("Batch size      : {}", cfg.batch_size);
-    info!("Ingest workers  : {}", cfg.ingest_concurrency);
-    info!("Clean mode      : {}", cfg.clean);
-    info!("Watch mode      : {}", cfg.watch);
-    info!(
-        "Qdrant          : {} / {}",
-        cfg.qdrant_url, cfg.qdrant_collection
-    );
-    info!("Neo4j           : {}", cfg.neo4j_uri);
-}
-
-/// Configure the Rayon thread pool size.
-///
-/// Default: `logical_cpus - 1` (leaves 1 core for tokio runtime + OS).
-/// Minimum: 2 threads. Respects the `KNOT_RAYON_THREADS` env var override.
-fn configure_rayon(threads: Option<usize>) -> Result<usize> {
-    let cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-
-    let thread_count = threads.unwrap_or(cpus.saturating_sub(1).max(2));
-
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(thread_count)
-        .build_global()
-        .context("Failed to initialize Rayon thread pool")?;
-
-    info!("Rayon thread pool initialized with {thread_count} threads ({cpus} logical CPUs)");
-    Ok(thread_count)
-}
-
-/// Initialize database connections and perform pre-flight checks.
-async fn init_databases(cfg: &Config) -> Result<(VectorDb, GraphDb)> {
-    let vector_db =
-        VectorDb::connect(&cfg.qdrant_url, &cfg.qdrant_collection, cfg.embed_dim).await?;
-    vector_db.ensure_collection().await?;
-
-    let graph_db = GraphDb::connect(&cfg.neo4j_uri, &cfg.neo4j_user, &cfg.neo4j_password).await?;
-    graph_db.ensure_indexes().await?;
-
-    Ok((vector_db, graph_db))
 }
 
 #[cfg(test)]
@@ -298,43 +210,5 @@ mod tests {
         assert_eq!(cfg.repo_name, "test-repo");
         assert!(cfg.clean);
         assert!(cfg.watch);
-    }
-
-    #[test]
-    fn test_configure_rayon_default_logic() {
-        // Test the N-1 default thread count computation logic.
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-
-        // Without override: N-1, minimum 2
-        let thread_count = cpus.saturating_sub(1).max(2);
-
-        assert!(thread_count >= 2);
-        assert!(thread_count <= cpus);
-    }
-
-    #[test]
-    fn test_configure_rayon_explicit_override() {
-        // With override: use the provided value
-        let thread_count = 4usize;
-
-        assert_eq!(thread_count, 4);
-    }
-
-    #[test]
-    fn test_configure_rayon_minimum_two() {
-        // Simulate a single-CPU system: minimum should be 2
-        let cpus: usize = 1;
-        let thread_count = cpus.saturating_sub(1).max(2);
-        assert_eq!(thread_count, 2);
-    }
-
-    #[test]
-    fn test_configure_rayon_many_cpus() {
-        // Simulate a 32-core system: should be 31 (N-1)
-        let cpus: usize = 32;
-        let thread_count = cpus.saturating_sub(1).max(2);
-        assert_eq!(thread_count, 31);
     }
 }

@@ -43,20 +43,12 @@ pub async fn run_search_hybrid_context(
 
     if let Some(arr) = prefix_results.as_array() {
         for entity in arr {
-            if let Some(uuid) = entity.get("uuid").and_then(|v| v.as_str())
-                && seen_uuids.insert(uuid.to_string())
-            {
-                combined.push(entity.clone());
-            }
+            push_if_unique(entity, &mut seen_uuids, &mut combined);
         }
     }
 
     for result in &search_results {
-        if let Some(uuid) = result.get("uuid").and_then(|v| v.as_str())
-            && seen_uuids.insert(uuid.to_string())
-        {
-            combined.push(result.clone());
-        }
+        push_if_unique(result, &mut seen_uuids, &mut combined);
     }
 
     if combined.is_empty() {
@@ -119,21 +111,33 @@ async fn enrich_with_relationships(
     Ok(enriched)
 }
 
-fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {
+fn push_if_unique(
+    entity: &serde_json::Value,
+    seen_uuids: &mut HashSet<String>,
+    combined: &mut Vec<serde_json::Value>,
+) {
+    if let Some(uuid) = entity.get("uuid").and_then(|v| v.as_str())
+        && seen_uuids.insert(uuid.to_string())
+    {
+        combined.push(entity.clone());
+    }
+}
+
+pub(crate) fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {
     extends_arr
         .iter()
         .filter_map(|e| e.get("name").and_then(|v| v.as_str()).map(String::from))
         .collect()
 }
 
-fn extract_implementer_names(implements_arr: &[serde_json::Value]) -> Vec<String> {
+pub(crate) fn extract_implementer_names(implements_arr: &[serde_json::Value]) -> Vec<String> {
     implements_arr
         .iter()
         .filter_map(|e| e.get("name").and_then(|v| v.as_str()).map(String::from))
         .collect()
 }
 
-fn format_usage_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
+pub(crate) fn format_reference_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
     references_arr
         .iter()
         .take(3)
@@ -145,19 +149,7 @@ fn format_usage_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-fn format_caller_samples(calls_arr: &[serde_json::Value]) -> Vec<String> {
-    calls_arr
-        .iter()
-        .take(3)
-        .map(|e| {
-            let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let file = e.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("{} in {}", name, file)
-        })
-        .collect()
-}
-
-fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json::Value) {
+pub(crate) fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json::Value) {
     if let Some(extends_arr) = references.get("extends").and_then(|v| v.as_array())
         && !extends_arr.is_empty()
     {
@@ -180,7 +172,7 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
         && !references_arr.is_empty()
     {
         let usage_count = references_arr.len();
-        let samples = format_usage_samples(references_arr);
+        let samples = format_reference_samples(references_arr);
         if let Some(obj) = entity.as_object_mut() {
             obj.insert("type_usage_count".to_string(), json!(usage_count));
             obj.insert("type_usage_samples".to_string(), json!(samples));
@@ -191,7 +183,7 @@ fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json:
         && !calls_arr.is_empty()
     {
         let caller_count = calls_arr.len();
-        let samples = format_caller_samples(calls_arr);
+        let samples = format_reference_samples(calls_arr);
         if let Some(obj) = entity.as_object_mut() {
             obj.insert("caller_count".to_string(), json!(caller_count));
             obj.insert("caller_samples".to_string(), json!(samples));
@@ -234,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_usage_samples_limits_to_three() {
+    fn test_format_reference_samples_limits_to_three() {
         let refs = vec![
             json!({"name": "usage1", "file_path": "file1.java"}),
             json!({"name": "usage2", "file_path": "file2.java"}),
@@ -242,7 +234,7 @@ mod tests {
             json!({"name": "usage4", "file_path": "file4.java"}),
             json!({"name": "usage5", "file_path": "file5.java"}),
         ];
-        let samples = format_usage_samples(&refs);
+        let samples = format_reference_samples(&refs);
         assert_eq!(samples.len(), 3);
         assert!(samples[0].contains("usage1"));
         assert!(samples[1].contains("usage2"));
@@ -250,9 +242,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_caller_samples() {
+    fn test_format_reference_samples() {
         let refs = vec![json!({"name": "caller1", "file_path": "caller.java"})];
-        let samples = format_caller_samples(&refs);
+        let samples = format_reference_samples(&refs);
         assert_eq!(samples.len(), 1);
         assert!(samples[0].contains("caller1"));
         assert!(samples[0].contains("caller.java"));

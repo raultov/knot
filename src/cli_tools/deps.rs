@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::db::graph::{GraphDb, QueryExt};
+use crate::db::graph::{GraphDb, RepoQueryExt};
 
 pub async fn run_deps(
     repo_name: &str,
@@ -106,5 +106,26 @@ mod tests {
         let formatted = format_deps_output("my-app", false, &result);
         assert!(formatted.contains("Dependencies of `my-app`"));
         assert!(formatted.contains("+-- core-lib"));
+    }
+
+    #[test]
+    fn test_format_deps_output_null_returns_no_deps() {
+        let formatted = format_deps_output("my-app", false, &serde_json::Value::Null);
+        assert!(formatted.contains("No dependencies found"));
+    }
+
+    #[test]
+    fn test_format_deps_output_object_returns_no_deps() {
+        let result = json!({"repo_name": "should-be-array"});
+        let formatted = format_deps_output("my-app", false, &result);
+        assert!(formatted.contains("No dependencies found"));
+    }
+
+    #[test]
+    fn test_format_deps_output_missing_repo_name_field() {
+        let result = json!([{"other": "value"}]);
+        let formatted = format_deps_output("my-app", false, &result);
+        assert!(!formatted.contains("No dependencies found"));
+        assert!(!formatted.contains("+--"));
     }
 }

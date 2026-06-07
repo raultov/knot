@@ -139,8 +139,7 @@ impl SearchHybridContextTool {
         .await
         .map_err(|e| CallToolError::from_message(format!("Search failed: {}", e)))?;
 
-        let formatted =
-            crate::mcp_tools::search_hybrid_context::format::format_search_results(&json_result);
+        let formatted = format::format_search_results(&json_result);
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(

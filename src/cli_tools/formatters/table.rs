@@ -6,6 +6,8 @@
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use serde_json::Value;
 
+use crate::cli_tools::{json_entities_array, json_line_number, json_target_name};
+
 pub fn format_search_table(results: &Value) -> String {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::DynamicFullWidth);
@@ -28,12 +30,7 @@ pub fn format_search_table(results: &Value) -> String {
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("-");
-            let line = entity
-                .get("start_line")
-                .and_then(|v| v.as_i64())
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string());
-
+            let line = json_line_number(entity);
             let kind_color = match kind {
                 "class" | "python_class" => Color::Yellow,
                 "interface" => Color::Cyan,
@@ -95,22 +92,13 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
                 total_refs += 1;
                 // Prefer target_fqn when available (qualified identifiers
                 // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
-                let target = entity
-                    .get("target_fqn")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| entity.get("target_name").and_then(|v| v.as_str()))
-                    .unwrap_or(entity_name);
+                let target = json_target_name(entity, entity_name);
                 let caller = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
                 let file = entity
                     .get("file_path")
                     .and_then(|v| v.as_str())
                     .unwrap_or("-");
-                let line = entity
-                    .get("start_line")
-                    .and_then(|v| v.as_i64())
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string());
+                let line = json_line_number(entity);
 
                 table.add_row(vec![
                     Cell::new(label).fg(label_color),
@@ -148,25 +136,12 @@ pub fn format_explore_table(file_path: &str, result: &Value) -> String {
         Cell::new("Signature / Doc").fg(Color::White),
     ]);
 
-    let arr = if let Some(obj) = result.as_object() {
-        obj.get("entities")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default()
-    } else if let Some(a) = result.as_array() {
-        a.clone()
-    } else {
-        Vec::new()
-    };
+    let arr = json_entities_array(result);
 
     for entity in &arr {
         let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("-");
         let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-        let line = entity
-            .get("start_line")
-            .and_then(|v| v.as_i64())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "-".to_string());
+        let line = json_line_number(entity);
 
         let sig_or_doc = entity
             .get("signature")

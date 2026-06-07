@@ -7,6 +7,15 @@ use uuid::Uuid;
 use super::{GraphDb, utils};
 use crate::models::{EmbeddedEntity, RelationshipType, ResolutionEntity};
 
+fn group_entities_by_kind(entities: &[EmbeddedEntity]) -> HashMap<String, Vec<&EmbeddedEntity>> {
+    let mut groups: HashMap<String, Vec<&EmbeddedEntity>> = HashMap::new();
+    for e in entities {
+        let label = utils::kind_to_label(&e.entity.kind);
+        groups.entry(label.to_string()).or_default().push(e);
+    }
+    groups
+}
+
 /// Extension trait for upsert and write operations.
 #[allow(async_fn_in_trait)]
 pub trait UpsertExt {
@@ -112,12 +121,7 @@ impl UpsertExt for GraphDb {
             return Ok(());
         }
 
-        // Group entities by their Neo4j label (derived from EntityKind)
-        let mut groups: HashMap<String, Vec<&EmbeddedEntity>> = HashMap::new();
-        for e in entities {
-            let label = utils::kind_to_label(&e.entity.kind);
-            groups.entry(label.to_string()).or_default().push(e);
-        }
+        let groups = group_entities_by_kind(entities);
 
         for (label, group) in &groups {
             let entity_params: Vec<HashMap<String, BoltType>> = group
@@ -495,8 +499,8 @@ mod tests {
         let repo_names: Vec<String> = vec![];
         // Simulate what would happen with empty repo list
         if repo_names.is_empty() {
-            let fqn_map = std::collections::HashMap::<String, uuid::Uuid>::new();
-            let name_map = std::collections::HashMap::<String, Vec<uuid::Uuid>>::new();
+            let fqn_map = HashMap::<String, Uuid>::new();
+            let name_map = HashMap::<String, Vec<Uuid>>::new();
             assert_eq!(fqn_map.len(), 0);
             assert_eq!(name_map.len(), 0);
         }
@@ -654,12 +658,7 @@ mod tests {
 
         let entities = vec![entity1, entity2, entity3, entity4];
 
-        // Simulate the grouping logic from upsert_entities
-        let mut groups: HashMap<String, Vec<&crate::models::EmbeddedEntity>> = HashMap::new();
-        for e in &entities {
-            let label = super::super::utils::kind_to_label(&e.entity.kind);
-            groups.entry(label.to_string()).or_default().push(e);
-        }
+        let groups = super::group_entities_by_kind(&entities);
 
         // Should have 3 groups: Class, Method, Function
         assert_eq!(groups.len(), 3);
@@ -868,12 +867,8 @@ mod tests {
         let entity1 = create_embedded_test_entity("A", EntityKind::Class);
         let entity2 = create_embedded_test_entity("B", EntityKind::Class);
 
-        let mut groups: HashMap<String, Vec<&crate::models::EmbeddedEntity>> = HashMap::new();
         let entities = [entity1, entity2];
-        for e in &entities {
-            let label = super::super::utils::kind_to_label(&e.entity.kind);
-            groups.entry(label.to_string()).or_default().push(e);
-        }
+        let groups = super::group_entities_by_kind(&entities);
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups["Class"].len(), 2);
@@ -891,11 +886,7 @@ mod tests {
             create_embedded_test_entity("F", EntityKind::Enum),
         ];
 
-        let mut groups: HashMap<String, Vec<&crate::models::EmbeddedEntity>> = HashMap::new();
-        for e in &entities {
-            let label = super::super::utils::kind_to_label(&e.entity.kind);
-            groups.entry(label.to_string()).or_default().push(e);
-        }
+        let groups = super::group_entities_by_kind(&entities);
 
         assert_eq!(groups.len(), 6);
         for group in groups.values() {

@@ -51,7 +51,7 @@ pub fn classify_files_for_indexing(
     all_files: &[PathBuf],
     index_state: &IndexState,
     clean_mode: bool,
-) -> anyhow::Result<FileClassification> {
+) -> Result<FileClassification> {
     if clean_mode {
         Ok((vec![], vec![], all_files.to_vec(), vec![]))
     } else {

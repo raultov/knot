@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use crate::db::graph::{GraphDb, QueryExt};
-use crate::models::{SubgraphDirection, SubgraphResult};
+use crate::db::graph::{GraphDb, SubgraphQueryExt};
+use crate::models::{SubgraphDirection, SubgraphQueryOptions, SubgraphResult};
 
 pub const DEFAULT_MAX_NODES: usize = 500;
 
@@ -32,7 +32,7 @@ pub async fn run_get_subgraph(
 ) -> anyhow::Result<SubgraphResult> {
     let max_nodes = max_nodes.unwrap_or(DEFAULT_MAX_NODES);
     let result = graph_db
-        .get_entity_subgraph(
+        .get_entity_subgraph(SubgraphQueryOptions {
             entity_name,
             repo_name,
             depth,
@@ -41,7 +41,7 @@ pub async fn run_get_subgraph(
             max_nodes,
             entity_uuid,
             visible_kinds,
-        )
+        })
         .await?;
     Ok(result)
 }

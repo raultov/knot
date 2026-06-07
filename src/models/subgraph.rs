@@ -34,6 +34,19 @@ pub struct SubgraphEdge {
     pub relationship: String,
 }
 
+/// Options for querying a subgraph.
+#[derive(Debug, Clone)]
+pub struct SubgraphQueryOptions<'a> {
+    pub entity_name: &'a str,
+    pub repo_name: &'a str,
+    pub depth: u32,
+    pub relationships: &'a [&'a str],
+    pub direction: SubgraphDirection,
+    pub max_nodes: usize,
+    pub entity_uuid: Option<&'a str>,
+    pub visible_kinds: Option<&'a [&'a str]>,
+}
+
 /// Result of a subgraph traversal query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubgraphResult {
