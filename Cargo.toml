@@ -50,6 +50,7 @@ tree-sitter-python = "0.23"
 tree-sitter-groovy = "0.1.2"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
+tree-sitter-md = "0.5.3"
 
 # --- Local Embeddings ---
 fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls", "image-models"], optional = true }

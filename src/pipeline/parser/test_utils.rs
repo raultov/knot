@@ -95,6 +95,19 @@ pub(crate) fn parse_rust_snippet(code: &str) -> Result<Tree, String> {
         .ok_or_else(|| "Failed to parse Rust code snippet".to_string())
 }
 
+/// Parse a Markdown snippet and return the syntax tree.
+#[cfg(test)]
+pub(crate) fn parse_markdown_snippet(code: &str) -> Result<Tree, String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_md::LANGUAGE.into())
+        .map_err(|e| format!("Failed to set Markdown language: {e}"))?;
+
+    parser
+        .parse(code, None)
+        .ok_or_else(|| "Failed to parse Markdown code snippet".to_string())
+}
+
 /// Parse a Python code snippet and return the syntax tree.
 #[cfg(test)]
 pub(crate) fn parse_python_snippet(code: &str) -> Result<Tree, String> {

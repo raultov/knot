@@ -77,6 +77,8 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::HelmValue => "HelmValue",
         EntityKind::HelmTemplateVar => "HelmTemplateVar",
         EntityKind::ProjectIdentity => "ProjectIdentity",
+        EntityKind::MarkdownDocument => "MarkdownDocument",
+        EntityKind::MarkdownSection => "MarkdownSection",
     }
 }
 

@@ -218,6 +218,7 @@ pub(crate) fn compute_fqn_and_context(
             }
         }
         EntityKind::MacroDefinition => name.to_string(),
+        EntityKind::MarkdownDocument | EntityKind::MarkdownSection => name.to_string(),
     };
 
     (fqn, enclosing_class)

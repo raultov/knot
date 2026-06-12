@@ -102,6 +102,9 @@ pub enum EntityKind {
     HelmTemplateVar, // {{ .Values.x }} template variable usage
     // Cross-repo linking
     ProjectIdentity, // Build file project declaration (Maven GAV, Cargo package, npm name)
+    // Markdown entities
+    MarkdownDocument, // A full markdown file or frontmatter
+    MarkdownSection,  // A section under a markdown heading
 }
 
 impl std::fmt::Display for EntityKind {
@@ -181,6 +184,8 @@ impl std::fmt::Display for EntityKind {
             EntityKind::HelmValue => "helm_value",
             EntityKind::HelmTemplateVar => "helm_template_var",
             EntityKind::ProjectIdentity => "project_identity",
+            EntityKind::MarkdownDocument => "markdown_document",
+            EntityKind::MarkdownSection => "markdown_section",
         };
         write!(f, "{s}")
     }
