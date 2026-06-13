@@ -70,6 +70,12 @@ pub async fn run_indexing_pipeline(
         deleted_files.len()
     );
 
+    // Detect a full indexing run (no prior state on disk) so that we can
+    // short-circuit the slow per-file deletion path with a single bulk
+    // `delete_by_repo` query. Without this, initial indexing on a populated
+    // database would issue one DELETE per file in the repo.
+    let is_full_index = index_state.file_hashes.is_empty();
+
     // Clean stale data before re-indexing.
     clean_stale_data(
         vector_db,
@@ -77,7 +83,7 @@ pub async fn run_indexing_pipeline(
         cfg,
         &deleted_files,
         &modified_files,
-        &added_files,
+        is_full_index,
     )
     .await?;
 
@@ -271,27 +277,39 @@ pub async fn run_indexing_pipeline(
 }
 
 /// Clean stale data from databases based on files to delete.
+///
+/// When `cfg.clean` is set or this is a full indexing run (no prior state on
+/// disk), the entire repository is wiped in a single bulk operation. Otherwise
+/// only the files that already exist in the database (deleted and modified)
+/// are removed incrementally.
 pub async fn clean_stale_data(
     vector_db: &VectorDb,
     graph_db: &GraphDb,
     cfg: &Config,
     deleted_files: &[String],
     modified_files: &[PathBuf],
-    added_files: &[PathBuf],
+    is_full_index: bool,
 ) -> Result<()> {
     use crate::db::graph::DeleteExt;
     use crate::db::vector::VectorDeleteExt;
 
-    if cfg.clean {
-        // Full clean: delete entire repository
-        info!("Performing full clean for repo '{}'", cfg.repo_name);
+    if cfg.clean || is_full_index {
+        // Full clean / initial indexing: delete entire repository in one query.
+        if cfg.clean {
+            info!("Performing full clean for repo '{}'", cfg.repo_name);
+        } else {
+            info!(
+                "Detected full indexing run — wiping repo '{}' before re-indexing",
+                cfg.repo_name
+            );
+        }
         tokio::try_join!(
             vector_db.delete_by_repo(&cfg.repo_name),
             graph_db.delete_by_repo(&cfg.repo_name),
         )?;
     } else {
         // Incremental: delete only modified and deleted files
-        let files_to_delete = calculate_files_to_delete(deleted_files, modified_files, added_files);
+        let files_to_delete = calculate_files_to_delete(deleted_files, modified_files);
 
         if !files_to_delete.is_empty() {
             info!(

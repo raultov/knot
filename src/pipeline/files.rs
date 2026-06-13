@@ -60,18 +60,13 @@ pub fn classify_files_for_indexing(
 }
 
 /// Calculate which files should be deleted from the databases before re-indexing.
-pub fn calculate_files_to_delete(
-    deleted: &[String],
-    modified: &[PathBuf],
-    added: &[PathBuf],
-) -> Vec<String> {
+///
+/// Only files that already exist in the database need to be removed: deleted and
+/// modified files. Added files have never been indexed, so including them here
+/// would trigger pointless sequential delete operations.
+pub fn calculate_files_to_delete(deleted: &[String], modified: &[PathBuf]) -> Vec<String> {
     let mut files_to_delete = deleted.to_vec();
-    files_to_delete.extend(
-        modified
-            .iter()
-            .chain(added.iter())
-            .filter_map(|p| p.to_str().map(String::from)),
-    );
+    files_to_delete.extend(modified.iter().filter_map(|p| p.to_str().map(String::from)));
     files_to_delete
 }
 
@@ -123,12 +118,16 @@ mod tests {
         let modified = vec![PathBuf::from("modified.ts")];
         let added = vec![PathBuf::from("added.tsx")];
 
-        let to_delete = calculate_files_to_delete(&deleted, &modified, &added);
+        let to_delete = calculate_files_to_delete(&deleted, &modified);
 
-        assert_eq!(to_delete.len(), 3);
+        // Only deleted and modified files should be returned.
+        // Added files are skipped — they have never been indexed.
+        assert_eq!(to_delete.len(), 2);
         assert!(to_delete.contains(&"deleted.java".to_string()));
         assert!(to_delete.contains(&"modified.ts".to_string()));
-        assert!(to_delete.contains(&"added.tsx".to_string()));
+        assert!(!to_delete.contains(&"added.tsx".to_string()));
+        // Verify the `added` input does not affect the output.
+        let _ = added;
     }
 
     #[test]
@@ -199,17 +198,21 @@ mod tests {
 
     #[test]
     fn test_calculate_files_to_delete_edge_cases() {
-        let to_delete = calculate_files_to_delete(&[], &[], &[]);
+        let to_delete = calculate_files_to_delete(&[], &[]);
         assert!(to_delete.is_empty());
 
-        let to_delete = calculate_files_to_delete(&["a.ts".to_string()], &[], &[]);
+        let to_delete = calculate_files_to_delete(&["a.ts".to_string()], &[]);
         assert_eq!(to_delete, vec!["a.ts".to_string()]);
 
+        let to_delete = calculate_files_to_delete(&[], &[PathBuf::from("m.ts")]);
+        assert_eq!(to_delete, vec!["m.ts".to_string()]);
+
+        // Mixed input: both deleted and modified files are included.
         let to_delete =
-            calculate_files_to_delete(&[], &[PathBuf::from("m.ts")], &[PathBuf::from("add.ts")]);
+            calculate_files_to_delete(&["del.ts".to_string()], &[PathBuf::from("m.ts")]);
         assert_eq!(to_delete.len(), 2);
+        assert!(to_delete.contains(&"del.ts".to_string()));
         assert!(to_delete.contains(&"m.ts".to_string()));
-        assert!(to_delete.contains(&"add.ts".to_string()));
     }
 
     #[test]
