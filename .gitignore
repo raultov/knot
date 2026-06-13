@@ -31,5 +31,8 @@ plan.md
 /tests/.e2e_cross_repo_client/
 /tests/.e2e_cross_repo_lib/
 
+# Ignore knot index state in test fixture directories
+tests/testing_files/**/.knot/
+
 # Agent skills generated artifacts
 .knot-agent-skills/
