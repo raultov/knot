@@ -49,6 +49,7 @@ This dual-database approach powers both:
 - **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references. Supports cross-repository call resolution via `DEPENDS_ON` graph edges.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
+- **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package-aware FQN resolution (e.g., `com.example.app.UserService`), class inheritance (`EXTENDS`), interface implementation (`IMPLEMENTS`), annotation tracking, and field-access method invocation resolution
@@ -206,6 +207,8 @@ docker run --rm \
 - ✅ `knot search` (structural only, no semantic search)
 - ✅ `knot callers` (reverse dependency lookup)
 - ✅ `knot explore` (file structure inspection)
+- ✅ `knot deps` (repository dependency graph)
+- ✅ `knot repos` (indexed repository inventory)
 - ❌ Semantic search requires the full install
 
 **Note:** Uses Debian Bookworm (glibc 2.35+) and excludes ONNX Runtime, making it compatible with older Linux distributions.
@@ -307,6 +310,8 @@ Comprehensive documentation for using knot tools. The download above extracts:
 - **search.md** — Semantic code discovery guide with examples
 - **callers.md** — Reverse dependency lookup with critical usage rules
 - **explore.md** — File anatomy inspection guide
+- **deps.md** — Repository dependency graph guide
+- **repos.md** — Indexed repository inventory
 - **workflows.md** — Common patterns and best practices
 
 For quick reference without downloading, see [`.knot-agent.md`](.knot-agent.md).
@@ -347,6 +352,14 @@ knot deps my-app --depth 2           # Show forward dependencies (transitive)
 knot deps my-app --reverse           # Show who depends on this repo
 ```
 Visualize auto-discovered dependencies between indexed repositories with transitive resolution up to 3 levels deep.
+
+#### `knot repos` — List Indexed Repositories
+```bash
+knot repos                          # Table with REPO / BUILD SYSTEM / LANGUAGE / FILES / ENTITIES
+knot repos --output json            # Machine-readable list
+knot repos --output markdown        # GFM table for chat UIs
+```
+Show the status of every repository currently indexed in the graph database — useful for orientation, sanity-checking that an indexing run completed, and discovering which languages and build systems are present across the workspace.
 
 **For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 
