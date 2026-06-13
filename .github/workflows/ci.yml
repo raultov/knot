@@ -86,115 +86,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
-      - name: Run JS/TS/Java E2E tests
-        run: ./tests/run_e2e.sh
-        timeout-minutes: 15
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_data .e2e_kotlin_data .e2e_rust_data .e2e_python_data .e2e_build_systems_data 2>/dev/null || true
-          sleep 5
-
-      - name: Run Kotlin E2E tests
-        run: ./tests/run_kotlin_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_kotlin_data .e2e_rust_data .e2e_python_data 2>/dev/null || true
-          sleep 5
-
-      - name: Run Rust E2E tests
-        run: ./tests/run_rust_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_rust_data .e2e_python_data 2>/dev/null || true
-          sleep 5
-
-      - name: Run Python E2E tests
-        run: ./tests/run_python_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_python_data .e2e_build_systems_data 2>/dev/null || true
-          sleep 5
-
-      - name: Run Build Systems E2E tests
-        run: ./tests/run_build_systems_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_build_systems_data .e2e_build_systems_repo .e2e_groovy_data .e2e_groovy_repo 2>/dev/null || true
-          sleep 5
-
-      - name: Run Config Files E2E tests
-        run: ./tests/run_config_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_config_data .e2e_config_repo .e2e_k8s_helm_data .e2e_k8s_helm_repo 2>/dev/null || true
-          sleep 5
-
-      - name: Run K8s/Helm E2E tests
-        run: ./tests/run_k8s_helm_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_k8s_helm_data .e2e_k8s_helm_repo .e2e_groovy_data .e2e_groovy_repo 2>/dev/null || true
-          sleep 5
-
-      - name: Run Groovy E2E tests
-        run: ./tests/run_groovy_e2e.sh
-        timeout-minutes: 15
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_groovy_data .e2e_groovy_repo .e2e_crosslang_data .e2e_cpp_data 2>/dev/null || true
-          sleep 5
-
-      - name: Run Cross-Language Ref E2E tests
-        run: ./tests/run_cross_lang_ref_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker between E2E test suites
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_crosslang_data .e2e_cpp_data 2>/dev/null || true
-          sleep 5
-
-      - name: Run C/C++ E2E tests
-        run: ./tests/run_cpp_e2e.sh
-        timeout-minutes: 10
-
-      - name: Cleanup Docker and data dirs after all E2E tests
-        if: always()
-        run: |
-          cd tests && docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          rm -rf .e2e_cpp_data .e2e_cpp_repo 2>/dev/null || true
-          sleep 5
+      - name: Run all E2E tests (Fast)
+        run: ./tests/run_all_e2e_fast.sh
+        timeout-minutes: 60
 
       - name: Upload E2E logs on failure
         if: failure()
@@ -203,13 +97,7 @@ jobs:
           name: e2e-logs
           path: |
             tests/.e2e_data/
-            tests/.e2e_kotlin_data/
-            tests/.e2e_rust_data/
-            tests/.e2e_python_data/
-            tests/.e2e_build_systems_data/
-            tests/.e2e_groovy_data/
-            tests/.e2e_crosslang_data/
-            tests/.e2e_cpp_data/
+            tests/.e2e_*/
           retention-days: 7
 
   test-performance:
