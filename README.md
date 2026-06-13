@@ -118,21 +118,16 @@ curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md &&
 
 The first command installs the `knot` binary to your PATH. The second (optional) downloads the agent skill index (`.knot-agent.md`) and extracts comprehensive guides for using knot CLI with AI agents and code analysis tools.
 
-**Linux Requirements:**
-- **Full install (knot-indexer + CLI + MCP)**: glibc 2.38+
-  - Ubuntu 24.04 LTS or later
-  - Debian 13 (Trixie) or later
-  - Fedora 39+ / RHEL 10+
-  - Arch Linux (rolling release)
-- **Lightweight clients-only (knot CLI + MCP server, no indexing)**: glibc 2.35+ (even older systems like Debian 12 Bookworm work fine)
-
-**For older Linux distributions or Windows**, see the **Lightweight Clients** section below or use Docker (Option B).
+**System Requirements:**
+- **Linux**: glibc 2.38+ (Ubuntu 24.04+, Debian 13+, Fedora 39+, Arch)
+- **macOS**: Modern versions supported
+- **Windows**: Use Docker (Option B)
 
 ### Option B: Docker (Universal Compatibility)
 
 Docker images provide universal compatibility for **any Linux distribution** and **Windows**.
 
-#### Full Install (All Binaries: knot-indexer, knot CLI, knot-mcp)
+#### Docker Installation (All Binaries)
 
 **Build the image:**
 ```bash
@@ -176,43 +171,6 @@ docker run --rm \
 
 ---
 
-#### Lightweight Clients (Only knot CLI + knot-mcp, No Indexer)
-
-For older systems (Debian 12 Bookworm, Ubuntu 22.04) or production deployments that only need to **query existing indexes** without indexing new code:
-
-**Build the lightweight image:**
-```bash
-docker build -t knot:clients -f Dockerfile.clients . --network=host
-```
-
-Image size: ~100MB (vs ~160MB for full install)
-
-**Run the CLI tool (query existing index):**
-```bash
-docker run --rm \
-  --network host \
-  knot:clients \
-  knot callers "MyClass"
-```
-
-**Run the MCP server:**
-```bash
-docker run --rm \
-  --network host \
-  knot:clients \
-  knot-mcp
-```
-
-**Available tools in lightweight mode:**
-- ✅ `knot search` (structural only, no semantic search)
-- ✅ `knot callers` (reverse dependency lookup)
-- ✅ `knot explore` (file structure inspection)
-- ✅ `knot deps` (repository dependency graph)
-- ✅ `knot repos` (indexed repository inventory)
-- ❌ Semantic search requires the full install
-
-**Note:** Uses Debian Bookworm (glibc 2.35+) and excludes ONNX Runtime, making it compatible with older Linux distributions.
-
 ### Option C: Install via Cargo
 
 ```bash
@@ -220,8 +178,6 @@ cargo install --git https://github.com/raultov/knot
 ```
 
 ### Option D: Build from Source
-
-**Full Install (All Binaries):**
 
 **1. Start infrastructure with Docker:**
 ```bash
@@ -250,37 +206,6 @@ $EDITOR ~/.config/knot/.env  # Set KNOT_REPO_PATH and Neo4j credentials
 **5. Query via CLI:**
 ```bash
 ./target/release/knot search "your query"
-```
-
-### Option E: Lightweight Clients (No Indexing)
-
-For older Linux distributions (e.g. Debian 12 Bookworm, Ubuntu 22.04) or production deployments where you only need the **CLI and MCP server** (not the indexer), compile without the embedding dependencies:
-
-**Build lightweight clients:**
-```bash
-cargo build --release --no-default-features --features only-clients
-```
-
-This produces only `knot` and `knot-mcp` binaries (~8-10 MB each), excluding the 30+ MB of ONNX Runtime dependencies.
-
-**Available tools in lightweight mode:**
-- ✅ **`find_callers`**: Reverse dependency lookup (graph search). Automatically groups results by target when multiple entities share the same name.
-- ✅ **`explore_file`**: File structure inspection
-- ❌ **`search_hybrid_context`**: Semantic search (requires embeddings, not available in this mode)
-
-**Use case:** Query an existing Qdrant + Neo4j index that was built elsewhere, without needing the indexer on your machine.
-
-**Docker alternative (for lightweight mode):**
-```bash
-docker build -t knot:clients-only -f Dockerfile -f - . << 'EOF'
-FROM rust:1.90-slim-bookworm AS builder
-WORKDIR /build
-COPY . .
-RUN cargo build --release --no-default-features --features only-clients
-FROM debian:bookworm-slim
-COPY --from=builder /build/target/release/knot* /usr/local/bin/
-CMD ["knot-mcp"]
-EOF
 ```
 
 **6. Start the MCP server:**

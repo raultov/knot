@@ -65,8 +65,6 @@ impl SearchHybridContextTool {
                 "Read-only semantic and structural code search combining vector embeddings with graph analysis. Use this for initial codebase discovery to find features by their meaning (e.g., 'user authentication'). \
                  Locates code based on natural language descriptions instead of exact keywords, returning relevant files, signatures, and documentation. \
                  \n\n⚠️ PREREQUISITE: This tool requires an active knot-mcp server with vector database (Qdrant) and graph database (Neo4j) initialized. \
-                 If running in lightweight 'only-clients' mode, semantic search is disabled and this tool will fail with: 'Semantic search is disabled in lightweight build. Please use find_callers or explore_file instead.' \
-                 In such cases, use 'find_callers' for reverse dependency lookups or 'explore_file' for file structure inspection instead. \
                  \n\nBehavior & Return: Performs a read-only dual query against vector DB (for semantic similarity) and graph DB (for architectural relationships). \
                  Returns Markdown-formatted results with file paths, line numbers, code snippets, and cross-repository dependencies. No side effects. \
                  \n\nUsage: Use as your FIRST step when exploring unfamiliar code or discovering architectural patterns. Do NOT use this to find all usages of a specific function—use the 'find_callers' tool for that instead. \
