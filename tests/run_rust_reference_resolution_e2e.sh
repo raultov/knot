@@ -48,10 +48,6 @@ if [ "${KNOT_E2E_REGRESSIONS:-run}" = "skip" ]; then
     exit 0
 fi
 
-# Isolated repository: copy the fixture into a temp dir so we control what
-# gets indexed and avoid semantic-search pollution from other fixtures.
-TMP_REPO_DIR="$SCRIPT_DIR/.e2e_rust_ref_resol_repo"
-
 # Timeout settings
 TIMEOUT_SECONDS=60
 HEALTH_CHECK_INTERVAL=2
@@ -69,7 +65,7 @@ cleanup() {
         echo -e "\n${RED}Rust Reference Resolution E2E tests failed!${NC}"
         echo -e "${YELLOW}To clean up manually:${NC}"
         echo "  cd $SCRIPT_DIR && docker compose -f docker-compose.e2e.yml down -v"
-        echo "  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR"
+        echo "  sudo rm -rf $E2E_DATA_DIR"
         return 0
     fi
 
@@ -83,7 +79,6 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -152,12 +147,7 @@ fi
 echo -e "${YELLOW}[3/5] Staging fixture repo and indexing...${NC}"
 cd "$PROJECT_ROOT"
 
-rm -rf "$TMP_REPO_DIR"
-mkdir -p "$TMP_REPO_DIR"
-cp -r "$TEST_FILES_DIR/crate_a" "$TMP_REPO_DIR/"
-cp -r "$TEST_FILES_DIR/crate_b" "$TMP_REPO_DIR/"
-
-export KNOT_REPO_PATH="$TMP_REPO_DIR"
+export KNOT_REPO_PATH="$TEST_FILES_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 export KNOT_NEO4J_URI="$NEO4J_URI"
 export KNOT_NEO4J_USER="$NEO4J_USER"
@@ -193,7 +183,7 @@ export KNOT_REPO_NAME="$REPO_NAME"
 # has zero callers in the fixture (it is a leaf constructor).
 echo ""
 echo "Test 1: knot callers on 'Config::load' must not include spurious references..."
-CALLERS_OUTPUT=$(env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot -- callers "Config::load" -r "$REPO_NAME" 2>/dev/null)
+CALLERS_OUTPUT=$(env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot -- callers "Config::load" -r "$REPO_NAME" 2>/dev/null)
 
 # The fixture has no callers for Config::load (it is a leaf method, only
 # crate_b/src/lib.rs calls it through CrateAConfig::load). The crucial
@@ -213,8 +203,8 @@ fi
 # CrateAConfig alias).
 echo ""
 echo "Test 2: knot explore on crate_a/src/config.rs lists Config and its methods..."
-CONFIG_RS="$TMP_REPO_DIR/crate_a/src/config.rs"
-EXPLORE_OUTPUT=$(env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot -- explore "$CONFIG_RS" -r "$REPO_NAME" -o markdown 2>/dev/null)
+CONFIG_RS="$TEST_FILES_DIR/crate_a/src/config.rs"
+EXPLORE_OUTPUT=$(env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot -- explore "$CONFIG_RS" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 # Expect Config to be indexed and load()/process() to appear as methods.
 if echo "$EXPLORE_OUTPUT" | grep -q "Config"; then

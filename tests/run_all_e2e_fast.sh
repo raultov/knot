@@ -44,6 +44,7 @@ SUITES=(
     "run_rust_e2e.sh"
     "run_rust_reference_resolution_e2e.sh"
     "run_python_e2e.sh"
+    "run_rust_test_module_e2e.sh"
     "run_build_systems_e2e.sh"
     "run_config_e2e.sh"
     "run_k8s_helm_e2e.sh"

@@ -25,7 +25,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.e2e.yml"
-TEST_FILES_DIR="$SCRIPT_DIR/testing_files"
+TEST_FILES_DIR="$SCRIPT_DIR/testing_files/kotlin"
 E2E_DATA_DIR="$SCRIPT_DIR/.e2e_kotlin_data"
 
 # Database configuration (high ports to avoid conflicts)
@@ -33,8 +33,8 @@ NEO4J_URI="bolt://localhost:17687"
 NEO4J_USER="neo4j"
 NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
-QDRANT_COLLECTION="knot_e2e_test"
-REPO_NAME="e2e_test_repo"
+QDRANT_COLLECTION="knot_kotlin_e2e_test"
+REPO_NAME="kotlin_e2e_test_repo"
 
 # Timeout settings
 TIMEOUT_SECONDS=60
@@ -188,7 +188,7 @@ fi
 # Test 2: Kotlin interface extraction
 echo ""
 echo "Test 2: Searching for Kotlin interface Repository..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Repository","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Repository\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Repository" -r "$REPO_NAME" 2>/dev/null)
@@ -203,7 +203,7 @@ fi
 # Test 3: Kotlin object (singleton) extraction
 echo ""
 echo "Test 3: Searching for Kotlin singleton object DatabaseManager..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"DatabaseManager","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"DatabaseManager\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "DatabaseManager" -r "$REPO_NAME" 2>/dev/null)
@@ -218,10 +218,11 @@ fi
 # Test 4: Kotlin data class extraction
 echo ""
 echo "Test 4: Searching for Kotlin data class User..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"User","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"User\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "User" -r "$REPO_NAME" 2>/dev/null)
+
 
 if echo "$MCP_RESPONSE" | grep -q "User" && echo "$CLI_RESPONSE" | grep -q "User"; then
     echo -e "${GREEN}✓ Found Kotlin data class User (MCP & CLI)${NC}"
@@ -234,7 +235,7 @@ fi
 echo ""
 echo "Test 5: Exploring sample.kt for ConfigManager with companion object..."
 KT_FILE="$TEST_FILES_DIR/sample.kt"
-MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$KT_FILE"'","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$KT_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
@@ -249,7 +250,7 @@ fi
 # Test 6: Kotlin top-level function extraction
 echo ""
 echo "Test 6: Searching for top-level Kotlin function greetUser..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greetUser","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"greetUser\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "greetUser" -r "$REPO_NAME" 2>/dev/null)
@@ -264,7 +265,7 @@ fi
 # Test 7: Kotlin extension function extraction
 echo ""
 echo "Test 7: Searching for Kotlin extension function isValidEmail..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"isValidEmail","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"isValidEmail\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "isValidEmail" -r "$REPO_NAME" 2>/dev/null)
@@ -279,7 +280,7 @@ fi
 # Test 8: Kotlin method extraction
 echo ""
 echo "Test 8: Searching for Kotlin methods (findById, save)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"findById","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"findById\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "findById" -r "$REPO_NAME" 2>/dev/null)
@@ -307,7 +308,7 @@ fi
 # Test 10: Kotlin type references
 echo ""
 echo "Test 10: Searching for Kotlin type references (Random, User)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Random","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Random\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Random" -r "$REPO_NAME" 2>/dev/null)
@@ -321,7 +322,7 @@ fi
 # Test 11: Kotlin object method call resolution
 echo ""
 echo "Test 11: Verifying object method resolution (Helpers.greet called by Greeter)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Helpers","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Helpers\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Helpers" -r "$REPO_NAME" 2>/dev/null)
@@ -334,7 +335,7 @@ else
 fi
 
 echo "Test 11b: Verifying greet method exists inside Helpers object..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greet","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"greet\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "greet" -r "$REPO_NAME" 2>/dev/null)
@@ -346,7 +347,7 @@ else
 fi
 
 echo "Test 11c: Verifying find_callers for greet resolves to Greeter.sayHello..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"greet","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"greet\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -359,7 +360,7 @@ fi
 # Test 12: Kotlin interface classification (should be KotlinInterface, not KotlinClass)
 echo ""
 echo "Test 12: Verifying FilterContract is classified as KotlinInterface (not KotlinClass)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"FilterContract","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"FilterContract\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" 2>/dev/null)
@@ -380,7 +381,7 @@ fi
 # Test 13: Kotlin implements relationship (UpperFilter IMPLEMENTS FilterContract)
 echo ""
 echo "Test 13: Verifying UpperFilter implements FilterContract (IMPLEMENTS relationship)..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"FilterContract","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"FilterContract\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -393,7 +394,7 @@ fi
 # Test 14: Anonymous object implements relationship (AnonHost.build IMPLEMENTS AnonContract via anonymous object)
 echo ""
 echo "Test 14: Verifying anonymous object implements AnonContract..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"AnonContract","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"AnonContract\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -406,7 +407,7 @@ fi
 # Test 15: Enum class detection (Color should be KotlinEnum, not KotlinClass)
 echo ""
 echo "Test 15: Verifying Color enum class is classified as KotlinEnum..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Color","repo_name":"kotlin_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Color\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$KT_FILE" -r "$REPO_NAME" 2>/dev/null)

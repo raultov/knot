@@ -24,7 +24,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.e2e.yml"
-TEST_FILES_DIR="$SCRIPT_DIR/testing_files"
+TEST_FILES_DIR="$SCRIPT_DIR/testing_files/build_systems"
 E2E_DATA_DIR="$SCRIPT_DIR/.e2e_build_systems_data"
 
 # Database configuration (high ports to avoid conflicts)
@@ -34,9 +34,6 @@ NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
 QDRANT_COLLECTION="knot_build_systems_e2e_test"
 REPO_NAME="build_systems_e2e_test_repo"
-
-# Isolated repository: only build system files to avoid cross-language semantic ranking noise
-TMP_REPO_DIR="$SCRIPT_DIR/.e2e_build_systems_repo"
 
 # Timeout settings
 TIMEOUT_SECONDS=60
@@ -62,7 +59,7 @@ cleanup() {
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Build Systems E2E tests failed!${NC}"
         echo -e "${YELLOW}Test data preserved at $E2E_DATA_DIR for inspection.${NC}"
-        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR${NC}"
+        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR${NC}"
         return 0
     fi
 
@@ -70,7 +67,6 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -87,6 +83,7 @@ if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
     fi
     docker compose -f "$COMPOSE_FILE" up -d
 else
+
     echo -e "${YELLOW}[1/5] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
 
@@ -140,15 +137,7 @@ fi
 echo -e "${YELLOW}[3/5] Indexing build system files (pom.xml, build.gradle, Jenkinsfile)...${NC}"
 cd "$PROJECT_ROOT"
 
-# Isolate: copy only build system files to a temp dir so semantic search only sees build entities
-rm -rf "$TMP_REPO_DIR"
-mkdir -p "$TMP_REPO_DIR"
-cp "$TEST_FILES_DIR/sample_pom.xml" "$TMP_REPO_DIR/pom.xml"
-cp "$TEST_FILES_DIR/sample_build.gradle" "$TMP_REPO_DIR/build.gradle"
-cp "$TEST_FILES_DIR/sample.jenkinsfile" "$TMP_REPO_DIR/Jenkinsfile"
-cp "$TEST_FILES_DIR/sample_Cargo.toml" "$TMP_REPO_DIR/Cargo.toml"
-
-export KNOT_REPO_PATH="$TMP_REPO_DIR"
+export KNOT_REPO_PATH="$TEST_FILES_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 export KNOT_NEO4J_URI="$NEO4J_URI"
 export KNOT_NEO4J_USER="$NEO4J_USER"
@@ -178,7 +167,7 @@ echo ""
 echo "Test 1: Searching for Maven dependency spring-core..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"spring-core\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "spring-core" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "spring-core" && echo "$CLI_RESPONSE" | grep -q "spring-core"; then
@@ -191,10 +180,10 @@ fi
 # Test 2: Maven dependencies via explore_file on pom.xml
 echo ""
 echo "Test 2: Exploring pom.xml for dependency structure..."
-POM_FILE="$TMP_REPO_DIR/pom.xml"
+POM_FILE="$TEST_FILES_DIR/pom.xml"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$POM_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$POM_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -qE "spring-core|gson|log4j" && echo "$CLI_RESPONSE" | grep -qE "spring-core|gson|log4j"; then
@@ -209,7 +198,7 @@ echo ""
 echo "Test 3: Searching for Gradle dependency spring-boot-starter-web..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"spring-boot-starter-web\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "spring-boot-starter-web" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "spring-boot-starter-web" && echo "$CLI_RESPONSE" | grep -q "spring-boot-starter-web"; then
@@ -224,7 +213,7 @@ echo ""
 echo "Test 4: Searching for Gradle task buildDocs..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"buildDocs Gradle task\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "buildDocs" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "buildDocs" && echo "$CLI_RESPONSE" | grep -q "buildDocs"; then
@@ -239,7 +228,7 @@ echo ""
 echo "Test 5: Searching for Jenkins pipeline stage Build..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"pipeline stage Build\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "pipeline stage Build" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "stage: Build" && echo "$CLI_RESPONSE" | grep -q "stage: Build"; then
@@ -253,7 +242,7 @@ echo ""
 echo "Test 6: Searching for Jenkins step sh: mvn compile..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"sh mvn compile Jenkins\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "sh: mvn" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "sh:" && echo "$CLI_RESPONSE" | grep -q "sh:"; then
@@ -265,10 +254,10 @@ fi
 # Test 7: Explore build.gradle
 echo ""
 echo "Test 7: Exploring build.gradle..."
-GRADLE_FILE="$TMP_REPO_DIR/build.gradle"
+GRADLE_FILE="$TEST_FILES_DIR/build.gradle"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$GRADLE_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$GRADLE_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -qE "spring-boot|gson|buildDocs" && echo "$CLI_RESPONSE" | grep -qE "spring-boot|gson|buildDocs"; then
@@ -283,7 +272,7 @@ echo ""
 echo "Test 8: Searching for Maven plugin maven-compiler-plugin..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"maven-compiler-plugin\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "maven-compiler-plugin" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "maven-compiler-plugin" && echo "$CLI_RESPONSE" | grep -q "maven-compiler-plugin"; then
@@ -298,7 +287,7 @@ echo ""
 echo "Test 9: Searching for Cargo dependency serde..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"serde\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "serde" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "serde" && echo "$CLI_RESPONSE" | grep -q "serde"; then
@@ -311,10 +300,10 @@ fi
 # Test 10: Explore Cargo.toml
 echo ""
 echo "Test 10: Exploring Cargo.toml for dependencies and features..."
-CARGO_FILE="$TMP_REPO_DIR/Cargo.toml"
+CARGO_FILE="$TEST_FILES_DIR/Cargo.toml"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$CARGO_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$CARGO_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -qE "serde|tokio" && echo "$CLI_RESPONSE" | grep -qE "serde|tokio"; then
@@ -329,7 +318,7 @@ echo ""
 echo "Test 11: Searching for Cargo feature derive..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"derive feature\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "derive feature" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -qi "derive" && echo "$CLI_RESPONSE" | grep -qi "derive"; then
@@ -344,7 +333,7 @@ echo ""
 echo "Test 12: Searching for workspace member knot-core..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"knot-core\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "knot-core" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "knot-core" && echo "$CLI_RESPONSE" | grep -q "knot-core"; then
@@ -359,7 +348,7 @@ echo ""
 echo "Test 13: Searching for Cargo package metadata..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"cargo package edition 2024\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "cargo package" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "cargo_package" && echo "$CLI_RESPONSE" | grep -q "cargo_package"; then
@@ -374,7 +363,7 @@ echo ""
 echo "Test 14: Searching for dev-dependency criterion..."
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"criterion\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
 
-MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_REPO_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "criterion" -r "$REPO_NAME" -m 10 2>/dev/null)
 
 if echo "$MCP_RESPONSE" | grep -q "criterion" && echo "$CLI_RESPONSE" | grep -q "criterion"; then

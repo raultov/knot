@@ -1,0 +1,11 @@
+apiVersion: v2
+name: sample-app
+version: 1.0.0
+appVersion: 2.3.1
+description: A sample Helm chart for testing
+type: application
+dependencies:
+  - name: redis
+    version: 17.0.0
+  - name: postgresql
+    version: 12.5.0

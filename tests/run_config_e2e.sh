@@ -22,7 +22,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.e2e.yml"
-TEST_FILES_DIR="$SCRIPT_DIR/testing_files"
+TEST_FILES_DIR="$SCRIPT_DIR/testing_files/config"
 E2E_DATA_DIR="$SCRIPT_DIR/.e2e_config_data"
 
 NEO4J_URI="bolt://localhost:17687"
@@ -31,8 +31,6 @@ NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
 QDRANT_COLLECTION="knot_config_e2e_test"
 REPO_NAME="config_e2e_test_repo"
-
-TMP_REPO_DIR="$SCRIPT_DIR/.e2e_config_repo"
 
 TIMEOUT_SECONDS=60
 HEALTH_CHECK_INTERVAL=2
@@ -56,7 +54,7 @@ cleanup() {
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Config E2E tests failed!${NC}"
         echo -e "${YELLOW}Test data preserved at $E2E_DATA_DIR for inspection.${NC}"
-        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR${NC}"
+        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR${NC}"
         return 0
     fi
 
@@ -64,7 +62,6 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -133,14 +130,10 @@ fi
 echo -e "${YELLOW}[3/5] Phase A — Indexing WITHOUT --include-config-files (skip mode)...${NC}"
 cd "$PROJECT_ROOT"
 
-rm -rf "$TMP_REPO_DIR"
-mkdir -p "$TMP_REPO_DIR"
-cp "$TEST_FILES_DIR/sample_application.yml" "$TMP_REPO_DIR/application.yml"
-cp "$TEST_FILES_DIR/sample_config.json" "$TMP_REPO_DIR/config.json"
-cp "$TEST_FILES_DIR/sample_app.properties" "$TMP_REPO_DIR/app.properties"
-cp "$TEST_FILES_DIR/sample_package.json" "$TMP_REPO_DIR/package.json"
+# Ensure tsconfig.json is NOT present (otherwise it would be indexed as build-system)
+rm -f "$TEST_FILES_DIR/tsconfig.json"
 
-export KNOT_REPO_PATH="$TMP_REPO_DIR"
+export KNOT_REPO_PATH="$TEST_FILES_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 export KNOT_NEO4J_URI="$NEO4J_URI"
 export KNOT_NEO4J_USER="$NEO4J_USER"
@@ -152,8 +145,7 @@ echo "Building knot-indexer..."
 cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
 echo "Running indexer WITHOUT --include-config-files (config files should be skipped)..."
-INDEXER_FLAGS=()
-[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+INDEXER_FLAGS=("--clean")
 cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Phase A indexing complete (config files skipped by default)${NC}"
@@ -233,7 +225,7 @@ fi
 # Test A5: Explore package.json — should show entities
 echo ""
 echo "Test A5: Exploring package.json (should show entities)..."
-PKG_FILE="$TMP_REPO_DIR/package.json"
+PKG_FILE="$TEST_FILES_DIR/package.json"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":105,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$PKG_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
@@ -249,7 +241,7 @@ fi
 # Test A6: Explore application.yml — should return empty or not be listed
 echo ""
 echo "Test A6: Exploring application.yml (should NOT show config entities)..."
-YML_FILE="$TMP_REPO_DIR/application.yml"
+YML_FILE="$TEST_FILES_DIR/application.yml"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":106,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$YML_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
@@ -269,16 +261,14 @@ echo ""
 # Now re-index with --include-config-files for the full suite
 echo -e "${YELLOW}[3c/5] Phase B — Re-indexing WITH --include-config-files...${NC}"
 
-rm -rf "$TMP_REPO_DIR"
-mkdir -p "$TMP_REPO_DIR"
-cp "$TEST_FILES_DIR/sample_application.yml" "$TMP_REPO_DIR/application.yml"
-cp "$TEST_FILES_DIR/sample_config.json" "$TMP_REPO_DIR/tsconfig.json"
-cp "$TEST_FILES_DIR/sample_app.properties" "$TMP_REPO_DIR/app.properties"
-cp "$TEST_FILES_DIR/sample_package.json" "$TMP_REPO_DIR/package.json"
+# Add tsconfig.json to test build-system recognition
+cp "$TEST_FILES_DIR/config.json" "$TEST_FILES_DIR/tsconfig.json"
+
+export KNOT_REPO_PATH="$TEST_FILES_DIR"
+export KNOT_REPO_NAME="$REPO_NAME"
 
 echo "Running indexer WITH --include-config-files..."
-INDEXER_FLAGS=("--include-config-files")
-[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+INDEXER_FLAGS=("--include-config-files" "--clean")
 cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Config files indexed${NC}"
@@ -307,7 +297,7 @@ fi
 # Test 2: Explore application.yml
 echo ""
 echo "Test 2: Exploring application.yml..."
-YML_FILE="$TMP_REPO_DIR/application.yml"
+YML_FILE="$TEST_FILES_DIR/application.yml"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$YML_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
@@ -353,7 +343,7 @@ fi
 # Test 5: Explore app.properties
 echo ""
 echo "Test 5: Exploring app.properties..."
-PROPS_FILE="$TMP_REPO_DIR/app.properties"
+PROPS_FILE="$TEST_FILES_DIR/app.properties"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$PROPS_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
@@ -369,7 +359,7 @@ fi
 # Test 6: Explore package.json — dependencies + scripts
 echo ""
 echo "Test 6: Exploring package.json for dependencies and scripts..."
-PKG_FILE="$TMP_REPO_DIR/package.json"
+PKG_FILE="$TEST_FILES_DIR/package.json"
 MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$PKG_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)

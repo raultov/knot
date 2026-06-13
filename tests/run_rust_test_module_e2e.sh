@@ -36,7 +36,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.e2e.yml"
 TEST_FILES_DIR="$SCRIPT_DIR/testing_files/rust_test_module"
 E2E_DATA_DIR="$SCRIPT_DIR/.e2e_rust_test_module_data"
-TMP_REPO_DIR="$SCRIPT_DIR/.e2e_rust_test_module_repo"
 
 NEO4J_URI="bolt://localhost:17687"
 NEO4J_USER="neo4j"
@@ -65,7 +64,11 @@ cleanup() {
         echo -e "\n${RED}Rust test-module E2E failed!${NC}"
         echo -e "${YELLOW}To clean up manually:${NC}"
         echo "  cd $SCRIPT_DIR && docker compose -f docker-compose.e2e.yml down -v"
-        echo "  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR"
+        echo "  sudo rm -rf $E2E_DATA_DIR"
+        return 0
+    fi
+
+    if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
         return 0
     fi
 
@@ -75,23 +78,29 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
 trap cleanup EXIT INT TERM
 
 # ---- Step 1: Start Docker containers ----
-echo -e "${YELLOW}[1/5] Starting Docker containers...${NC}"
-cd "$SCRIPT_DIR"
-docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-if [ -d "$E2E_DATA_DIR" ]; then
-    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[1/5] Starting Docker containers...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    if [ -d "$E2E_DATA_DIR" ]; then
+        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    fi
+    docker compose -f "$COMPOSE_FILE" up -d
+else
+    echo -e "${YELLOW}[1/5] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
-docker compose -f "$COMPOSE_FILE" up -d
 
 # ---- Step 2: Wait for services ----
-echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
+if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[2/5] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+else
+    echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
 
 wait_for_port() {
     local port=$1
@@ -131,16 +140,13 @@ wait_for_port() {
 wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
 wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
+fi
 
 # ---- Step 3: Stage fixture & index ----
 echo -e "${YELLOW}[3/5] Staging fixture repo and indexing...${NC}"
 cd "$PROJECT_ROOT"
 
-rm -rf "$TMP_REPO_DIR"
-mkdir -p "$TMP_REPO_DIR"
-cp -r "$TEST_FILES_DIR"/* "$TMP_REPO_DIR/"
-
-export KNOT_REPO_PATH="$TMP_REPO_DIR"
+export KNOT_REPO_PATH="$TEST_FILES_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 export KNOT_NEO4J_URI="$NEO4J_URI"
 export KNOT_NEO4J_USER="$NEO4J_USER"
@@ -205,7 +211,7 @@ TEST_FQNS=(
 )
 MISSING=0
 for fqn in "${TEST_FQNS[@]}"; do
-    CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'$fqn'}) RETURN count(n) AS cnt;")
+    CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'$fqn', repo_name: '$REPO_NAME'}) RETURN count(n) AS cnt;")
     CNT=${CNT:-0}
     if [ "$CNT" -ge 1 ] 2>/dev/null; then
         echo -e "${GREEN}  ✓ ${fqn}${NC}"
@@ -222,7 +228,8 @@ fi
 # Test 2: production caller resolves correctly.
 echo ""
 echo "Test 2: production_caller --[CALLS]--> is_supported..."
-PROD_CALLS=$(run_neo4j_cypher "MATCH (a:Entity {fqn:'test_module_repo::production_caller'})-[r:CALLS]->(b:Entity {fqn:'test_module_repo::is_supported'}) RETURN count(r) AS cnt;")
+    PROD_CALLS=$(run_neo4j_cypher "MATCH (a:Entity {fqn:'test_module_repo::production_caller', repo_name: '$REPO_NAME'})-[r:CALLS]->(b:Entity {fqn:'test_module_repo::is_supported', repo_name: '$REPO_NAME'}) RETURN count(r) AS cnt;")
+
 assert_count_ge "Production CALLS edge" "$PROD_CALLS" 1 || exit 1
 
 # Test 3: test functions emit CALLS edges to is_supported.
@@ -236,7 +243,7 @@ EXPECTED_TEST_CALLERS=(
 )
 TEST_CALL_FAILS=0
 for fqn in "${EXPECTED_TEST_CALLERS[@]}"; do
-    CNT=$(run_neo4j_cypher "MATCH (a:Entity {fqn:'$fqn'})-[r:CALLS]->(b:Entity {fqn:'test_module_repo::is_supported'}) RETURN count(r) AS cnt;")
+    CNT=$(run_neo4j_cypher "MATCH (a:Entity {fqn:'$fqn', repo_name: '$REPO_NAME'})-[r:CALLS]->(b:Entity {fqn:'test_module_repo::is_supported', repo_name: '$REPO_NAME'}) RETURN count(r) AS cnt;")
     CNT=${CNT:-0}
     if [ "$CNT" -ge 1 ] 2>/dev/null; then
         echo -e "${GREEN}  ✓ ${fqn} → is_supported${NC}"
@@ -253,13 +260,15 @@ fi
 # Test 4: total CALLERS of is_supported include both production and tests.
 echo ""
 echo "Test 4: is_supported has >=5 callers (1 production + 4 tests + helper crossover)..."
-TOTAL_CALLERS=$(run_neo4j_cypher "MATCH (a:Entity)-[r:CALLS]->(b:Entity {fqn:'test_module_repo::is_supported'}) RETURN count(DISTINCT a) AS cnt;")
+    TOTAL_CALLERS=$(run_neo4j_cypher "MATCH (a:Entity {repo_name: '$REPO_NAME'})-[r:CALLS]->(b:Entity {fqn:'test_module_repo::is_supported', repo_name: '$REPO_NAME'}) RETURN count(DISTINCT a) AS cnt;")
+
 assert_count_ge "Distinct callers of is_supported" "$TOTAL_CALLERS" 5 || exit 1
 
 # Test 5: entities under #[cfg(test)] mod tests carry is_test_context = true.
 echo ""
 echo "Test 5: Test entities expose is_test_context = true..."
-TEST_FLAG_CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::tests::test_is_supported_rs'}) RETURN n.is_test_context AS flag;")
+    TEST_FLAG_CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::tests::test_is_supported_rs', repo_name: '$REPO_NAME'}) RETURN n.is_test_context AS flag;")
+
 if [ "$TEST_FLAG_CNT" = "TRUE" ] || [ "$TEST_FLAG_CNT" = "true" ]; then
     echo -e "${GREEN}✓ test_is_supported_rs.is_test_context = true${NC}"
 else
@@ -267,7 +276,8 @@ else
     exit 1
 fi
 
-PROD_FLAG=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::is_supported'}) RETURN n.is_test_context AS flag;")
+    PROD_FLAG=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::is_supported', repo_name: '$REPO_NAME'}) RETURN n.is_test_context AS flag;")
+
 if [ "$PROD_FLAG" = "FALSE" ] || [ "$PROD_FLAG" = "false" ] || [ -z "$PROD_FLAG" ] || [ "$PROD_FLAG" = "NULL" ] || [ "$PROD_FLAG" = "null" ]; then
     echo -e "${GREEN}✓ is_supported.is_test_context is falsy (production code)${NC}"
 else
@@ -278,8 +288,9 @@ fi
 # Test 6: helpers::tests namespace is distinct from root::tests.
 echo ""
 echo "Test 6: helpers::tests and tests are distinct namespaces..."
-ROOT_TESTS_CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::tests'}) RETURN count(n) AS cnt;")
-HELP_TESTS_CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::helpers::tests'}) RETURN count(n) AS cnt;")
+    ROOT_TESTS_CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::tests', repo_name: '$REPO_NAME'}) RETURN count(n) AS cnt;")
+    HELP_TESTS_CNT=$(run_neo4j_cypher "MATCH (n:Entity {fqn:'test_module_repo::helpers::tests', repo_name: '$REPO_NAME'}) RETURN count(n) AS cnt;")
+
 assert_count_eq "test_module_repo::tests RustModule entity" "$ROOT_TESTS_CNT" 1 || exit 1
 assert_count_eq "test_module_repo::helpers::tests RustModule entity" "$HELP_TESTS_CNT" 1 || exit 1
 

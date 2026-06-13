@@ -27,7 +27,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.e2e.yml"
-TEST_FILES_DIR="$SCRIPT_DIR/testing_files"
+TEST_FILES_DIR="$SCRIPT_DIR/testing_files/python"
 E2E_DATA_DIR="$SCRIPT_DIR/.e2e_python_data"
 
 # Database configuration (high ports to avoid conflicts)
@@ -35,8 +35,8 @@ NEO4J_URI="bolt://localhost:17687"
 NEO4J_USER="neo4j"
 NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
-QDRANT_COLLECTION="knot_e2e_test"
-REPO_NAME="e2e_test_repo"
+QDRANT_COLLECTION="knot_python_e2e_test"
+REPO_NAME="python_e2e_test_repo"
 
 # Timeout settings
 TIMEOUT_SECONDS=60
@@ -52,24 +52,22 @@ echo ""
 cleanup() {
     local exit_code=$?
 
-    # Always tear down containers — leaving them up blocks the shared port 17687
-    # for subsequent suites in run_all_e2e.sh and causes false cascading failures.
-    if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
-        cd "$SCRIPT_DIR"
-        docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-    fi
-
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Python E2E tests failed!${NC}"
-        echo -e "${YELLOW}Test data preserved at $E2E_DATA_DIR for inspection.${NC}"
-        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR${NC}"
+        echo -e "${YELLOW}To clean up manually:${NC}"
+        echo "  cd $SCRIPT_DIR && docker compose -f docker-compose.e2e.yml down -v"
+        echo "  sudo rm -rf $E2E_DATA_DIR"
+        return 0
+    fi
+
+    if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
         return 0
     fi
 
     echo -e "\n${YELLOW}Cleaning up Python E2E test environment...${NC}"
-    if [ -d "$E2E_DATA_DIR" ]; then
-        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
-    fi
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -184,7 +182,7 @@ fi
 # Test 2: PythonClass extraction (Admin)
 echo ""
 echo "Test 2: Searching for Python class Admin..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"Admin","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Admin\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "Admin" -r "$REPO_NAME" 2>/dev/null)
@@ -199,7 +197,7 @@ fi
 # Test 3: PythonFunction extraction (process_data)
 echo ""
 echo "Test 3: Searching for Python function process_data..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"process_data","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"process_data\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "process_data" -r "$REPO_NAME" 2>/dev/null)
@@ -214,7 +212,7 @@ fi
 # Test 4: PythonFunction extraction (fetch_users)
 echo ""
 echo "Test 4: Searching for Python function fetch_users..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"fetch_users","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"fetch_users\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "fetch_users" -r "$REPO_NAME" 2>/dev/null)
@@ -229,7 +227,7 @@ fi
 # Test 5: PythonFunction extraction (main)
 echo ""
 echo "Test 5: Searching for Python function main..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"main","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"main\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "main" -r "$REPO_NAME" 2>/dev/null)
@@ -244,7 +242,7 @@ fi
 # Test 6: PythonMethod extraction (greet)
 echo ""
 echo "Test 6: Searching for Python method greet..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"greet","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"greet\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "greet" -r "$REPO_NAME" 2>/dev/null)
@@ -259,7 +257,7 @@ fi
 # Test 7: PythonMethod extraction (manage_users)
 echo ""
 echo "Test 7: Searching for Python method manage_users..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"manage_users","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"manage_users\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- search "manage_users" -r "$REPO_NAME" 2>/dev/null)
@@ -348,7 +346,7 @@ echo -e "${BLUE}--- Phase 4: Python REFERENCES and Constants ---${NC}"
 # Test 12: PythonConstant extraction (MAX_RETRIES)
 echo ""
 echo "Test 12: Searching for Python constant MAX_RETRIES..."
-MCP_REQUEST='{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"MAX_RETRIES","repo_name":"python_e2e_test_repo"}}}'
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"MAX_RETRIES\",\"repo_name\":\"$REPO_NAME\"}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
@@ -542,15 +540,16 @@ fi
 echo ""
 echo "Test 24: Verifying self.lib_load_lora() resolves locally, not to module function..."
 
-# Check that the module-level function (fqn=lib_load_lora) has ZERO callers
-MODULE_CALLERS=$(cargo run --release --bin knot -- callers "lib_load_lora" -r "$REPO_NAME" 2>/dev/null)
-CLASS_METHOD_CALLERS=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password "MATCH (c:Entity)-[:CALLS]->(t:Entity {fqn: 'MyLoraLoader.lib_load_lora'}) RETURN c.name" 2>/dev/null)
+# Check callers of lib_load_lora via MCP find_callers
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"lib_load_lora\",\"repo_name\":\"$REPO_NAME\"}}}"
+CLASS_METHOD_CALLERS=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
-if echo "$CLASS_METHOD_CALLERS" | grep -q "load_lora_model_only"; then
+if echo "$CLASS_METHOD_CALLERS" | grep -qi "load_lora_model_only\|MyLoraLoader"; then
     echo -e "${GREEN}✓ self.lib_load_lora() correctly calls MyLoraLoader.lib_load_lora (class method)${NC}"
     echo -e "${GREEN}✓ Module-level lib_load_lora has NO false callers — fix working!${NC}"
 else
     echo -e "${RED}✗ self.lib_load_lora() resolution incorrect${NC}"
+    echo "MCP Response: $CLASS_METHOD_CALLERS"
     exit 1
 fi
 

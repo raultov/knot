@@ -16,7 +16,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.e2e.yml"
-TEST_FILES_DIR="$SCRIPT_DIR/testing_files"
+TEST_FILES_DIR="$SCRIPT_DIR/testing_files/k8s_helm"
 E2E_DATA_DIR="$SCRIPT_DIR/.e2e_k8s_helm_data"
 
 NEO4J_URI="bolt://localhost:17687"
@@ -25,8 +25,6 @@ NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
 QDRANT_COLLECTION="knot_k8s_helm_e2e_test"
 REPO_NAME="k8s_helm_e2e_test_repo"
-
-TMP_REPO_DIR="$SCRIPT_DIR/.e2e_k8s_helm_repo"
 
 TIMEOUT_SECONDS=60
 HEALTH_CHECK_INTERVAL=2
@@ -50,7 +48,7 @@ cleanup() {
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}K8s/Helm E2E tests failed!${NC}"
         echo -e "${YELLOW}Test data preserved at $E2E_DATA_DIR for inspection.${NC}"
-        echo -e "${YELLOW}Manual cleanup:  sudo rm -rf $E2E_DATA_DIR $TMP_REPO_DIR${NC}"
+        echo -e "${YELLOW}Manual cleanup:  cd $SCRIPT_DIR && docker compose -f docker-compose.e2e.yml down -v && sudo rm -rf $E2E_DATA_DIR${NC}"
         return 0
     fi
 
@@ -58,7 +56,6 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 trap cleanup EXIT INT TERM
@@ -105,17 +102,8 @@ fi
 
 echo -e "${YELLOW}[3/5] Indexing K8s and Helm files...${NC}"
 cd "$PROJECT_ROOT"
-rm -rf "$TMP_REPO_DIR"
-mkdir -p "$TMP_REPO_DIR/k8s"
-mkdir -p "$TMP_REPO_DIR/helm/charts/sample-app/templates"
-cp "$TEST_FILES_DIR/k8s/deployment.yaml" "$TMP_REPO_DIR/k8s/deployment.yaml"
-cp "$TEST_FILES_DIR/k8s/service.yaml" "$TMP_REPO_DIR/k8s/service.yaml"
-cp "$TEST_FILES_DIR/k8s/configmap.yaml" "$TMP_REPO_DIR/k8s/configmap.yaml"
-cp "$TEST_FILES_DIR/helm/Chart.yaml" "$TMP_REPO_DIR/helm/charts/sample-app/Chart.yaml"
-cp "$TEST_FILES_DIR/helm/values.yaml" "$TMP_REPO_DIR/helm/charts/sample-app/values.yaml"
-cp "$TEST_FILES_DIR/helm/templates/deployment.yaml" "$TMP_REPO_DIR/helm/charts/sample-app/templates/deployment.yaml"
 
-export KNOT_REPO_PATH="$TMP_REPO_DIR"
+export KNOT_REPO_PATH="$TEST_FILES_DIR"
 export KNOT_REPO_NAME="$REPO_NAME"
 export KNOT_NEO4J_URI="$NEO4J_URI"
 export KNOT_NEO4J_USER="$NEO4J_USER"
@@ -150,7 +138,7 @@ fi
 # Test 2: Explore deployment.yaml
 echo ""
 echo "Test 2: Exploring deployment.yaml..."
-DEP="$TMP_REPO_DIR/k8s/deployment.yaml"
+DEP="$TEST_FILES_DIR/k8s/deployment.yaml"
 MCP_REQ='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$DEP"'","repo_name":"'"$REPO_NAME"'"}}}'
 MCP_RESP=$(echo "$MCP_REQ" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESP=$(cargo run --release --bin knot -- explore "$DEP" -r "$REPO_NAME" -o markdown 2>/dev/null)
@@ -187,7 +175,7 @@ fi
 # Test 5: Explore Chart.yaml
 echo ""
 echo "Test 5: Exploring Chart.yaml..."
-CHART="$TMP_REPO_DIR/helm/charts/sample-app/Chart.yaml"
+CHART="$TEST_FILES_DIR/helm/charts/sample-app/Chart.yaml"
 MCP_REQ='{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$CHART"'","repo_name":"'"$REPO_NAME"'"}}}'
 MCP_RESP=$(echo "$MCP_REQ" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESP=$(cargo run --release --bin knot -- explore "$CHART" -r "$REPO_NAME" -o markdown 2>/dev/null)
@@ -212,7 +200,7 @@ fi
 # Test 7: Explore values.yaml
 echo ""
 echo "Test 7: Exploring values.yaml..."
-VALS="$TMP_REPO_DIR/helm/charts/sample-app/values.yaml"
+VALS="$TEST_FILES_DIR/helm/charts/sample-app/values.yaml"
 MCP_REQ='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$VALS"'","repo_name":"'"$REPO_NAME"'"}}}'
 MCP_RESP=$(echo "$MCP_REQ" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESP=$(cargo run --release --bin knot -- explore "$VALS" -r "$REPO_NAME" -o markdown 2>/dev/null)
@@ -237,7 +225,7 @@ fi
 # Test 9: Explore Helm template
 echo ""
 echo "Test 9: Exploring Helm template deployment.yaml..."
-TMPL="$TMP_REPO_DIR/helm/charts/sample-app/templates/deployment.yaml"
+TMPL="$TEST_FILES_DIR/helm/charts/sample-app/templates/deployment.yaml"
 MCP_REQ='{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$TMPL"'","repo_name":"'"$REPO_NAME"'"}}}'
 MCP_RESP=$(echo "$MCP_REQ" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESP=$(cargo run --release --bin knot -- explore "$TMPL" -r "$REPO_NAME" -o markdown 2>/dev/null)
