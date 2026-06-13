@@ -8,18 +8,18 @@
 
 set -e
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Color output (printf interprets \033 directly — no shell-specific extensions).
+RED=$(printf '\033[0;31m')
+GREEN=$(printf '\033[0;32m')
+YELLOW=$(printf '\033[1;33m')
+BLUE=$(printf '\033[0;34m')
+NC=$(printf '\033[0m') # No Color
 
 # Config
 TARGET_DIR="${1:-.knot-agent-skills}"
 GITHUB_REPO="${2:-https://raw.githubusercontent.com/user/knot/master}"
 
-echo -e "${BLUE}📦 Downloading knot agent-skills documentation...${NC}"
+printf '%b📦 Downloading knot agent-skills documentation...%b\n' "$BLUE" "$NC"
 
 # Create target directory
 mkdir -p "$TARGET_DIR"
@@ -29,41 +29,47 @@ files=(
   "search.md"
   "callers.md"
   "explore.md"
+  "deps.md"
+  "repos.md"
   "workflows.md"
 )
 
 # Base URL for documentation
 BASE_URL="${GITHUB_REPO}/docs/agent-skills"
 
-echo -e "${BLUE}Destination: ${GREEN}${TARGET_DIR}${NC}\n"
+printf '%bDestination: %b%s%b\n\n' "$BLUE" "$GREEN" "$TARGET_DIR" "$NC"
 
 # Download each file
 downloaded=0
 for file in "${files[@]}"; do
-  echo -ne "${YELLOW}Downloading${NC} $file ... "
-  
+  printf '%bDownloading%b %s ... ' "$YELLOW" "$NC" "$file"
+
   if curl -fsSL "${BASE_URL}/${file}" -o "${TARGET_DIR}/${file}"; then
-    echo -e "${GREEN}✓${NC}"
-    ((downloaded++))
+    printf '%b✓%b\n' "$GREEN" "$NC"
+    downloaded=$((downloaded + 1))
   else
-    echo -e "${RED}✗${NC}"
+    printf '%b✗%b\n' "$RED" "$NC"
   fi
 done
 
-echo ""
-echo -e "${GREEN}✅ Downloaded ${GREEN}${downloaded}/${#files[@]}${NC} files${NC}"
-echo ""
-echo -e "📖 ${BLUE}Documentation files:${NC}"
-echo "   - ${TARGET_DIR}/search.md       (Semantic code discovery)"
-echo "   - ${TARGET_DIR}/callers.md      (Reverse dependency lookup)"
-echo "   - ${TARGET_DIR}/explore.md      (File anatomy discovery)"
-echo "   - ${TARGET_DIR}/workflows.md    (Common patterns & best practices)"
-echo ""
-echo -e "🚀 ${BLUE}Quick start:${NC}"
-echo "   knot search \"your query\""
-echo "   knot explore \"src/path/to/file.ts\""
-echo "   knot callers \"EntityName\""
-echo ""
-echo -e "📖 ${BLUE}Read the guides:${NC}"
-echo "   less ${TARGET_DIR}/search.md"
-echo "   less ${TARGET_DIR}/workflows.md"
+printf '\n'
+printf '%b✅ Downloaded %d/%d files%b\n' "$GREEN" "$downloaded" "${#files[@]}" "$NC"
+printf '\n'
+printf '%b📖 Documentation files:%b\n' "$BLUE" "$NC"
+printf '   - %s/search.md       (Semantic code discovery)\n' "$TARGET_DIR"
+printf '   - %s/callers.md      (Reverse dependency lookup)\n' "$TARGET_DIR"
+printf '   - %s/explore.md      (File anatomy discovery)\n' "$TARGET_DIR"
+printf '   - %s/deps.md         (Repository dependency graph)\n' "$TARGET_DIR"
+printf '   - %s/repos.md        (Indexed repository inventory)\n' "$TARGET_DIR"
+printf '   - %s/workflows.md    (Common patterns & best practices)\n' "$TARGET_DIR"
+printf '\n'
+printf '%b🚀 Quick start:%b\n' "$BLUE" "$NC"
+printf '   knot search "your query"\n'
+printf '   knot explore "src/path/to/file.ts"\n'
+printf '   knot callers "EntityName"\n'
+printf '   knot deps my-app --reverse\n'
+printf '   knot repos\n'
+printf '\n'
+printf '%b📖 Read the guides:%b\n' "$BLUE" "$NC"
+printf '   less %s/search.md\n' "$TARGET_DIR"
+printf '   less %s/workflows.md\n' "$TARGET_DIR"

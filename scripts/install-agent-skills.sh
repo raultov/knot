@@ -29,76 +29,81 @@ if [ -f ".knot-agent-skills.tar.gz" ]; then
   SKIP_DOWNLOAD=1
 fi
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Color output (printf interprets \033 directly — no shell-specific extensions).
+RED=$(printf '\033[0;31m')
+GREEN=$(printf '\033[0;32m')
+YELLOW=$(printf '\033[1;33m')
+BLUE=$(printf '\033[0;34m')
+NC=$(printf '\033[0m') # No Color
 
 trap "rm -rf $TEMP_DIR" EXIT
 
-echo -e "${BLUE}📦 Installing knot agent-skills documentation${NC}"
-echo -e "   Target: ${GREEN}${TARGET_DIR}${NC}\n"
+printf '%b📦 Installing knot agent-skills documentation%b\n' "$BLUE" "$NC"
+printf '%b   Target: %b%s%b\n\n' "$NC" "$GREEN" "$TARGET_DIR" "$NC"
 
 # Download the tarball (skip if using local source)
 if [ -z "$SKIP_DOWNLOAD" ]; then
-  echo -ne "${YELLOW}Downloading${NC} agent-skills... "
+  printf '%bDownloading%b agent-skills... ' "$YELLOW" "$NC"
   if curl -fsSL "${REPO_URL}/.knot-agent-skills.tar.gz" -o "$TARBALL"; then
-    echo -e "${GREEN}✓${NC}"
+    printf '%b✓%b\n' "$GREEN" "$NC"
   else
-    echo -e "${RED}✗${NC}"
-    echo -e "${RED}Error: Could not download agent-skills from ${REPO_URL}${NC}"
+    printf '%b✗%b\n' "$RED" "$NC"
+    printf '%bError: Could not download agent-skills from %s%b\n' "$RED" "$REPO_URL" "$NC"
     exit 1
   fi
 else
-  echo -ne "${YELLOW}Using${NC} local tarball... "
-  echo -e "${GREEN}✓${NC}"
+  printf '%bUsing%b local tarball... ' "$YELLOW" "$NC"
+  printf '%b✓%b\n' "$GREEN" "$NC"
 fi
 
 # Create target directory
 mkdir -p "$TARGET_DIR"
 
 # Extract tarball
-echo -ne "${YELLOW}Extracting${NC} files... "
+printf '%bExtracting%b files... ' "$YELLOW" "$NC"
 if tar -xzf "$TARBALL" -C "$TARGET_DIR" --strip-components=2; then
-  echo -e "${GREEN}✓${NC}"
+  printf '%b✓%b\n' "$GREEN" "$NC"
 else
-  echo -e "${RED}✗${NC}"
-  echo -e "${RED}Error: Could not extract files${NC}"
+  printf '%b✗%b\n' "$RED" "$NC"
+  printf '%bError: Could not extract files%b\n' "$RED" "$NC"
   exit 1
 fi
 
 # Verify files
-echo -ne "${YELLOW}Verifying${NC} files... "
+printf '%bVerifying%b files... ' "$YELLOW" "$NC"
 files_found=0
-for file in search.md callers.md explore.md workflows.md; do
+files_expected=6
+for file in search.md callers.md explore.md deps.md repos.md workflows.md; do
   if [ -f "$TARGET_DIR/$file" ]; then
-    ((files_found++))
+    ((files_found++)) || true
   fi
 done
 
-if [ $files_found -eq 4 ]; then
-  echo -e "${GREEN}✓${NC}"
+if [ $files_found -eq $files_expected ]; then
+  printf '%b✓%b\n' "$GREEN" "$NC"
 else
-  echo -e "${YELLOW}⚠${NC} (found $files_found/4 files)"
+  printf '%b⚠%b (found %d/%d files)\n' "$YELLOW" "$NC" "$files_found" "$files_expected"
 fi
 
-echo ""
-echo -e "${GREEN}✅ Installation complete!${NC}"
-echo ""
-echo -e "📖 ${BLUE}Available documentation:${NC}"
-echo "   • ${TARGET_DIR}/search.md       — Semantic code discovery"
-echo "   • ${TARGET_DIR}/callers.md      — Reverse dependency lookup"
-echo "   • ${TARGET_DIR}/explore.md      — File anatomy discovery"
-echo "   • ${TARGET_DIR}/workflows.md    — Common patterns & best practices"
-echo ""
-echo -e "🚀 ${BLUE}Quick start:${NC}"
-echo "   cat ${TARGET_DIR}/search.md"
-echo "   knot search \"your query\""
-echo "   knot explore \"src/file.ts\""
-echo "   knot callers \"EntityName\""
-echo ""
-echo -e "💡 ${BLUE}Pro tip:${NC}"
-echo "   alias knot-docs='less ${TARGET_DIR}'"
-echo "   knot-docs/search.md"
+printf '\n'
+printf '%b✅ Installation complete!%b\n' "$GREEN" "$NC"
+printf '\n'
+printf '%b📖 Available documentation:%b\n' "$BLUE" "$NC"
+printf '   • %s/search.md       — Semantic code discovery\n' "$TARGET_DIR"
+printf '   • %s/callers.md      — Reverse dependency lookup\n' "$TARGET_DIR"
+printf '   • %s/explore.md      — File anatomy discovery\n' "$TARGET_DIR"
+printf '   • %s/deps.md         — Repository dependency graph\n' "$TARGET_DIR"
+printf '   • %s/repos.md        — Indexed repository inventory\n' "$TARGET_DIR"
+printf '   • %s/workflows.md    — Common patterns & best practices\n' "$TARGET_DIR"
+printf '\n'
+printf '%b🚀 Quick start:%b\n' "$BLUE" "$NC"
+printf '   cat %s/search.md\n' "$TARGET_DIR"
+printf '   knot search "your query"\n'
+printf '   knot explore "src/file.ts"\n'
+printf '   knot callers "EntityName"\n'
+printf '   knot deps my-app --reverse\n'
+printf '   knot repos\n'
+printf '\n'
+printf '%b💡 Pro tip:%b\n' "$BLUE" "$NC"
+printf '   alias knot-docs='"'"'less %s'"'"'\n' "$TARGET_DIR"
+printf '   knot-docs/search.md\n'
