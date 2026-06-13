@@ -48,8 +48,10 @@ cleanup() {
 
     # Always tear down containers — leaving them up blocks the shared port 17687
     # for subsequent suites in run_all_e2e.sh and causes false cascading failures.
-    cd "$SCRIPT_DIR"
-    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    fi
 
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Config E2E tests failed!${NC}"
@@ -68,16 +70,25 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-echo -e "${YELLOW}[1/5] Starting Docker containers for Config E2E test...${NC}"
-cd "$SCRIPT_DIR"
-docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-if [ -d "$E2E_DATA_DIR" ]; then
-    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+# Step 1: Start Docker containers (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[1/5] Starting Docker containers for Config E2E test...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    if [ -d "$E2E_DATA_DIR" ]; then
+        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    fi
+
+    docker compose -f "$COMPOSE_FILE" up -d
+else
+    echo -e "${YELLOW}[1/5] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
 
-docker compose -f "$COMPOSE_FILE" up -d
-
-echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
+# Step 2: Wait for services to be ready (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[2/5] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+else
+    echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
 
 wait_for_port() {
     local port=$1
@@ -117,6 +128,7 @@ wait_for_port() {
 wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
 wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
+fi
 
 echo -e "${YELLOW}[3/5] Phase A — Indexing WITHOUT --include-config-files (skip mode)...${NC}"
 cd "$PROJECT_ROOT"
@@ -140,7 +152,9 @@ echo "Building knot-indexer..."
 cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
 echo "Running indexer WITHOUT --include-config-files (config files should be skipped)..."
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Phase A indexing complete (config files skipped by default)${NC}"
 
@@ -263,7 +277,9 @@ cp "$TEST_FILES_DIR/sample_app.properties" "$TMP_REPO_DIR/app.properties"
 cp "$TEST_FILES_DIR/sample_package.json" "$TMP_REPO_DIR/package.json"
 
 echo "Running indexer WITH --include-config-files..."
-cargo run --release --bin knot-indexer -- --clean --include-config-files
+INDEXER_FLAGS=("--include-config-files")
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Config files indexed${NC}"
 

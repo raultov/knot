@@ -73,6 +73,10 @@ cleanup() {
         return 0
     fi
 
+    if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+        return 0
+    fi
+
     echo -e "\n${YELLOW}Cleaning up Rust Reference Resolution E2E environment...${NC}"
     cd "$SCRIPT_DIR"
     docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
@@ -85,17 +89,24 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# Step 1: Start Docker containers
-echo -e "${YELLOW}[1/5] Starting Docker containers for Rust reference resolution E2E...${NC}"
-cd "$SCRIPT_DIR"
-docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-if [ -d "$E2E_DATA_DIR" ]; then
-    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+# Step 1: Start Docker containers (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[1/5] Starting Docker containers for Rust reference resolution E2E...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    if [ -d "$E2E_DATA_DIR" ]; then
+        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    fi
+    docker compose -f "$COMPOSE_FILE" up -d
+else
+    echo -e "${YELLOW}[1/5] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
-docker compose -f "$COMPOSE_FILE" up -d
 
-# Step 2: Wait for services
-echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
+# Step 2: Wait for services (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[2/5] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+else
+    echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
 
 wait_for_port() {
     local port=$1
@@ -135,6 +146,7 @@ wait_for_port() {
 wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
 wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
+fi
 
 # Step 3: Stage fixture repo and index it
 echo -e "${YELLOW}[3/5] Staging fixture repo and indexing...${NC}"
@@ -157,7 +169,9 @@ echo "Building knot-indexer..."
 cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
 echo "Running indexer for crate_a + crate_b..."
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Fixture repo indexed${NC}"
 
@@ -172,6 +186,7 @@ cargo build --release --bin knot-mcp 2>&1 | grep -E "(Compiling|Finished|error)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/assert_neo4j_relationships.sh"
 export NEO4J_URI NEO4J_USER NEO4J_PASSWORD
+export KNOT_REPO_NAME="$REPO_NAME"
 
 # Test 1: find_callers on Config::load (crate_a) must NOT pull in callers
 # from crate_a::other_module::types::Config. In a healthy graph, Config::load
@@ -244,7 +259,7 @@ run_neo4j_cypher_all() {
 # First, make sure both Config types are actually indexed. After Phase 3,
 # Rust FQNs are qualified: crate_a::config::Config and
 # crate_a::other_module::types::Config.
-QUERY_PRESENCE="MATCH (n) WHERE n.fqn IN ['crate_a::config::Config', 'crate_a::other_module::types::Config'] RETURN count(n) AS cnt;"
+QUERY_PRESENCE="MATCH (n {repo_name: '$REPO_NAME'}) WHERE n.fqn IN ['crate_a::config::Config', 'crate_a::other_module::types::Config'] RETURN count(n) AS cnt;"
 PRESENCE_COUNT=$(run_neo4j_cypher "$QUERY_PRESENCE")
 PRESENCE_COUNT=${PRESENCE_COUNT:-0}
 
@@ -256,11 +271,11 @@ else
 fi
 
 # Now assert no REFERENCES edge connects them in either direction.
-QUERY_CROSS="MATCH (a)-[r:REFERENCES]->(b) WHERE a.fqn = 'crate_a::config::Config' AND b.fqn = 'crate_a::other_module::types::Config' RETURN count(r) AS cnt;"
+QUERY_CROSS="MATCH (a {repo_name: '$REPO_NAME'})-[r:REFERENCES]->(b {repo_name: '$REPO_NAME'}) WHERE a.fqn = 'crate_a::config::Config' AND b.fqn = 'crate_a::other_module::types::Config' RETURN count(r) AS cnt;"
 CROSS_FORWARD=$(run_neo4j_cypher "$QUERY_CROSS")
 CROSS_FORWARD=${CROSS_FORWARD:-0}
 
-QUERY_CROSS_REV="MATCH (a)-[r:REFERENCES]->(b) WHERE a.fqn = 'crate_a::other_module::types::Config' AND b.fqn = 'crate_a::config::Config' RETURN count(r) AS cnt;"
+QUERY_CROSS_REV="MATCH (a {repo_name: '$REPO_NAME'})-[r:REFERENCES]->(b {repo_name: '$REPO_NAME'}) WHERE a.fqn = 'crate_a::other_module::types::Config' AND b.fqn = 'crate_a::config::Config' RETURN count(r) AS cnt;"
 CROSS_REVERSE=$(run_neo4j_cypher "$QUERY_CROSS_REV")
 CROSS_REVERSE=${CROSS_REVERSE:-0}
 
@@ -282,7 +297,7 @@ echo "Test 4: Helper library — assert that crate_b's lib.rs resolves the Crate
 # The use statement in crate_b/src/lib.rs should generate a REFERENCES
 # edge from `CrateAConfig` (or the import site) to `crate_a::config::Config`.
 # We allow either of the two canonical forms the parser may emit.
-QUERY_USE="MATCH (a)-[r:REFERENCES]->(b) WHERE b.fqn = 'crate_a::config::Config' AND a.file_path ENDS WITH 'crate_b/src/lib.rs' RETURN count(r) AS cnt;"
+QUERY_USE="MATCH (a {repo_name: '$REPO_NAME'})-[r:REFERENCES]->(b {repo_name: '$REPO_NAME'}) WHERE b.fqn = 'crate_a::config::Config' AND a.file_path ENDS WITH 'crate_b/src/lib.rs' RETURN count(r) AS cnt;"
 USE_HITS=$(run_neo4j_cypher "$QUERY_USE")
 USE_HITS=${USE_HITS:-0}
 
@@ -298,7 +313,7 @@ fi
 # crate_a::config::Config has outgoing REFERENCES edges (to String, Result, etc.)
 # so we verify that assert_edge_count accepts the real count and assert_no_edge
 # correctly rejects a non-existent edge.
-CONFIG_REFS=$(run_neo4j_cypher "MATCH (a)-[r:REFERENCES]->() WHERE a.fqn = 'crate_a::config::Config' RETURN count(r) AS cnt;")
+CONFIG_REFS=$(run_neo4j_cypher "MATCH (a {repo_name: '$REPO_NAME'})-[r:REFERENCES]->() WHERE a.fqn = 'crate_a::config::Config' RETURN count(r) AS cnt;")
 CONFIG_REFS=${CONFIG_REFS:-0}
 
 if assert_edge_count "crate_a::config::Config" "REFERENCES" "$CONFIG_REFS"; then
@@ -346,8 +361,8 @@ cp -r "$COLLISION_FIXTURE_DIR"/* "$COLLISION_REPO_DIR/"
 # Index the collision fixture
 echo ""
 echo "Indexing collision fixture repo..."
-# Clean all existing Neo4j data first to avoid leftover nodes from prior E2E suites
-run_neo4j_cypher "MATCH (n) DETACH DELETE n;" >/dev/null 2>&1 || true
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
 COLLISION_OUTPUT=$(env KNOT_REPO_PATH="$COLLISION_REPO_DIR" \
     KNOT_REPO_NAME="$COLLISION_REPO_NAME" \
     KNOT_NEO4J_URI="$NEO4J_URI" \
@@ -355,14 +370,14 @@ COLLISION_OUTPUT=$(env KNOT_REPO_PATH="$COLLISION_REPO_DIR" \
     KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
     KNOT_QDRANT_URL="$QDRANT_URL" \
     KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
-    cargo run --release --bin knot-indexer -- --clean 2>&1)
+    cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}" 2>&1)
 
 echo "$COLLISION_OUTPUT" | tail -5
 
 # Test PR1-1: Real Config (src/config.rs) CONTAINS load_mcp — positive case
 echo ""
 echo "Test PR1-1: Real Config CONTAINS load_mcp (FQN-based match)..."
-QUERY_REAL_CONTAINS="MATCH (c:Entity {fqn:'collision_test::config::Config'})-[:CONTAINS]->(m:Entity {name:'load_mcp'}) RETURN count(m) AS cnt;"
+QUERY_REAL_CONTAINS="MATCH (c:Entity {repo_name: '$COLLISION_REPO_NAME', fqn:'collision_test::config::Config'})-[:CONTAINS]->(m:Entity {name:'load_mcp'}) RETURN count(m) AS cnt;"
 REAL_COUNT=$(run_neo4j_cypher "$QUERY_REAL_CONTAINS")
 REAL_COUNT=${REAL_COUNT:-0}
 
@@ -376,7 +391,7 @@ fi
 # Test PR1-2: Fixture Config (tests/testing_files/sample.rs) does NOT CONTAIN load_mcp — negative case
 echo ""
 echo "Test PR1-2: Fixture Config does NOT CONTAIN load_mcp (no spurious edge)..."
-QUERY_FIXTURE_CONTAINS="MATCH (c:Entity)-[:CONTAINS]->(m:Entity {name:'load_mcp'}) WHERE c.fqn STARTS WITH '__fixture::' RETURN count(m) AS cnt;"
+QUERY_FIXTURE_CONTAINS="MATCH (c:Entity {repo_name: '$COLLISION_REPO_NAME'})-[:CONTAINS]->(m:Entity {name:'load_mcp'}) WHERE c.fqn STARTS WITH '__fixture::' RETURN count(m) AS cnt;"
 FIXTURE_COUNT=$(run_neo4j_cypher "$QUERY_FIXTURE_CONTAINS")
 FIXTURE_COUNT=${FIXTURE_COUNT:-0}
 
@@ -390,7 +405,7 @@ fi
 # Test PR2-1: Fixture entity has __fixture:: prefix in FQN
 echo ""
 echo "Test PR2-1: Fixture Config entity has __fixture:: FQN prefix..."
-QUERY_FIXTURE_FQN="MATCH (e:Entity) WHERE e.file_path CONTAINS '/tests/testing_files/sample.rs' AND e.name = 'Config' RETURN e.fqn AS fqn;"
+QUERY_FIXTURE_FQN="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME'}) WHERE e.file_path CONTAINS '/tests/testing_files/sample.rs' AND e.name = 'Config' RETURN e.fqn AS fqn;"
 FIXTURE_FQN=$(run_neo4j_cypher "$QUERY_FIXTURE_FQN")
 
 if echo "$FIXTURE_FQN" | grep -q "__fixture::"; then
@@ -403,7 +418,7 @@ fi
 # Test PR2-2: Real Config entity does NOT have __fixture:: prefix
 echo ""
 echo "Test PR2-2: Real Config entity has standard crate FQN..."
-QUERY_REAL_FQN="MATCH (e:Entity {fqn:'collision_test::config::Config'}) RETURN e.file_path AS fp;"
+QUERY_REAL_FQN="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME', fqn:'collision_test::config::Config'}) RETURN e.file_path AS fp;"
 REAL_FP=$(run_neo4j_cypher "$QUERY_REAL_FQN")
 
 if echo "$REAL_FP" | grep -q "/src/"; then
@@ -416,7 +431,7 @@ fi
 # Test PR2-3: Fixture method has __fixture:: prefix in enclosing_class_fqn
 echo ""
 echo "Test PR2-3: Fixture method 'new' has __fixture:: enclosing_class_fqn..."
-QUERY_FIXTURE_METHOD="MATCH (e:Entity) WHERE e.file_path CONTAINS '/tests/testing_files/sample.rs' AND e.name = 'new' RETURN e.enclosing_class_fqn AS fqn;"
+QUERY_FIXTURE_METHOD="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME'}) WHERE e.file_path CONTAINS '/tests/testing_files/sample.rs' AND e.name = 'new' RETURN e.enclosing_class_fqn AS fqn;"
 FIXTURE_METHOD_FQN=$(run_neo4j_cypher "$QUERY_FIXTURE_METHOD")
 
 if echo "$FIXTURE_METHOD_FQN" | grep -q "__fixture::"; then

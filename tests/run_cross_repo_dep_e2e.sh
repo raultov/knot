@@ -68,6 +68,10 @@ cleanup() {
         return 0
     fi
 
+    if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+        return 0
+    fi
+
     echo -e "\n${YELLOW}Cleaning up cross-repo E2E test environment...${NC}"
     cd "$SCRIPT_DIR"
     docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
@@ -80,17 +84,24 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# Step 1: Start Docker containers
-echo -e "${YELLOW}[1/6] Starting Docker containers for cross-repo E2E test...${NC}"
-cd "$SCRIPT_DIR"
-docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-if [ -d "$E2E_DATA_DIR" ]; then
-    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+# Step 1: Start Docker containers (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[1/6] Starting Docker containers for cross-repo E2E test...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    if [ -d "$E2E_DATA_DIR" ]; then
+        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    fi
+    docker compose -f "$COMPOSE_FILE" up -d
+else
+    echo -e "${YELLOW}[1/6] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
-docker compose -f "$COMPOSE_FILE" up -d
 
-# Step 2: Wait for services
-echo -e "${YELLOW}[2/6] Waiting for services to be ready...${NC}"
+# Step 2: Wait for services (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[2/6] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+else
+    echo -e "${YELLOW}[2/6] Waiting for services to be ready...${NC}"
 
 wait_for_port() {
     local port=$1
@@ -130,6 +141,7 @@ wait_for_port() {
 wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
 wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
+fi
 
 # Step 3: Create and index library repo
 echo -e "${YELLOW}[3/6] Creating and indexing library repo '${LIB_REPO_NAME}'...${NC}"
@@ -184,7 +196,9 @@ export KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD"
 export KNOT_QDRANT_URL="$QDRANT_URL"
 export KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION"
 
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Library repo indexed${NC}"
 
@@ -232,7 +246,9 @@ JAVAEOF
 export KNOT_REPO_PATH="$TMP_CLIENT_DIR"
 export KNOT_REPO_NAME="$CLIENT_REPO_NAME"
 
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Client repo indexed${NC}"
 
@@ -371,7 +387,9 @@ RUST_EOF
 echo "Indexing Cargo library crate '${CARGO_LIB_NAME}'..."
 export KNOT_REPO_PATH="$TMP_CARGO_LIB_DIR"
 export KNOT_REPO_NAME="$CARGO_LIB_NAME"
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Cargo library indexed${NC}"
 
@@ -379,7 +397,9 @@ echo -e "${GREEN}✓ Cargo library indexed${NC}"
 echo "Indexing Cargo binary crate '${CARGO_BIN_NAME}'..."
 export KNOT_REPO_PATH="$TMP_CARGO_BIN_DIR"
 export KNOT_REPO_NAME="$CARGO_BIN_NAME"
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Cargo binary indexed${NC}"
 
@@ -512,7 +532,9 @@ RUST_EOF
 echo "Indexing multi-identity library crate '${PROJ_LIB_NAME}'..."
 export KNOT_REPO_PATH="$TMP_PROJ_LIB_DIR"
 export KNOT_REPO_NAME="$PROJ_LIB_NAME"
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Library indexed${NC}"
 
@@ -520,7 +542,9 @@ echo -e "${GREEN}✓ Library indexed${NC}"
 echo "Indexing Cargo binary crate '${PROJ_BIN_NAME}'..."
 export KNOT_REPO_PATH="$TMP_PROJ_BIN_DIR"
 export KNOT_REPO_NAME="$PROJ_BIN_NAME"
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Binary indexed${NC}"
 

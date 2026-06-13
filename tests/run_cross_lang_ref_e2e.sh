@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # E2E regression test: Cross-language (Java -> Groovy) reference resolution
-# Reproduces bug where Java code calling a Groovy static method 
+# Reproduces bug where Java code calling a Groovy static method
 # does not get stored as a CALLS relationship in Neo4j.
 #
 # Usage: ./tests/run_cross_lang_ref_e2e.sh
+# When KNOT_E2E_EXTERNAL_DB is set, the shared docker-compose.e2e.yml
+# (ports 17687/16334) is expected to be already running.
 set -eu
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-E2E_DATA_DIR="$SCRIPT_DIR/.e2e_crosslang_data"
 TMP_REPO_DIR="$SCRIPT_DIR/.e2e_crosslang_repo"
 
-NEO4J_PORT=17888; NEO4J_HTTP_PORT=17974
-NEO4J_URI="bolt://localhost:${NEO4J_PORT}"
+# Shared DB coordinates (used when KNOT_E2E_EXTERNAL_DB is set)
+NEO4J_URI="bolt://localhost:17687"
 NEO4J_USER="neo4j"; NEO4J_PASSWORD="e2e_test_password"
-QDRANT_PORT=16435; QDRANT_GRPC_PORT=16436
-QDRANT_URL="http://localhost:${QDRANT_PORT}"
+QDRANT_URL="http://localhost:16334"
 QDRANT_COLLECTION="knot_crosslang_e2e"
 REPO_NAME="cross_lang_e2e"
 
@@ -25,8 +25,11 @@ cleanup() {
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Cross-lang reference E2E tests failed!${NC}"
     fi
-    docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v 2>/dev/null || true
-    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+        E2E_DATA_DIR="$SCRIPT_DIR/.e2e_crosslang_data"
+        docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v 2>/dev/null || true
+        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    fi
     rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -37,10 +40,17 @@ echo -e "${BLUE}(Java/Kotlin/Groovy CALLS relationships)${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # 1. Set up Docker
-echo -e "\n${YELLOW}[1/4] Starting Docker containers...${NC}"
-mkdir -p "$E2E_DATA_DIR"/{neo4j/data,neo4j/logs,qdrant/storage}
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    E2E_DATA_DIR="$SCRIPT_DIR/.e2e_crosslang_data"
+    NEO4J_PORT=17888; NEO4J_HTTP_PORT=17974
+    QDRANT_PORT=16435; QDRANT_GRPC_PORT=16436
+    NEO4J_URI="bolt://localhost:${NEO4J_PORT}"
+    QDRANT_URL="http://localhost:${QDRANT_PORT}"
 
-cat > "$E2E_DATA_DIR/docker-compose.yml" <<EOF
+    echo -e "\n${YELLOW}[1/4] Starting Docker containers...${NC}"
+    mkdir -p "$E2E_DATA_DIR"/{neo4j/data,neo4j/logs,qdrant/storage}
+
+    cat > "$E2E_DATA_DIR/docker-compose.yml" <<EOF
 services:
   neo4j:
     image: neo4j:5.26-community
@@ -70,30 +80,33 @@ services:
       - ${E2E_DATA_DIR}/qdrant/storage:/qdrant/storage
 EOF
 
-docker compose -f "$E2E_DATA_DIR/docker-compose.yml" up -d
+    docker compose -f "$E2E_DATA_DIR/docker-compose.yml" up -d
 
-# Wait for services using Docker health checks for Neo4j
-echo -n "Waiting for Neo4j (health check)"
-elapsed=0
-while [ $elapsed -lt 120 ]; do
-    status=$(docker inspect --format='{{.State.Health.Status}}' knot_neo4j_crosslang_e2e 2>/dev/null || echo "starting")
-    if [ "$status" = "healthy" ]; then
-        echo -e "\n${GREEN}✓ Neo4j is ready (healthy)${NC}"; break
-    fi
-    sleep 3; elapsed=$((elapsed+3)); echo -n "."
-done
-[ $elapsed -lt 120 ] || { echo -e "\n${RED}Neo4j timeout${NC}"; exit 1; }
+    # Wait for services using Docker health checks for Neo4j
+    echo -n "Waiting for Neo4j (health check)"
+    elapsed=0
+    while [ $elapsed -lt 120 ]; do
+        status=$(docker inspect --format='{{.State.Health.Status}}' knot_neo4j_crosslang_e2e 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            echo -e "\n${GREEN}✓ Neo4j is ready (healthy)${NC}"; break
+        fi
+        sleep 3; elapsed=$((elapsed+3)); echo -n "."
+    done
+    [ $elapsed -lt 120 ] || { echo -e "\n${RED}Neo4j timeout${NC}"; exit 1; }
 
-echo -n "Waiting for Qdrant on port $QDRANT_PORT"
-elapsed=0
-while [ $elapsed -lt 120 ]; do
-    if nc -z localhost "$QDRANT_PORT" 2>/dev/null; then
-        echo -e "\n${GREEN}✓ Qdrant is ready${NC}"; break
-    fi
-    sleep 2; elapsed=$((elapsed+2)); echo -n "."
-done
-[ $elapsed -lt 120 ] || { echo -e "\n${RED}Qdrant timeout${NC}"; exit 1; }
-sleep 5
+    echo -n "Waiting for Qdrant on port $QDRANT_PORT"
+    elapsed=0
+    while [ $elapsed -lt 120 ]; do
+        if nc -z localhost "$QDRANT_PORT" 2>/dev/null; then
+            echo -e "\n${GREEN}✓ Qdrant is ready${NC}"; break
+        fi
+        sleep 2; elapsed=$((elapsed+2)); echo -n "."
+    done
+    [ $elapsed -lt 120 ] || { echo -e "\n${RED}Qdrant timeout${NC}"; exit 1; }
+    sleep 5
+else
+    echo -e "\n${YELLOW}[1/4] Using shared DB (KNOT_E2E_EXTERNAL_DB set)${NC}"
+fi
 
 # 2. Create the test repo with Groovy, Java, and Kotlin classes
 echo -e "\n${YELLOW}[2/4] Creating test repo (Groovy + Java + Kotlin classes)...${NC}"
@@ -236,6 +249,8 @@ GROOVY
 # 3. Index
 echo -e "\n${YELLOW}[3/4] Indexing test repo...${NC}"
 cd "$PROJECT_ROOT"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
 env \
     KNOT_NEO4J_URI="$NEO4J_URI" \
     KNOT_NEO4J_USER="$NEO4J_USER" \
@@ -244,7 +259,7 @@ env \
     KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
     KNOT_REPO_PATH="$TMP_REPO_DIR" \
     KNOT_REPO_NAME="$REPO_NAME" \
-    cargo run --release --bin knot-indexer -- --clean 2>&1
+    cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}" 2>&1
 
 IDX_EXIT=$?
 if [ $IDX_EXIT -ne 0 ]; then
@@ -406,7 +421,10 @@ else
 fi
 
 # Final
-docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v 2>/dev/null || true
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    E2E_DATA_DIR="$SCRIPT_DIR/.e2e_crosslang_data"
+    docker compose -f "$E2E_DATA_DIR/docker-compose.yml" down -v 2>/dev/null || true
+fi
 
 if [ "${FAILED:-0}" -eq 0 ]; then
     echo -e "\n${GREEN}✓ All cross-lang reference E2E tests passed!${NC}"

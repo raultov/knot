@@ -44,6 +44,9 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 cleanup() {
+    if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+        return 0
+    fi
     echo -e "\n${YELLOW}Cleaning up Groovy E2E test environment...${NC}"
     cd "$SCRIPT_DIR"
     docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
@@ -54,14 +57,18 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ── Start Docker ────────────────────────────────────────
-echo -e "${YELLOW}[0/4] Starting Docker for Groovy E2E...${NC}"
-cd "$SCRIPT_DIR"
-docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
-rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
-mkdir -p "$E2E_DATA_DIR"/neo4j/data "$E2E_DATA_DIR"/neo4j/logs "$E2E_DATA_DIR"/qdrant
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[0/4] Starting Docker for Groovy E2E...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    rm -rf "$TMP_REPO_DIR" 2>/dev/null || true
+    mkdir -p "$E2E_DATA_DIR"/neo4j/data "$E2E_DATA_DIR"/neo4j/logs "$E2E_DATA_DIR"/qdrant
 
-docker compose -f "$COMPOSE_FILE" up -d
+    docker compose -f "$COMPOSE_FILE" up -d
+else
+    echo -e "${YELLOW}[0/4] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
+fi
 
 wait_for_port() {
     local port=$1
@@ -96,9 +103,13 @@ wait_for_port() {
     done
 }
 
-wait_for_port 17687 "Neo4j" "knot_neo4j_e2e" || exit 1
-wait_for_port 16334 "Qdrant" "knot_qdrant_e2e" || exit 1
-sleep 8  # extra buffer: Neo4j healthcheck can pass before index creation is ready
+if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[0b/4] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+else
+    wait_for_port 17687 "Neo4j" "knot_neo4j_e2e" || exit 1
+    wait_for_port 16334 "Qdrant" "knot_qdrant_e2e" || exit 1
+    sleep 8  # extra buffer: Neo4j healthcheck can pass before index creation is ready
+fi
 
 # ── Build binaries once ─────────────────────────────────
 echo -e "\n${YELLOW}[1/4] Building knot binaries...${NC}"
@@ -182,7 +193,9 @@ rm -rf "$TMP_REPO_DIR"
 mkdir -p "$TMP_REPO_DIR"
 cp "$TEST_FILES_DIR/sample_full.groovy" "$TMP_REPO_DIR/"
 
-run_indexer "$REPO_A" "$COLL_A" "--clean"
+CLEAN_FLAG=""
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && CLEAN_FLAG="--clean"
+run_indexer "$REPO_A" "$COLL_A" "$CLEAN_FLAG"
 sleep 2
 
 # Test A1: Search for Groovy class

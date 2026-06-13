@@ -53,6 +53,8 @@ _escape_cypher_string() {
 
 # Assert that NO relationship of <rel_type> exists from <source_fqn> to <target_fqn>.
 #
+# If KNOT_REPO_NAME is set, the query is scoped to that repository for both nodes.
+#
 # Args:
 #   source_fqn  - Fully-qualified name (or unique identifier) of the source node
 #   target_fqn  - Fully-qualified name of the target node
@@ -64,7 +66,12 @@ assert_no_edge() {
     source_name=$(_escape_cypher_string "$1")
     target_name=$(_escape_cypher_string "$2")
 
-    local query="MATCH (a)-[r:${rel_type}]->(b) WHERE a.fqn = '${source_name}' AND b.fqn = '${target_name}' RETURN count(r) AS cnt;"
+    local repo_filter=""
+    if [[ -n "${KNOT_REPO_NAME:-}" ]]; then
+        repo_filter=" AND a.repo_name = '${KNOT_REPO_NAME}' AND b.repo_name = '${KNOT_REPO_NAME}'"
+    fi
+
+    local query="MATCH (a)-[r:${rel_type}]->(b) WHERE a.fqn = '${source_name}' AND b.fqn = '${target_name}'${repo_filter} RETURN count(r) AS cnt;"
     local result
     result=$(_run_cypher_value "$query")
 
@@ -74,12 +81,14 @@ assert_no_edge() {
     fi
 
     if [ "$result" != "0" ]; then
-        echo "ASSERTION FAILED: Expected no ${rel_type} edge from '${1}' to '${2}', but found ${result}" >&2
+        echo "ASSERTION FAILED: Expected no ${rel_type} edge from '${1}' to '${2}' (repo: ${KNOT_REPO_NAME:-all}), but found ${result}" >&2
         return 1
     fi
 }
 
 # Assert that AT LEAST one relationship of <rel_type> exists from <source_fqn> to <target_fqn>.
+#
+# If KNOT_REPO_NAME is set, the query is scoped to that repository for both nodes.
 #
 # Args:
 #   source_fqn  - Fully-qualified name of the source node
@@ -92,7 +101,12 @@ assert_edge_exists() {
     source_name=$(_escape_cypher_string "$1")
     target_name=$(_escape_cypher_string "$2")
 
-    local query="MATCH (a)-[r:${rel_type}]->(b) WHERE a.fqn = '${source_name}' AND b.fqn = '${target_name}' RETURN count(r) AS cnt;"
+    local repo_filter=""
+    if [[ -n "${KNOT_REPO_NAME:-}" ]]; then
+        repo_filter=" AND a.repo_name = '${KNOT_REPO_NAME}' AND b.repo_name = '${KNOT_REPO_NAME}'"
+    fi
+
+    local query="MATCH (a)-[r:${rel_type}]->(b) WHERE a.fqn = '${source_name}' AND b.fqn = '${target_name}'${repo_filter} RETURN count(r) AS cnt;"
     local result
     result=$(_run_cypher_value "$query")
 
@@ -101,13 +115,15 @@ assert_edge_exists() {
     fi
 
     if [ "$result" = "0" ]; then
-        echo "ASSERTION FAILED: Expected at least one ${rel_type} edge from '${1}' to '${2}', but found none" >&2
+        echo "ASSERTION FAILED: Expected at least one ${rel_type} edge from '${1}' to '${2}' (repo: ${KNOT_REPO_NAME:-all}), but found none" >&2
         return 1
     fi
 }
 
 # Assert that the number of outgoing <rel_type> relationships from <source_fqn>
 # matches <expected_count> exactly.
+#
+# If KNOT_REPO_NAME is set, the query is scoped to that repository.
 #
 # Args:
 #   source_fqn       - Fully-qualified name of the source node
@@ -119,7 +135,12 @@ assert_edge_count() {
     local expected_count="$3"
     source_name=$(_escape_cypher_string "$1")
 
-    local query="MATCH (a)-[r:${rel_type}]->() WHERE a.fqn = '${source_name}' RETURN count(r) AS cnt;"
+    local repo_filter=""
+    if [[ -n "${KNOT_REPO_NAME:-}" ]]; then
+        repo_filter=" AND a.repo_name = '${KNOT_REPO_NAME}'"
+    fi
+
+    local query="MATCH (a)-[r:${rel_type}]->() WHERE a.fqn = '${source_name}'${repo_filter} RETURN count(r) AS cnt;"
     local result
     result=$(_run_cypher_value "$query")
 
@@ -128,7 +149,7 @@ assert_edge_count() {
     fi
 
     if [ "$result" != "$expected_count" ]; then
-        echo "ASSERTION FAILED: Expected exactly ${expected_count} ${rel_type} edge(s) from '${1}', but found ${result}" >&2
+        echo "ASSERTION FAILED: Expected exactly ${expected_count} ${rel_type} edge(s) from '${1}' (repo: ${KNOT_REPO_NAME:-all}), but found ${result}" >&2
         return 1
     fi
 }

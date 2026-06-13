@@ -49,7 +49,7 @@ echo ""
 # Cleanup function (runs on exit)
 cleanup() {
     local exit_code=$?
-    
+
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}Kotlin E2E tests failed!${NC}"
         echo -e "${YELLOW}To clean up manually:${NC}"
@@ -57,7 +57,11 @@ cleanup() {
         echo "  sudo rm -rf $E2E_DATA_DIR"
         return 0
     fi
-    
+
+    if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+        return 0
+    fi
+
     echo -e "\n${YELLOW}Cleaning up Kotlin E2E test environment...${NC}"
     cd "$SCRIPT_DIR"
     docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
@@ -70,17 +74,24 @@ cleanup() {
 # Register cleanup on script exit
 trap cleanup EXIT INT TERM
 
-# Step 1: Start Docker containers
-echo -e "${YELLOW}[1/5] Starting Docker containers for Kotlin E2E test...${NC}"
-cd "$SCRIPT_DIR"
-docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
-if [ -d "$E2E_DATA_DIR" ]; then
-    sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+# Step 1: Start Docker containers (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[1/5] Starting Docker containers for Kotlin E2E test...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    if [ -d "$E2E_DATA_DIR" ]; then
+        sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
+    fi
+    docker compose -f "$COMPOSE_FILE" up -d
+else
+    echo -e "${YELLOW}[1/5] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
-docker compose -f "$COMPOSE_FILE" up -d
 
-# Step 2: Wait for services to be ready
-echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
+# Step 2: Wait for services to be ready (skipped if KNOT_E2E_EXTERNAL_DB is set)
+if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
+    echo -e "${YELLOW}[2/5] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+else
+    echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
 
 wait_for_port() {
     local port=$1
@@ -120,6 +131,7 @@ wait_for_port() {
 wait_for_port 17687 "Neo4j" "knot_neo4j_e2e"
 wait_for_port 16334 "Qdrant" "knot_qdrant_e2e"
 sleep 5
+fi
 
 # Step 3: Index Kotlin test file
 echo -e "${YELLOW}[3/5] Indexing Kotlin sample file (sample.kt)...${NC}"
@@ -137,7 +149,9 @@ echo "Building knot-indexer..."
 cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|error)" || true
 
 echo "Running indexer for Kotlin files..."
-cargo run --release --bin knot-indexer -- --clean
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
 
 echo -e "${GREEN}✓ Kotlin file indexed${NC}"
 
