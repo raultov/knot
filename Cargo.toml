@@ -1,6 +1,6 @@
 [package]
 name = "knot"
-version = "1.4.2"
+version = "1.4.3"
 edition = "2024"
 description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, Groovy, C/C++, Build Systems, and HTML/CSS codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
