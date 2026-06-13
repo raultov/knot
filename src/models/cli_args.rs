@@ -80,6 +80,13 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
     },
+
+    /// List all indexed repositories with their status (entity count, file count, build system, language)
+    Repos {
+        /// Output format (default: table)
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
 }
 
 #[cfg(test)]
@@ -223,6 +230,42 @@ mod tests {
                 assert_eq!(output, OutputFormat::Json);
             }
             _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_repos_command() {
+        let args = vec!["knot", "repos"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Repos { output } => {
+                assert_eq!(output, OutputFormat::Table);
+            }
+            _ => panic!("Expected Repos command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_repos_with_output_format() {
+        let args = vec!["knot", "repos", "--output", "json"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Repos { output } => {
+                assert_eq!(output, OutputFormat::Json);
+            }
+            _ => panic!("Expected Repos command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_repos_short_output_flag() {
+        let args = vec!["knot", "repos", "-o", "markdown"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Repos { output } => {
+                assert_eq!(output, OutputFormat::Markdown);
+            }
+            _ => panic!("Expected Repos command"),
         }
     }
 }
