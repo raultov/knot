@@ -35,8 +35,8 @@ NEO4J_URI="bolt://localhost:17687"
 NEO4J_USER="neo4j"
 NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
-QDRANT_COLLECTION="knot_python_e2e_test"
-REPO_NAME="python_e2e_test_repo"
+QDRANT_COLLECTION="knot_e2e_test"
+REPO_NAME="e2e_test_repo"
 
 # Timeout settings
 TIMEOUT_SECONDS=60

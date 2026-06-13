@@ -35,13 +35,27 @@ _run_cypher_value() {
 
     _require_neo4j_env
 
-    echo "$query" | "$CYPHER_SHELL" \
-        -a "$NEO4J_URI" \
-        -u "$NEO4J_USER" \
-        -p "$NEO4J_PASSWORD" \
-        --format plain \
-        2>/dev/null \
-        | awk 'NF && NR > 1 && $0 !~ /^(Available|neo4j>|Connection|Disconnect|Connected)/ { print; exit }'
+    # Fallback mechanism: try host cypher-shell, then docker exec
+    if command -v "$CYPHER_SHELL" >/dev/null 2>&1; then
+        echo "$query" | "$CYPHER_SHELL" \
+            -a "$NEO4J_URI" \
+            -u "$NEO4J_USER" \
+            -p "$NEO4J_PASSWORD" \
+            --format plain \
+            2>/dev/null \
+            | awk 'NF && NR > 1 && $0 !~ /^(Available|neo4j>|Connection|Disconnect|Connected)/ { print; exit }'
+    else
+        # In CI, cypher-shell is usually not in the host but available in the container.
+        # We connect to localhost:7687 INSIDE the container.
+        docker exec -i knot_neo4j_e2e cypher-shell \
+            -a "bolt://localhost:7687" \
+            -u "$NEO4J_USER" \
+            -p "$NEO4J_PASSWORD" \
+            --format plain \
+            2>/dev/null <<EOF | awk 'NF && NR > 1 && $0 !~ /^(Available|neo4j>|Connection|Disconnect|Connected)/ { print; exit }'
+$query
+EOF
+    fi
 }
 
 # Escape single quotes for safe embedding in Cypher string literals.
