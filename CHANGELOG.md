@@ -4,6 +4,15 @@
  For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
  
 ---
+
+ ## v1.4.2 — Lightweight Mode Removal
+
+ - ✅ **Removed Lightweight Mode**: Deprecated and removed the "only-clients" mode and the `only-clients` feature flag. All builds now include semantic search capabilities (ONNX Runtime + fastembed) by default, as modern deployment environments now provide the necessary GLIBC version.
+ - ✅ **Simplified `Embedder`**: Eliminated stub implementations in favor of the full embedding pipeline.
+ - ✅ **Cleaned Documentation**: Updated README, Dockerfiles, and tool descriptions to reflect that semantic search is now a standard feature.
+ - ✅ **cargo fmt** clean | **cargo clippy** clean
+ 
+ ---
  
  ## v1.4.1 — Repository Management, CLI Modularization & Optimized Indexing
  
