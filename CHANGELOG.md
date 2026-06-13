@@ -3,9 +3,19 @@
  All notable changes to **knot** are documented here, ordered from most recent to oldest.
  For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
  
+---
+ 
+ ## v1.4.1 — Repository Management, CLI Modularization & Optimized Indexing
+ 
+ - ✅ **Repository Management**: Added `knot repos` command to list all indexed repositories with entity/file counts and primary language detection.
+ - ✅ **Optimized Initial Indexing**: The pipeline now detects full indexing runs and short-circuits stale data cleanup using a single bulk repository wipe, significantly speeding up first-time indexing on populated databases.
+ - ✅ **CLI Modularization**: Refactored argument models and query logic into dedicated submodules for better maintainability.
+ - ✅ **Enhanced E2E Infrastructure**: Added support for `KNOT_E2E_EXTERNAL_DB` to allow running test suites against a shared database. Introduced `run_all_e2e_fast.sh` for parallel-safe test execution.
+ - ✅ **cargo fmt** clean | **cargo clippy** clean
+ 
  ---
  
-+## v1.4.0 — Major Refactor, Cleanup & Specialized Build System Parsers
+ +## v1.4.0 — Major Refactor, Cleanup & Specialized Build System Parsers
 +
 +- ✅ **Specialized Build System Extraction**: Activated the dedicated Gradle (`.gradle`) and Jenkinsfile parsers. These now extract project identities, dependencies, plugins, and pipeline stages/steps with higher precision than the generic Groovy parser.
 +- ✅ **Major Code Deduplication**: Consolidated redundant logic across the parser pipeline.
