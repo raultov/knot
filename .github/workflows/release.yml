@@ -20,10 +20,12 @@
 #
 # The job `plan` declares `needs: [test-unit]` to enforce this gate.
 #
-# If you regenerate this file with `dist init`, the new release.yml will
-# be written over the top of this one and the test-unit gate will be
-# LOST. Re-add the `test-unit` job and the `needs:` entry on `plan`
-# after any `dist init` regeneration.
+# The `allow-dirty = ["ci"]` setting in `dist-workspace.toml` makes
+# `cargo-dist` skip the freshness check on this file, so `dist init`
+# does NOT clobber the hand-written `test-unit` job. Do not remove that
+# setting; if you do, the next `dist init` will overwrite this gate and
+# you will have to re-add the `test-unit` job and the `needs:` entry on
+# `plan` by hand.
 # ---------------------------------------------------------------------------
 
 name: Release

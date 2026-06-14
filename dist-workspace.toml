@@ -9,6 +9,14 @@ cargo-dist-version = "0.31.0"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
+# Skip checking whether the specified configuration files are up to date.
+# The release.yml is hand-edited to add a `test-unit` gate (v1.4.5) that
+# blocks the GitHub Release on failing unit tests; without this allow-dirty
+# entry, cargo-dist refuses to run with
+# "release.yml has out of date contents and needs to be regenerated".
+# See .github/workflows/release.yml for the HAND-WRITTEN ADDITION banner.
+# The "ci" magic string means "don't check/regenerate ci scripts (release.yml)".
+allow-dirty = ["ci"]
 # Target platforms to build apps for (Rust target-triple syntax)
 # Note: x86_64-apple-darwin removed - ort crate doesn't provide prebuilt binaries for legacy Intel Macs
 # Note: x86_64-pc-windows-msvc removed - ort crate has MSVC linker compatibility issues
