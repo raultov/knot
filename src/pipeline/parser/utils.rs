@@ -87,7 +87,7 @@ pub(crate) fn extract_single_quoted(s: &str) -> Option<String> {
 /// Used by Java, TypeScript, and Kotlin parsers to capture type annotations
 /// (constructor parameters, method params, field types, return types).
 pub(crate) fn extract_type_references(
-    node: tree_sitter::Node<'_>,
+    node: Node<'_>,
     source: &[u8],
     intents: &mut Vec<ReferenceIntent>,
 ) {

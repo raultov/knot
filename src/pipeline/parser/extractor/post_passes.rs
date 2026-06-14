@@ -3,6 +3,37 @@ use crate::pipeline::parser::languages::{javascript, kotlin, rust, typescript};
 use crate::pipeline::parser::orphans::collect_orphaned_references;
 use tree_sitter::Node;
 
+/// Find the existing `<module>` entity and set its `default_export`, or create
+/// a synthetic one if none exists yet.
+fn set_module_default_export(
+    entities: &mut Vec<ParsedEntity>,
+    target: String,
+    lang_name: &str,
+    file_path: &str,
+    repo_name: &str,
+) {
+    if let Some(module_entity) = entities.iter_mut().find(|e| e.name == "<module>") {
+        module_entity.default_export = Some(target);
+    } else {
+        // Create a synthetic module entity just to hold the default export
+        let mut module_entity = ParsedEntity::new(
+            "<module>",
+            EntityKind::Function,
+            file_path,
+            None,
+            None,
+            lang_name,
+            file_path,
+            1,
+            1,
+            None,
+            repo_name,
+        );
+        module_entity.default_export = Some(target);
+        entities.push(module_entity);
+    }
+}
+
 pub(crate) fn run_post_passes<'a>(
     tree_root: Node<'a>,
     source_bytes: &[u8],
@@ -82,26 +113,7 @@ pub(crate) fn run_post_passes<'a>(
     if lang_name == "javascript" {
         // Set default_export on <module> entity from module.exports = X
         if let Some(target) = javascript::scan_module_exports_target(tree_root, source_bytes) {
-            if let Some(module_entity) = entities.iter_mut().find(|e| e.name == "<module>") {
-                module_entity.default_export = Some(target);
-            } else {
-                // Create a synthetic module entity just to hold the default export
-                let mut module_entity = ParsedEntity::new(
-                    "<module>",
-                    EntityKind::Function,
-                    file_path,
-                    None,
-                    None,
-                    lang_name,
-                    file_path,
-                    1,
-                    1, // we don't have exact lines, use 1
-                    None,
-                    repo_name,
-                );
-                module_entity.default_export = Some(target);
-                entities.push(module_entity);
-            }
+            set_module_default_export(entities, target, lang_name, file_path, repo_name);
         }
     }
     if lang_name == "typescript" {
@@ -132,26 +144,7 @@ pub(crate) fn run_post_passes<'a>(
         }
         // Set default_export on <module> from export default X
         if let Some(target) = typescript::scan_default_export_target(tree_root, source_bytes) {
-            if let Some(module_entity) = entities.iter_mut().find(|e| e.name == "<module>") {
-                module_entity.default_export = Some(target);
-            } else {
-                // Create a synthetic module entity just to hold the default export
-                let mut module_entity = ParsedEntity::new(
-                    "<module>",
-                    EntityKind::Function,
-                    file_path,
-                    None,
-                    None,
-                    lang_name,
-                    file_path,
-                    1,
-                    1,
-                    None,
-                    repo_name,
-                );
-                module_entity.default_export = Some(target);
-                entities.push(module_entity);
-            }
+            set_module_default_export(entities, target, lang_name, file_path, repo_name);
         }
     }
 }
