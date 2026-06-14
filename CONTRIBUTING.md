@@ -53,12 +53,15 @@ cargo test --lib pipeline::parser
 E2E tests validate the full ingestion and querying pipeline. They are written first (BDD) and must fail before the logic is implemented.
 ```bash
 # Run all E2E language suites
-./tests/run_all_e2e.sh
+./tests/run_all_e2e_fast.sh
 
 # Run a specific language suite
+./tests/run_typescript_e2e.sh
+./tests/run_java_e2e.sh
+./tests/run_javascript_e2e.sh
+./tests/run_web_e2e.sh
 ./tests/run_rust_e2e.sh
 ./tests/run_kotlin_e2e.sh
-./tests/run_e2e.sh # JS/TS/Java/HTML/CSS
 ```
 
 ### Performance Benchmarks

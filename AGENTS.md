@@ -18,22 +18,25 @@ cargo test
 
 **Run all E2E tests** (requires Docker + databases):
 ```bash
-./tests/run_all_e2e.sh
+./tests/run_all_e2e_fast.sh
 ```
 
 **Run a single E2E language suite:**
 ```bash
-./tests/run_e2e.sh              # JS/TS/Java/HTML/CSS
-./tests/run_rust_e2e.sh         # Rust
-./tests/run_kotlin_e2e.sh       # Kotlin
-./tests/run_python_e2e.sh       # Python
-./tests/run_build_systems_e2e.sh  # Maven/Gradle/Jenkins/Cargo.toml
-./tests/run_groovy_e2e.sh       # Groovy
-./tests/run_cpp_e2e.sh          # C/C++
-./tests/run_cross_lang_ref_e2e.sh  # Cross-language validation
-./tests/run_config_e2e.sh         # YAML/JSON/.properties config
-./tests/run_k8s_helm_e2e.sh       # Kubernetes + Helm
-./tests/run_cross_repo_dep_e2e.sh # Cross-repo dependency linking
+./tests/run_typescript_e2e.sh       # TypeScript
+./tests/run_java_e2e.sh              # Java
+./tests/run_javascript_e2e.sh        # JavaScript
+./tests/run_web_e2e.sh               # HTML + JSX + CSS + SCSS + hybrid
+./tests/run_kotlin_e2e.sh            # Kotlin
+./tests/run_rust_e2e.sh              # Rust
+./tests/run_python_e2e.sh            # Python
+./tests/run_build_systems_e2e.sh     # Maven/Gradle/Jenkins/Cargo.toml
+./tests/run_groovy_e2e.sh            # Groovy
+./tests/run_cpp_e2e.sh               # C/C++
+./tests/run_cross_lang_ref_e2e.sh    # Cross-language validation
+./tests/run_config_e2e.sh            # YAML/JSON/.properties config
+./tests/run_k8s_helm_e2e.sh          # Kubernetes + Helm
+./tests/run_cross_repo_dep_e2e.sh    # Cross-repo dependency linking
 ```
 
 **Code quality:**
@@ -141,7 +144,7 @@ Scripts in `tests/`:
 - Require `docker compose` with Qdrant + Neo4j running
 - Use `docker-compose.e2e.yml` (ephemeral test databases)
 
-**Critical**: E2E tests clean up Docker containers between suites (see `run_all_e2e.sh` lines 36-42).
+**Critical**: E2E tests clean up Docker containers between suites (see `run_all_e2e_fast.sh` lines 36-42).
 
 ### Running Specific Test
 ```bash
@@ -171,7 +174,7 @@ edition = "2024"
 ### Build Artifacts to Ignore
 - `target/` — Compiled binaries, intermediate objects
 - `.knot/` — Index state (`index_state.json` file for incremental indexing) and fastembed model cache (`fastembed_cache/`)
-- `.e2e_*` — Ephemeral test databases (cleaned up by `run_all_e2e.sh`)
+- `.e2e_*` — Ephemeral test databases (cleaned up by `run_all_e2e_fast.sh`)
 - `node_modules/` — Only for tree-sitter-groovy npm package
 
 ### Database Dependencies
@@ -257,7 +260,7 @@ cargo fmt -- --check
 cargo test
 
 # 4. E2E tests (optional locally, required in CI)
-./tests/run_all_e2e.sh
+./tests/run_all_e2e_fast.sh
 ```
 
 **No `unsafe` blocks** allowed except in unavoidable ONNX Runtime interop.
@@ -282,7 +285,7 @@ cargo test
 2. **Identify root cause** → Likely in parser module or reference builder
 3. **Fix in parser** → Add unit tests covering the case
 4. **Verify E2E test passes**
-5. **Check no regressions** → `cargo test && ./tests/run_all_e2e.sh`
+5. **Check no regressions** → `cargo test && ./tests/run_all_e2e_fast.sh`
 
 ### Cross-Repo Dependency Linking Workflow (v1.2.5)
 
@@ -332,7 +335,7 @@ cargo test
 1. `cargo fmt -- --check` (formatting)
 2. `cargo clippy --all-targets -- -D warnings` (linting)
 3. `cargo test` (unit tests)
-4. `./tests/run_all_e2e.sh` (all language suites)
+4. `./tests/run_all_e2e_fast.sh` (all language suites)
 
 Failure = PR not mergeable. Check `.github/workflows/ci.yml` for exact steps.
 
@@ -343,7 +346,7 @@ Failure = PR not mergeable. Check `.github/workflows/ci.yml` for exact steps.
 - **Parser module registration**: `src/pipeline/parser/mod.rs` (dispatcher for each language)
 - **MCP tools definition**: `src/mcp_tools/` (search_hybrid_context, find_callers, explore_file)
 - **CLI command routing**: `src/bin/knot.rs` (search/explore/callers/deps subcommands)
-- **E2E test structure**: `tests/run_e2e.sh` (pattern used by all language suites)
+- **E2E test structure**: `tests/run_kotlin_e2e.sh` (template for all per-language suites)
 - **Docker setup**: `docker-compose.yml` (production), `tests/docker-compose.e2e.yml` (ephemeral)
 
 ---

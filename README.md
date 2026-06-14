@@ -333,8 +333,8 @@ Use `--clean` when:
 To ensure indexer stability, run the E2E integration test suite:
 
 ```bash
-# Run all language E2E tests (Java, TS, JS, HTML, CSS, Kotlin, Rust)
-./tests/run_e2e.sh
+# Run all language E2E tests (TypeScript, Java, JavaScript, Web, Kotlin, Rust, ...)
+./tests/run_all_e2e_fast.sh
 
 # Run only Kotlin E2E tests
 ./tests/run_kotlin_e2e.sh
