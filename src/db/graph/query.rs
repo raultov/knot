@@ -302,7 +302,10 @@ impl QueryExt for GraphDb {
              OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
              RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
                     m.file_path, m.start_line, collect(dep.name) as dependencies
-             ORDER BY CASE WHEN toLower(m.name) = toLower($prefix) THEN 0 ELSE 1 END, size(m.name)
+             ORDER BY CASE WHEN toLower(m.name) = toLower($prefix) THEN 0 ELSE 1 END,
+                      size(m.name),
+                      m.fqn,
+                      m.uuid
              LIMIT $limit"
                 .to_string()
         } else {
@@ -311,7 +314,10 @@ impl QueryExt for GraphDb {
              OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
              RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
                     m.file_path, m.start_line, collect(dep.name) as dependencies
-             ORDER BY CASE WHEN toLower(m.name) = toLower($prefix) THEN 0 ELSE 1 END, size(m.name)
+             ORDER BY CASE WHEN toLower(m.name) = toLower($prefix) THEN 0 ELSE 1 END,
+                      size(m.name),
+                      m.fqn,
+                      m.uuid
              LIMIT $limit"
                 .to_string()
         };
