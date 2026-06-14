@@ -87,6 +87,13 @@ echo -e "${CYAN}OS:          ${OS_INFO}${NC}"
 echo -e "${CYAN}Commit:      ${COMMIT_HASH}${NC}"
 echo ""
 
+# ─── Ensure dependencies are installed ─────────────────────────────────
+if [ ! -x "/usr/bin/time" ]; then
+    echo -e "${RED}Error: /usr/bin/time is required but not found.${NC}"
+    echo -e "Please install it (e.g., 'sudo apt-get install time' or 'brew install gnu-time')."
+    exit 1
+fi
+
 # ─── Ensure binaries are built ───────────────────────────────────────
 echo -e "${YELLOW}Building knot-indexer (release)...${NC}"
 cd "$PROJECT_ROOT"
@@ -165,7 +172,7 @@ run_benchmark_iteration() {
         export KNOT_REPO_NAME="$repo_name"
         export KNOT_NEO4J_URI="bolt://localhost:17687"
         export KNOT_NEO4J_USER="neo4j"
-        export KNOT_NEO4J_PASSWORD="${KNOT_NEO4J_PASSWORD:-e2e_test_password}"
+        export KNOT_NEO4J_PASSWORD="e2e_test_password"
         export KNOT_QDRANT_URL="http://localhost:16334"
         export KNOT_QDRANT_COLLECTION="knot_perf_${suite_name}"
         RUST_LOG=info /usr/bin/time -f "TIME_ELAPSED=%e\nMEM_MAX_RSS=%M" \
