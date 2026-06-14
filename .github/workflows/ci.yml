@@ -43,8 +43,8 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       
-      - name: Install netcat (for port checking)
-        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd
+      - name: Install dependencies (netcat, time)
+        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd time
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -92,8 +92,8 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install netcat (for port checking)
-        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd
+      - name: Install dependencies (netcat, time)
+        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd time
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
