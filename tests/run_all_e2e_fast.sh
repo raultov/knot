@@ -37,9 +37,12 @@ echo -e "${BLUE}========================================${NC}"
 FAILED_TESTS=()
 PASSED_TESTS=()
 
-# All 12 suites now use the shared DB. Order matches CI.
+# All 16 suites now use the shared DB. Order matches CI.
 SUITES=(
-    "run_e2e.sh"
+    "run_typescript_e2e.sh"
+    "run_java_e2e.sh"
+    "run_javascript_e2e.sh"
+    "run_web_e2e.sh"
     "run_kotlin_e2e.sh"
     "run_rust_e2e.sh"
     "run_rust_reference_resolution_e2e.sh"
@@ -132,10 +135,10 @@ run_suite() {
     fi
 }
 
-# Run all 12 suites sequentially against the same live DB.
+# Run all 16 suites sequentially against the same live DB.
 # --clean is repo-scoped in the indexer, so each suite only wipes its own
 # repo's data — earlier suites' data is preserved.
-echo -e "\n${BLUE}── Running all 12 suites against shared DB ──${NC}"
+echo -e "\n${BLUE}── Running all 16 suites against shared DB ──${NC}"
 for suite in "${SUITES[@]}"; do
     run_suite "$suite"
 done

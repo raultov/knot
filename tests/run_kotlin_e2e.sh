@@ -423,6 +423,21 @@ else
     echo -e "${YELLOW}~ Color enum class may need additional extraction tuning${NC}"
 fi
 
+# Test 16: Kotlin method signature search by parameter type fragment (ported from run_e2e.sh Test 24)
+echo ""
+echo "Test 16: Searching for Kotlin method by signature fragment : Int..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\": Int\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers ": Int" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "loadData\|UserService" || echo "$CLI_RESPONSE" | grep -q "loadData\|UserService"; then
+    echo -e "${GREEN}✓ Found Kotlin callers by signature fragment (MCP or CLI)${NC}"
+else
+    echo -e "${RED}✗ Kotlin callers by signature fragment not found${NC}"
+    exit 1
+fi
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -446,6 +461,7 @@ echo "  ✓ Kotlin interface vs class classification (v0.10.0)"
 echo "  ✓ Kotlin EXTENDS/IMPLEMENTS extraction (v0.10.0)"
 echo "  ✓ Kotlin anonymous object implements (v0.11.0)"
 echo "  ✓ Kotlin enum class classification (v0.11.0)"
+echo "  ✓ Kotlin method signature fragment search (: Int)"
 echo ""
 echo "Entity types supported:"
 echo "  - KotlinClass"
