@@ -425,7 +425,7 @@ pub(crate) fn process_capture<'a>(
         // Markdown: Handle Markdown entity captures
         name_or_intent if name_or_intent.starts_with("markdown.") => {
             if let Some((entity_name, entity_kind, entity_line)) =
-                markdown::handle_markdown_capture(name_or_intent, &text, node)
+                markdown::handle_markdown_capture(name_or_intent, &text, node, source_bytes)
             {
                 name = Some(entity_name);
                 kind = Some(entity_kind);

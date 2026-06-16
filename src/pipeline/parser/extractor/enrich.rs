@@ -188,6 +188,17 @@ pub(crate) fn enrich_and_create_entity<'a>(
         entity.inline_comments = inline_comments;
         entity.decorators = decorators;
 
+        // Extract text below header/document entity for each markdown entity
+        if lang_name == "markdown"
+            && matches!(
+                entity.kind,
+                EntityKind::MarkdownSection | EntityKind::MarkdownDocument
+            )
+            && let Some(node) = entity_node
+        {
+            entity.embed_text = node.utf8_text(source_bytes).unwrap_or("").to_string();
+        }
+
         // Extract alias module path for JS require() aliases
         if lang_name == "javascript"
             && entity.kind == EntityKind::Constant

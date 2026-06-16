@@ -2365,3 +2365,110 @@ fn test_extract_ts_import_alias() {
         Some("./alias_target_ts")
     );
 }
+
+// ============================================================
+// Markdown section embed_text and end_line tests
+// ============================================================
+#[test]
+fn test_extract_entities_markdown_section_body_in_embed_text() {
+    // The core of the issue: when a Markdown section is captured, its
+    // embed_text must contain the section body (paragraphs, lists, code
+    // blocks) — not just the heading. The captured node should be the
+    // enclosing `section`, so end_line covers the full section and
+    // node.utf8_text() gives us the body for the embedding.
+    let source = r#"# Top Level
+
+Intro paragraph under the H1.
+
+## Setup
+
+To get started, configure your environment.
+
+- Install the toolchain
+- Verify the install
+
+```bash
+cargo --version
+```
+
+### Prerequisites
+
+You need a recent rustc.
+
+## Usage
+
+Run the binary to start the service.
+"#;
+
+    let query = r#"
+(document) @markdown.document.name
+
+(section) @markdown.section
+"#;
+
+    let result = extract_entities(
+        source,
+        tree_sitter_md::LANGUAGE.into(),
+        query,
+        "markdown",
+        "/test/README.md",
+        "test-repo",
+    );
+
+    assert!(result.is_ok());
+    let entities = result.unwrap();
+
+    // 1 document + 4 sections (Top Level, Setup, Prerequisites, Usage)
+    let sections: Vec<_> = entities
+        .iter()
+        .filter(|e| e.kind == EntityKind::MarkdownSection)
+        .collect();
+    assert_eq!(
+        sections.len(),
+        4,
+        "expected 4 section entities, got {}",
+        sections.len()
+    );
+
+    // The "Setup" section's embed_text must contain the section body —
+    // the paragraph, the list, and the code block — not just the heading.
+    let setup = sections
+        .iter()
+        .find(|e| e.name == "Setup")
+        .expect("Setup section should be extracted");
+
+    assert!(
+        setup.embed_text.contains("configure your environment"),
+        "Setup embed_text must contain the section's paragraph, got: {:?}",
+        setup.embed_text
+    );
+    assert!(
+        setup.embed_text.contains("Install the toolchain"),
+        "Setup embed_text must contain the list items"
+    );
+    assert!(
+        setup.embed_text.contains("cargo --version"),
+        "Setup embed_text must contain the code block content"
+    );
+
+    assert!(
+        setup.end_line > setup.start_line,
+        "Setup end_line ({}) must extend past start_line ({})",
+        setup.end_line,
+        setup.start_line,
+    );
+
+    assert!(
+        !setup.embed_text.contains("Run the binary"),
+        "Setup must not bleed into the Usage section's content"
+    );
+
+    let prereqs = sections
+        .iter()
+        .find(|e| e.name == "Prerequisites")
+        .expect("Prerequisites section should be extracted");
+    assert!(
+        prereqs.embed_text.contains("recent rustc"),
+        "Prerequisites embed_text must contain its own body"
+    );
+}

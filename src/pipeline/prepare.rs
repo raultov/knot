@@ -23,7 +23,13 @@ use crate::models::ParsedEntity;
 /// called after Rayon parsing and before the async embedding stage.
 pub fn prepare_entities(entities: &mut [ParsedEntity]) {
     for entity in entities.iter_mut() {
-        entity.embed_text = build_embed_text(entity);
+        if entity.embed_text.is_empty() {
+            entity.embed_text = build_embed_text(entity);
+        } else {
+            let header = format!("[{}] {}", entity.kind, entity.name);
+            let location = format!("File: {}:{}", entity.file_path, entity.start_line);
+            entity.embed_text = format!("{header}\n{location}\n\n{}", entity.embed_text);
+        }
     }
 }
 
