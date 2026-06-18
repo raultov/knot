@@ -3,9 +3,20 @@
  All notable changes to **knot** are documented here, ordered from most recent to oldest.
  For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
  
- ---
- 
- ## v1.4.8 — Parser Refactor & Version Bump
+---
+
+## v1.4.9 — Markdown Documentation Indexing
+
+- ✅ **Feat(parser)**: Added Markdown support (`.md`) with `MarkdownDocument` and `MarkdownSection` entities. Section bodies — paragraphs, fenced code blocks, lists, and tables — are captured into `embed_text` for full semantic search over documentation content, not just heading titles.
+- ✅ **Feat(parser)**: Hierarchical, file-scoped FQNs (e.g. `README.md::Setup > Installation > Linux`) prevent cross-file and within-file heading collisions.
+- ✅ **Test(e2e)**: Added `run_markdown_e2e.sh` (body searchability, cross-file disambiguation, deep nesting, special-character headings) and wired it into `run_all_e2e_fast.sh`.
+- ✅ **Docs(readme)**: Documented Markdown language support.
+- ✅ Credit: @sdi2200246 (PR #17, closes #8).
+- ✅ **cargo fmt** clean | **cargo clippy** clean
+
+---
+
+## v1.4.8 — Parser Refactor & Version Bump
 
  - ✅ **Refactor(parser)**: Extracted `set_module_default_export` helper in `post_passes.rs` to unify JS and TS default export logic.
  - ✅ **Refactor(parser)**: Simplified `Node` imports and type usage in `utils.rs`.

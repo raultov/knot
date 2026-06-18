@@ -10,7 +10,7 @@ pub(crate) fn handle_markdown_capture(
     let start_line = node.start_position().row + 1;
 
     match cap_name {
-        //gets overwittten in enrich.
+        // Gets overwritten in enrich.
         "markdown.document.name" => Some((
             "Document".to_string(),
             EntityKind::MarkdownDocument,
@@ -68,6 +68,12 @@ pub(crate) fn section_heading_text(section: Node<'_>, source: &[u8]) -> Option<S
     None
 }
 
+/// Builds the FQN heading chain for a section node by walking ancestor
+/// `section` nodes. Each heading text is normalized with `clean_heading_name`
+/// so the FQN stays consistent with the entity `name` field (which is also
+/// cleaned in `handle_markdown_capture`). Without this, `## [foo](bar.md)`
+/// would produce `name = "foo bar.md"` but `fqn = "...::[foo](bar.md)"`,
+/// making the FQN harder to reference from queries.
 pub(crate) fn build_markdown_fqn(section: Node<'_>, source: &[u8]) -> String {
     let mut chain: Vec<String> = Vec::new();
     let mut current = Some(section);
@@ -79,7 +85,7 @@ pub(crate) fn build_markdown_fqn(section: Node<'_>, source: &[u8]) -> String {
                     if let Some(inline) = child.child_by_field_name("heading_content")
                         && let Ok(text) = inline.utf8_text(source)
                     {
-                        chain.push(text.to_string());
+                        chain.push(clean_heading_name(text));
                     }
                     break;
                 }

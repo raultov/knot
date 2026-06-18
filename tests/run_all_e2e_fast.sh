@@ -37,7 +37,7 @@ echo -e "${BLUE}========================================${NC}"
 FAILED_TESTS=()
 PASSED_TESTS=()
 
-# All 16 suites now use the shared DB. Order matches CI.
+# All 17 suites now use the shared DB. Order matches CI.
 SUITES=(
     "run_typescript_e2e.sh"
     "run_java_e2e.sh"
@@ -55,6 +55,7 @@ SUITES=(
     "run_cross_repo_dep_e2e.sh"
     "run_cross_lang_ref_e2e.sh"
     "run_cpp_e2e.sh"
+    "run_markdown_e2e.sh"
 )
 
 # Pre-flight: ensure shared Neo4j port (17687) is free before starting.
@@ -135,10 +136,10 @@ run_suite() {
     fi
 }
 
-# Run all 16 suites sequentially against the same live DB.
+# Run all 17 suites sequentially against the same live DB.
 # --clean is repo-scoped in the indexer, so each suite only wipes its own
 # repo's data — earlier suites' data is preserved.
-echo -e "\n${BLUE}── Running all 16 suites against shared DB ──${NC}"
+echo -e "\n${BLUE}── Running all 17 suites against shared DB ──${NC}"
 for suite in "${SUITES[@]}"; do
     run_suite "$suite"
 done
