@@ -2365,3 +2365,170 @@ fn test_extract_ts_import_alias() {
         Some("./alias_target_ts")
     );
 }
+
+// ============================================================
+// Markdown section embed_text and end_line tests
+// ============================================================
+#[test]
+fn test_extract_entities_markdown_section_body_in_embed_text() {
+    // The core of the issue: when a Markdown section is captured, its
+    // embed_text must contain the section body (paragraphs, lists, code
+    // blocks) — not just the heading. The captured node should be the
+    // enclosing `section`, so end_line covers the full section and
+    // node.utf8_text() gives us the body for the embedding.
+    let source = r#"# Top Level
+
+Intro paragraph under the H1.
+
+## Setup
+
+To get started, configure your environment.
+
+- Install the toolchain
+- Verify the install
+
+```bash
+cargo --version
+```
+
+### Prerequisites
+
+You need a recent rustc.
+
+## Usage
+
+Run the binary to start the service.
+"#;
+
+    let query = r#"
+(document) @markdown.document.name
+
+(section) @markdown.section
+"#;
+
+    let result = extract_entities(
+        source,
+        tree_sitter_md::LANGUAGE.into(),
+        query,
+        "markdown",
+        "/test/README.md",
+        "test-repo",
+    );
+
+    assert!(result.is_ok());
+    let entities = result.unwrap();
+
+    //check names for ducument kind were correctly overrwritten
+    let document = entities
+        .iter()
+        .find(|e| e.kind == EntityKind::MarkdownDocument)
+        .expect("Document entity should be extracted");
+    assert_eq!(
+        document.name, "test-repo::/test/README.md",
+        "MarkdownDocument name should be repo_name::file_path, got: {:?}",
+        document.name
+    );
+
+    // 1 document + 4 sections (Top Level, Setup, Prerequisites, Usage)
+    let sections: Vec<_> = entities
+        .iter()
+        .filter(|e| e.kind == EntityKind::MarkdownSection)
+        .collect();
+    assert_eq!(
+        sections.len(),
+        4,
+        "expected 4 section entities, got {}",
+        sections.len()
+    );
+
+    // The "Setup" section's embed_text must contain the section body —
+    // the paragraph, the list, and the code block — not just the heading.
+    let setup = sections
+        .iter()
+        .find(|e| e.name == "Setup")
+        .expect("Setup section should be extracted");
+
+    assert!(
+        setup.embed_text.contains("configure your environment"),
+        "Setup embed_text must contain the section's paragraph, got: {:?}",
+        setup.embed_text
+    );
+    assert!(
+        setup.embed_text.contains("Install the toolchain"),
+        "Setup embed_text must contain the list items"
+    );
+    assert!(
+        setup.embed_text.contains("cargo --version"),
+        "Setup embed_text must contain the code block content"
+    );
+
+    assert!(
+        setup.end_line > setup.start_line,
+        "Setup end_line ({}) must extend past start_line ({})",
+        setup.end_line,
+        setup.start_line,
+    );
+
+    assert!(
+        !setup.embed_text.contains("Run the binary"),
+        "Setup must not bleed into the Usage section's content"
+    );
+
+    let prereqs = sections
+        .iter()
+        .find(|e| e.name == "Prerequisites")
+        .expect("Prerequisites section should be extracted");
+    assert!(
+        prereqs.embed_text.contains("recent rustc"),
+        "Prerequisites embed_text must contain its own body"
+    );
+
+    // ============================================================
+    // FQN assertions: file path + hierarchical heading chain.
+    // Prevents cross-file collisions (two READMEs each with a
+    // "## Setup") and within-file collisions (same heading text
+    // at different depths).
+    // ============================================================
+
+    let document = entities
+        .iter()
+        .find(|e| e.kind == EntityKind::MarkdownDocument)
+        .expect("Document entity should be extracted");
+    assert_eq!(
+        document.fqn, "/test/README.md",
+        "MarkdownDocument FQN should be the file path, got: {:?}",
+        document.fqn
+    );
+
+    let top_level = sections
+        .iter()
+        .find(|e| e.name == "Top Level")
+        .expect("Top Level section should be extracted");
+    assert_eq!(
+        top_level.fqn, "/test/README.md::Top Level",
+        "Top-level section FQN should be file_path::heading, got: {:?}",
+        top_level.fqn
+    );
+
+    assert_eq!(
+        setup.fqn, "/test/README.md::Top Level > Setup",
+        "Nested H2 FQN should include its H1 ancestor, got: {:?}",
+        setup.fqn
+    );
+
+    assert_eq!(
+        prereqs.fqn, "/test/README.md::Top Level > Setup > Prerequisites",
+        "Nested H3 FQN should include both ancestors, got: {:?}",
+        prereqs.fqn
+    );
+
+    let usage = sections
+        .iter()
+        .find(|e| e.name == "Usage")
+        .expect("Usage section should be extracted");
+    assert_eq!(
+        usage.fqn, "/test/README.md::Top Level > Usage",
+        "Sibling H2 should have its own chain, not bleed from Setup, got: {:?}",
+        usage.fqn
+    );
+}

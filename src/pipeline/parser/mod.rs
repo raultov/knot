@@ -50,6 +50,8 @@ const DEFAULT_PYTHON_QUERY: &str = include_str!("../../../queries/python.scm");
 const DEFAULT_C_QUERY: &str = include_str!("../../../queries/c.scm");
 #[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_CPP_QUERY: &str = include_str!("../../../queries/cpp.scm");
+#[allow(dead_code)] // Used by language-specific parsers
+const DEFAULT_MD_QUERY: &str = include_str!("../../../queries/markdown.scm");
 
 /// Configuration for the parse stage.
 #[derive(Clone)]
@@ -426,6 +428,17 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
         }
         "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),
         "toml" => languages::toml::extract_entities_toml(&source, &file_path, &parse_cfg.repo_name),
+        "md" | "markdown" => {
+            let query_src = load_query_source("markdown.scm", DEFAULT_MD_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_md::LANGUAGE.into(),
+                &query_src,
+                "markdown",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
         other => {
             warn!("Unsupported extension '{other}', skipping");
             vec![]

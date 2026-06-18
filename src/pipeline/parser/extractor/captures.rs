@@ -1,6 +1,6 @@
 use crate::models::{EntityKind, ReferenceIntent};
 use crate::pipeline::parser::languages::{
-    cpp, css, groovy, html, java, javascript, kotlin, python, rust, typescript,
+    cpp, css, groovy, html, java, javascript, kotlin, markdown, python, rust, typescript,
 };
 use crate::pipeline::parser::utils::*;
 use tree_sitter::Node;
@@ -420,6 +420,17 @@ pub(crate) fn process_capture<'a>(
                         &mut reference_intents,
                     );
                 }
+            }
+        }
+        // Markdown: Handle Markdown entity captures
+        name_or_intent if name_or_intent.starts_with("markdown.") => {
+            if let Some((entity_name, entity_kind, entity_line)) =
+                markdown::handle_markdown_capture(name_or_intent, &text, node, source_bytes)
+            {
+                name = Some(entity_name);
+                kind = Some(entity_kind);
+                start_line = entity_line;
+                entity_node = Some(node);
             }
         }
         // DOM/CSS references: Delegate to JavaScript handler

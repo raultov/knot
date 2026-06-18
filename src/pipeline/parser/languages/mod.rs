@@ -10,6 +10,7 @@ pub mod jenkins;
 pub mod json_config;
 pub mod kotlin;
 pub mod kubernetes;
+pub mod markdown;
 pub mod properties;
 pub mod python;
 pub mod rust;
