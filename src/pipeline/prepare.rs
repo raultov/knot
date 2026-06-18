@@ -15,7 +15,7 @@
 //! Keeping the format consistent across runs is important: the same entity
 //! should always produce the same embedding so vector updates are idempotent.
 
-use crate::models::ParsedEntity;
+use crate::models::{EntityKind, ParsedEntity};
 
 /// Build the `embed_text` field for every entity in-place.
 ///
@@ -23,13 +23,13 @@ use crate::models::ParsedEntity;
 /// called after Rayon parsing and before the async embedding stage.
 pub fn prepare_entities(entities: &mut [ParsedEntity]) {
     for entity in entities.iter_mut() {
-        if entity.embed_text.is_empty() {
-            entity.embed_text = build_embed_text(entity);
-        } else {
-            let header = format!("[{}] {}", entity.kind, entity.name);
-            let location = format!("File: {}:{}", entity.file_path, entity.start_line);
-            entity.embed_text = format!("{header}\n{location}\n\n{}", entity.embed_text);
+        if matches!(
+            entity.kind,
+            EntityKind::MarkdownSection | EntityKind::MarkdownDocument
+        ) {
+            continue;
         }
+        entity.embed_text = build_embed_text(entity);
     }
 }
 

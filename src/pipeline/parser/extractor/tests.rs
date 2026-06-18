@@ -2418,6 +2418,17 @@ Run the binary to start the service.
     assert!(result.is_ok());
     let entities = result.unwrap();
 
+    //check names for ducument kind were correctly overrwritten
+    let document = entities
+        .iter()
+        .find(|e| e.kind == EntityKind::MarkdownDocument)
+        .expect("Document entity should be extracted");
+    assert_eq!(
+        document.name, "test-repo::/test/README.md",
+        "MarkdownDocument name should be repo_name::file_path, got: {:?}",
+        document.name
+    );
+
     // 1 document + 4 sections (Top Level, Setup, Prerequisites, Usage)
     let sections: Vec<_> = entities
         .iter()
@@ -2470,5 +2481,54 @@ Run the binary to start the service.
     assert!(
         prereqs.embed_text.contains("recent rustc"),
         "Prerequisites embed_text must contain its own body"
+    );
+
+    // ============================================================
+    // FQN assertions: file path + hierarchical heading chain.
+    // Prevents cross-file collisions (two READMEs each with a
+    // "## Setup") and within-file collisions (same heading text
+    // at different depths).
+    // ============================================================
+
+    let document = entities
+        .iter()
+        .find(|e| e.kind == EntityKind::MarkdownDocument)
+        .expect("Document entity should be extracted");
+    assert_eq!(
+        document.fqn, "/test/README.md",
+        "MarkdownDocument FQN should be the file path, got: {:?}",
+        document.fqn
+    );
+
+    let top_level = sections
+        .iter()
+        .find(|e| e.name == "Top Level")
+        .expect("Top Level section should be extracted");
+    assert_eq!(
+        top_level.fqn, "/test/README.md::Top Level",
+        "Top-level section FQN should be file_path::heading, got: {:?}",
+        top_level.fqn
+    );
+
+    assert_eq!(
+        setup.fqn, "/test/README.md::Top Level > Setup",
+        "Nested H2 FQN should include its H1 ancestor, got: {:?}",
+        setup.fqn
+    );
+
+    assert_eq!(
+        prereqs.fqn, "/test/README.md::Top Level > Setup > Prerequisites",
+        "Nested H3 FQN should include both ancestors, got: {:?}",
+        prereqs.fqn
+    );
+
+    let usage = sections
+        .iter()
+        .find(|e| e.name == "Usage")
+        .expect("Usage section should be extracted");
+    assert_eq!(
+        usage.fqn, "/test/README.md::Top Level > Usage",
+        "Sibling H2 should have its own chain, not bleed from Setup, got: {:?}",
+        usage.fqn
     );
 }

@@ -12,7 +12,7 @@ use tracing::{debug, info};
 const CORE_EXTENSIONS: &[&str] = &[
     "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "py", "pyi", "pyw", "html",
     "htm", "css", "scss", "sass", "rs", "groovy", "gradle", "c", "h", "cpp", "hpp", "cc", "cxx",
-    "hh", "hxx",
+    "hh", "hxx", "md",
 ];
 
 /// Configuration / Kubernetes / Helm file extensions — indexed only when
@@ -52,6 +52,7 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "cxx",
     "hh",
     "hxx",
+    "md",
     // Config
     "yml",
     "yaml",
@@ -220,9 +221,9 @@ mod tests {
         fs::write(dir.path().join("main.py"), "def main(): pass").unwrap();
         fs::write(dir.path().join("stub.pyi"), "def foo() -> None: ...").unwrap();
         fs::write(dir.path().join("gui.pyw"), "import tkinter").unwrap();
+        fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
 
         // Create unsupported files
-        fs::write(dir.path().join("readme.md"), "# Readme").unwrap();
         fs::write(dir.path().join("data.xml"), "<root/>").unwrap();
 
         // Create nested supported file
@@ -232,7 +233,7 @@ mod tests {
 
         let files = discover_files(repo_path, true).unwrap();
 
-        assert_eq!(files.len(), 11);
+        assert_eq!(files.len(), 12);
 
         // Verify extensions are in supported list
         for path in files {

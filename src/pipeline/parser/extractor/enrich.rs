@@ -1,7 +1,9 @@
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::comments::{extract_comments, extract_decorators};
 use crate::pipeline::parser::context::{ClassContext, compute_fqn_and_context};
-use crate::pipeline::parser::languages::{cpp, java, javascript, kotlin, python, typescript};
+use crate::pipeline::parser::languages::{
+    cpp, java, javascript, kotlin, markdown, python, typescript,
+};
 use crate::pipeline::parser::utils::{extract_decorator_references, extract_type_references};
 
 use super::captures::CaptureState;
@@ -26,7 +28,7 @@ pub(crate) fn enrich_and_create_entity<'a>(
     let entity_node = state.entity_node.take();
     let mut reference_intents = std::mem::take(&mut state.reference_intents);
 
-    if let (Some(name), Some(kind)) = (name, kind) {
+    if let (Some(mut name), Some(kind)) = (name, kind) {
         // Extract docstring and inline comments dynamically from the entity node
         let (docstring, inline_comments) = if let Some(node) = entity_node {
             extract_comments(node, source_bytes, lang_name, &kind, class_contexts)
@@ -71,6 +73,26 @@ pub(crate) fn enrich_and_create_entity<'a>(
         {
             enclosing_class = Some(cpp_fqn.clone());
             fqn = format!("{}::{}", cpp_fqn, name);
+        }
+
+        // derive the document's display name from repo + file path, and the FQN from the file path so entities don't collide.
+        if lang_name == "markdown" {
+            if matches!(kind, EntityKind::MarkdownDocument) {
+                name = format!("{}::{}", repo_name, file_path);
+            }
+
+            fqn = match kind {
+                EntityKind::MarkdownDocument => file_path.to_string(),
+                EntityKind::MarkdownSection => {
+                    if let Some(node) = entity_node {
+                        let chain = markdown::build_markdown_fqn(node, source_bytes);
+                        format!("{}::{}", file_path, chain)
+                    } else {
+                        format!("{}::{}", file_path, name)
+                    }
+                }
+                _ => fqn,
+            };
         }
 
         // For classes, also extract extends/implements from AST
@@ -190,13 +212,20 @@ pub(crate) fn enrich_and_create_entity<'a>(
 
         // Extract text below header/document entity for each markdown entity
         if lang_name == "markdown"
-            && matches!(
-                entity.kind,
-                EntityKind::MarkdownSection | EntityKind::MarkdownDocument
-            )
             && let Some(node) = entity_node
         {
-            entity.embed_text = node.utf8_text(source_bytes).unwrap_or("").to_string();
+            let body = match entity.kind {
+                EntityKind::MarkdownDocument => {
+                    markdown::extract_document_intro(node, source_bytes)
+                }
+                EntityKind::MarkdownSection => {
+                    node.utf8_text(source_bytes).unwrap_or("").to_string()
+                }
+                _ => String::new(),
+            };
+            let header = format!("[{}] {}", entity.kind, entity.name);
+            let location = format!("File: {}:{}", entity.file_path, entity.start_line);
+            entity.embed_text = format!("{header}\n{location}\n\n{body}");
         }
 
         // Extract alias module path for JS require() aliases
