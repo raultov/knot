@@ -16,9 +16,34 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  test-unit:
+    name: Unit Tests & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Format Check
+        run: cargo fmt -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Run Unit Tests
+        run: cargo test --lib --all-features
+
   test-e2e:
     name: E2E Integration Tests
     runs-on: ubuntu-latest
+    needs: test-unit
     steps:
       - uses: actions/checkout@v4
       
@@ -43,6 +68,38 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       
+      - name: Cache fastembed models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/knot/fastembed_cache
+          key: ${{ runner.os }}-fastembed-v1
+          
+      - name: Pre-download fastembed model (with retries for 429 rate limit)
+        run: |
+          # Create cache dir
+          mkdir -p ~/.cache/knot/fastembed_cache/fast-bge-small-en-v1.5
+          mkdir -p ~/.cache/knot/fastembed_cache/all-minilm-l6-v2
+          # Only download if missing (saves time if cache restored successfully)
+          if [ ! -f ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/model.onnx ]; then
+            echo "Model not in cache. Downloading with retries..."
+            # Try up to 5 times with exponential backoff
+            for i in {1..5}; do
+              # We use AllMiniLML6V2 as default in tests
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/model.onnx" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/model.onnx &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/config.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/config.json &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/tokenizer.json &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer_config.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/tokenizer_config.json &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/special_tokens_map.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/special_tokens_map.json && break || {
+                echo "Download failed (attempt $i). Waiting..."
+                sleep $((2**i))
+              }
+            done
+            # Write a marker so fastembed knows it's the right model
+            echo "fast-bge-small-en-v1.5" > ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/.fastembed_model_name 2>/dev/null || true
+          else
+            echo "Model found in cache."
+          fi
+          
       - name: Install dependencies (netcat, time)
         run: sudo apt-get update && sudo apt-get install -y netcat-openbsd time
       
@@ -91,6 +148,12 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache fastembed models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/knot/fastembed_cache
+          key: ${{ runner.os }}-fastembed-v1
 
       - name: Install dependencies (netcat, time)
         run: sudo apt-get update && sudo apt-get install -y netcat-openbsd time
