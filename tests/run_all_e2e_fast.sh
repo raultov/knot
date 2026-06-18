@@ -67,10 +67,14 @@ if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':17687 '; the
     cd "$PROJECT_ROOT"
 fi
 
-# Build binaries once
-echo -e "\n${YELLOW}Building knot binaries...${NC}"
-cargo build --release --bin knot-indexer --bin knot --bin knot-mcp 2>&1 | grep -E "(Compiling knot|Finished)" || true
-echo -e "${GREEN}✓ Build complete${NC}"
+# Build binaries once (unless caller provides pre-built binaries via KNOT_SKIP_BUILD=1)
+if [ "${KNOT_SKIP_BUILD:-0}" = "1" ]; then
+    echo -e "${YELLOW}KNOT_SKIP_BUILD=1 set — skipping cargo build; expecting pre-built binaries in target/release/${NC}"
+else
+    echo -e "\n${YELLOW}Building knot binaries...${NC}"
+    cargo build --release --bin knot-indexer --bin knot --bin knot-mcp 2>&1 | grep -E "(Compiling knot|Finished)" || true
+    echo -e "${GREEN}✓ Build complete${NC}"
+fi
 
 # Single shared-DB startup
 echo -e "\n${YELLOW}Starting shared Neo4j + Qdrant (once for all suites)...${NC}"

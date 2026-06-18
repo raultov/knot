@@ -95,9 +95,13 @@ if [ ! -x "/usr/bin/time" ]; then
 fi
 
 # ─── Ensure binaries are built ───────────────────────────────────────
-echo -e "${YELLOW}Building knot-indexer (release)...${NC}"
-cd "$PROJECT_ROOT"
-cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling knot|Finished)" || true
+if [ "${KNOT_SKIP_BUILD:-0}" = "1" ]; then
+    echo -e "${YELLOW}KNOT_SKIP_BUILD=1 set — skipping cargo build; expecting pre-built binaries in target/release/${NC}"
+else
+    echo -e "${YELLOW}Building knot-indexer (release)...${NC}"
+    cd "$PROJECT_ROOT"
+    cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling knot|Finished)" || true
+fi
 echo ""
 
 # ─── Helper: wait for port ──────────────────────────────────────────
@@ -334,10 +338,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Build once
-echo -e "${YELLOW}Building knot-indexer (release)...${NC}"
-cd "$PROJECT_ROOT"
-cargo build --release --bin knot-indexer 2>&1 | tail -3
+# Build once (unless caller provides pre-built binaries via KNOT_SKIP_BUILD=1)
+if [ "${KNOT_SKIP_BUILD:-0}" = "1" ]; then
+    echo -e "${YELLOW}KNOT_SKIP_BUILD=1 set — skipping cargo build; expecting pre-built binaries in target/release/${NC}"
+else
+    echo -e "${YELLOW}Building knot-indexer (release)...${NC}"
+    cd "$PROJECT_ROOT"
+    cargo build --release --bin knot-indexer 2>&1 | tail -3
+fi
 echo ""
 
 # Run benchmarks

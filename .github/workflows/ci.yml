@@ -1,9 +1,20 @@
 name: CI
 
 # CI validates integration and performance on every push to master/main
-# and on every pull request. Unit tests moved to the Release workflow
-# (release.yml → test-unit job) so that a tag push is gated by passing
-# unit tests before any GitHub Release is created.
+# and on every pull request. Unit tests run only on PRs and on non-release
+# direct pushes to master (release commits delegate to release.yml).
+#
+# Build architecture (Option A — parallel):
+#
+#   build-binaries ──┬→ test-e2e (needs: build-binaries + test-unit)
+#                    └→ test-performance (needs: test-e2e)
+#   test-unit ───────┘
+#
+# `build-binaries` compiles release binaries ONCE and uploads them as a
+# workflow artifact. `test-e2e` and `test-performance` download the
+# pre-built binaries and pass KNOT_SKIP_BUILD=1 to the test scripts so
+# they do NOT rebuild. `test-unit` runs its own debug/test build in
+# parallel (different target profile, not worth sharing).
 
 on:
   push:
@@ -16,6 +27,41 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  build-binaries:
+    name: Build Release Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build release binaries
+        run: cargo build --release --all-features
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: knot-binaries
+          path: |
+            target/release/knot-indexer
+            target/release/knot
+            target/release/knot-mcp
+          retention-days: 1
+          if-no-files-found: error
+
   test-unit:
     name: Unit Tests & Linting
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release:'))
@@ -44,92 +90,26 @@ jobs:
   test-e2e:
     name: E2E Integration Tests
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache fastembed models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/knot/fastembed_cache
-          key: ${{ runner.os }}-fastembed-v2
-          
-      - name: Pre-download fastembed model (with retries for 429 rate limit)
-        run: |
-          # Create cache dir
-          mkdir -p ~/.cache/knot/fastembed_cache/fast-bge-small-en-v1.5
-          mkdir -p ~/.cache/knot/fastembed_cache/all-minilm-l6-v2
-          # Only download if missing (saves time if cache restored successfully)
-          if [ ! -f ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/model.onnx ]; then
-            echo "Model not in cache. Downloading with retries..."
-            # Try up to 5 times with exponential backoff
-            for i in {1..5}; do
-              # We use AllMiniLML6V2 as default in tests
-              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/model.onnx" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/model.onnx &&
-              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/config.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/config.json &&
-              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/tokenizer.json &&
-              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer_config.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/tokenizer_config.json &&
-              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/special_tokens_map.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/special_tokens_map.json && break || {
-                echo "Download failed (attempt $i). Waiting..."
-                sleep $((2**i))
-              }
-            done
-            # Write a marker so fastembed knows it's the right model
-            echo "fast-bge-small-en-v1.5" > ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/.fastembed_model_name 2>/dev/null || true
-          else
-            echo "Model found in cache."
-          fi
-          
-      - name: Install dependencies (netcat, time)
-        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd time
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Run all E2E tests (Fast)
-        run: ./tests/run_all_e2e_fast.sh
-        timeout-minutes: 60
-
-      - name: Upload E2E logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-logs
-          path: |
-            tests/.e2e_data/
-            tests/.e2e_*/
-          retention-days: 7
-
-  test-performance:
-    name: Performance Benchmarks
-    runs-on: ubuntu-latest
-    needs: test-e2e
-    if: success()
+    needs:
+      - build-binaries
+      - test-unit
+    # Run if build succeeded AND (test-unit succeeded OR was skipped).
+    # test-unit is skipped on release: commits, but e2e should still run.
+    if: always() && needs.build-binaries.result == 'success' && (needs.test-unit.result == 'success' || needs.test-unit.result == 'skipped')
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust (for any auxiliary cargo invocations)
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Download pre-built binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: knot-binaries
+          path: target/release
+
+      - name: Make binaries executable
+        run: chmod +x target/release/knot-indexer target/release/knot target/release/knot-mcp
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -142,12 +122,6 @@ jobs:
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache fastembed models
         uses: actions/cache@v4
@@ -187,10 +161,95 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build release
-        run: cargo build --release --all-features
+      - name: Run all E2E tests (Fast)
+        env:
+          KNOT_SKIP_BUILD: "1"
+        run: ./tests/run_all_e2e_fast.sh
+        timeout-minutes: 60
+
+      - name: Upload E2E logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            tests/.e2e_data/
+            tests/.e2e_*/
+          retention-days: 7
+
+  test-performance:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: test-e2e
+    if: success()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (for any auxiliary cargo invocations)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download pre-built binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: knot-binaries
+          path: target/release
+
+      - name: Make binaries executable
+        run: chmod +x target/release/knot-indexer target/release/knot target/release/knot-mcp
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache fastembed models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/knot/fastembed_cache
+          key: ${{ runner.os }}-fastembed-v2
+
+      - name: Pre-download fastembed model (with retries for 429 rate limit)
+        run: |
+          # Create cache dir
+          mkdir -p ~/.cache/knot/fastembed_cache/fast-bge-small-en-v1.5
+          mkdir -p ~/.cache/knot/fastembed_cache/all-minilm-l6-v2
+          # Only download if missing (saves time if cache restored successfully)
+          if [ ! -f ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/model.onnx ]; then
+            echo "Model not in cache. Downloading with retries..."
+            # Try up to 5 times with exponential backoff
+            for i in {1..5}; do
+              # We use AllMiniLML6V2 as default in tests
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/model.onnx" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/model.onnx &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/config.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/config.json &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/tokenizer.json &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer_config.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/tokenizer_config.json &&
+              curl -fL "https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx/resolve/main/special_tokens_map.json" -o ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/special_tokens_map.json && break || {
+                echo "Download failed (attempt $i). Waiting..."
+                sleep $((2**i))
+              }
+            done
+            # Write a marker so fastembed knows it's the right model
+            echo "all-MiniLM-L6-v2" > ~/.cache/knot/fastembed_cache/all-minilm-l6-v2/.fastembed_model_name 2>/dev/null || true
+          else
+            echo "Model found in cache."
+          fi
+
+      - name: Install dependencies (netcat, time)
+        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd time
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Run Performance Benchmarks
+        env:
+          KNOT_SKIP_BUILD: "1"
         run: |
           ./tests/benchmark_e2e.sh --focus java_e2e --output-dir /tmp/perf_results
           scripts/compare_perf_metrics.sh /tmp/perf_results .perf_metrics/baseline.json

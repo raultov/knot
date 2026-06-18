@@ -384,8 +384,22 @@ itself documents the contract).
   never turned into a release and no GitHub Release is created.
 
 **CI always runs (on push to master/main and on PRs):**
-1. `./tests/run_all_e2e_fast.sh` (all language suites)
-2. `./tests/benchmark_e2e.sh` + `scripts/compare_perf_metrics.sh` (perf bench)
+1. `build-binaries` — `cargo build --release --all-features` once, uploads the three
+   binaries (`knot-indexer`, `knot`, `knot-mcp`) as a workflow artifact.
+2. `test-unit` (fmt + clippy + `cargo test --lib --all-features`) — runs in parallel
+   with `build-binaries`; skipped on `release:` commits (those delegate to
+   `release.yml`'s own `test-unit` gate).
+3. `test-e2e` — `./tests/run_all_e2e_fast.sh` with `KNOT_SKIP_BUILD=1`, downloading
+   the pre-built binaries from `build-binaries` instead of rebuilding.
+4. `test-performance` — `./tests/benchmark_e2e.sh` with `KNOT_SKIP_BUILD=1`, reusing
+   the same pre-built binaries.
+
+**Build reuse pattern (`KNOT_SKIP_BUILD`):** `run_all_e2e_fast.sh` and
+`benchmark_e2e.sh` honour `KNOT_SKIP_BUILD=1` to skip their internal
+`cargo build --release` step, expecting pre-built binaries in
+`target/release/`. CI sets this env var in `test-e2e` and `test-performance`
+to avoid rebuilding knot three times per push. Locally, leave it unset and
+the scripts build normally.
 
 **Release always runs (on push of a `vX.Y.Z` tag):**
 1. `test-unit` (fmt + clippy -D warnings + `cargo test --lib --all-features` + `cargo build --release --all-features`)
