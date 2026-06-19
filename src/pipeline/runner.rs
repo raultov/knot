@@ -144,7 +144,8 @@ pub async fn run_indexing_pipeline(
                         let mut batch =
                             std::mem::replace(&mut current_batch, Vec::with_capacity(batch_size));
                         info!(
-                            "[Worker: Embedder] Stage 3: Embedding batch #{} ({} entities)...",
+                            "[Worker: Embedder] [{}] Stage 3: Embedding batch #{} ({} entities)...",
+                            batch[0].repo_name,
                             batch_count,
                             batch.len()
                         );
@@ -161,7 +162,8 @@ pub async fn run_indexing_pipeline(
                 if !current_batch.is_empty() {
                     batch_count += 1;
                     info!(
-                        "[Worker: Embedder] Stage 3: Embedding final batch #{} ({} entities)...",
+                        "[Worker: Embedder] [{}] Stage 3: Embedding final batch #{} ({} entities)...",
+                        current_batch[0].repo_name,
                         batch_count,
                         current_batch.len()
                     );
@@ -218,7 +220,10 @@ pub async fn run_indexing_pipeline(
                     let bl = embedded_batch.len();
 
                     join_set.spawn(async move {
-                        info!("[Worker: Ingester] Ingesting batch #{bc} ({bl} entities)...");
+                        info!(
+                            "[Worker: Ingester] [{}] Ingesting batch #{bc} ({bl} entities)...",
+                            embedded_batch[0].entity.repo_name
+                        );
                         let result = ingest_batch(&embedded_batch, &vdb, &gdb).await;
                         drop(permit);
                         result

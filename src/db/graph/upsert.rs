@@ -209,7 +209,11 @@ impl UpsertExt for GraphDb {
                 .context("Failed to upsert entity nodes into Neo4j")?;
         }
 
-        info!("Upserted {} entity nodes into Neo4j", entities.len());
+        info!(
+            "[{}] Upserted {} entity nodes into Neo4j",
+            entities[0].entity.repo_name,
+            entities.len()
+        );
 
         // Auto-link entities using their enclosing_class property to create physical CONTAINS edges.
         // Uses enclosing_class_fqn (when populated by the Rust qualifier) for exact match,

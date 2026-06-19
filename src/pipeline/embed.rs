@@ -60,10 +60,11 @@ impl Embedder {
             return Ok(vec![]);
         }
 
+        let repo_name = entities[0].repo_name.clone();
         let texts: Vec<&str> = entities.iter().map(|e| e.embed_text.as_str()).collect();
 
         info!(
-            "Embedding {} entities (batch_size={})…",
+            "[{repo_name}] Embedding {} entities (batch_size={})…",
             texts.len(),
             batch_size
         );
@@ -85,7 +86,10 @@ impl Embedder {
             .map(|(entity, vector)| EmbeddedEntity { entity, vector })
             .collect();
 
-        info!("Embedding complete — {} vectors produced", embedded.len());
+        info!(
+            "[{repo_name}] Embedding complete — {} vectors produced",
+            embedded.len()
+        );
         Ok(embedded)
     }
 

@@ -49,7 +49,11 @@ impl VectorUpsertExt for VectorDb {
             .await
             .context("Failed to upsert points into Qdrant")?;
 
-        info!("Upserted {} vectors into Qdrant", entities.len());
+        info!(
+            "[{}] Upserted {} vectors into Qdrant",
+            entities[0].entity.repo_name,
+            entities.len()
+        );
         Ok(())
     }
 }

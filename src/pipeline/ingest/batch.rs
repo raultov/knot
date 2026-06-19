@@ -21,7 +21,11 @@ pub async fn ingest_batch(
         return Ok(());
     }
 
-    info!("Ingesting batch of {} entities…", entities.len());
+    info!(
+        "[{}] Ingesting batch of {} entities…",
+        entities[0].entity.repo_name,
+        entities.len()
+    );
 
     // Fire both writes concurrently; surface the first failure.
     tokio::try_join!(
@@ -29,7 +33,10 @@ pub async fn ingest_batch(
         graph_db.upsert_entities(entities),
     )?;
 
-    info!("Batch ingestion complete");
+    info!(
+        "[{}] Batch ingestion complete",
+        entities[0].entity.repo_name
+    );
     Ok(())
 }
 
