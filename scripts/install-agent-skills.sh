@@ -8,10 +8,10 @@
 #      bash scripts/install-agent-skills.sh /custom/path
 #
 #   2. Download and install in one command:
-#      curl -fsSL https://raw.githubusercontent.com/user/knot/master/scripts/install-agent-skills.sh | bash
+#      curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/scripts/install-agent-skills.sh | bash
 #
 #   3. Specify custom directory:
-#      curl -fsSL https://raw.githubusercontent.com/user/knot/master/scripts/install-agent-skills.sh | bash -s /my/custom/path
+#      curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/scripts/install-agent-skills.sh | bash -s /my/custom/path
 #
 
 set -e
@@ -61,6 +61,7 @@ mkdir -p "$TARGET_DIR"
 
 # Extract tarball
 printf '%bExtracting%b files... ' "$YELLOW" "$NC"
+# Strip the docs/agent-skills prefix
 if tar -xzf "$TARBALL" -C "$TARGET_DIR" --strip-components=2; then
   printf '%b✓%b\n' "$GREEN" "$NC"
 else
@@ -96,14 +97,6 @@ printf '   • %s/deps.md         — Repository dependency graph\n' "$TARGET_DI
 printf '   • %s/repos.md        — Indexed repository inventory\n' "$TARGET_DIR"
 printf '   • %s/workflows.md    — Common patterns & best practices\n' "$TARGET_DIR"
 printf '\n'
-printf '%b🚀 Quick start:%b\n' "$BLUE" "$NC"
-printf '   cat %s/search.md\n' "$TARGET_DIR"
-printf '   knot search "your query"\n'
-printf '   knot explore "src/file.ts"\n'
-printf '   knot callers "EntityName"\n'
-printf '   knot deps my-app --reverse\n'
-printf '   knot repos\n'
-printf '\n'
 printf '%b💡 Pro tip:%b\n' "$BLUE" "$NC"
-printf '   alias knot-docs='"'"'less %s'"'"'\n' "$TARGET_DIR"
-printf '   knot-docs/search.md\n'
+printf '   Point your AI Agent to read these files (e.g. echo "Read %s" >> .cursorrules)\n' "$TARGET_DIR"
+printf '\n'
