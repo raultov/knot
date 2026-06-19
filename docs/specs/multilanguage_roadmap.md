@@ -1,13 +1,14 @@
 # Multi-Language Roadmap for Knot
 
-This document outlines the planned expansion of `knot` to support Python and C/C++ codebases, building on the existing foundation for Java, TypeScript, JavaScript, Kotlin, Rust, HTML, CSS, and SCSS.
+This document outlines the planned expansion of `knot` to support Python, C/C++, and Markdown documentation, building on the existing foundation for Java, TypeScript, JavaScript, Kotlin, Rust, HTML, CSS, and SCSS.
 
 ---
 
 ## Overview
 
-**Current State (v1.3.8):**
+**Current State (v1.4.9):**
 - Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
+- Markdown (v1.4.9): `MarkdownDocument` (one per `.md`/`.markdown` file) and `MarkdownSection` (one per ATX heading H1–H6) with section bodies embedded for full semantic search over docs
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
 - Configuration Files: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with leaf-key granularity and package.json special handling
@@ -24,6 +25,7 @@ This document outlines the planned expansion of `knot` to support Python and C/C
 - 565+ unit tests | 100+ E2E tests across all languages
 - Fix Indexer Ambiguity & Context Deduplication (v1.3.4)
 - Kind-Aware Subgraph Traversal (v1.3.8): `get_entity_subgraph` now maintains connectivity when filtering by kind via synthetic roll-up edges and fixed edge extraction bug.
+- Markdown Documentation Indexing (v1.4.9): hierarchical FQNs (`README.md::Setup > Installation > Linux`), body searchability, special-character heading handling.
 
 ---
 
@@ -138,6 +140,59 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 
 ---
 
+## Phase 13: Markdown Documentation Indexing (v1.4.9 — ✅ Completed)
+
+### Objective
+Enable `knot` to index Markdown (`.md`/`.markdown`) documentation files so that documentation content — not just heading titles — is searchable semantically, with hierarchical FQN resolution that disambiguates same-named sections across files and nesting levels.
+
+### Planned → ✅ Completed
+- ✅ `tree-sitter-md = "0.5.3"` integration via the unified tree-sitter parser dispatcher (`md`/`markdown` extension)
+- ✅ 2 new EntityKind variants: `MarkdownDocument` (one per file) and `MarkdownSection` (one per ATX heading H1–H6)
+- ✅ `queries/markdown.scm` tree-sitter query with two captures: `@markdown.document.name` (document root) and `@markdown.section` (each section spans its heading + body)
+- ✅ `src/pipeline/parser/languages/markdown.rs` (524 lines) — `handle_markdown_capture`, `build_markdown_fqn` (ancestor-section chain), `clean_heading_name` (strip inline syntax), `extract_document_intro`, `extract_section_body`
+- ✅ Hierarchical, file-scoped FQNs (`README.md::Setup > Installation > Linux`) so same-named headings in different files or under different parents disambiguate cleanly
+- ✅ Section bodies — paragraphs, fenced code blocks, lists, and tables — captured into `embed_text` so semantic search returns documentation prose, not only heading text
+- ✅ Section boundaries respect heading depth: a section extends until the next same-or-higher-level heading (prevents `### Linux` under `## Installation` from bleeding into a sibling `## Configuration`)
+- ✅ Headings with inline markdown (backticks, em-dash, links, emoji, escaped chars) parse without losing their bodies or breaking FQN construction
+- ✅ Real `start_line` / `end_line` positions computed via tree-sitter for each section (no heuristic line counting)
+- ✅ Wired into the parser dispatcher (`src/pipeline/parser/mod.rs`), capture router (`extractor/captures.rs`), enricher (`extractor/enrich.rs`), and graph utils (`db/graph/utils.rs`)
+- ✅ 13+ inline unit tests in `markdown.rs` covering AST shape, FQN construction across nesting depths, section body extraction, and special-character headings
+- ✅ E2E suite `tests/run_markdown_e2e.sh` (366 lines): body searchability, cross-file disambiguation, deep nesting, special-character headings, document-level intro capture
+- ✅ Wired into `tests/run_all_e2e_fast.sh` (line 58) so Markdown runs in the master suite
+- ✅ `MarkdownDocument` / `MarkdownSection` handled in `prepare.rs` skip-list and `context.rs` for clean FQN derivation
+
+#### Implementation Files
+- `src/pipeline/parser/languages/markdown.rs` — main Markdown parser module (524 lines)
+- `src/pipeline/parser/languages/mod.rs` — registers the module (`pub mod markdown;`)
+- `src/pipeline/parser/mod.rs` — `md`/`markdown` extension dispatch with `DEFAULT_MD_QUERY` include
+- `src/pipeline/parser/extractor/captures.rs` — routes `markdown.*` capture names
+- `src/pipeline/parser/extractor/enrich.rs` — FQN + body text enrichment for Markdown
+- `src/pipeline/parser/extractor/tests.rs` — unit tests covering MarkdownDocument / MarkdownSection
+- `src/pipeline/parser/test_utils.rs` — `parse_markdown_snippet` helper
+- `src/pipeline/parser/languages/markdown.rs` (tests module) — inline unit tests for FQN, body extraction, AST walking
+- `src/pipeline/prepare.rs` — Markdown entity skip handling
+- `src/pipeline/parser/context.rs` — file-scoped FQN derivation
+- `src/db/graph/utils.rs` — display labels for `MarkdownDocument` / `MarkdownSection`
+- `src/models/entity.rs` — `EntityKind::MarkdownDocument`, `EntityKind::MarkdownSection` enum variants and string mappings
+- `queries/markdown.scm` — tree-sitter query file (26 lines, two captures)
+- `tests/run_markdown_e2e.sh` — Markdown E2E suite (366 lines)
+- `tests/run_all_e2e_fast.sh` — registers the Markdown suite
+- `tests/testing_files/markdown/` — fixtures: `README.md`, `GUIDE.md`, `complex.md`, `nested.md`
+- `README.md` — documents Markdown language support (line 71)
+
+#### Design Notes
+- The `section` node emitted by `tree-sitter-md` already spans from an ATX heading down to the next same-or-higher-level heading, so capturing `section` directly gives both the right `end_line` and the embedded body text without parent-walking or level-tracking in the handler.
+- FQNs normalize the same heading text used for the entity `name` field (via `clean_heading_name`) so `## [foo](bar.md)` yields `name = "foo bar.md"` and `fqn = "...::foo bar.md"` consistently — otherwise queries that match by name would miss by FQN.
+- `extract_document_intro` returns only the text before the first heading for `MarkdownDocument`, so the document-level embed text captures the file's preamble (frontmatter-style intro) rather than duplicating the first section's body.
+
+#### Limitations (intentional, documented in code)
+- Inline link text vs. URL distinction is not preserved in `name` (`## [foo](bar.md)` → `foo bar.md`).
+- Reference-style links (`[text][ref]`) are not specially resolved.
+- HTML tags inside headings are not stripped.
+- Escaped characters (`\*`, `\_`) are not decoded.
+
+---
+
 ## Implementation Priority & Timeline
 
 | Phase | Complexity | Status |
@@ -150,6 +205,7 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 | Phase 11: C/C++ | High | ✅ Completed (v1.0.0) |
 | Phase 12: Performance Optimization | High | ✅ Completed (v1.1.0) |
 | Phase 12A-C: Cargo.toml, Config, K8s/Helm | Medium | ✅ Completed (v1.2.0) |
+| Phase 13: Markdown Documentation Indexing | Low | ✅ Completed (v1.4.9) |
 
 ---
 
@@ -162,6 +218,19 @@ Enable `knot` to index C and C++ codebases with full support for namespaces, cla
 ---
 
 ## Changelog
+
+### v1.4.9 - Markdown Documentation Indexing
+- ✅ **Feat(parser)**: Added Markdown support (`.md`/`.markdown`) with `MarkdownDocument` (one per file) and `MarkdownSection` (one per ATX heading H1–H6).
+- ✅ **Feat(parser)**: Section bodies — paragraphs, fenced code blocks, lists, tables — captured into `embed_text` for full semantic search over documentation content, not just heading titles.
+- ✅ **Feat(parser)**: Hierarchical, file-scoped FQNs (e.g. `README.md::Setup > Installation > Linux`) prevent cross-file and within-file heading collisions.
+- ✅ **Feat(parser)**: Section boundaries respect heading depth (`section` spans until the next same-or-higher-level heading).
+- ✅ **Feat(parser)**: Headings with inline markdown (backticks, em-dash, links, emoji) parse without losing their bodies.
+- ✅ **Test(unit)**: 13+ inline tests in `src/pipeline/parser/languages/markdown.rs` covering AST shape, FQN construction across nesting depths, body extraction, and special-character headings.
+- ✅ **Test(e2e)**: New `tests/run_markdown_e2e.sh` (366 lines) — body searchability, cross-file disambiguation, deep nesting, special-character headings, document-level intro capture.
+- ✅ **Test(e2e)**: Wired into `tests/run_all_e2e_fast.sh` so Markdown runs in the master suite.
+- ✅ **Docs(readme)**: Documented Markdown language support.
+- ✅ **cargo fmt** clean | **cargo clippy** clean.
+- ✅ Credit: @sdi2200246 (PR #17, closes #8).
 
 ### v1.3.8 - Subgraph Connectivity & Edge Extraction Fix
 - ✅ **Fixed Subgraph Disconnection**: Injected `CONTAINS` into traversal relationships to discovery class-to-class paths.

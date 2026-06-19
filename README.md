@@ -112,12 +112,11 @@ Go to the [Releases](https://github.com/raultov/knot/releases) page and download
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
 ```
 
-**Download agent-skills guides separately (optional):**
-```bash
-curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md && curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/.knot-agent-skills.tar.gz | tar -xz
-```
+**Install agent-skills for your AI (Optional):**
+Paste this into your LLM agent (Claude Code, OpenCode, Cursor, etc.):
+> Install the knot agent skills by following the instructions at: https://raw.githubusercontent.com/raultov/knot/master/README.md
 
-The first command installs the `knot` binary to your PATH. The second (optional) downloads the agent skill index (`.knot-agent.md`) and extracts comprehensive guides for using knot CLI with AI agents and code analysis tools.
+The first command installs the `knot` binary to your PATH. The second (optional) allows your AI assistant to automatically download the agent skill index (`.knot-agent.md`) and run the installer to extract comprehensive guides for using knot CLI with AI agents and code analysis tools.
 
 **System Requirements:**
 - **Linux**: glibc 2.38+ (Ubuntu 24.04+, Debian 13+, Fedora 39+, Arch)
@@ -218,21 +217,30 @@ $EDITOR ~/.config/knot/.env  # Set KNOT_REPO_PATH and Neo4j credentials
 
 ## 📖 Usage
 
-### 📥 Quick Downloads
+### 🤖 Install Agent Skills (For AI Agents)
+
+**Option A: Let an LLM do it**
+
+Paste this into any LLM agent (Claude Code, OpenCode, Cursor, etc.):
+
+> Install the knot agent skills by following the instructions at: https://raw.githubusercontent.com/raultov/knot/master/README.md
+
+**Option B: Terminal (Manual)**
+
+```bash
+curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md && curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/scripts/install-agent-skills.sh | bash
+```
+
+### 📥 Quick Downloads (Binaries)
 
 **Download knot binaries (CLI + MCP server):**
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/knot/releases/latest/download/knot-installer.sh | sh
 ```
 
-**Download agent-skills documentation (index + all guides):**
-```bash
-curl -sO https://raw.githubusercontent.com/raultov/knot/master/.knot-agent.md && curl -fsSL https://raw.githubusercontent.com/raultov/knot/master/.knot-agent-skills.tar.gz | tar -xz
-```
-
 ### 📖 Agent-Skills Guides
 
-Comprehensive documentation for using knot tools. The download above extracts:
+Comprehensive documentation for using knot tools. The agent skills installer extracts:
 - **search.md** — Semantic code discovery guide with examples
 - **callers.md** — Reverse dependency lookup with critical usage rules
 - **explore.md** — File anatomy inspection guide
