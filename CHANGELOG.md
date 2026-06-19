@@ -5,6 +5,19 @@
  
 ---
 
+## v1.4.10 — Pipeline Trace Repo Identification & Docs Cleanup
+
+- ✅ **Feat(pipeline)**: All major pipeline trace lines (embed, batch ingest, vector upsert, graph upsert, embedder/ingester worker logs) now include the originating `repo_name` as a `[repo]` prefix, so `knot-server` users can attribute each log line to the repository being indexed.
+- ✅ **Docs(readme)**: New "Install Agent Skills (For AI Agents)" section with "Let an LLM do it" prompt for one-line installation via Claude Code, OpenCode, Cursor, etc.
+- ✅ **Docs(readme)**: Replaced manual `tar -xz` instructions for the agent-skills bundle with `curl | bash scripts/install-agent-skills.sh`.
+- ✅ **Docs(roadmap)**: Added Phase 13 (Markdown Documentation Indexing) to `docs/specs/multilanguage_roadmap.md` with implementation files, design notes, and intentional limitations.
+- ✅ **Chore(docs)**: Removed three obsolete E2E isolation specs (`e2e_per_language_split.md`, `e2e_per_suite_fixture_architecture.md`, `kotlin_python_e2e_isolation_fix.md`) already covered by current implementations.
+- ✅ **Chore(scripts)**: Corrected `scripts/install-agent-skills.sh` repository URL (`user/` → `raultov/`) and dropped legacy `alias knot-docs` snippet.
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean
+- ✅ 802 unit tests passing.
+
+---
+
 ## v1.4.9 — Markdown Documentation Indexing
 
 - ✅ **Feat(parser)**: Added Markdown support (`.md`) with `MarkdownDocument` and `MarkdownSection` entities. Section bodies — paragraphs, fenced code blocks, lists, and tables — are captured into `embed_text` for full semantic search over documentation content, not just heading titles.
