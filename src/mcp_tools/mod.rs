@@ -3,13 +3,14 @@
 pub mod explore_file;
 pub mod find_callers;
 pub mod list_repo_dependencies;
+pub mod list_repositories;
 pub mod search_hybrid_context;
 
 #[cfg(test)]
 mod tests {
     use crate::mcp_tools::{
         explore_file::ExploreFileTool, find_callers::FindCallersTool,
-        list_repo_dependencies::ListRepoDependenciesTool,
+        list_repo_dependencies::ListRepoDependenciesTool, list_repositories::ListRepositoriesTool,
         search_hybrid_context::SearchHybridContextTool,
     };
 
@@ -19,11 +20,13 @@ mod tests {
         let find_callers = FindCallersTool::tool();
         let search = SearchHybridContextTool::tool();
         let deps = ListRepoDependenciesTool::tool();
+        let repos = ListRepositoriesTool::tool();
 
         assert_eq!(explore.name, "explore_file");
         assert_eq!(find_callers.name, "find_callers");
         assert_eq!(search.name, "search_hybrid_context");
         assert_eq!(deps.name, "list_repo_dependencies");
+        assert_eq!(repos.name, "list_repositories");
     }
 
     #[test]
@@ -32,16 +35,19 @@ mod tests {
         let find_callers = FindCallersTool::tool();
         let search = SearchHybridContextTool::tool();
         let deps = ListRepoDependenciesTool::tool();
+        let repos = ListRepositoriesTool::tool();
 
         assert!(explore.description.is_some());
         assert!(find_callers.description.is_some());
         assert!(search.description.is_some());
         assert!(deps.description.is_some());
+        assert!(repos.description.is_some());
 
         assert!(!explore.description.unwrap().is_empty());
         assert!(!find_callers.description.unwrap().is_empty());
         assert!(!search.description.unwrap().is_empty());
         assert!(!deps.description.unwrap().is_empty());
+        assert!(!repos.description.unwrap().is_empty());
     }
 
     #[test]
@@ -50,18 +56,21 @@ mod tests {
         let find_callers = FindCallersTool::tool();
         let search = SearchHybridContextTool::tool();
         let deps = ListRepoDependenciesTool::tool();
+        let repos = ListRepositoriesTool::tool();
 
-        // All tools must have required parameters
+        // All tools must have required parameters (except list_repositories which has optional filter)
         assert!(!explore.input_schema.required.is_empty());
         assert!(!find_callers.input_schema.required.is_empty());
         assert!(!search.input_schema.required.is_empty());
         assert!(!deps.input_schema.required.is_empty());
+        assert!(repos.input_schema.required.is_empty());
 
         // All tools must have properties defined
         assert!(explore.input_schema.properties.is_some());
         assert!(find_callers.input_schema.properties.is_some());
         assert!(search.input_schema.properties.is_some());
         assert!(deps.input_schema.properties.is_some());
+        assert!(repos.input_schema.properties.is_some());
     }
 
     #[test]
@@ -126,5 +135,14 @@ mod tests {
                 .required
                 .contains(&"repo_name".to_string())
         );
+    }
+
+    #[test]
+    fn test_list_repositories_schema_has_optional_filter() {
+        let tool = ListRepositoriesTool::tool();
+        let props = tool.input_schema.properties.unwrap();
+
+        assert!(props.contains_key("filter"));
+        assert!(!tool.input_schema.required.contains(&"filter".to_string()));
     }
 }

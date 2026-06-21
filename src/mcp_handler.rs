@@ -17,7 +17,7 @@ use crate::db::{
 };
 use crate::mcp_tools::{
     explore_file::ExploreFileTool, find_callers::FindCallersTool,
-    list_repo_dependencies::ListRepoDependenciesTool,
+    list_repo_dependencies::ListRepoDependenciesTool, list_repositories::ListRepositoriesTool,
     search_hybrid_context::SearchHybridContextTool,
 };
 use crate::pipeline::embed::Embedder;
@@ -85,6 +85,7 @@ impl ServerHandler for KnotMcpHandler {
                 FindCallersTool::tool(),
                 ExploreFileTool::tool(),
                 ListRepoDependenciesTool::tool(),
+                ListRepositoriesTool::tool(),
             ],
             meta: None,
             next_cursor: None,
@@ -110,6 +111,7 @@ impl ServerHandler for KnotMcpHandler {
             "find_callers" => FindCallersTool::handle(params, self).await,
             "explore_file" => ExploreFileTool::handle(params, self).await,
             "list_repo_dependencies" => ListRepoDependenciesTool::handle(params, self).await,
+            "list_repositories" => ListRepositoriesTool::handle(params, self).await,
             _ => Err(CallToolError::unknown_tool(params.name)),
         }
     }
@@ -135,10 +137,11 @@ pub fn build_server_details() -> InitializeResult {
         },
         protocol_version: ProtocolVersion::V2025_11_25.into(),
         instructions: Some(
-            "Use the three available tools to search and explore an indexed codebase:\n\
+            "Use the available tools to search and explore an indexed codebase:\n\
              1. search_hybrid_context — find entities by semantic meaning with dependencies\n\
              2. find_callers — reverse dependency lookup (impact analysis)\n\
-             3. explore_file — inspect file structure and entity declarations"
+             3. explore_file — inspect file structure and entity declarations\n\
+             4. list_repositories — list all indexed repositories with optional name filtering"
                 .into(),
         ),
         meta: None,
@@ -209,6 +212,7 @@ mod tests {
         assert!(instructions.contains("search_hybrid_context"));
         assert!(instructions.contains("find_callers"));
         assert!(instructions.contains("explore_file"));
+        assert!(instructions.contains("list_repositories"));
     }
 
     #[test]

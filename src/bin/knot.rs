@@ -106,12 +106,12 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Repos { output } => {
+        Commands::Repos { filter, output } => {
             // `repos` only needs the graph database — no vector DB or embedder.
             // We keep the standard initialisation above to avoid splitting
             // the binary's startup flow; the overhead is negligible compared
             // to the network round-trips that follow.
-            let json_result = cli_tools::run_list_repos(&graph_db).await?;
+            let json_result = cli_tools::run_list_repos(filter.as_deref(), &graph_db).await?;
             let formatted = cli_tools::format_repos_output(&json_result, output);
             utils::print_with_pager(&formatted);
         }

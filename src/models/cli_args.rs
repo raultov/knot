@@ -83,6 +83,10 @@ pub enum Commands {
 
     /// List all indexed repositories with their status (entity count, file count, build system, language)
     Repos {
+        /// Filter repositories by name (case-insensitive substring match)
+        #[arg(short, long)]
+        filter: Option<String>,
+
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
@@ -238,7 +242,8 @@ mod tests {
         let args = vec!["knot", "repos"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
         match cli.command {
-            Commands::Repos { output } => {
+            Commands::Repos { filter, output } => {
+                assert_eq!(filter, None);
                 assert_eq!(output, OutputFormat::Table);
             }
             _ => panic!("Expected Repos command"),
@@ -250,7 +255,8 @@ mod tests {
         let args = vec!["knot", "repos", "--output", "json"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
         match cli.command {
-            Commands::Repos { output } => {
+            Commands::Repos { filter, output } => {
+                assert_eq!(filter, None);
                 assert_eq!(output, OutputFormat::Json);
             }
             _ => panic!("Expected Repos command"),
@@ -262,8 +268,35 @@ mod tests {
         let args = vec!["knot", "repos", "-o", "markdown"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
         match cli.command {
-            Commands::Repos { output } => {
+            Commands::Repos { filter, output } => {
+                assert_eq!(filter, None);
                 assert_eq!(output, OutputFormat::Markdown);
+            }
+            _ => panic!("Expected Repos command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_repos_with_filter() {
+        let args = vec!["knot", "repos", "--filter", "search_term"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Repos { filter, output } => {
+                assert_eq!(filter, Some("search_term".to_string()));
+                assert_eq!(output, OutputFormat::Table);
+            }
+            _ => panic!("Expected Repos command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_repos_with_filter_and_output() {
+        let args = vec!["knot", "repos", "--filter", "app", "--output", "json"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Repos { filter, output } => {
+                assert_eq!(filter, Some("app".to_string()));
+                assert_eq!(output, OutputFormat::Json);
             }
             _ => panic!("Expected Repos command"),
         }

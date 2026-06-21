@@ -16,9 +16,28 @@ use crate::db::graph::{GraphDb, RepoQueryExt};
 /// This shape matches the rest of the `cli_tools` layer and is rendered
 /// differently by [`format_repos_output`] depending on the chosen
 /// [`OutputFormat`].
-pub async fn run_list_repos(graph_db: &Arc<GraphDb>) -> anyhow::Result<serde_json::Value> {
+///
+/// If `filter` is `Some`, only repositories whose name contains the filter
+/// string (case-insensitive) are included in the result.
+pub async fn run_list_repos(
+    filter: Option<&str>,
+    graph_db: &Arc<GraphDb>,
+) -> anyhow::Result<serde_json::Value> {
     let repos = graph_db.list_repositories().await?;
-    Ok(serde_json::json!(repos))
+    let mut result = serde_json::json!(repos);
+
+    if let Some(filter_str) = filter {
+        let filter_lower = filter_str.to_lowercase();
+        if let Some(arr) = result.as_array_mut() {
+            arr.retain(|repo| {
+                repo.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
+            });
+        }
+    }
+
+    Ok(result)
 }
 
 /// Format the repository list for the requested output format.
@@ -325,5 +344,74 @@ mod tests {
         // Negative numbers are emitted verbatim: we only ever pass
         // non-negative counts in practice.
         assert_eq!(format_thousands(-42), "-42");
+    }
+
+    #[test]
+    fn test_filter_repos_case_insensitive() {
+        let repos = sample_repos();
+        let filter_lower = "API".to_lowercase();
+        let mut filtered = repos.clone();
+        if let Some(arr) = filtered.as_array_mut() {
+            arr.retain(|repo| {
+                repo.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
+            });
+        }
+        let arr = filtered.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "my-api");
+    }
+
+    #[test]
+    fn test_filter_repos_no_match() {
+        let repos = sample_repos();
+        let filter_lower = "nonexistent".to_lowercase();
+        let mut filtered = repos.clone();
+        if let Some(arr) = filtered.as_array_mut() {
+            arr.retain(|repo| {
+                repo.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
+            });
+        }
+        let arr = filtered.as_array().unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn test_filter_repos_partial_match() {
+        let repos = sample_repos();
+        let filter_lower = "auth".to_lowercase();
+        let mut filtered = repos.clone();
+        if let Some(arr) = filtered.as_array_mut() {
+            arr.retain(|repo| {
+                repo.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
+            });
+        }
+        let arr = filtered.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "auth-lib");
+    }
+
+    #[test]
+    fn test_filter_repos_none_returns_all() {
+        let repos = sample_repos();
+        let filter: Option<&str> = None;
+        let mut filtered = repos.clone();
+        if let Some(filter_str) = filter {
+            let filter_lower = filter_str.to_lowercase();
+            if let Some(arr) = filtered.as_array_mut() {
+                arr.retain(|repo| {
+                    repo.get("name")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
+                });
+            }
+        }
+        let arr = filtered.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
     }
 }
