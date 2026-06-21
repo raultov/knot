@@ -3,6 +3,17 @@
  All notable changes to **knot** are documented here, ordered from most recent to oldest.
  For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
  
+
+---
+
+## v1.4.12 — Python Constructor Call Resolution & Agent Skills Packaging
+
+- ✅ **Feat(python)**: Automatically redirect class instantiation (`ClassName(...)`) to constructor (`ClassName.__init__`) in reference resolution, allowing `find_callers` to accurately list class instantiation sites as callers of `__init__`.
+- ✅ **Chore(scripts)**: Packaged agent skills into `.knot-agent-skills.sh` installer and `.tar.gz` archive, replacing the previous python-based generation script.
+- ✅ **Docs(specs)**: Added specification for Python constructor call resolution.
+- ✅ **Docs**: Updated `knot repos` agent skill documentation to include the `--filter` substring parameter.
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean
+
 ---
 
 ## v1.4.11 — list_repositories MCP Tool & CLI Filter
