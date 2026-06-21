@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::context::ResolutionContext;
-use crate::models::CallIntent;
+use crate::models::{CallIntent, EntityKind};
 
 pub(crate) fn disambiguate_overload(
     fqn_uuid: Uuid,
@@ -80,6 +80,94 @@ pub(crate) fn find_by_arg_count(
     } else {
         None
     }
+}
+
+/// Redirect a resolved class call UUID to its constructor (`__init__`) when applicable.
+///
+/// For languages where class instantiation is semantically equivalent to invoking
+/// the constructor (Python `Foo()`, etc.), this turns a `(Foo, Calls)` edge into a
+/// `(Foo.__init__, Calls)` edge. The redirect is applied **after** resolution so it
+/// works for every parser without language-specific changes.
+///
+/// Only triggers when:
+/// 1. `uuid` resolves to a class-like entity (`Class`, `PythonClass`, `RustStruct`,
+///    or `CStruct`).
+/// 2. The class has an explicit `__init__` method, or one is reachable via the
+///    extends-map (inheritance chain).
+///
+/// Other intents (`TypeReference`, `ValueReference`, `Extends`, …) are unaffected.
+pub(crate) fn redirect_class_call_to_constructor(uuid: Uuid, ctx: &ResolutionContext) -> Uuid {
+    let Some(kind_map) = ctx.uuid_to_kind else {
+        return uuid;
+    };
+    let Some(name_map) = ctx.uuid_to_name else {
+        return uuid;
+    };
+
+    let Some(kind) = kind_map.get(&uuid) else {
+        return uuid;
+    };
+    if !matches!(
+        kind,
+        EntityKind::Class | EntityKind::RustStruct | EntityKind::CStruct | EntityKind::PythonClass
+    ) {
+        return uuid;
+    }
+
+    let Some(class_name) = name_map.get(&uuid) else {
+        return uuid;
+    };
+
+    if let Some(init_uuid) = lookup_init_in_class_hierarchy(class_name, ctx) {
+        return init_uuid;
+    }
+
+    if let Some(parents) = ctx.extends_map.get(class_name) {
+        for parent in parents {
+            if let Some(init_uuid) = lookup_init_in_class_hierarchy(parent, ctx) {
+                return init_uuid;
+            }
+        }
+    }
+
+    uuid
+}
+
+/// Locate a class's `__init__` constructor by trying every FQN shape the parser
+/// may have produced (`<ClassName>.__init__`, `<mod.ClassName>.__init__`, …).
+fn lookup_init_in_class_hierarchy(class_name: &str, ctx: &ResolutionContext) -> Option<Uuid> {
+    if let Some(uuid) = lookup_fqn(class_name, "__init__", ctx.fqn_to_uuid) {
+        return Some(uuid);
+    }
+
+    if let Some(uuid_to_fqn) = ctx.uuid_to_fqn {
+        for class_fqn in uuid_to_fqn.values() {
+            let is_class_match = class_fqn == class_name
+                || class_fqn.ends_with(&format!(".{}", class_name))
+                || class_fqn.ends_with(&format!("::{}", class_name));
+            if is_class_match
+                && let Some(uuid) = lookup_fqn_by_fqn(class_fqn, "__init__", ctx.fqn_to_uuid)
+            {
+                return Some(uuid);
+            }
+        }
+    }
+
+    None
+}
+
+/// Lookup `__init__` using a fully-qualified class path (handles `mod.Class.__init__`).
+fn lookup_fqn_by_fqn(
+    class_fqn: &str,
+    method: &str,
+    fqn_to_uuid: &HashMap<String, Uuid>,
+) -> Option<Uuid> {
+    let dot_fqn = format!("{}.{}", class_fqn, method);
+    if let Some(&uuid) = fqn_to_uuid.get(&dot_fqn) {
+        return Some(uuid);
+    }
+    let colon_fqn = format!("{}::{}", class_fqn, method);
+    fqn_to_uuid.get(&colon_fqn).copied()
 }
 
 pub(crate) fn resolve_single_call_intent(
@@ -548,5 +636,250 @@ mod tests {
 
         assert_eq!(entities[0].relationships.len(), 1);
         assert_eq!(entities[0].relationships[0].0, entities[1].uuid);
+    }
+
+    // ============================================================
+    // Spec: docs/specs/python_constructor_call_resolution.md
+    // ClassName(...) must resolve to ClassName.__init__
+    // ============================================================
+
+    #[test]
+    fn test_python_class_call_redirects_to_init() {
+        let foo_class = mock_resolution_entity_with_kind(
+            "Foo",
+            "mod.Foo",
+            None,
+            "test/mod.py",
+            EntityKind::Class,
+        );
+        let foo_init = mock_resolution_entity_with_kind(
+            "__init__",
+            "mod.Foo.__init__",
+            Some("Foo"),
+            "test/mod.py",
+            EntityKind::Method,
+        );
+
+        let mut factory = mock_resolution_entity_with_kind(
+            "factory",
+            "mod.factory",
+            None,
+            "test/mod.py",
+            EntityKind::Function,
+        );
+        factory.reference_intents.push(ReferenceIntent::Call {
+            method: "Foo".to_string(),
+            receiver: None,
+            line: 10,
+            arg_count: None,
+        });
+
+        let foo_class_uuid = foo_class.uuid;
+        let foo_init_uuid = foo_init.uuid;
+
+        let mut entities = vec![foo_class, foo_init, factory];
+        resolve_reference_intents(&mut entities);
+
+        let factory_entity = entities.iter().find(|e| e.name == "factory").unwrap();
+        assert!(
+            factory_entity
+                .relationships
+                .contains(&(foo_init_uuid, RelationshipType::Calls)),
+            "factory should call Foo.__init__, not Foo"
+        );
+        assert!(
+            !factory_entity
+                .relationships
+                .contains(&(foo_class_uuid, RelationshipType::Calls)),
+            "factory must NOT call the Foo class entity itself"
+        );
+    }
+
+    #[test]
+    fn test_python_class_call_no_init_keeps_class() {
+        let bar_class = mock_resolution_entity_with_kind(
+            "Bar",
+            "mod.Bar",
+            None,
+            "test/mod.py",
+            EntityKind::Class,
+        );
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "mod.caller",
+            None,
+            "test/mod.py",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "Bar".to_string(),
+            receiver: None,
+            line: 5,
+            arg_count: None,
+        });
+
+        let bar_class_uuid = bar_class.uuid;
+
+        let mut entities = vec![bar_class, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert_eq!(caller_entity.relationships.len(), 1);
+        assert_eq!(
+            caller_entity.relationships[0],
+            (bar_class_uuid, RelationshipType::Calls),
+            "Class without __init__ must keep the legacy behavior (call goes to class)"
+        );
+    }
+
+    #[test]
+    fn test_python_class_call_inherited_init() {
+        let parent_class = mock_resolution_entity_with_kind(
+            "Parent",
+            "mod.Parent",
+            None,
+            "test/mod.py",
+            EntityKind::Class,
+        );
+        let parent_init = mock_resolution_entity_with_kind(
+            "__init__",
+            "mod.Parent.__init__",
+            Some("Parent"),
+            "test/mod.py",
+            EntityKind::Method,
+        );
+        let mut child_class = mock_resolution_entity_with_kind(
+            "Child",
+            "mod.Child",
+            None,
+            "test/mod.py",
+            EntityKind::Class,
+        );
+        child_class
+            .reference_intents
+            .push(ReferenceIntent::Extends {
+                parent: "Parent".to_string(),
+                line: 1,
+            });
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "mod.caller",
+            None,
+            "test/mod.py",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "Child".to_string(),
+            receiver: None,
+            line: 20,
+            arg_count: None,
+        });
+
+        let parent_init_uuid = parent_init.uuid;
+
+        let mut entities = vec![parent_class, parent_init, child_class, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(parent_init_uuid, RelationshipType::Calls)),
+            "Child() with no own __init__ must redirect to Parent.__init__ via inheritance"
+        );
+    }
+
+    #[test]
+    fn test_function_named_like_class_not_redirected() {
+        let foo_function = mock_resolution_entity_with_kind(
+            "foo",
+            "mod.foo",
+            None,
+            "test/mod.py",
+            EntityKind::Function,
+        );
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "mod.caller",
+            None,
+            "test/mod.py",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "foo".to_string(),
+            receiver: None,
+            line: 5,
+            arg_count: None,
+        });
+
+        let foo_function_uuid = foo_function.uuid;
+
+        let mut entities = vec![foo_function, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert_eq!(caller_entity.relationships.len(), 1);
+        assert_eq!(
+            caller_entity.relationships[0],
+            (foo_function_uuid, RelationshipType::Calls),
+            "A function must NOT be redirected — only Class/Struct kinds trigger the redirect"
+        );
+    }
+
+    #[test]
+    fn test_python_class_call_with_existing_init_no_duplicate() {
+        let foo_class = mock_resolution_entity_with_kind(
+            "Foo",
+            "mod.Foo",
+            None,
+            "test/mod.py",
+            EntityKind::Class,
+        );
+        let foo_init = mock_resolution_entity_with_kind(
+            "__init__",
+            "mod.Foo.__init__",
+            Some("Foo"),
+            "test/mod.py",
+            EntityKind::Method,
+        );
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "mod.caller",
+            None,
+            "test/mod.py",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "Foo".to_string(),
+            receiver: None,
+            line: 10,
+            arg_count: None,
+        });
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "__init__".to_string(),
+            receiver: Some("Foo".to_string()),
+            line: 10,
+            arg_count: None,
+        });
+
+        let foo_init_uuid = foo_init.uuid;
+
+        let mut entities = vec![foo_class, foo_init, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "caller").unwrap();
+        let init_calls = caller_entity
+            .relationships
+            .iter()
+            .filter(|(uuid, rel)| *uuid == foo_init_uuid && *rel == RelationshipType::Calls)
+            .count();
+        assert_eq!(
+            init_calls, 1,
+            "There must be exactly one Calls edge to Foo.__init__ (parser + redirect deduplicated)"
+        );
     }
 }

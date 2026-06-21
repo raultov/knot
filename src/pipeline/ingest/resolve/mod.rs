@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::db::graph::{GraphDb, RepoQueryExt, UpsertExt};
-use crate::models::{ReferenceIntent, RelationshipType, ResolutionEntity};
+use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEntity};
 
 pub use context::{ResolutionContext, RunMetrics};
 pub use cross_repo::link_cross_repo_dependencies;
@@ -102,6 +102,12 @@ pub fn resolve_reference_intents_with_context(
     let uuid_to_fqn: HashMap<Uuid, String> =
         entities.iter().map(|e| (e.uuid, e.fqn.clone())).collect();
 
+    let uuid_to_kind: HashMap<Uuid, EntityKind> =
+        entities.iter().map(|e| (e.uuid, e.kind.clone())).collect();
+
+    let uuid_to_name: HashMap<Uuid, String> =
+        entities.iter().map(|e| (e.uuid, e.name.clone())).collect();
+
     let extends_map: HashMap<String, Vec<String>> = entities
         .iter()
         .filter_map(|e| {
@@ -148,6 +154,8 @@ pub fn resolve_reference_intents_with_context(
         extends_map: &extends_map,
         uuid_to_arg_count: Some(&uuid_to_arg_count),
         uuid_to_fqn: Some(&uuid_to_fqn),
+        uuid_to_kind: Some(&uuid_to_kind),
+        uuid_to_name: Some(&uuid_to_name),
     };
 
     entities.par_iter_mut().for_each(|entity| {
@@ -169,15 +177,14 @@ pub fn resolve_reference_intents_with_context(
                         line: 0,
                         arg_count: *arg_count,
                     };
-                    (
-                        calls::resolve_single_call_intent(
-                            &call_intent,
-                            &entity.file_path,
-                            entity.enclosing_class.as_deref(),
-                            &ctx,
-                        ),
-                        RelationshipType::Calls,
+                    let resolved = calls::resolve_single_call_intent(
+                        &call_intent,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &ctx,
                     )
+                    .map(|uuid| calls::redirect_class_call_to_constructor(uuid, &ctx));
+                    (resolved, RelationshipType::Calls)
                 }
                 ReferenceIntent::Extends { parent, .. } => (
                     non_calls::resolve_non_call_reference(

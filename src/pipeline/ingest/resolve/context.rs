@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
+use crate::models::EntityKind;
+
 pub struct RunMetrics {
     pub entities_indexed: AtomicU64,
     pub references_resolved: AtomicU64,
@@ -46,6 +48,8 @@ pub struct ResolutionContext<'a> {
     pub extends_map: &'a HashMap<String, Vec<String>>,
     pub uuid_to_arg_count: Option<&'a HashMap<Uuid, usize>>,
     pub uuid_to_fqn: Option<&'a HashMap<Uuid, String>>,
+    pub uuid_to_kind: Option<&'a HashMap<Uuid, EntityKind>>,
+    pub uuid_to_name: Option<&'a HashMap<Uuid, String>>,
 }
 
 #[cfg(test)]
