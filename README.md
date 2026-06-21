@@ -49,7 +49,7 @@ This dual-database approach powers both:
 - **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references. Supports cross-repository call resolution via `DEPENDS_ON` graph edges.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
-- **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
+- **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Supports optional case-insensitive name filtering via `--filter` (CLI) or `filter` parameter (MCP). Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package-aware FQN resolution (e.g., `com.example.app.UserService`), class inheritance (`EXTENDS`), interface implementation (`IMPLEMENTS`), annotation tracking, and field-access method invocation resolution
@@ -290,10 +290,11 @@ Visualize auto-discovered dependencies between indexed repositories with transit
 #### `knot repos` — List Indexed Repositories
 ```bash
 knot repos                          # Table with REPO / BUILD SYSTEM / LANGUAGE / FILES / ENTITIES
+knot repos --filter app             # Case-insensitive name filter (substring match)
 knot repos --output json            # Machine-readable list
 knot repos --output markdown        # GFM table for chat UIs
 ```
-Show the status of every repository currently indexed in the graph database — useful for orientation, sanity-checking that an indexing run completed, and discovering which languages and build systems are present across the workspace.
+Show the status of every repository currently indexed in the graph database — useful for orientation, sanity-checking that an indexing run completed, and discovering which languages and build systems are present across the workspace. Use `--filter` to quickly locate a specific repository when working with multiple indexed codebases.
 
 **For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 
