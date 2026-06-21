@@ -248,3 +248,17 @@ class MyLoraLoader:
     def load_lora_model_only(self, model, lora_name, strength):
         """Calls self.lib_load_lora() — should resolve to THIS class's method."""
         return (self.lib_load_lora(model, None, lora_name, strength, 0)[0],)
+
+
+# ============================================================
+# Regression: ClassName(...) must resolve to ClassName.__init__
+# Spec: docs/specs/python_constructor_call_resolution.md
+# ============================================================
+
+class MuonLike:
+    def __init__(self, lr, wd):
+        self.lr = lr
+        self.wd = wd
+
+def create_muon_like():
+    return MuonLike(lr=1e-3, wd=0.1)   # caller esperado de MuonLike.__init__

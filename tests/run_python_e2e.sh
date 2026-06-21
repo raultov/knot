@@ -553,6 +553,36 @@ else
     exit 1
 fi
 
+# ============================================================
+# Spec: docs/specs/python_constructor_call_resolution.md
+# Class instantiation (ClassName(...)) must resolve to ClassName.__init__
+# ============================================================
+
+echo ""
+echo -e "${BLUE}--- Constructor call resolution ---${NC}"
+
+echo "Test 25: class instantiation resolves to __init__ caller (CLI)..."
+KNOT_BIN="$PROJECT_ROOT/target/release/knot"
+CLI_CALLERS=$("$KNOT_BIN" callers "MuonLike.__init__" --repo "$REPO_NAME" 2>/dev/null || true)
+if echo "$CLI_CALLERS" | grep -q "create_muon_like"; then
+    echo -e "${GREEN}✓ CLI: MuonLike.__init__ lists create_muon_like as caller${NC}"
+else
+    echo -e "${RED}✗ CLI: MuonLike.__init__ should list create_muon_like as caller${NC}"
+    echo "CLI Response: $CLI_CALLERS"
+    exit 1
+fi
+
+echo "Test 26: class instantiation resolves to __init__ caller (MCP)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"MuonLike.__init__\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_RESPONSE" | grep -q "create_muon_like"; then
+    echo -e "${GREEN}✓ MCP: MuonLike.__init__ lists create_muon_like as caller${NC}"
+else
+    echo -e "${RED}✗ MCP: MuonLike.__init__ should list create_muon_like as caller${NC}"
+    echo "MCP Response: $MCP_RESPONSE"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Python E2E tests passed! ✓${NC}"
