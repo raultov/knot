@@ -1,6 +1,6 @@
 # Knot Repos: Indexed Repository Inventory
 
-**Command:** `knot repos [--output <format>]`
+**Command:** `knot repos [--filter <substring>] [--output <format>]`
 
 ## Purpose
 
@@ -14,7 +14,15 @@ Neo4j only. This makes it the fastest CLI command in the knot toolkit.
 
 ## Parameters
 
-- **`--output <format>`**: `table` (default), `json`, or `markdown`.
+- **`-f, --filter <substring>`**: Case-insensitive substring match on the
+  repository name. Only repositories whose `:Repository.name` contains
+  `<substring>` (lowercased on both sides) are returned. Useful when the
+  index holds many repositories and you want to focus on a subset
+  (e.g. `--filter auth` to surface `auth-lib`, `auth-service`, etc.).
+  When the filter matches nothing, the command prints
+  `No repositories found.` and exits 0.
+
+- **`-o, --output <format>`**: `table` (default), `json`, or `markdown`.
 
 ## Output Format
 
@@ -140,6 +148,27 @@ knot callers "TokenVerifier" --repo my-app
 # Cross-repo resolution works because my-app has a DEPENDS_ON edge to auth-lib
 ```
 
+### 5. Focused Lookup with `--filter`
+
+When the index contains dozens of repositories, listing all of them is
+noisy. Use `--filter` to find a specific repository (or a family of
+related ones) without piping through `grep`:
+
+```bash
+knot repos --filter app
+# → my-app, mobile-app, web-app
+
+knot repos --filter AUTH       # case-insensitive
+# → auth-lib, auth-service
+
+knot repos --filter zzz
+# → No repositories found.
+```
+
+This is the fastest way to confirm a repository name before running
+`knot search`, `knot callers`, `knot explore`, or `knot deps` with
+`--repo <name>`.
+
 ## Workflow Patterns
 
 ### Pattern: Index-Health Check (Cron-Style)
@@ -185,8 +214,9 @@ knot repos --output json \
   before build-system support was added, its `build_system` cell is empty.
   Re-index the repository with the current version of `knot-indexer` to
   populate it.
-- **No filtering yet**: There is no `--language` or `--build-system` filter
-  flag. Pipe `--output json` through `jq` for ad-hoc filtering.
+- **Only name filtering is built-in**: `--filter` matches the repository
+  name only. There is no `--language` or `--build-system` filter flag
+  yet. For those, pipe `--output json` through `jq` for ad-hoc filtering.
 
 ## See Also
 
