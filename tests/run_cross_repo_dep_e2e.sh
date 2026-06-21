@@ -330,6 +330,88 @@ LIB_DEPS=$(cargo run --release --bin knot -- deps "$LIB_REPO_NAME" --depth 1 2>/
 # Actually, gson won't match any repo since it's not indexed. So dependencies should be empty.
 echo -e "${GREEN}✓ Library dependency lookup completed${NC}"
 
+# ─── list_repositories tests (CLI + MCP) ─────────────────────────────────────
+echo ""
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}list_repositories E2E Tests (CLI + MCP)${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+# Test 6a: knot repos lists all indexed repositories
+echo ""
+echo "Test 6a: knot repos lists all indexed repositories..."
+REPOS_OUTPUT=$(cargo run --release --bin knot -- repos 2>/dev/null)
+if echo "$REPOS_OUTPUT" | grep -q "$LIB_REPO_NAME" && echo "$REPOS_OUTPUT" | grep -q "$CLIENT_REPO_NAME"; then
+    echo -e "${GREEN}✓ knot repos lists both ${LIB_REPO_NAME} and ${CLIENT_REPO_NAME}${NC}"
+else
+    echo -e "${RED}✗ knot repos missing expected repositories. Output:${NC}"
+    echo "$REPOS_OUTPUT"
+    exit 1
+fi
+
+# Test 6b: knot repos --filter matches case-insensitively
+echo ""
+echo "Test 6b: knot repos --filter AUTH (case-insensitive)..."
+FILTER_OUTPUT=$(cargo run --release --bin knot -- repos --filter AUTH 2>/dev/null)
+if echo "$FILTER_OUTPUT" | grep -q "$LIB_REPO_NAME"; then
+    echo -e "${GREEN}✓ --filter AUTH matched ${LIB_REPO_NAME} (case-insensitive)${NC}"
+else
+    echo -e "${RED}✗ --filter AUTH failed to match ${LIB_REPO_NAME}. Output:${NC}"
+    echo "$FILTER_OUTPUT"
+    exit 1
+fi
+if echo "$FILTER_OUTPUT" | grep -q "$CLIENT_REPO_NAME"; then
+    echo -e "${RED}✗ --filter AUTH should NOT have matched ${CLIENT_REPO_NAME}${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ --filter AUTH correctly excluded ${CLIENT_REPO_NAME}${NC}"
+fi
+
+# Test 6c: knot repos --filter with no matches
+echo ""
+echo "Test 6c: knot repos --filter nonexistent..."
+NO_MATCH_OUTPUT=$(cargo run --release --bin knot -- repos --filter nonexistent 2>/dev/null)
+if echo "$NO_MATCH_OUTPUT" | grep -q "No repositories found"; then
+    echo -e "${GREEN}✓ --filter nonexistent returns 'No repositories found'${NC}"
+else
+    echo -e "${RED}✗ Expected 'No repositories found'. Output:${NC}"
+    echo "$NO_MATCH_OUTPUT"
+    exit 1
+fi
+
+# Test 6d: MCP list_repositories returns all repos
+echo ""
+echo "Test 6d: MCP list_repositories (no filter)..."
+MCP_LIST_REQUEST='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"list_repositories","arguments":{}}}'
+MCP_LIST_RESPONSE=$(echo "$MCP_LIST_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_CLIENT_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_LIST_RESPONSE" | grep -q "$LIB_REPO_NAME" && echo "$MCP_LIST_RESPONSE" | grep -q "$CLIENT_REPO_NAME"; then
+    echo -e "${GREEN}✓ MCP list_repositories returns both repositories${NC}"
+else
+    echo -e "${RED}✗ MCP list_repositories missing expected repositories. Response:${NC}"
+    echo "$MCP_LIST_RESPONSE"
+    exit 1
+fi
+
+# Test 6e: MCP list_repositories with filter
+echo ""
+echo "Test 6e: MCP list_repositories with filter=client..."
+MCP_FILTER_REQUEST='{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"list_repositories","arguments":{"filter":"client"}}}'
+MCP_FILTER_RESPONSE=$(echo "$MCP_FILTER_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_CLIENT_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_FILTER_RESPONSE" | grep -q "$CLIENT_REPO_NAME"; then
+    echo -e "${GREEN}✓ MCP list_repositories filter=client matched ${CLIENT_REPO_NAME}${NC}"
+else
+    echo -e "${RED}✗ MCP list_repositories filter=client failed. Response:${NC}"
+    echo "$MCP_FILTER_RESPONSE"
+    exit 1
+fi
+if echo "$MCP_FILTER_RESPONSE" | grep -q "$LIB_REPO_NAME"; then
+    echo -e "${RED}✗ MCP list_repositories filter=client should NOT match ${LIB_REPO_NAME}${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ MCP list_repositories filter=client correctly excluded ${LIB_REPO_NAME}${NC}"
+fi
+
+echo -e "${GREEN}✓ All list_repositories E2E tests passed${NC}"
+
 # Test 7: Cargo cross-repo dependency linking
 echo ""
 echo "Test 7: Cargo cross-repo dependency linking..."
