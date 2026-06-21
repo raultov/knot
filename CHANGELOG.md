@@ -5,6 +5,16 @@
  
 ---
 
+## v1.4.11 — list_repositories MCP Tool & CLI Filter
+
+- ✅ **Feat(mcp)**: Added `list_repositories` MCP tool to list all indexed repositories with optional name filtering (TDQS-optimized description with sibling tool alternatives).
+- ✅ **Feat(cli)**: Added `--filter` flag to `knot repos` for case-insensitive repository name filtering (substring match).
+- ✅ **Test(e2e)**: Added 5 E2E tests for `list_repositories` covering CLI list, CLI filter, CLI no-match, MCP list, and MCP filter.
+- ✅ **Docs(readme)**: Documented `--filter` flag and MCP tool in README.
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean
+
+---
+
 ## v1.4.10 — Pipeline Trace Repo Identification & Docs Cleanup
 
 - ✅ **Feat(pipeline)**: All major pipeline trace lines (embed, batch ingest, vector upsert, graph upsert, embedder/ingester worker logs) now include the originating `repo_name` as a `[repo]` prefix, so `knot-server` users can attribute each log line to the repository being indexed.
