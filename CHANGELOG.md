@@ -6,6 +6,17 @@
 
 ---
 
+## v1.4.13 — Python `super()` and Chained Attribute Resolution
+
+- ✅ **Fix(python)**: `super().__init__()` calls inside subclasses now resolve to the parent class's `__init__` instead of being misattributed to the enclosing class's own `__init__` (or dropped when the parent was unindexed). Reported against LlamaFactory `webui/chatter.py::WebChatModel`.
+- ✅ **Fix(python)**: Chained calls like `engine.chatter.method(...)` now resolve via a receiver-chain disambiguator that scores each candidate by how many receiver segments appear in its FQN, picking the unique winner and dropping ties (no guessing). Fixes the case where a homonymous module-level function in another file would otherwise swallow the call.
+- ✅ **Feat(python)**: Python parser now emits `ValueReference` for chained attribute access used as a value (e.g. `engine.chatter.loaded`, `load_btn.click(engine.chatter.load_model, ...)`). Trailing identifier of every `attribute` node is captured, except when it is the function of a `call` (already a `Call` intent) or the `object` of a wider attribute chain (avoids duplicate intermediate segments).
+- ✅ **Test(e2e)**: Added 6 E2E assertions in `tests/run_python_e2e.sh` covering `super().__init__()` parent resolution (CLI + MCP), self-misattribution guard, and the three chained-attribute patterns (chained call, chained property, method-as-value).
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean
+- ✅ 827 unit tests passing.
+
+---
+
 ## v1.4.12 — Python Constructor Call Resolution & Agent Skills Packaging
 
 - ✅ **Feat(python)**: Automatically redirect class instantiation (`ClassName(...)`) to constructor (`ClassName.__init__`) in reference resolution, allowing `find_callers` to accurately list class instantiation sites as callers of `__init__`.
