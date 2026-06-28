@@ -583,6 +583,92 @@ else
     exit 1
 fi
 
+# ============================================================
+# Regression: super().__init__() must resolve to the parent
+# class's __init__, not the enclosing class's own __init__.
+# Real-world report: LlamaFactory webui/chatter.py::WebChatModel.
+# ============================================================
+
+echo ""
+echo -e "${BLUE}--- super().__init__() resolution ---${NC}"
+
+echo "Test 27: super().__init__() resolves to parent class (CLI)..."
+CLI_CALLERS=$("$KNOT_BIN" callers "BaseEngineLike.__init__" --repo "$REPO_NAME" 2>/dev/null || true)
+if echo "$CLI_CALLERS" | grep -q "__init__"; then
+    echo -e "${GREEN}✓ CLI: BaseEngineLike.__init__ lists WebChatLike.__init__ as caller${NC}"
+else
+    echo -e "${RED}✗ CLI: BaseEngineLike.__init__ should list WebChatLike.__init__ as caller${NC}"
+    echo "CLI Response: $CLI_CALLERS"
+    exit 1
+fi
+
+echo "Test 28: super().__init__() does NOT misattribute to self (CLI)..."
+CLI_SELF=$("$KNOT_BIN" callers "WebChatLike.__init__" --repo "$REPO_NAME" 2>/dev/null || true)
+# WebChatLike.__init__ should not list itself as caller of itself via super().
+if echo "$CLI_SELF" | grep -qE "WebChatLike.__init__\s.*WebChatLike.__init__|__init__\s.*__init__\s.*/sample\.py\s*\|\s*279"; then
+    echo -e "${RED}✗ CLI: WebChatLike.__init__ must NOT list itself as caller via super()${NC}"
+    echo "CLI Response: $CLI_SELF"
+    exit 1
+else
+    echo -e "${GREEN}✓ CLI: WebChatLike.__init__ is not misattributed to itself${NC}"
+fi
+
+echo "Test 29: super().__init__() resolves to parent class (MCP)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"BaseEngineLike.__init__\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_RESPONSE" | grep -q "__init__"; then
+    echo -e "${GREEN}✓ MCP: BaseEngineLike.__init__ lists WebChatLike.__init__ as caller${NC}"
+else
+    echo -e "${RED}✗ MCP: BaseEngineLike.__init__ should list WebChatLike.__init__ as caller${NC}"
+    echo "MCP Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+# ============================================================
+# Regression: chained attribute access (real-world LlamaFactory).
+# - `engine.chatter.load_model_chained(...)` (chained call) must resolve to
+#   WebChatLike.load_model_chained, not the module-level homonym.
+# - `engine.chatter.loaded` (chained value access) must produce a
+#   ValueReference to WebChatLike.loaded.
+# - `click_handler(engine.chatter.load_model_chained, ...)` (method passed as
+#   value) must produce a ValueReference to WebChatLike.load_model_chained.
+# ============================================================
+
+echo ""
+echo -e "${BLUE}--- Chained attribute access ---${NC}"
+
+echo "Test 30: chained call resolves via receiver chain (CLI)..."
+CLI_CALLERS=$("$KNOT_BIN" callers "load_model_chained" --repo "$REPO_NAME" 2>/dev/null || true)
+# Caller `build_ui` calls WebChatLike.load_model_chained AND passes it as a value.
+if echo "$CLI_CALLERS" | grep -q "build_ui"; then
+    echo -e "${GREEN}✓ CLI: WebChatLike.load_model_chained lists build_ui as caller${NC}"
+else
+    echo -e "${RED}✗ CLI: WebChatLike.load_model_chained should list build_ui as caller${NC}"
+    echo "CLI Response: $CLI_CALLERS"
+    exit 1
+fi
+
+echo "Test 31: chained attribute access emits ValueReference to property (CLI)..."
+CLI_LOADED=$("$KNOT_BIN" callers "loaded" --repo "$REPO_NAME" 2>/dev/null || true)
+if echo "$CLI_LOADED" | grep -q "build_ui"; then
+    echo -e "${GREEN}✓ CLI: WebChatLike.loaded lists build_ui as reference${NC}"
+else
+    echo -e "${RED}✗ CLI: WebChatLike.loaded should list build_ui as reference${NC}"
+    echo "CLI Response: $CLI_LOADED"
+    exit 1
+fi
+
+echo "Test 32: chained call resolves via receiver chain (MCP)..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"load_model_chained\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if echo "$MCP_RESPONSE" | grep -q "build_ui"; then
+    echo -e "${GREEN}✓ MCP: WebChatLike.load_model_chained lists build_ui as caller${NC}"
+else
+    echo -e "${RED}✗ MCP: WebChatLike.load_model_chained should list build_ui as caller${NC}"
+    echo "MCP Response: $MCP_RESPONSE"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Python E2E tests passed! ✓${NC}"

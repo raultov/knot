@@ -262,3 +262,59 @@ class MuonLike:
 
 def create_muon_like():
     return MuonLike(lr=1e-3, wd=0.1)   # caller esperado de MuonLike.__init__
+
+
+# ============================================================
+# Regression: super().__init__() must resolve to the parent
+# class's __init__, not the enclosing class's own __init__.
+# Real-world report: LlamaFactory webui/chatter.py::WebChatModel.
+# ============================================================
+
+class BaseEngineLike:
+    def __init__(self, name: str = "base"):
+        self.name = name
+
+
+class WebChatLike(BaseEngineLike):
+    def __init__(self, lazy_init: bool = True):
+        self.lazy_init = lazy_init
+        if not lazy_init:
+            super().__init__()                 # caller esperado de BaseEngineLike.__init__
+        if not lazy_init:
+            super().__init__(name="explicit")  # caller esperado de BaseEngineLike.__init__
+
+    @property
+    def loaded(self) -> bool:
+        return self.lazy_init is False
+
+    def load_model_chained(self, data) -> str:
+        return "loaded:" + str(data)
+
+
+# Module-level homonym for `load_model_chained` — this forces ambiguity that
+# only the receiver-chain disambiguator can resolve. Without the disambiguator,
+# the chained call below would have two candidates and be dropped.
+def load_model_chained(data) -> str:
+    return "module-level:" + str(data)
+
+
+class WebChatHost:
+    def __init__(self):
+        self.chatter = WebChatLike()
+
+    def build_ui(self, click_handler):
+        # `engine.chatter.load_model_chained(...)` — chained call. The receiver
+        # `self.chatter` must steer the resolver to WebChatLike.load_model_chained,
+        # not the module-level homonym.
+        self.chatter.load_model_chained("hi")
+
+        # `engine.chatter.loaded` — chained attribute access used as a value.
+        # Must emit a ValueReference for the trailing identifier `loaded`.
+        info = {"visible": self.chatter.loaded}
+
+        # `click_handler(self.chatter.load_model_chained, ...)` — method passed
+        # as a value (Gradio-style callback). Must emit a ValueReference for
+        # the trailing identifier `load_model_chained`.
+        click_handler(self.chatter.load_model_chained, info)
+
+        return info
