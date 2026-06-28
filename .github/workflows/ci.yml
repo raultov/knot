@@ -181,7 +181,10 @@ jobs:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
     needs: test-e2e
-    if: success()
+    # Run if test-e2e succeeded OR was skipped. test-e2e is skipped on
+    # release: commits when test-unit is also skipped, but the pre-built
+    # binaries are still available, so benchmarks can run independently.
+    if: always() && (needs.test-e2e.result == 'success' || needs.test-e2e.result == 'skipped')
     steps:
       - uses: actions/checkout@v4
 
