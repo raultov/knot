@@ -190,11 +190,50 @@ pub(crate) fn extract_value_references_python(
         }
     }
 
+    if node.kind() == "attribute"
+        && is_attribute_value_context(node)
+        && let Some(attr_node) = node.child_by_field_name("attribute")
+    {
+        let value_name = node_text(attr_node, source);
+        if !is_python_reserved_value(&value_name) {
+            intents.push(ReferenceIntent::ValueReference { value_name, line });
+        }
+    }
+
     let mut child = node.child(0);
     while let Some(c) = child {
         extract_value_references_python(c, source, intents);
         child = c.next_sibling();
     }
+}
+
+/// True if the attribute node's trailing identifier is being *read* as a value
+/// (or written to as an assignment target), rather than:
+/// 1. Acting as the function of a call (already captured by call extraction).
+/// 2. Being the `object` of a wider attribute chain (the outermost link in
+///    the chain will emit the trailing identifier, avoiding duplicates).
+fn is_attribute_value_context(node: Node<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return true;
+    };
+
+    if parent.kind() == "call"
+        && parent
+            .child_by_field_name("function")
+            .is_some_and(|f| f.id() == node.id())
+    {
+        return false;
+    }
+
+    if parent.kind() == "attribute"
+        && parent
+            .child_by_field_name("object")
+            .is_some_and(|o| o.id() == node.id())
+    {
+        return false;
+    }
+
+    true
 }
 
 const PYTHON_RESERVED_VALUES: &[&str] = &["self", "cls"];
@@ -696,6 +735,109 @@ mod tests {
         assert!(
             self_refs.is_empty(),
             "self should be filtered as reserved value"
+        );
+    }
+
+    // Regression: chained attribute access used as a VALUE (not a call target)
+    // should emit a ValueReference for the trailing identifier so that
+    // `engine.chatter.loaded` becomes a reference to the property `loaded`.
+    #[test]
+    fn test_extract_value_reference_chained_attribute_access() {
+        let code = "x = engine.chatter.loaded";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        let names: Vec<&str> = intents
+            .iter()
+            .filter_map(|i| match i {
+                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            names.contains(&"loaded"),
+            "must emit ValueReference for the trailing identifier `loaded`, got: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"chatter"),
+            "must NOT emit duplicate ValueReference for the inner chain segment `chatter`, got: {:?}",
+            names
+        );
+    }
+
+    // Regression: attribute used as a function argument (Gradio callback style)
+    // — `load_btn.click(engine.chatter.load_model, ...)` passes `load_model`
+    // as a value. The outer `click` call is captured separately; the inner
+    // attribute must still emit a ValueReference for `load_model`.
+    #[test]
+    fn test_extract_value_reference_attribute_passed_as_argument() {
+        let code = "load_btn.click(engine.chatter.load_model, foo)";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        let names: Vec<&str> = intents
+            .iter()
+            .filter_map(|i| match i {
+                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            names.contains(&"load_model"),
+            "must emit ValueReference for `load_model` when passed as an arg, got: {:?}",
+            names
+        );
+    }
+
+    // Regression: keyword argument whose value is a chained attribute access
+    // — `gr.Column(visible=engine.chatter.loaded)`. The existing keyword-arg
+    // path only fires for `identifier` values; the new attribute path covers
+    // the `attribute` value.
+    #[test]
+    fn test_extract_value_reference_keyword_arg_with_attribute_value() {
+        let code = "gr.Column(visible=engine.chatter.loaded)";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        let names: Vec<&str> = intents
+            .iter()
+            .filter_map(|i| match i {
+                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            names.contains(&"loaded"),
+            "keyword-arg with chained attribute value must emit ValueReference for `loaded`, got: {:?}",
+            names
+        );
+    }
+
+    // The attribute that is the function field of a call must NOT also emit
+    // a ValueReference — that would double-count the call.
+    #[test]
+    fn test_attribute_call_function_not_emitted_as_value_reference() {
+        let code = "engine.chatter.load_model(arg)";
+        let tree = parse(code);
+        let mut intents = Vec::new();
+        extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
+
+        let names: Vec<&str> = intents
+            .iter()
+            .filter_map(|i| match i {
+                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !names.contains(&"load_model"),
+            "must NOT emit ValueReference for the trailing identifier of a call's function (already a Call intent), got: {:?}",
+            names
         );
     }
 

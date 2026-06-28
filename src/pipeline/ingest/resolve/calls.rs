@@ -38,6 +38,79 @@ pub(crate) fn disambiguate_overload(
     fqn_uuid
 }
 
+/// Disambiguate candidates by scoring each one's FQN against the segments of a
+/// chained receiver expression (e.g. `engine.chatter.method`).
+///
+/// For a receiver like `engine.chatter` and candidates whose FQNs are
+/// `llamafactory.webui.chatter.WebChatModel.method` and
+/// `llamafactory.model.loader.method`, the first FQN contains the receiver
+/// segment `chatter` (score 1) while the second contains nothing (score 0).
+/// The unique top-scorer wins; ties fall through to other heuristics.
+///
+/// Receivers without dots are ignored — the existing same-file / unique-name
+/// fallbacks already handle them.
+pub(crate) fn disambiguate_by_receiver_chain(
+    candidate_uuids: &[Uuid],
+    receiver: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    if !receiver.contains('.') {
+        return None;
+    }
+    let uuid_to_fqn = ctx.uuid_to_fqn?;
+
+    let segments: Vec<&str> = receiver
+        .split('.')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "self" && *s != "cls" && *s != "this")
+        .collect();
+    if segments.is_empty() {
+        return None;
+    }
+
+    let mut best_score: usize = 0;
+    let mut best_uuid: Option<Uuid> = None;
+    let mut tied = false;
+
+    for uuid in candidate_uuids {
+        let Some(fqn) = uuid_to_fqn.get(uuid) else {
+            continue;
+        };
+        let fqn_segments: Vec<&str> = fqn.split(['.', ':']).collect();
+        let score = segments
+            .iter()
+            .filter(|seg| fqn_segments.contains(seg))
+            .count();
+        if score == 0 {
+            continue;
+        }
+        match score.cmp(&best_score) {
+            std::cmp::Ordering::Greater => {
+                best_score = score;
+                best_uuid = Some(*uuid);
+                tied = false;
+            }
+            std::cmp::Ordering::Equal => {
+                tied = true;
+            }
+            std::cmp::Ordering::Less => {}
+        }
+    }
+
+    if tied { None } else { best_uuid }
+}
+
+/// Detects receiver expressions that denote a `super` invocation.
+///
+/// Covers:
+/// - Java/Kotlin: `super.method()` → receiver is `"super"`.
+/// - Python 3: `super().__init__()` → receiver is `"super()"`.
+/// - Python 2 / explicit form: `super(WebChatModel, self).__init__()` →
+///   receiver is `"super(WebChatModel, self)"`.
+pub(crate) fn is_super_receiver(receiver: &str) -> bool {
+    receiver == "super" || receiver == "super()" || receiver.starts_with("super(")
+}
+
 pub(crate) fn lookup_fqn(
     class: &str,
     method: &str,
@@ -136,7 +209,19 @@ pub(crate) fn redirect_class_call_to_constructor(uuid: Uuid, ctx: &ResolutionCon
 /// Locate a class's `__init__` constructor by trying every FQN shape the parser
 /// may have produced (`<ClassName>.__init__`, `<mod.ClassName>.__init__`, …).
 fn lookup_init_in_class_hierarchy(class_name: &str, ctx: &ResolutionContext) -> Option<Uuid> {
-    if let Some(uuid) = lookup_fqn(class_name, "__init__", ctx.fqn_to_uuid) {
+    lookup_method_in_class_hierarchy(class_name, "__init__", ctx)
+}
+
+/// Locate `<class_name>.<method>` by trying every FQN shape the parser may
+/// have produced. Falls back to suffix matching against the FQN map so that
+/// short class names (e.g. `"ChatModel"`) resolve to fully-qualified
+/// methods (e.g. `"llamafactory.chat.ChatModel.__init__"`).
+fn lookup_method_in_class_hierarchy(
+    class_name: &str,
+    method: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    if let Some(uuid) = lookup_fqn(class_name, method, ctx.fqn_to_uuid) {
         return Some(uuid);
     }
 
@@ -146,7 +231,7 @@ fn lookup_init_in_class_hierarchy(class_name: &str, ctx: &ResolutionContext) -> 
                 || class_fqn.ends_with(&format!(".{}", class_name))
                 || class_fqn.ends_with(&format!("::{}", class_name));
             if is_class_match
-                && let Some(uuid) = lookup_fqn_by_fqn(class_fqn, "__init__", ctx.fqn_to_uuid)
+                && let Some(uuid) = lookup_fqn_by_fqn(class_fqn, method, ctx.fqn_to_uuid)
             {
                 return Some(uuid);
             }
@@ -176,6 +261,21 @@ pub(crate) fn resolve_single_call_intent(
     caller_enclosing_class: Option<&str>,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
+    if let Some(receiver) = intent.receiver.as_deref()
+        && is_super_receiver(receiver)
+    {
+        if let Some(enclosing_class) = caller_enclosing_class
+            && let Some(parents) = ctx.extends_map.get(enclosing_class)
+        {
+            for parent in parents {
+                if let Some(uuid) = lookup_method_in_class_hierarchy(parent, &intent.method, ctx) {
+                    return Some(disambiguate_overload(uuid, intent, ctx, Some(parent)));
+                }
+            }
+        }
+        return None;
+    }
+
     if (intent.receiver.is_none()
         || intent.receiver.as_deref() == Some("this")
         || intent.receiver.as_deref() == Some("self"))
@@ -266,6 +366,9 @@ pub(crate) fn resolve_single_call_intent(
                 && let Some(ac_map) = ctx.uuid_to_arg_count
                 && let Some(u) = find_by_arg_count(uuids, ac, ac_map)
             {
+                return Some(u);
+            }
+            if let Some(u) = disambiguate_by_receiver_chain(uuids, receiver, ctx) {
                 return Some(u);
             }
             if uuids.len() == 1 {
@@ -826,6 +929,313 @@ mod tests {
             caller_entity.relationships[0],
             (foo_function_uuid, RelationshipType::Calls),
             "A function must NOT be redirected — only Class/Struct kinds trigger the redirect"
+        );
+    }
+
+    // Regression: bug reported on LlamaFactory's webui/chatter.py.
+    // `engine.chatter.load_model(args)` was failing to resolve when there were
+    // two homonyms in different modules:
+    //   - `llamafactory.webui.chatter.WebChatModel.load_model` (method)
+    //   - `llamafactory.model.loader.load_model` (top-level function)
+    // The receiver chain `engine.chatter` contains the segment `chatter` which
+    // uniquely identifies the WebChatModel method via its FQN module path.
+    #[test]
+    fn test_call_disambiguation_by_receiver_chain_segments() {
+        let web_chat_method = mock_resolution_entity_with_kind(
+            "load_model",
+            "llamafactory.webui.chatter.WebChatModel.load_model",
+            Some("WebChatModel"),
+            "src/llamafactory/webui/chatter.py",
+            EntityKind::Method,
+        );
+        let loader_fn = mock_resolution_entity_with_kind(
+            "load_model",
+            "llamafactory.model.loader.load_model",
+            None,
+            "src/llamafactory/model/loader.py",
+            EntityKind::Function,
+        );
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "build_chat_tab",
+            "llamafactory.webui.components.chatbot.build_chat_tab",
+            None,
+            "src/llamafactory/webui/components/chatbot.py",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "load_model".to_string(),
+            receiver: Some("engine.chatter".to_string()),
+            line: 42,
+            arg_count: Some(1),
+        });
+
+        let web_chat_method_uuid = web_chat_method.uuid;
+        let loader_fn_uuid = loader_fn.uuid;
+
+        let mut entities = vec![web_chat_method, loader_fn, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities
+            .iter()
+            .find(|e| e.name == "build_chat_tab")
+            .unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(web_chat_method_uuid, RelationshipType::Calls)),
+            "engine.chatter.load_model(...) must resolve to WebChatModel.load_model"
+        );
+        assert!(
+            !caller_entity
+                .relationships
+                .iter()
+                .any(|(u, _)| *u == loader_fn_uuid),
+            "must NOT misattribute to the module-level loader.load_model"
+        );
+    }
+
+    // Two candidates whose FQNs both contain a single receiver-chain segment
+    // (`chatter`) result in a tie and the resolver must NOT pick either one.
+    #[test]
+    fn test_call_disambiguation_ties_are_dropped() {
+        let candidate_a = mock_resolution_entity_with_kind(
+            "load_model",
+            "mod.chatter.WebChatModel.load_model",
+            Some("WebChatModel"),
+            "src/a.py",
+            EntityKind::Method,
+        );
+        let candidate_b = mock_resolution_entity_with_kind(
+            "load_model",
+            "mod.chatter.Other.load_model",
+            Some("Other"),
+            "src/b.py",
+            EntityKind::Method,
+        );
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "mod.caller",
+            None,
+            "src/caller.py",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "load_model".to_string(),
+            receiver: Some("engine.chatter".to_string()),
+            line: 1,
+            arg_count: Some(1),
+        });
+
+        let candidate_a_uuid = candidate_a.uuid;
+        let candidate_b_uuid = candidate_b.uuid;
+
+        let mut entities = vec![candidate_a, candidate_b, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "caller").unwrap();
+        assert!(
+            !caller_entity
+                .relationships
+                .iter()
+                .any(|(u, _)| *u == candidate_a_uuid || *u == candidate_b_uuid),
+            "tie on receiver-chain score must drop the call rather than guess"
+        );
+    }
+
+    // Regression: bug reported on LlamaFactory's webui/chatter.py.
+    // `super().__init__()` inside `WebChatModel.__init__` was being resolved to
+    // the same-file `WebChatModel.__init__` (the enclosing function itself) via
+    // the name_to_uuids fallback, instead of `ChatModel.__init__`.
+    #[test]
+    fn test_python_super_init_resolves_to_parent_class() {
+        let parent_class = mock_resolution_entity_with_kind(
+            "ChatModel",
+            "llamafactory.chat.ChatModel",
+            None,
+            "src/llamafactory/chat/chat_model.py",
+            EntityKind::PythonClass,
+        );
+        let parent_init = mock_resolution_entity_with_kind(
+            "__init__",
+            "llamafactory.chat.ChatModel.__init__",
+            Some("ChatModel"),
+            "src/llamafactory/chat/chat_model.py",
+            EntityKind::Method,
+        );
+        let mut child_class = mock_resolution_entity_with_kind(
+            "WebChatModel",
+            "llamafactory.webui.chatter.WebChatModel",
+            None,
+            "src/llamafactory/webui/chatter.py",
+            EntityKind::PythonClass,
+        );
+        child_class
+            .reference_intents
+            .push(ReferenceIntent::Extends {
+                parent: "ChatModel".to_string(),
+                line: 81,
+            });
+
+        let mut child_init = mock_resolution_entity_with_kind(
+            "__init__",
+            "llamafactory.webui.chatter.WebChatModel.__init__",
+            Some("WebChatModel"),
+            "src/llamafactory/webui/chatter.py",
+            EntityKind::Method,
+        );
+        child_init.reference_intents.push(ReferenceIntent::Call {
+            method: "__init__".to_string(),
+            receiver: Some("super()".to_string()),
+            line: 87,
+            arg_count: Some(0),
+        });
+        child_init.reference_intents.push(ReferenceIntent::Call {
+            method: "__init__".to_string(),
+            receiver: Some("super()".to_string()),
+            line: 93,
+            arg_count: Some(1),
+        });
+
+        let parent_init_uuid = parent_init.uuid;
+        let child_init_uuid = child_init.uuid;
+
+        let mut entities = vec![parent_class, parent_init, child_class, child_init];
+        resolve_reference_intents(&mut entities);
+
+        let child_init_entity = entities.iter().find(|e| e.uuid == child_init_uuid).unwrap();
+
+        let calls_to_parent = child_init_entity
+            .relationships
+            .iter()
+            .filter(|(uuid, rel)| *uuid == parent_init_uuid && *rel == RelationshipType::Calls)
+            .count();
+        assert_eq!(
+            calls_to_parent, 1,
+            "super().__init__() must resolve to ChatModel.__init__ (deduplicated across the two call sites)"
+        );
+
+        let self_calls = child_init_entity
+            .relationships
+            .iter()
+            .filter(|(uuid, rel)| *uuid == child_init_uuid && *rel == RelationshipType::Calls)
+            .count();
+        assert_eq!(
+            self_calls, 0,
+            "super().__init__() must NOT be misattributed to the enclosing WebChatModel.__init__"
+        );
+    }
+
+    // Java/Kotlin style: `super.method()` produces receiver `"super"`.
+    #[test]
+    fn test_java_super_call_resolves_to_parent_class() {
+        let parent_class = mock_resolution_entity_with_kind(
+            "Base",
+            "com.example.Base",
+            None,
+            "src/Base.java",
+            EntityKind::Class,
+        );
+        let parent_method = mock_resolution_entity_with_kind(
+            "init",
+            "com.example.Base.init",
+            Some("Base"),
+            "src/Base.java",
+            EntityKind::Method,
+        );
+        let mut child_class = mock_resolution_entity_with_kind(
+            "Child",
+            "com.example.Child",
+            None,
+            "src/Child.java",
+            EntityKind::Class,
+        );
+        child_class
+            .reference_intents
+            .push(ReferenceIntent::Extends {
+                parent: "Base".to_string(),
+                line: 1,
+            });
+
+        let mut child_method = mock_resolution_entity_with_kind(
+            "init",
+            "com.example.Child.init",
+            Some("Child"),
+            "src/Child.java",
+            EntityKind::Method,
+        );
+        child_method.reference_intents.push(ReferenceIntent::Call {
+            method: "init".to_string(),
+            receiver: Some("super".to_string()),
+            line: 5,
+            arg_count: Some(0),
+        });
+
+        let parent_method_uuid = parent_method.uuid;
+        let child_method_uuid = child_method.uuid;
+
+        let mut entities = vec![parent_class, parent_method, child_class, child_method];
+        resolve_reference_intents(&mut entities);
+
+        let child_method_entity = entities
+            .iter()
+            .find(|e| e.uuid == child_method_uuid)
+            .unwrap();
+        assert!(
+            child_method_entity
+                .relationships
+                .contains(&(parent_method_uuid, RelationshipType::Calls)),
+            "super.init() must resolve to Base.init"
+        );
+    }
+
+    #[test]
+    fn test_python_super_init_no_parent_returns_no_edge() {
+        // If the parent class isn't indexed, super().__init__() should drop the
+        // call (return None) rather than fall back to the same-file __init__.
+        let mut child_class = mock_resolution_entity_with_kind(
+            "Orphan",
+            "mod.Orphan",
+            None,
+            "test/mod.py",
+            EntityKind::PythonClass,
+        );
+        child_class
+            .reference_intents
+            .push(ReferenceIntent::Extends {
+                parent: "UnindexedExternal".to_string(),
+                line: 1,
+            });
+
+        let mut child_init = mock_resolution_entity_with_kind(
+            "__init__",
+            "mod.Orphan.__init__",
+            Some("Orphan"),
+            "test/mod.py",
+            EntityKind::Method,
+        );
+        child_init.reference_intents.push(ReferenceIntent::Call {
+            method: "__init__".to_string(),
+            receiver: Some("super()".to_string()),
+            line: 5,
+            arg_count: Some(0),
+        });
+
+        let child_init_uuid = child_init.uuid;
+
+        let mut entities = vec![child_class, child_init];
+        resolve_reference_intents(&mut entities);
+
+        let child_init_entity = entities.iter().find(|e| e.uuid == child_init_uuid).unwrap();
+        let self_calls = child_init_entity
+            .relationships
+            .iter()
+            .filter(|(uuid, rel)| *uuid == child_init_uuid && *rel == RelationshipType::Calls)
+            .count();
+        assert_eq!(
+            self_calls, 0,
+            "Unresolved super() must not be misattributed to self"
         );
     }
 
