@@ -338,6 +338,50 @@ Use `--clean` when:
 - You've changed Tree-sitter queries or embedding models
 - Troubleshooting indexing issues
 
+### Indexing Progress
+
+The indexer emits `[Progress]` log lines showing real-time file-based completion.
+Example with 5000 files where 1000 have been parsed:
+
+```
+[Progress] [my-repo] 1000/5000 files (20.0%) — batch #16 ingested (64 entities)
+```
+
+A final log line confirms completion:
+
+```
+[Progress] [my-repo] 5000/5000 files (100.0%) — parsing and ingestion complete, resolving references...
+```
+
+#### Library API (knot-server integration)
+
+Callers that need to observe progress programmatically can use the `ProgressTracker`:
+
+```rust
+use std::sync::Arc;
+use knot::pipeline::{ProgressTracker, run_indexing_pipeline_with_progress};
+
+let progress = Arc::new(ProgressTracker::new());
+let progress_clone = Arc::clone(&progress);
+
+// Poll snapshot() from another task while the pipeline runs
+tokio::spawn(async move {
+    loop {
+        let snap = progress_clone.snapshot();
+        println!("{}/{} files ({:.1}%)", snap.parsed_files, snap.total_files, snap.percent_complete);
+        if snap.stage == IndexingStage::Completed || snap.stage == IndexingStage::Failed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+});
+
+run_indexing_pipeline_with_progress(&cfg, &vdb, &gdb, &mut state, progress).await?;
+```
+
+The `snapshot()` method is thread-safe (read-only locks + atomic loads) and returns a
+`IndexingProgress` struct that serializes directly to JSON for REST endpoints.
+
 ### Running E2E Integration Tests
 
 To ensure indexer stability, run the E2E integration test suite:
