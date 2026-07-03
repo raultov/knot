@@ -12,7 +12,10 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::db::{graph::GraphDb, vector::VectorDb};
-use crate::pipeline::{files::is_supported_file, runner::run_indexing_pipeline, state::IndexState};
+use crate::pipeline::{
+    files::is_supported_file, progress::ProgressTracker,
+    runner::run_indexing_pipeline_with_progress, state::IndexState,
+};
 
 /// Setup and run the watch mode event loop.
 ///
@@ -29,6 +32,23 @@ pub async fn setup_watch_mode(
     vector_db: &Arc<VectorDb>,
     graph_db: &Arc<GraphDb>,
     index_state: &mut IndexState,
+) -> Result<()> {
+    setup_watch_mode_with_progress(
+        cfg,
+        vector_db,
+        graph_db,
+        index_state,
+        Arc::new(ProgressTracker::new()),
+    )
+    .await
+}
+
+pub async fn setup_watch_mode_with_progress(
+    cfg: &Config,
+    vector_db: &Arc<VectorDb>,
+    graph_db: &Arc<GraphDb>,
+    index_state: &mut IndexState,
+    progress: Arc<ProgressTracker>,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<Vec<PathBuf>>(100);
 
@@ -105,7 +125,15 @@ pub async fn setup_watch_mode(
         }
 
         // [PHASE 2] Execute the pipeline once for all accumulated changes
-        if let Err(e) = run_indexing_pipeline(cfg, vector_db, graph_db, index_state).await {
+        if let Err(e) = run_indexing_pipeline_with_progress(
+            cfg,
+            vector_db,
+            graph_db,
+            index_state,
+            Arc::clone(&progress),
+        )
+        .await
+        {
             error!("Error during incremental update: {e:#}");
         }
 

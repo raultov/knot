@@ -61,7 +61,7 @@ fn bench_channel_capacity(c: &mut Criterion) {
                     let max_concurrent = cpus;
 
                     let (tx, mut rx) = mpsc::channel::<ParsedEntity>(capacity);
-                    parse_files_stream(black_box(&files), &parse_cfg, tx, max_concurrent);
+                    parse_files_stream(black_box(&files), &parse_cfg, tx, max_concurrent, None);
 
                     // Drain channel to avoid backpressure skewing results
                     let mut count = 0u64;
@@ -107,7 +107,7 @@ fn bench_concurrency_levels(c: &mut Criterion) {
                     };
 
                     let (tx, mut rx) = mpsc::channel::<ParsedEntity>(1024);
-                    parse_files_stream(black_box(&files), &parse_cfg, tx, max_c);
+                    parse_files_stream(black_box(&files), &parse_cfg, tx, max_c, None);
 
                     let mut count = 0u64;
                     while let Ok(_entity) = rx.try_recv() {

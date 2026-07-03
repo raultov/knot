@@ -70,6 +70,10 @@ pub struct ParseConfig {
     pub repo_path: Option<String>,
 }
 
+/// Callback invoked exactly once per input file after the file has been
+/// fully processed (all entities sent to the channel, or parse failed).
+pub type FileParsedCallback = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// Parse a collection of source files in parallel and send results through a channel.
 ///
 /// Uses `std::thread::scope` with raw OS threads (NOT Rayon) so that
@@ -84,6 +88,7 @@ pub fn parse_files_stream(
     parse_cfg: &ParseConfig,
     sender: mpsc::Sender<ParsedEntity>,
     max_concurrent: usize,
+    on_file_parsed: Option<FileParsedCallback>,
 ) {
     use std::sync::{Arc, Condvar, Mutex};
 
@@ -107,6 +112,8 @@ pub fn parse_files_stream(
                 *active += 1;
             }
 
+            let on_file_parsed = on_file_parsed.clone();
+
             s.spawn(move || {
                 match parse_single_file(&path, &parse_cfg) {
                     Ok(entities) => {
@@ -120,6 +127,10 @@ pub fn parse_files_stream(
                     Err(e) => {
                         warn!("Failed to parse {}: {e:#}", path.display());
                     }
+                }
+
+                if let Some(cb) = &on_file_parsed {
+                    cb();
                 }
 
                 // Release: decrement active count and wake waiter
@@ -143,7 +154,7 @@ pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEnti
         .map(|n| n.get())
         .unwrap_or(4);
 
-    parse_files_stream(files, parse_cfg, tx, cpus);
+    parse_files_stream(files, parse_cfg, tx, cpus, None);
 
     let mut entities = Vec::with_capacity(1024);
     while let Ok(entity) = rx.try_recv() {
@@ -641,7 +652,7 @@ mod tests {
         let files: Vec<PathBuf> = vec![];
         let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
 
-        parse_files_stream(&files, &cfg, sender, 4);
+        parse_files_stream(&files, &cfg, sender, 4, None);
 
         // No files to parse, channel should receive nothing
         assert!(receiver.try_recv().is_err());
@@ -660,7 +671,7 @@ mod tests {
         let files: Vec<PathBuf> = vec![];
         let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
 
-        parse_files_stream(&files, &cfg, sender, 4);
+        parse_files_stream(&files, &cfg, sender, 4, None);
 
         // Verify channel can receive messages (simulated)
         assert!(receiver.try_recv().is_err()); // No data sent
@@ -908,6 +919,103 @@ int bar(const char *s);
         assert_eq!(received.name, "TestClass");
         assert_eq!(received.fqn, "com.example.TestClass");
         assert_eq!(received.language, "java");
+    }
+
+    #[test]
+    fn test_parse_files_stream_callback_once_per_file() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        for i in 0..3 {
+            std::fs::write(dir.path().join(format!("file_{}.rs", i)), "fn foo() {}").unwrap();
+        }
+
+        let files: Vec<PathBuf> = (0..3)
+            .map(|i| dir.path().join(format!("file_{}.rs", i)))
+            .collect();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+        };
+
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
+        let counter = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter_clone = std::sync::Arc::clone(&counter);
+        let cb: FileParsedCallback = std::sync::Arc::new(move || {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        parse_files_stream(&files, &cfg, sender, 4, Some(cb));
+
+        let mut count = 0;
+        while receiver.try_recv().is_ok() {
+            count += 1;
+        }
+        assert!(count > 0, "Should have extracted some entities");
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_parse_files_stream_callback_counts_unparseable() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("valid.rs"), "fn foo() {}").unwrap();
+        std::fs::write(dir.path().join("valid2.rs"), "enum Color { Red }").unwrap();
+        std::fs::write(dir.path().join("broken.rs"), "not valid rust @@@@!!").unwrap();
+
+        let files: Vec<PathBuf> = ["valid.rs", "valid2.rs", "broken.rs"]
+            .iter()
+            .map(|f| dir.path().join(f))
+            .collect();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+        };
+
+        let (sender, _receiver) = mpsc::channel::<ParsedEntity>(32);
+        let counter = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter_clone = std::sync::Arc::clone(&counter);
+        let cb: FileParsedCallback = std::sync::Arc::new(move || {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        parse_files_stream(&files, &cfg, sender, 4, Some(cb));
+
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_parse_files_stream_none_callback() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn foo() {}").unwrap();
+        let files: Vec<PathBuf> = vec![dir.path().join("test.rs")];
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+        };
+
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
+        parse_files_stream(&files, &cfg, sender, 4, None);
+
+        let mut count = 0;
+        while receiver.try_recv().is_ok() {
+            count += 1;
+        }
+        assert!(count > 0, "Should parse entities with None callback");
     }
 
     #[test]

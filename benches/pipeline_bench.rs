@@ -51,7 +51,7 @@ fn parse_benchmark(files: &[PathBuf], label: &str) {
     let max_concurrent = cpus;
 
     let (tx, mut rx) = mpsc::channel::<ParsedEntity>(1024);
-    parse_files_stream(files, &parse_cfg, tx, max_concurrent);
+    parse_files_stream(files, &parse_cfg, tx, max_concurrent, None);
 
     black_box(&parse_cfg);
 
@@ -158,7 +158,7 @@ fn bench_preparation_stage(c: &mut Criterion) {
             .unwrap_or(4);
         let max_concurrent = cpus;
         let (tx, mut rx) = mpsc::channel::<ParsedEntity>(1024);
-        parse_files_stream(&lang_files, &parse_cfg, tx, max_concurrent);
+        parse_files_stream(&lang_files, &parse_cfg, tx, max_concurrent, None);
 
         let mut entities = Vec::with_capacity(1024);
         while let Ok(entity) = rx.try_recv() {

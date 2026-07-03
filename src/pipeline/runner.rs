@@ -24,10 +24,49 @@ use crate::pipeline::{
         resolve_and_save_relationships,
     },
     input::discover_files,
-    parser::{ParseConfig, parse_files_stream},
+    parser::{FileParsedCallback, ParseConfig, parse_files_stream},
     prepare::prepare_entities,
+    progress::{IndexingStage, ProgressTracker},
     state::IndexState,
 };
+
+/// Existing entry point — unchanged signature. Creates a private throwaway
+/// tracker internally so progress *logging* always happens (knot-indexer
+/// gets the log lines for free without opting into the API).
+pub async fn run_indexing_pipeline(
+    cfg: &Config,
+    vector_db: &Arc<VectorDb>,
+    graph_db: &Arc<GraphDb>,
+    index_state: &mut IndexState,
+) -> Result<RunMetrics> {
+    run_indexing_pipeline_with_progress(
+        cfg,
+        vector_db,
+        graph_db,
+        index_state,
+        Arc::new(ProgressTracker::new()),
+    )
+    .await
+}
+
+/// New entry point for callers that want to observe progress (knot-server).
+/// The caller keeps a clone of `progress` and polls `snapshot()` from
+/// another task/thread while this future runs.
+pub async fn run_indexing_pipeline_with_progress(
+    cfg: &Config,
+    vector_db: &Arc<VectorDb>,
+    graph_db: &Arc<GraphDb>,
+    index_state: &mut IndexState,
+    progress: Arc<ProgressTracker>,
+) -> Result<RunMetrics> {
+    progress.begin_run(&cfg.repo_name);
+    let result = run_pipeline_inner(cfg, vector_db, graph_db, index_state, &progress).await;
+    match &result {
+        Ok(_) => progress.complete(),
+        Err(e) => progress.fail(&format!("{e:#}")),
+    }
+    result
+}
 
 /// Core indexing pipeline orchestrator.
 ///
@@ -38,11 +77,12 @@ use crate::pipeline::{
 /// 4. Batch and embed entities (fastembed)
 /// 5. Ingest into Qdrant and Neo4j (dual-write)
 /// 6. Resolve cross-repository relationships
-pub async fn run_indexing_pipeline(
+async fn run_pipeline_inner(
     cfg: &Config,
     vector_db: &Arc<VectorDb>,
     graph_db: &Arc<GraphDb>,
     index_state: &mut IndexState,
+    progress: &Arc<ProgressTracker>,
 ) -> Result<RunMetrics> {
     // Stage 1: Discover and classify files.
     let all_files = discover_files(&cfg.repo_path, cfg.include_config_files)?;
@@ -51,6 +91,7 @@ pub async fn run_indexing_pipeline(
         return Ok(RunMetrics::new(0));
     }
 
+    progress.set_stage(IndexingStage::Classifying);
     let (_, modified_files, added_files, deleted_files) =
         classify_files_for_indexing(&all_files, index_state, cfg.clean)?;
 
@@ -77,6 +118,7 @@ pub async fn run_indexing_pipeline(
     let is_full_index = index_state.file_hashes.is_empty();
 
     // Clean stale data before re-indexing.
+    progress.set_stage(IndexingStage::CleaningStaleData);
     clean_stale_data(
         vector_db,
         graph_db,
@@ -89,6 +131,7 @@ pub async fn run_indexing_pipeline(
 
     // Determine files to parse
     let files_to_parse = calculate_files_to_parse(added_files, modified_files);
+    progress.set_total_files(files_to_parse.len() as u64);
 
     if !files_to_parse.is_empty() {
         info!(
@@ -122,9 +165,28 @@ pub async fn run_indexing_pipeline(
                 .unwrap_or(4)
         });
 
+        // Build the per-file completion callback.
+        let parse_progress = Arc::clone(progress);
+        let on_file_parsed: FileParsedCallback =
+            Arc::new(move || parse_progress.incr_parsed_files());
+
+        progress.set_stage(IndexingStage::Parsing);
+
+        let parse_done_progress = Arc::clone(progress);
         tokio::task::spawn_blocking(move || {
-            parse_files_stream(&files_to_parse_clone, &parse_cfg, parse_tx, cpus);
+            parse_files_stream(
+                &files_to_parse_clone,
+                &parse_cfg,
+                parse_tx,
+                cpus,
+                Some(on_file_parsed),
+            );
             info!("Stage 2: Parallel parsing complete.");
+            // Parsing stage done; ingest continues draining.
+            // The stage is flipped here while the ingest task may already
+            // have been ingesting — this matches the state-machine
+            // simplification where Parsing/Ingesting overlap in reality.
+            parse_done_progress.set_stage(IndexingStage::Ingesting);
         });
 
         // Stage 3 & 4: Batching & Embedding (CPU)
@@ -216,6 +278,7 @@ pub async fn run_indexing_pipeline(
             let gdb = Arc::clone(graph_db);
             let max_concurrent = cfg.ingest_concurrency;
             let semaphore = Arc::new(Semaphore::new(max_concurrent));
+            let ingest_progress = Arc::clone(progress);
 
             info!("Ingestion concurrency: {max_concurrent} simultaneous batches");
 
@@ -226,7 +289,20 @@ pub async fn run_indexing_pipeline(
 
                 while let Some(embedded_batch) = embed_rx.recv().await {
                     batch_count += 1;
-                    total_ingested += embedded_batch.len();
+                    let bl = embedded_batch.len();
+                    total_ingested += bl;
+
+                    ingest_progress.record_batch_ingested(bl as u64);
+                    let snap = ingest_progress.snapshot();
+                    info!(
+                        "[Progress] [{}] {}/{} files ({:.1}%) — batch #{} ingested ({} entities)",
+                        snap.repo_name,
+                        snap.parsed_files,
+                        snap.total_files,
+                        snap.percent_complete,
+                        snap.batches_ingested,
+                        bl
+                    );
 
                     // Dispatch resolution entities before ingestion spawns
                     for ee in &embedded_batch {
@@ -238,7 +314,6 @@ pub async fn run_indexing_pipeline(
                     let vdb = Arc::clone(&vdb);
                     let gdb = Arc::clone(&gdb);
                     let bc = batch_count;
-                    let bl = embedded_batch.len();
 
                     join_set.spawn(async move {
                         info!(
@@ -270,9 +345,20 @@ pub async fn run_indexing_pipeline(
         drop(embed_tx); // Ensure ingest task finishes when embed_rx is empty
         let total_entities = ingest_handle.await??;
 
+        // Final progress log showing 100% parse completion
+        let final_snap = progress.snapshot();
+        info!(
+            "[Progress] [{}] {}/{} files ({:.1}%) — parsing and ingestion complete, resolving references...",
+            final_snap.repo_name,
+            final_snap.parsed_files,
+            final_snap.total_files,
+            final_snap.percent_complete
+        );
+
         // Stage 7: Relationship Resolution
         // The ingest task drops res_tx on exit, which closes the channel
         // and causes res_handle to finish naturally.
+        progress.set_stage(IndexingStage::ResolvingReferences);
         let mut resolution_entities = res_handle.await?;
 
         // Cross-repo dependency linking: upsert Repository nodes and create DEPENDS_ON edges.

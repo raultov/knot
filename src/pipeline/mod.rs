@@ -17,10 +17,13 @@ pub mod ingest;
 pub mod input;
 pub mod parser;
 pub mod prepare;
+pub mod progress;
 pub mod runner;
 pub mod rust_crate_discovery;
 pub mod state;
 pub mod watch;
+
+pub use progress::{IndexingProgress, IndexingStage, ProgressTracker};
 
 #[cfg(test)]
 mod tests {
