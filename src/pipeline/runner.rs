@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::db::{graph::GraphDb, vector::VectorDb};
 use crate::models::{EmbeddedEntity, ParsedEntity, ResolutionEntity};
 use crate::pipeline::{
-    embed::Embedder,
+    embed::{Embedder, needs_reset},
     files::{
         calculate_files_to_delete, calculate_files_to_parse, classify_files_for_indexing,
         update_index_state,
@@ -132,6 +132,7 @@ pub async fn run_indexing_pipeline(
         let embedder = Arc::new(tokio::sync::Mutex::new(Embedder::init(cache_dir)?));
         let embed_handle = {
             let batch_size = cfg.batch_size;
+            let reset_interval = cfg.embedder_reset_interval;
             let embedder = Arc::clone(&embedder);
             let embed_tx = embed_tx.clone();
             tokio::spawn(async move {
@@ -141,6 +142,16 @@ pub async fn run_indexing_pipeline(
                     current_batch.push(entity);
                     if current_batch.len() >= batch_size {
                         batch_count += 1;
+
+                        if needs_reset(batch_count, reset_interval) {
+                            info!(
+                                "[Worker: Embedder] Resetting ONNX session at batch #{} to release BFCArena memory",
+                                batch_count
+                            );
+                            let mut lock = embedder.lock().await;
+                            lock.reinit()?;
+                        }
+
                         let mut batch =
                             std::mem::replace(&mut current_batch, Vec::with_capacity(batch_size));
                         info!(
@@ -161,6 +172,16 @@ pub async fn run_indexing_pipeline(
                 }
                 if !current_batch.is_empty() {
                     batch_count += 1;
+
+                    if needs_reset(batch_count, reset_interval) {
+                        info!(
+                            "[Worker: Embedder] Resetting ONNX session at batch #{} to release BFCArena memory",
+                            batch_count
+                        );
+                        let mut lock = embedder.lock().await;
+                        lock.reinit()?;
+                    }
+
                     info!(
                         "[Worker: Embedder] [{}] Stage 3: Embedding final batch #{} ({} entities)...",
                         current_batch[0].repo_name,
@@ -460,6 +481,7 @@ mod tests {
             neo4j_password: "password".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embedder_reset_interval: 0,
             batch_size: 64,
             clean: false,
             dependency_repos: Vec::new(),

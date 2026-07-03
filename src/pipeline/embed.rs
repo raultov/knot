@@ -21,9 +21,25 @@ const DEFAULT_MODEL: EmbeddingModel = EmbeddingModel::AllMiniLML6V2;
 /// Wrapper around the fastembed [`TextEmbedding`] model.
 pub struct Embedder {
     model: TextEmbedding,
+    cache_dir: std::path::PathBuf,
 }
 
 impl Embedder {
+    pub fn cache_dir_path(p: &std::path::Path) -> std::path::PathBuf {
+        p.to_path_buf()
+    }
+
+    pub fn reinit(&mut self) -> Result<()> {
+        let fresh = TextEmbedding::try_new(
+            InitOptions::new(DEFAULT_MODEL)
+                .with_cache_dir(self.cache_dir.clone())
+                .with_show_download_progress(false),
+        )
+        .context("Failed to reinit fastembed TextEmbedding model")?;
+        self.model = fresh;
+        Ok(())
+    }
+
     /// Initialise the embedding model.
     ///
     /// On first run this will download the ONNX model weights (~23 MB for
@@ -38,13 +54,13 @@ impl Embedder {
 
         let model = TextEmbedding::try_new(
             InitOptions::new(DEFAULT_MODEL)
-                .with_cache_dir(cache_dir)
+                .with_cache_dir(cache_dir.clone())
                 .with_show_download_progress(true),
         )
         .context("Failed to initialise fastembed TextEmbedding model")?;
 
         info!("Embedding model ready");
-        Ok(Self { model })
+        Ok(Self { model, cache_dir })
     }
 
     /// Embed a batch of [`ParsedEntity`] records and return [`EmbeddedEntity`] values.
@@ -155,5 +171,46 @@ mod tests {
             .expect("Failed to embed query");
 
         assert_eq!(vector.len(), 384);
+    }
+}
+
+pub fn needs_reset(batch_count: usize, interval: usize) -> bool {
+    interval > 0 && batch_count > 0 && batch_count.is_multiple_of(interval)
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    #[test]
+    fn test_needs_reset_disabled_when_interval_zero() {
+        assert!(!needs_reset(500, 0));
+        assert!(!needs_reset(1000, 0));
+    }
+    #[test]
+    fn test_needs_reset_true_exactly_at_interval() {
+        assert!(needs_reset(500, 500));
+        assert!(needs_reset(1000, 500));
+        assert!(needs_reset(250, 250));
+    }
+    #[test]
+    fn test_needs_reset_false_before_interval() {
+        assert!(!needs_reset(499, 500));
+        assert!(!needs_reset(1, 500));
+    }
+    #[test]
+    fn test_needs_reset_false_between_intervals() {
+        assert!(!needs_reset(501, 500));
+        assert!(!needs_reset(999, 500));
+    }
+    #[test]
+    fn test_needs_reset_multiples_of_interval() {
+        for multiplier in 1..=10 {
+            assert!(needs_reset(500 * multiplier, 500));
+        }
+    }
+    #[test]
+    fn test_needs_reset_batch_count_zero_never_resets() {
+        assert!(!needs_reset(0, 500));
+        assert!(!needs_reset(0, 1));
     }
 }

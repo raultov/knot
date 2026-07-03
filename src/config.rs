@@ -70,6 +70,13 @@ pub struct IndexerCli {
     /// Embedding model dimension (must match the deployed fastembed model).
     #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384)]
     pub embed_dim: u64,
+    #[arg(
+        long,
+        env = "KNOT_EMBEDDER_RESET_INTERVAL",
+        default_value = "500",
+        help = "Interval (in batches) to recreate the embedder to free memory. 0 disables resets."
+    )]
+    pub embedder_reset_interval: usize,
 
     /// Number of files to process in each rayon parallel batch.
     #[arg(long, env = "KNOT_BATCH_SIZE", default_value_t = 64)]
@@ -162,6 +169,13 @@ pub struct McpCli {
     /// Embedding model dimension (must match the deployed fastembed model).
     #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384, hide = true)]
     pub embed_dim: u64,
+    #[arg(
+        long,
+        env = "KNOT_EMBEDDER_RESET_INTERVAL",
+        default_value = "500",
+        help = "Interval (in batches) to recreate the embedder to free memory. 0 disables resets."
+    )]
+    pub embedder_reset_interval: usize,
 
     /// Run in offline/dry-run mode (for quality checks on deployment platforms).
     /// When enabled, skips all database and model initialization.
@@ -187,6 +201,7 @@ pub struct Config {
     pub neo4j_password: String,
     pub custom_queries_path: Option<String>,
     pub embed_dim: u64,
+    pub embedder_reset_interval: usize,
     pub batch_size: usize,
     pub clean: bool,
     pub dependency_repos: Vec<String>,
@@ -302,6 +317,7 @@ impl Config {
                     neo4j_password,
                     custom_queries_path: cli.custom_queries_path,
                     embed_dim: cli.embed_dim,
+                    embedder_reset_interval: cli.embedder_reset_interval,
                     batch_size: cli.batch_size,
                     clean: cli.clean,
                     dependency_repos,
@@ -331,6 +347,7 @@ impl Config {
                 neo4j_password,
                 custom_queries_path: None,
                 embed_dim: cli.embed_dim,
+                embedder_reset_interval: cli.embedder_reset_interval,
                 batch_size: 0,
                 clean: false,
                 dependency_repos: Vec::new(),
@@ -376,6 +393,7 @@ impl Config {
             neo4j_password,
             custom_queries_path: None,
             embed_dim: cli.embed_dim,
+            embedder_reset_interval: cli.embedder_reset_interval,
             batch_size: 0,
             clean: false,
             dependency_repos: Vec::new(),
@@ -862,6 +880,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
             dependency_repos: Vec::new(),
@@ -987,6 +1006,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
             dependency_repos: Vec::new(),
@@ -1051,6 +1071,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
             dependency_repos: Vec::new(),
@@ -1078,6 +1099,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
             dependency_repos: Vec::new(),

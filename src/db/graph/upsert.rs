@@ -16,6 +16,41 @@ fn group_entities_by_kind(entities: &[EmbeddedEntity]) -> HashMap<String, Vec<&E
     groups
 }
 
+/// Build the Cypher query used by [`UpsertExt::upsert_entities`] to auto-link
+/// parent (class/interface/enum) and child (method/field) entities via the
+/// `CONTAINS` relationship.
+///
+/// This helper is module-private so the query can be unit-tested without
+/// touching Neo4j.
+///
+/// The query MUST be scoped to the UUIDs of the entities just upserted
+/// (`UNWIND $entity_uuids AS entity_uuid`) to avoid a full-repo scan after
+/// every batch (the previous behaviour was O(n²) total).
+///
+/// The parent-class lookup (`c1`, `c2`) intentionally remains a graph-wide
+/// OPTIONAL MATCH scoped by `repo_name` because the parent class may have been
+/// indexed in a previous batch.
+fn build_contains_auto_link_cypher() -> &'static str {
+    "UNWIND $entity_uuids AS entity_uuid
+     MATCH (m:Entity {uuid: entity_uuid})
+     WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
+     OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
+     WITH m, c1
+     OPTIONAL MATCH (c2:Entity {name: m.enclosing_class, repo_name: $repo_name, file_path: m.file_path})
+     WITH m, COALESCE(c1, c2) AS c
+     WHERE c IS NOT NULL
+     MERGE (c)-[:CONTAINS]->(m)"
+}
+
+/// Extract the UUIDs of all entities in the batch as strings.
+///
+/// These UUIDs are passed to the CONTAINS auto-link Cypher query via
+/// `$entity_uuids` so the MATCH is scoped to the current batch rather than
+/// scanning every entity in the repository.
+fn extract_entity_uuids(entities: &[EmbeddedEntity]) -> Vec<String> {
+    entities.iter().map(|e| e.entity.uuid.to_string()).collect()
+}
+
 /// Extension trait for upsert and write operations.
 #[allow(async_fn_in_trait)]
 pub trait UpsertExt {
@@ -220,18 +255,14 @@ impl UpsertExt for GraphDb {
         // falling back to (name, file_path) for non-Rust languages or when FQN is unknown.
         if let Some(first) = entities.first() {
             let repo_name = &first.entity.repo_name;
-            let link_cypher = "
-                MATCH (m:Entity {repo_name: $repo_name})
-                WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
-                OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
-                WITH m, c1
-                OPTIONAL MATCH (c2:Entity {name: m.enclosing_class, repo_name: $repo_name, file_path: m.file_path})
-                WITH m, COALESCE(c1, c2) AS c
-                WHERE c IS NOT NULL
-                MERGE (c)-[:CONTAINS]->(m)
-            ";
+            let entity_uuids = extract_entity_uuids(entities);
+            let link_cypher = build_contains_auto_link_cypher();
             self.graph
-                .run(query(link_cypher).param("repo_name", repo_name.clone()))
+                .run(
+                    query(link_cypher)
+                        .param("repo_name", repo_name.clone())
+                        .param("entity_uuids", entity_uuids),
+                )
                 .await
                 .context("Failed to auto-link CONTAINS relationships")?;
         }
@@ -391,6 +422,63 @@ impl UpsertExt for GraphDb {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_contains_auto_link_uses_unwind_with_uuids() {
+        let cypher = super::build_contains_auto_link_cypher();
+        assert!(cypher.contains("UNWIND $entity_uuids AS entity_uuid"));
+    }
+
+    #[test]
+    fn test_contains_auto_link_matches_by_uuid() {
+        let cypher = super::build_contains_auto_link_cypher();
+        assert!(cypher.contains("MATCH (m:Entity {uuid: entity_uuid})"));
+    }
+
+    #[test]
+    fn test_contains_auto_link_does_not_scan_full_repo() {
+        let cypher = super::build_contains_auto_link_cypher();
+        assert!(!cypher.contains("MATCH (m:Entity {repo_name:"));
+    }
+
+    #[test]
+    fn test_contains_auto_link_preserves_optional_match_for_parent() {
+        let cypher = super::build_contains_auto_link_cypher();
+        assert!(cypher.contains("OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn"));
+        assert!(cypher.contains("OPTIONAL MATCH (c2:Entity {name: m.enclosing_class"));
+    }
+
+    #[test]
+    fn test_contains_auto_link_preserves_coalesce_fallback() {
+        let cypher = super::build_contains_auto_link_cypher();
+        assert!(cypher.contains("COALESCE(c1, c2)"));
+    }
+
+    #[test]
+    fn test_contains_uuid_list_contains_all_batch_uuids() {
+        let entities = vec![
+            create_embedded_test_entity("ClassA", EntityKind::Class),
+            create_embedded_test_entity("methodFoo", EntityKind::Method),
+        ];
+        let uuids = super::extract_entity_uuids(&entities);
+        assert_eq!(uuids.len(), entities.len());
+        for (uuid, entity) in uuids.iter().zip(entities.iter()) {
+            assert_eq!(uuid, &entity.entity.uuid.to_string());
+        }
+    }
+
+    #[test]
+    fn test_contains_uuid_list_empty_for_empty_batch() {
+        let entities: Vec<crate::models::EmbeddedEntity> = vec![];
+        let uuids = super::extract_entity_uuids(&entities);
+        assert!(uuids.is_empty());
+    }
+
+    #[test]
+    fn test_contains_cypher_repo_name_still_used_for_parent_lookup() {
+        let cypher = super::build_contains_auto_link_cypher();
+        assert!(cypher.contains("repo_name: $repo_name"));
+    }
+
     use super::super::GraphDb;
     use super::UpsertExt;
     use crate::db::graph::connection::ConnectExt;
