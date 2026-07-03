@@ -6,6 +6,21 @@
 
 ---
 
+## v1.5.0 — File-Based Indexing Progress Tracking
+
+- ✅ **Feat(pipeline)**: New `ProgressTracker` API (`src/pipeline/progress.rs`) — thread-safe, pollable struct exposing `snapshot()` as a `Serialize`able `IndexingProgress` so `knot-server` can implement `GET /repos/{name}/progress` without a mapping layer. Counters use lock-free atomics; stage/error live behind an `RwLock`.
+- ✅ **Feat(pipeline)**: Indexer logs a `[Progress] [<repo>] X/Y files (Z%) — batch #N ingested (M entities)` line after every ingested batch, and a final `100.0%` line before reference resolution. Format pinned by `tests/run_rust_e2e.sh` grep assertions.
+- ✅ **Feat(pipeline)**: `run_indexing_pipeline_with_progress()` and `setup_watch_mode_with_progress()` keep the legacy signatures, creating an internal throwaway tracker so CLI (`knot-indexer`) gets the log lines for free without opting into the API.
+- ✅ **Feat(parser)**: New `FileParsedCallback` parameter on `parse_files_stream` invoked exactly once per file (success or parse error), keeping the parser decoupled from the tracker.
+- ✅ **Test(progress)**: 10 unit tests on `ProgressTracker` (lifecycle, percent rules, concurrent atomicity, JSON serialization); 3 unit tests on `parse_files_stream` callback (once-per-file invariant, error-path counting, `None` regression).
+- ✅ **Test(e2e)**: `tests/run_rust_e2e.sh` now asserts the `[Progress]` log format and the 100.0% final line.
+- ✅ **Docs(readme)**: New "Indexing Progress" subsection with log-format example and library API sample.
+- ✅ **Docs(specs)**: New specification `docs/specs/indexing_progress_api.md` covering the design, thread-safety, and knot-server integration sketch.
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean
+- ✅ 854 unit tests passing.
+
+---
+
 ## v1.4.13 — Python `super()` and Chained Attribute Resolution
 
 - ✅ **Fix(python)**: `super().__init__()` calls inside subclasses now resolve to the parent class's `__init__` instead of being misattributed to the enclosing class's own `__init__` (or dropped when the parent was unindexed). Reported against LlamaFactory `webui/chatter.py::WebChatModel`.
