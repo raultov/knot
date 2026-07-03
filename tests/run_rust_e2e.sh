@@ -152,7 +152,25 @@ cargo build --release --bin knot-indexer 2>&1 | grep -E "(Compiling|Finished|err
 echo "Running indexer for Rust files..."
 INDEXER_FLAGS=()
 [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
-cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
+INDEXER_OUTPUT=$(cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}" 2>&1)
+echo "$INDEXER_OUTPUT"
+
+# Verify [Progress] log lines are emitted when files are actually parsed
+if echo "$INDEXER_OUTPUT" | grep -q "No files changed"; then
+    echo -e "${YELLOW}⚠ No files to parse — skipping progress log checks (incremental run)${NC}"
+elif echo "$INDEXER_OUTPUT" | grep -q "No supported source files found"; then
+    echo -e "${YELLOW}⚠ Empty repo — skipping progress log checks${NC}"
+else
+    if ! echo "$INDEXER_OUTPUT" | grep -qE '\[Progress\] \[.*\] [0-9]+/[0-9]+ files \([0-9.]+%\)'; then
+        echo -e "${RED}✗ No [Progress] log line found in indexer output${NC}"
+        exit 1
+    fi
+    if ! echo "$INDEXER_OUTPUT" | grep -q '100\.0%'; then
+        echo -e "${RED}✗ No 100.0% progress line found in indexer output${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Progress log lines verified${NC}"
+fi
 
 echo -e "${GREEN}✓ Rust file indexed${NC}"
 
