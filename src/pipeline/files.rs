@@ -47,15 +47,20 @@ pub fn is_supported_file(path: &Path, include_config_files: bool) -> bool {
 }
 
 /// Classify files into unchanged, modified, added, and deleted categories.
+///
+/// `repo_root` is the canonicalized repo root used by `to_repo_relative` to
+/// compute the keys persisted in `index_state` (see
+/// `docs/specs/relative_file_paths.md` §3.2).
 pub fn classify_files_for_indexing(
     all_files: &[PathBuf],
     index_state: &IndexState,
     clean_mode: bool,
+    repo_root: &Path,
 ) -> Result<FileClassification> {
     if clean_mode {
         Ok((vec![], vec![], all_files.to_vec(), vec![]))
     } else {
-        index_state.classify_files(all_files)
+        index_state.classify_files(all_files, repo_root)
     }
 }
 
@@ -79,15 +84,21 @@ pub fn calculate_files_to_parse(added: Vec<PathBuf>, modified: Vec<PathBuf>) -> 
 }
 
 /// Update index state and log completion.
+///
+/// `repo_root` is the canonicalized repo root used to compute relative keys
+/// (see `docs/specs/relative_file_paths.md` §3.2). `repo_path` is the raw
+/// input path used to locate the state file on disk (its canonical form is
+/// what `repo_root` should be).
 pub fn update_index_state(
     index_state: &mut IndexState,
     files_to_parse: &[PathBuf],
     deleted_files: &[String],
     repo_path: &str,
+    repo_root: &Path,
     embedded_count: usize,
 ) -> Result<()> {
     info!("Updating index state...");
-    index_state.update_files(files_to_parse)?;
+    index_state.update_files(files_to_parse, repo_root)?;
     index_state.remove_files(deleted_files);
     index_state.save(repo_path)?;
 
@@ -105,6 +116,46 @@ pub fn update_index_state(
     }
 
     Ok(())
+}
+
+/// Convert an absolute file path into the canonical repo-relative form
+/// (POSIX separators, no leading "./"). `repo_root` must be canonicalized
+/// by the caller (once per run). Returns the absolute path unchanged and
+/// logs a warning if `path` is not under `repo_root` (rule R5).
+///
+/// Rules enforced (see `docs/specs/relative_file_paths.md` §1):
+/// - R1: relative to canonicalized `repo_root`
+/// - R2: POSIX separators always (Windows `\` walks are normalized)
+/// - R3: no leading `./`, no trailing `/`
+/// - R4: a file at the repo root stores its bare filename
+/// - R5: paths outside the repo root fall back to the absolute path with a warn
+pub fn to_repo_relative(path: &Path, repo_root: &Path) -> String {
+    match path.strip_prefix(repo_root) {
+        Ok(rel) => {
+            let mut s = rel.to_string_lossy().to_string();
+            s = s.replace('\\', "/");
+            s = s.trim_start_matches("./").to_string();
+            s = s.trim_end_matches('/').to_string();
+            if s.is_empty() {
+                // Degenerate: path == repo_root itself. Not reachable for
+                // discovered files (only files are parsed), but be defensive
+                // — return the basename so we never produce an empty string.
+                rel.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| rel.to_string_lossy().into_owned())
+            } else {
+                s
+            }
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Path {} is not under repo root {}; storing absolute path (rule R5)",
+                path.display(),
+                repo_root.display()
+            );
+            path.to_string_lossy().replace('\\', "/").to_string()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -144,11 +195,13 @@ mod tests {
 
     #[test]
     fn test_classify_files_for_indexing_clean_mode() {
-        let all_files = vec![PathBuf::from("src/main.rs"), PathBuf::from("src/lib.rs")];
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = temp_dir.path();
+        let all_files = vec![repo_root.join("src/main.rs"), repo_root.join("src/lib.rs")];
         let index_state = IndexState::default();
 
         let (unchanged, modified, added, deleted) =
-            classify_files_for_indexing(&all_files, &index_state, true).unwrap();
+            classify_files_for_indexing(&all_files, &index_state, true, repo_root).unwrap();
 
         assert_eq!(unchanged.len(), 0);
         assert_eq!(modified.len(), 0);
@@ -158,11 +211,13 @@ mod tests {
 
     #[test]
     fn test_classify_files_for_indexing_no_clean() {
-        let file1 = PathBuf::from("file1.ts");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = temp_dir.path();
+        let file1 = repo_root.join("file1.ts");
         let _all_files = [file1.clone()];
 
         let mut index_state = IndexState::default();
-        // Simulate file1 being already indexed
+        // Simulate file1 being already indexed (relative key).
         index_state
             .file_hashes
             .insert("file1.ts".to_string(), "old_hash".to_string());
@@ -178,6 +233,7 @@ mod tests {
 
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_repo = temp_dir.path().to_str().unwrap();
+        let repo_root = temp_dir.path();
 
         // Create a fake file to hash
         let fake_file = temp_dir.path().join("new.ts");
@@ -188,12 +244,14 @@ mod tests {
             &[fake_file],
             &deleted_files,
             temp_repo,
+            repo_root,
             10,
         );
 
         assert!(result.is_ok());
         assert_eq!(index_state.file_hashes.len(), 1);
         assert!(!index_state.file_hashes.contains_key("old.java"));
+        assert!(index_state.file_hashes.contains_key("new.ts"));
     }
 
     #[test]
@@ -218,19 +276,21 @@ mod tests {
     #[test]
     fn test_classify_files_for_indexing_no_clean_unchanged() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let file1 = temp_dir.path().join("file1.ts");
+        let repo_root = temp_dir.path();
+        let file1 = repo_root.join("file1.ts");
         fs::write(&file1, "content").unwrap();
 
         let all_files = [file1.clone()];
         let mut index_state = IndexState::default();
 
         let hash = IndexState::compute_file_hash(&file1).unwrap();
+        // State keys are relative.
         index_state
             .file_hashes
-            .insert(file1.to_str().unwrap().to_string(), hash);
+            .insert(to_repo_relative(&file1, repo_root), hash);
 
         let (unchanged, modified, added, deleted) =
-            classify_files_for_indexing(&all_files, &index_state, false).unwrap();
+            classify_files_for_indexing(&all_files, &index_state, false, repo_root).unwrap();
 
         assert_eq!(unchanged.len(), 1);
         assert_eq!(modified.len(), 0);
@@ -267,5 +327,80 @@ mod tests {
         assert!(!is_supported_file(Path::new("test.txt"), true));
         assert!(!is_supported_file(Path::new("test"), true));
         assert!(!is_supported_file(Path::new("test.java.bak"), true));
+    }
+
+    // ---- §10.1 unit tests for to_repo_relative ----
+
+    #[test]
+    fn test_to_repo_relative_nested_file() {
+        let root = Path::new("/repo");
+        let path = Path::new("/repo/src/a/b.rs");
+        assert_eq!(to_repo_relative(path, root), "src/a/b.rs");
+    }
+
+    #[test]
+    fn test_to_repo_relative_root_file() {
+        let root = Path::new("/repo");
+        let path = Path::new("/repo/Cargo.toml");
+        assert_eq!(to_repo_relative(path, root), "Cargo.toml");
+    }
+
+    #[test]
+    fn test_to_repo_relative_trailing_slash_root() {
+        let root = Path::new("/repo/");
+        let path = Path::new("/repo/a/b/c.rs");
+        // Path::strip_prefix handles trailing-slash roots transparently.
+        assert_eq!(to_repo_relative(path, root), "a/b/c.rs");
+    }
+
+    #[test]
+    fn test_to_repo_relative_backslash_normalization() {
+        // R2: POSIX separators always. `\` from Windows walks is converted.
+        let root = Path::new("C:\\repo");
+        let path_str = "C:\\repo\\src\\lib.rs";
+        let path = Path::new(path_str);
+        let result = to_repo_relative(path, root);
+        assert!(
+            !result.contains('\\'),
+            "backslash should be converted to forward slash, got {result}"
+        );
+        assert!(result.contains("src/lib.rs"), "got {result}");
+    }
+
+    #[test]
+    fn test_to_repo_relative_outside_root_falls_back_absolute() {
+        // R5: paths outside the root fall back to absolute with a warn.
+        let root = Path::new("/repo");
+        let path = Path::new("/elsewhere/x.rs");
+        let result = to_repo_relative(path, root);
+        assert!(
+            result.contains("/elsewhere/x.rs"),
+            "expected absolute passthrough, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_to_repo_relative_no_leading_dot_slash() {
+        // R3: no leading "./".
+        let root = Path::new("/repo");
+        let path = Path::new("/repo/./src/lib.rs");
+        let result = to_repo_relative(path, root);
+        assert!(
+            !result.starts_with("./"),
+            "result must not have leading ./: got {result}"
+        );
+        assert!(result.contains("src/lib.rs"), "got {result}");
+    }
+
+    #[test]
+    fn test_to_repo_relative_no_trailing_slash() {
+        // R3: no trailing "/".
+        let root = Path::new("/repo");
+        let path = Path::new("/repo/dir/");
+        let result = to_repo_relative(path, root);
+        assert!(
+            !result.ends_with('/'),
+            "result must not have trailing /: got {result}"
+        );
     }
 }

@@ -44,6 +44,13 @@ struct RustModuleContext {
 /// the test function would either collide with same-named tests in other
 /// files or fail to surface at all in `find_callers` queries.
 ///
+/// `file_path` is the canonical **repo-relative** path produced by the
+/// parser (§3.1 of `docs/specs/relative_file_paths.md`). Internally the
+/// absolute path is reconstructed against `repo_path` because crate
+/// discovery (`CrateDiscovery`) and `compute_rust_file_kind` index the
+/// repository by absolute paths — only the **persisted** entity path is
+/// relative. Existing callers passing absolute paths continue to work.
+///
 /// A `None` `repo_path`, a missing `Cargo.toml`, or a file outside any
 /// known crate `src/` directory is treated as a no-op for that file.
 pub(crate) fn qualify_rust_fqns(
@@ -60,11 +67,19 @@ pub(crate) fn qualify_rust_fqns(
     }
 
     let repo_root = std::path::Path::new(repo_path);
+    let relative_path = std::path::Path::new(file_path);
+    // §3.1 ordering constraint: crate discovery must use absolute paths.
+    let absolute_path: std::path::PathBuf = if relative_path.is_absolute() {
+        relative_path.to_path_buf()
+    } else {
+        repo_root.join(relative_path)
+    };
+
     let discovery = CrateDiscovery::discover(repo_root);
-    let crate_root = discovery.crate_for_file(std::path::Path::new(file_path));
+    let crate_root = discovery.crate_for_file(&absolute_path);
 
     let file_kind = crate::pipeline::parser::context::compute_rust_file_kind(
-        file_path,
+        &absolute_path.to_string_lossy(),
         crate_root.map(|cr| cr.root_dir.as_path()),
         repo_root,
     );

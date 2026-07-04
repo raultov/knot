@@ -437,6 +437,88 @@ impl ParsedEntity {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    //! §10.1 unit tests — UUID stability across machines.
+    //!
+    //! Spec requirement (`docs/specs/relative_file_paths.md` §10.1
+    //! `test_uuid_stable_across_machines`): the same `(repo, relative_path,
+    //! fqn, line)` triple must produce the same UUID regardless of the
+    //! indexing machine. This is enforced by storing `file_path` as the
+    //! canonical relative path — the UUID is then a pure function of the
+    //! triple above.
+
+    use super::*;
+
+    #[test]
+    fn test_uuid_stable_across_machines() {
+        let a = ParsedEntity::new(
+            "Config",
+            EntityKind::Class,
+            "mycrate::config::Config",
+            None,
+            None,
+            "rust",
+            "src/config.rs",
+            1,
+            10,
+            None,
+            "mycrate",
+        );
+        let b = ParsedEntity::new(
+            "Config",
+            EntityKind::Class,
+            "mycrate::config::Config",
+            None,
+            None,
+            "rust",
+            "src/config.rs",
+            1,
+            10,
+            None,
+            "mycrate",
+        );
+        assert_eq!(
+            a.uuid, b.uuid,
+            "UUIDs must be deterministic for the same triple (repo, path, fqn, line)"
+        );
+
+        // The mirror: two different absolute prefixes in `file_path` MUST NOT
+        // produce the same UUID (they are different identities). The spec's
+        // stability contract only holds for relative paths.
+        let c = ParsedEntity::new(
+            "Config",
+            EntityKind::Class,
+            "mycrate::config::Config",
+            None,
+            None,
+            "rust",
+            "/home/alice/work/mycrate/src/config.rs",
+            1,
+            10,
+            None,
+            "mycrate",
+        );
+        let d = ParsedEntity::new(
+            "Config",
+            EntityKind::Class,
+            "mycrate::config::Config",
+            None,
+            None,
+            "rust",
+            "/var/lib/knot/repos/mycrate/src/config.rs",
+            1,
+            10,
+            None,
+            "mycrate",
+        );
+        assert_ne!(
+            c.uuid, d.uuid,
+            "different absolute prefixes must yield different UUIDs (regression marker)"
+        );
+    }
+}
+
 /// An entity that has been embedded and is ready for dual-write ingestion.
 ///
 /// Produced by Stage 4 (embed) and consumed by Stage 5 (ingest).

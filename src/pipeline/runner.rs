@@ -92,8 +92,9 @@ async fn run_pipeline_inner(
     }
 
     progress.set_stage(IndexingStage::Classifying);
+    let repo_root = PathBuf::from(&cfg.repo_path);
     let (_, modified_files, added_files, deleted_files) =
-        classify_files_for_indexing(&all_files, index_state, cfg.clean)?;
+        classify_files_for_indexing(&all_files, index_state, cfg.clean, &repo_root)?;
 
     let unchanged_count =
         all_files.len() - modified_files.len() - added_files.len() - deleted_files.len();
@@ -374,6 +375,7 @@ async fn run_pipeline_inner(
             &files_to_parse,
             &deleted_files,
             &cfg.repo_path,
+            &repo_root,
             total_entities,
         )?;
 
@@ -381,7 +383,14 @@ async fn run_pipeline_inner(
         Ok(metrics)
     } else if !deleted_files.is_empty() {
         // Only deletions occurred
-        update_index_state(index_state, &[], &deleted_files, &cfg.repo_path, 0)?;
+        update_index_state(
+            index_state,
+            &[],
+            &deleted_files,
+            &cfg.repo_path,
+            &repo_root,
+            0,
+        )?;
         Ok(RunMetrics::new(0))
     } else {
         Ok(RunMetrics::new(0))
@@ -391,7 +400,7 @@ async fn run_pipeline_inner(
 /// Clean stale data from databases based on files to delete.
 ///
 /// When `cfg.clean` is set or this is a full indexing run (no prior state on
-/// disk), the entire repository is wiped in a single bulk operation. Otherwise
+/// disk), the entire repository is wiped in a single bulk operation, otherwise
 /// only the files that already exist in the database (deleted and modified)
 /// are removed incrementally.
 pub async fn clean_stale_data(
@@ -444,7 +453,13 @@ fn build_parse_config(
     include_config_files: bool,
     repo_path: Option<String>,
 ) -> ParseConfig {
+    let repo_root = if let Some(ref p) = repo_path {
+        std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p))
+    } else {
+        PathBuf::from(".")
+    };
     ParseConfig {
+        repo_root,
         custom_queries_path,
         repo_name,
         include_config_files,

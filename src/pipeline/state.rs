@@ -2,6 +2,11 @@
 //!
 //! Manages a persistent index state file (.knot/index_state.json) that tracks
 //! SHA-256 hashes of indexed source files to enable incremental re-indexing.
+//!
+//! File hashes are keyed by **canonical repo-relative paths** (see
+//! `docs/specs/relative_file_paths.md` §3.2). Callers pass absolute
+//! `PathBuf`s in (discovery is unchanged); the relative key is computed
+//! against `repo_root` on every classification.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -10,6 +15,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
+
+use crate::pipeline::files::to_repo_relative;
 
 /// State directory name within the repository.
 const STATE_DIR: &str = ".knot";
@@ -23,7 +30,7 @@ const STATE_FILE: &str = "index_state.json";
 /// produced FQNs that are incompatible with the current schema (e.g. Rust
 /// entities now carry crate-qualified FQNs introduced in v2, and
 /// `__fixture::`/`__loose::` prefixed FQNs for non-src files in v3).
-const CURRENT_STATE_VERSION: u32 = 3;
+const CURRENT_STATE_VERSION: u32 = 4;
 
 /// Returns the cache directory for fastembed models.
 /// Prioritises the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
@@ -156,31 +163,39 @@ impl IndexState {
 
     /// Classify files based on state comparison.
     ///
+    /// `current_files` are absolute `PathBuf`s from `discover_files`.
+    /// `repo_root` is the canonicalized repo root used to compute relative
+    /// keys (see `docs/specs/relative_file_paths.md` §3.2). The returned
+    /// `unchanged`/`modified`/`added` vectors carry absolute paths (callers
+    /// need them for I/O); the `deleted` list carries relative keys (to
+    /// match what is persisted and to plug into `delete_by_file_paths`).
+    ///
     /// Returns four vectors:
     /// - unchanged: files with identical hashes
     /// - modified: files with different hashes
     /// - added: new files not in old state
-    /// - deleted: files in old state but not on disk
-    pub fn classify_files(&self, current_files: &[PathBuf]) -> Result<FileClassification> {
+    /// - deleted: files in old state but not on disk (relative keys)
+    pub fn classify_files(
+        &self,
+        current_files: &[PathBuf],
+        repo_root: &Path,
+    ) -> Result<FileClassification> {
         let mut unchanged = Vec::new();
         let mut modified = Vec::new();
         let mut added = Vec::new();
 
-        // Build a set of current file paths for deletion detection
-        let current_paths: std::collections::HashSet<String> = current_files
+        // Build a set of current *relative* file paths for deletion detection
+        let current_rel_paths: std::collections::HashSet<String> = current_files
             .iter()
-            .filter_map(|p| p.to_str().map(|s| s.to_string()))
+            .map(|p| to_repo_relative(p, repo_root))
             .collect();
 
         // Classify current files
         for file_path in current_files {
-            let path_str = file_path
-                .to_str()
-                .context("File path contains invalid UTF-8")?;
-
+            let key = to_repo_relative(file_path, repo_root);
             let current_hash = Self::compute_file_hash(file_path)?;
 
-            match self.file_hashes.get(path_str) {
+            match self.file_hashes.get(&key) {
                 Some(old_hash) if old_hash == &current_hash => {
                     unchanged.push(file_path.clone());
                 }
@@ -193,11 +208,11 @@ impl IndexState {
             }
         }
 
-        // Detect deleted files (in old state but not in current)
+        // Detect deleted files (in old state but not in current) — relative keys.
         let deleted: Vec<String> = self
             .file_hashes
             .keys()
-            .filter(|old_path| !current_paths.contains(*old_path))
+            .filter(|old_path| !current_rel_paths.contains(*old_path))
             .cloned()
             .collect();
 
@@ -213,15 +228,15 @@ impl IndexState {
     }
 
     /// Update the state with new file hashes.
-    pub fn update_files(&mut self, files: &[PathBuf]) -> Result<()> {
+    ///
+    /// `files` are absolute paths (from discovery / parsing). Keys stored
+    /// in `file_hashes` are canonical relative paths against `repo_root`
+    /// (see `docs/specs/relative_file_paths.md` §3.2).
+    pub fn update_files(&mut self, files: &[PathBuf], repo_root: &Path) -> Result<()> {
         for file_path in files {
-            let path_str = file_path
-                .to_str()
-                .context("File path contains invalid UTF-8")?
-                .to_string();
-
+            let key = to_repo_relative(file_path, repo_root);
             let hash = Self::compute_file_hash(file_path)?;
-            self.file_hashes.insert(path_str, hash);
+            self.file_hashes.insert(key, hash);
         }
 
         Ok(())
@@ -302,35 +317,38 @@ mod tests {
     #[test]
     fn test_classify_files() {
         let dir = tempdir().unwrap();
-        let unchanged_file = dir.path().join("unchanged.ts");
-        let modified_file = dir.path().join("modified.java");
-        let added_file = dir.path().join("added.tsx");
+        let repo_root = dir.path();
+        let unchanged_file = repo_root.join("unchanged.ts");
+        let modified_file = repo_root.join("modified.java");
+        let added_file = repo_root.join("added.tsx");
 
         fs::write(&unchanged_file, "unchanged").unwrap();
         fs::write(&modified_file, "original content").unwrap();
         fs::write(&added_file, "new file").unwrap();
 
         let mut state = IndexState::default();
+        // Keys are relative to repo_root (canonicalized).
         state.file_hashes.insert(
-            unchanged_file.to_str().unwrap().to_string(),
+            to_repo_relative(&unchanged_file, repo_root),
             IndexState::compute_file_hash(&unchanged_file).unwrap(),
         );
         state.file_hashes.insert(
-            modified_file.to_str().unwrap().to_string(),
+            to_repo_relative(&modified_file, repo_root),
             "fake_old_hash".to_string(),
         );
         state
             .file_hashes
             .insert("deleted.java".to_string(), "deleted_hash".to_string());
 
-        // Files currently on disk
+        // Files currently on disk (absolute paths from discover_files).
         let current_files = vec![
             unchanged_file.clone(),
             modified_file.clone(),
             added_file.clone(),
         ];
 
-        let (unchanged, modified, added, deleted) = state.classify_files(&current_files).unwrap();
+        let (unchanged, modified, added, deleted) =
+            state.classify_files(&current_files, repo_root).unwrap();
 
         assert_eq!(unchanged.len(), 1);
         assert_eq!(unchanged[0], unchanged_file);
@@ -348,27 +366,30 @@ mod tests {
     #[test]
     fn test_update_and_remove_files() {
         let dir = tempdir().unwrap();
-        let file1 = dir.path().join("file1.ts");
-        let file2 = dir.path().join("file2.java");
+        let repo_root = dir.path();
+        let file1 = repo_root.join("file1.ts");
+        let file2 = repo_root.join("file2.java");
         fs::write(&file1, "content1").unwrap();
         fs::write(&file2, "content2").unwrap();
 
         let mut state = IndexState::default();
 
-        // Update files
-        state.update_files(&[file1.clone(), file2.clone()]).unwrap();
+        // Update files — keys are relative paths.
+        state
+            .update_files(&[file1.clone(), file2.clone()], repo_root)
+            .unwrap();
         assert_eq!(state.file_hashes.len(), 2);
 
-        let path1 = file1.to_str().unwrap().to_string();
-        let path2 = file2.to_str().unwrap().to_string();
-        assert!(state.file_hashes.contains_key(&path1));
-        assert!(state.file_hashes.contains_key(&path2));
+        let key1 = to_repo_relative(&file1, repo_root);
+        let key2 = to_repo_relative(&file2, repo_root);
+        assert!(state.file_hashes.contains_key(&key1));
+        assert!(state.file_hashes.contains_key(&key2));
 
-        // Remove a file
-        state.remove_files(std::slice::from_ref(&path1));
+        // Remove a file by relative key.
+        state.remove_files(std::slice::from_ref(&key1));
         assert_eq!(state.file_hashes.len(), 1);
-        assert!(!state.file_hashes.contains_key(&path1));
-        assert!(state.file_hashes.contains_key(&path2));
+        assert!(!state.file_hashes.contains_key(&key1));
+        assert!(state.file_hashes.contains_key(&key2));
     }
 
     #[test]
@@ -470,5 +491,109 @@ mod tests {
         assert_eq!(loaded.version, CURRENT_STATE_VERSION);
         assert_eq!(loaded.file_hashes.len(), 1);
         assert_eq!(loaded.file_hashes.get("file1.rs").unwrap(), "hash1");
+    }
+
+    // ---- §10.1 unit tests for relative file path keys ----
+
+    #[test]
+    fn test_classify_files_uses_relative_keys() {
+        // State populated with RELATIVE keys must classify a re-discovered
+        // absolute path as `unchanged`.
+        let dir = tempdir().unwrap();
+        let repo_root = dir.path();
+        let file = repo_root.join("src/lib.rs");
+        fs::create_dir_all(repo_root.join("src")).unwrap();
+        fs::write(&file, "fn foo() {}").unwrap();
+
+        let mut state = IndexState::default();
+        let key = to_repo_relative(&file, repo_root);
+        state
+            .file_hashes
+            .insert(key.clone(), IndexState::compute_file_hash(&file).unwrap());
+
+        let current = vec![file.clone()];
+        let (unchanged, modified, added, deleted) =
+            state.classify_files(&current, repo_root).unwrap();
+
+        assert_eq!(unchanged, vec![file]);
+        assert!(modified.is_empty());
+        assert!(added.is_empty());
+        assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn test_update_files_stores_relative_keys() {
+        let dir = tempdir().unwrap();
+        let repo_root = dir.path();
+        let f = repo_root.join("a/b.rs");
+        fs::create_dir_all(repo_root.join("a")).unwrap();
+        fs::write(&f, "fn x() {}").unwrap();
+
+        let mut state = IndexState::default();
+        state
+            .update_files(std::slice::from_ref(&f), repo_root)
+            .unwrap();
+
+        let key = to_repo_relative(&f, repo_root);
+        assert_eq!(key, "a/b.rs");
+        assert!(state.file_hashes.contains_key(&key));
+        assert!(
+            !state.file_hashes.contains_key(f.to_str().unwrap()),
+            "absolute path must NOT be used as a key"
+        );
+    }
+
+    #[test]
+    fn test_deleted_files_reported_relative() {
+        let dir = tempdir().unwrap();
+        let repo_root = dir.path();
+        fs::create_dir_all(repo_root.join("src")).unwrap();
+        let present = repo_root.join("src/present.rs");
+        fs::write(&present, "x").unwrap();
+
+        let mut state = IndexState::default();
+        state
+            .file_hashes
+            .insert("src/present.rs".to_string(), "h".to_string());
+        state
+            .file_hashes
+            .insert("src/gone.rs".to_string(), "h2".to_string());
+
+        let current = vec![present.clone()];
+        let (_, _, _, deleted) = state.classify_files(&current, repo_root).unwrap();
+
+        assert_eq!(deleted, vec!["src/gone.rs".to_string()]);
+    }
+
+    #[test]
+    fn test_load_rejects_v3_state() {
+        // Mirror of the existing v1/v2 rejection tests: a state file
+        // claiming version 3 (one below CURRENT_STATE_VERSION) must be
+        // rejected so the caller rebuilds from scratch.
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let state_dir = dir.path().join(".knot");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_file = state_dir.join("index_state.json");
+
+        let raw = r#"{
+            "version": 3,
+            "file_hashes": {
+                "/tmp/stale.rs": "abc123"
+            }
+        }"#;
+        fs::write(&state_file, raw).unwrap();
+
+        let err = IndexState::load(repo_path).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("incompatible"),
+            "error should mention incompatibility: {msg}"
+        );
+        assert!(
+            msg.contains("--clean"),
+            "error should suggest --clean flag: {msg}"
+        );
     }
 }

@@ -56,6 +56,7 @@ const DEFAULT_MD_QUERY: &str = include_str!("../../../queries/markdown.scm");
 /// Configuration for the parse stage.
 #[derive(Clone)]
 pub struct ParseConfig {
+    pub repo_root: PathBuf,
     /// Optional filesystem path to a directory containing custom `.scm` query files.
     pub custom_queries_path: Option<String>,
     /// Logical repository name for multi-repository isolation.
@@ -68,6 +69,18 @@ pub struct ParseConfig {
     /// qualified FQNs (e.g. `crate_a::config::Config`). When `None`, Rust
     /// FQNs fall back to their bare-name form.
     pub repo_path: Option<String>,
+}
+
+impl Default for ParseConfig {
+    fn default() -> Self {
+        Self {
+            repo_root: PathBuf::from("."),
+            custom_queries_path: None,
+            repo_name: String::new(),
+            include_config_files: false,
+            repo_path: None,
+        }
+    }
 }
 
 /// Callback invoked exactly once per input file after the file has been
@@ -206,7 +219,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
         .and_then(|n| n.to_str())
         .unwrap_or_default();
 
-    let file_path = path.to_string_lossy().to_string();
+    let file_path = crate::pipeline::files::to_repo_relative(path, &parse_cfg.repo_root);
 
     // Dispatch by filename first for extensionless files
     if filename == "Jenkinsfile" {
@@ -291,7 +304,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
             if !parse_cfg.include_config_files {
                 Vec::new()
             } else {
-                dispatch_yaml(&source, &file_path, &parse_cfg.repo_name)
+                dispatch_yaml(&source, path, &file_path, &parse_cfg.repo_name)
             }
         }
         "json" => {
@@ -323,7 +336,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
             if !parse_cfg.include_config_files {
                 Vec::new()
             } else {
-                let chart_name = detect_chart_name(&file_path);
+                let chart_name = detect_chart_name(path, &parse_cfg.repo_root);
                 languages::helm::extract_helm_template(
                     &source,
                     &file_path,
@@ -462,28 +475,44 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
 
 /// Dispatch YAML files to the appropriate parser based on content.
 #[allow(dead_code)] // Called via dispatch for YAML handling
-fn dispatch_yaml(source: &str, file_path: &str, repo_name: &str) -> Vec<ParsedEntity> {
-    let filename = Path::new(file_path)
+fn dispatch_yaml(
+    source: &str,
+    absolute_path: &Path,
+    relative_path: &str,
+    repo_name: &str,
+) -> Vec<ParsedEntity> {
+    let filename = absolute_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
 
     // 1. Is it Chart.yaml?
     if filename == "Chart.yaml" {
-        return languages::helm::extract_chart_yaml(source, file_path, repo_name);
+        return languages::helm::extract_chart_yaml(source, relative_path, repo_name);
     }
 
     // 2. Is it inside a Helm chart directory?
-    if is_in_helm_chart_dir(file_path) {
+    if is_in_helm_chart_dir(absolute_path) {
         if filename == "values.yaml" || filename == "values.yml" {
-            let chart_name = detect_chart_name(file_path);
-            return languages::helm::extract_values_yaml(source, file_path, repo_name, &chart_name);
+            let chart_name = detect_chart_name(
+                absolute_path,
+                absolute_path.parent().unwrap_or(Path::new(".")),
+            );
+            return languages::helm::extract_values_yaml(
+                source,
+                relative_path,
+                repo_name,
+                &chart_name,
+            );
         }
-        if is_in_templates_dir(file_path) {
-            let chart_name = detect_chart_name(file_path);
+        if is_in_templates_dir(absolute_path) {
+            let chart_name = detect_chart_name(
+                absolute_path,
+                absolute_path.parent().unwrap_or(Path::new(".")),
+            );
             return languages::helm::extract_helm_template(
                 source,
-                file_path,
+                relative_path,
                 repo_name,
                 &chart_name,
             );
@@ -495,18 +524,23 @@ fn dispatch_yaml(source: &str, file_path: &str, repo_name: &str) -> Vec<ParsedEn
         && yaml.get("apiVersion").is_some()
         && yaml.get("kind").is_some()
     {
-        return languages::kubernetes::extract_entities_k8s(source, file_path, repo_name);
+        return languages::kubernetes::extract_entities_k8s(source, relative_path, repo_name);
     }
 
     // 4. Default: generic configuration YAML
-    languages::yaml::extract_entities_yaml(source, file_path, repo_name)
+    languages::yaml::extract_entities_yaml(source, relative_path, repo_name)
 }
 
 /// Check if the file is inside a Helm chart directory by looking for Chart.yaml in parent dirs.
+///
+/// `absolute_path` must be an absolute filesystem path — the function uses
+/// `.exists()` on each ancestor, which resolves against the **process CWD**
+/// for relative inputs. Callers in the pipeline always have the absolute
+/// path from `discover_files`; only the **persisted** entity `file_path`
+/// is relative.
 #[allow(dead_code)] // Used by YAML dispatch heuristics
-fn is_in_helm_chart_dir(file_path: &str) -> bool {
-    let path = Path::new(file_path);
-    let mut current = path.parent();
+fn is_in_helm_chart_dir(absolute_path: &Path) -> bool {
+    let mut current = absolute_path.parent();
 
     while let Some(dir) = current {
         if dir.join("Chart.yaml").exists() {
@@ -519,9 +553,8 @@ fn is_in_helm_chart_dir(file_path: &str) -> bool {
 
 /// Check if the file is inside a templates directory (Helm convention).
 #[allow(dead_code)] // Used by YAML dispatch heuristics
-fn is_in_templates_dir(file_path: &str) -> bool {
-    let path = Path::new(file_path);
-    let mut current = Some(path);
+fn is_in_templates_dir(absolute_path: &Path) -> bool {
+    let mut current = Some(absolute_path);
 
     while let Some(p) = current {
         if p.file_name().and_then(|n| n.to_str()) == Some("templates") {
@@ -533,9 +566,12 @@ fn is_in_templates_dir(file_path: &str) -> bool {
 }
 
 /// Detect the Helm chart name from the nearest Chart.yaml or directory name.
-fn detect_chart_name(file_path: &str) -> String {
-    let path = Path::new(file_path);
-    let mut current = path.parent();
+///
+/// `absolute_path` must be an absolute filesystem path (see
+/// `is_in_helm_chart_dir`). The `repo_root` parameter is currently unused
+/// but kept for future disambiguation if multiple Chart.yamls are reachable.
+fn detect_chart_name(absolute_path: &Path, _repo_root: &Path) -> String {
+    let mut current = absolute_path.parent();
 
     while let Some(dir) = current {
         let chart_yaml = dir.join("Chart.yaml");
@@ -552,7 +588,8 @@ fn detect_chart_name(file_path: &str) -> String {
     }
 
     // Fall back to parent directory name
-    path.parent()
+    absolute_path
+        .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
@@ -590,6 +627,7 @@ mod tests {
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         assert_eq!(cfg.repo_name, "test-repo");
@@ -603,6 +641,7 @@ mod tests {
             repo_name: "my-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         assert_eq!(cfg.repo_name, "my-repo");
@@ -616,6 +655,7 @@ mod tests {
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let default_query = "MATCH (n) RETURN n";
@@ -631,6 +671,7 @@ mod tests {
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let default_query = "MATCH (n) RETURN n";
@@ -647,6 +688,7 @@ mod tests {
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let files: Vec<PathBuf> = vec![];
@@ -665,6 +707,7 @@ mod tests {
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         // Use an empty list since we can't create real files in unit tests
@@ -786,11 +829,91 @@ int bar(const char *s);
 
     #[test]
     fn test_file_path_conversion() {
+        let parse_cfg = ParseConfig {
+            repo_root: PathBuf::from("/home/user/project"),
+            ..Default::default()
+        };
         let path = PathBuf::from("/home/user/project/src/Main.java");
-        let file_path = path.to_string_lossy().to_string();
+        let file_path = crate::pipeline::files::to_repo_relative(&path, &parse_cfg.repo_root);
 
         assert!(file_path.contains("Main.java"));
-        assert_eq!(file_path, "/home/user/project/src/Main.java");
+        assert_eq!(file_path, "src/Main.java");
+    }
+
+    // ---- §10.1 parser tests for relative file_path in entities ----
+
+    #[test]
+    fn test_parsed_entity_file_path_is_relative() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let repo_root = dir.path().canonicalize().unwrap();
+
+        // Create a minimal Java source file so the parser returns entities.
+        let src_dir = repo_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let java_file = src_dir.join("Foo.java");
+        fs::write(&java_file, "public class Foo { public void bar() {} }").unwrap();
+
+        let parse_cfg = ParseConfig {
+            repo_root: repo_root.clone(),
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: false,
+            repo_path: Some(repo_root.to_string_lossy().into_owned()),
+        };
+
+        let entities = parse_files(&[java_file], &parse_cfg);
+        assert!(
+            !entities.is_empty(),
+            "parser should produce at least one entity for Foo.java"
+        );
+        for entity in &entities {
+            assert!(
+                !entity.file_path.starts_with('/'),
+                "file_path must be relative (no leading /), got {}",
+                entity.file_path
+            );
+            assert!(
+                !entity.file_path.contains('\\'),
+                "file_path must use POSIX separators, got {}",
+                entity.file_path
+            );
+        }
+        // The class `Foo` should carry file_path = "src/Foo.java".
+        let foo = entities.iter().find(|e| e.name == "Foo").expect("Foo");
+        assert_eq!(foo.file_path, "src/Foo.java");
+    }
+
+    #[test]
+    fn test_parsed_entity_file_path_verbatim_without_repo_root() {
+        // When `repo_path` is None the parser falls back to its original
+        // behavior (path verbatim), protecting existing parser unit tests
+        // that don't set up a repo root.
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let java_file = dir.path().join("Main.java");
+        fs::write(&java_file, "public class Main {}").unwrap();
+
+        let parse_cfg = ParseConfig {
+            // No canonical repo_root set in production — default (".") used.
+            repo_root: PathBuf::from("."),
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: false,
+            repo_path: None,
+        };
+
+        let entities = parse_files(std::slice::from_ref(&java_file), &parse_cfg);
+        // Without a repo_root, the parser cannot strip a prefix — it falls
+        // back to the absolute path (R5). Existing unit tests that don't
+        // set up a repo root continue to see the path they passed in.
+        assert!(!entities.is_empty(), "parser must still produce entities");
+        let main = entities.iter().find(|e| e.name == "Main").expect("Main");
+        assert!(
+            main.file_path.contains("Main.java"),
+            "verbatim path should still contain the filename, got {}",
+            main.file_path
+        );
     }
 
     #[test]
@@ -800,6 +923,7 @@ int bar(const char *s);
             repo_name: "myproject".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let path = PathBuf::from("/src/Main.java");
@@ -817,6 +941,7 @@ int bar(const char *s);
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let files: Vec<PathBuf> = vec![];
@@ -928,7 +1053,7 @@ int bar(const char *s);
 
         let dir = tempdir().unwrap();
         for i in 0..3 {
-            std::fs::write(dir.path().join(format!("file_{}.rs", i)), "fn foo() {}").unwrap();
+            fs::write(dir.path().join(format!("file_{}.rs", i)), "fn foo() {}").unwrap();
         }
 
         let files: Vec<PathBuf> = (0..3)
@@ -940,6 +1065,7 @@ int bar(const char *s);
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
@@ -965,9 +1091,9 @@ int bar(const char *s);
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("valid.rs"), "fn foo() {}").unwrap();
-        std::fs::write(dir.path().join("valid2.rs"), "enum Color { Red }").unwrap();
-        std::fs::write(dir.path().join("broken.rs"), "not valid rust @@@@!!").unwrap();
+        fs::write(dir.path().join("valid.rs"), "fn foo() {}").unwrap();
+        fs::write(dir.path().join("valid2.rs"), "enum Color { Red }").unwrap();
+        fs::write(dir.path().join("broken.rs"), "not valid rust @@@@!!").unwrap();
 
         let files: Vec<PathBuf> = ["valid.rs", "valid2.rs", "broken.rs"]
             .iter()
@@ -979,6 +1105,7 @@ int bar(const char *s);
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let (sender, _receiver) = mpsc::channel::<ParsedEntity>(32);
@@ -998,7 +1125,7 @@ int bar(const char *s);
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("test.rs"), "fn foo() {}").unwrap();
+        fs::write(dir.path().join("test.rs"), "fn foo() {}").unwrap();
         let files: Vec<PathBuf> = vec![dir.path().join("test.rs")];
 
         let cfg = ParseConfig {
@@ -1006,6 +1133,7 @@ int bar(const char *s);
             repo_name: "test-repo".to_string(),
             include_config_files: true,
             repo_path: None,
+            ..Default::default()
         };
 
         let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
