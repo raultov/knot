@@ -58,14 +58,38 @@ SUITES=(
     "run_markdown_e2e.sh"
 )
 
-# Pre-flight: ensure shared Neo4j port (17687) is free before starting.
-if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':17687 '; then
-    echo -e "${YELLOW}Port 17687 still in use, forcing teardown before suite...${NC}"
-    cd "$TESTS_DIR"
-    docker compose -f docker-compose.e2e.yml down -v --remove-orphans 2>/dev/null || true
-    sleep 5
-    cd "$PROJECT_ROOT"
-fi
+# Pre-flight: free the e2e ports of any foreign container. Other e2e
+# projects on this host (e.g. knot-server/tests/docker-compose.e2e.yml)
+# publish the same high ports under their own container names; if any of
+# those is still running, our containers will silently die on port-bind and
+# `nc -z` will then talk to the wrong Qdrant/Neo4j.
+OUR_E2E_CONTAINERS=(knot_qdrant_e2e knot_neo4j_e2e)
+E2E_PORTS=(16333 16334 17474 17687)
+stop_foreign_holders() {
+    local stopped_any=0
+    for port in "${E2E_PORTS[@]}"; do
+        # `docker ps --filter publish=<port>` matches by host-port mapping.
+        local holders
+        holders=$(docker ps --filter "publish=$port" --format '{{.Names}}' 2>/dev/null || true)
+        for name in $holders; do
+            local skip=0
+            for ours in "${OUR_E2E_CONTAINERS[@]}"; do
+                if [ "$name" = "$ours" ]; then skip=1; break; fi
+            done
+            if [ "$skip" -eq 1 ]; then continue; fi
+            echo -e "${YELLOW}Stopping foreign container '$name' holding e2e port $port...${NC}"
+            docker stop "$name" >/dev/null 2>&1 || true
+            stopped_any=1
+        done
+    done
+    if [ "$stopped_any" -eq 1 ]; then sleep 3; fi
+}
+stop_foreign_holders
+
+# If our own e2e containers are still around from a previous run, tear them down.
+cd "$TESTS_DIR"
+docker compose -f docker-compose.e2e.yml down -v --remove-orphans 2>/dev/null || true
+cd "$PROJECT_ROOT"
 
 # Build binaries once (unless caller provides pre-built binaries via KNOT_SKIP_BUILD=1)
 if [ "${KNOT_SKIP_BUILD:-0}" = "1" ]; then
@@ -96,7 +120,7 @@ wait_for_port() {
 
     echo -n "Waiting for $service"
     while [ $elapsed -lt $timeout ]; do
-        if [ "$service" = "Neo4j" ] || [ "$service" = "Qdrant" ]; then
+        if [ "$service" = "Neo4j" ]; then
             local status
             status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "starting")
             if [ "$status" = "healthy" ]; then
@@ -105,21 +129,23 @@ wait_for_port() {
                 return 0
             fi
         else
+            # For Qdrant (and any non-Neo4j service), probe the actual port
+            # instead of the container's Health.Status. Qdrant 1.16+ removed
+            # the /health endpoint (returns 404), so the compose healthcheck
+            # never reports healthy and the container stays in "starting".
             if nc -z localhost "$port" 2>/dev/null; then
                 echo ""
                 echo -e "${GREEN}✓ $service is ready on port $port${NC}"
                 return 0
             fi
         fi
-        if [ $elapsed -ge $timeout ]; then
-            echo ""
-            echo -e "${RED}ERROR: $service did not start within ${timeout}s${NC}"
-            return 1
-        fi
         sleep 2
         elapsed=$((elapsed + 2))
         echo -n "."
     done
+    echo ""
+    echo -e "${RED}ERROR: $service did not start within ${timeout}s${NC}"
+    return 1
 }
 
 wait_for_port 17687 "Neo4j" "knot_neo4j_e2e" || { echo -e "${RED}Shared DB failed to start${NC}"; exit 1; }
