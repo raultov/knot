@@ -77,6 +77,10 @@ else
 fi
 
 # Single shared-DB startup
+echo -e "${YELLOW}Cleaning up stale .knot and .e2e_data directories...${NC}"
+docker run --rm -v "$SCRIPT_DIR:/tests" alpine rm -rf /tests/.e2e_data 2>/dev/null || true
+find "$PROJECT_ROOT/tests" -type d -name ".knot" -exec rm -rf {} + 2>/dev/null || true
+
 echo -e "\n${YELLOW}Starting shared Neo4j + Qdrant (once for all suites)...${NC}"
 cd "$TESTS_DIR"
 docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -92,7 +96,7 @@ wait_for_port() {
 
     echo -n "Waiting for $service"
     while [ $elapsed -lt $timeout ]; do
-        if [ "$service" = "Neo4j" ]; then
+        if [ "$service" = "Neo4j" ] || [ "$service" = "Qdrant" ]; then
             local status
             status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "starting")
             if [ "$status" = "healthy" ]; then

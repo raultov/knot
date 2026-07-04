@@ -357,16 +357,26 @@ pub(crate) fn resolve_single_call_intent(
         }
 
         if let Some(uuids) = ctx.name_to_uuids.get(&intent.method) {
+            if let Some(ac) = intent.arg_count
+                && let Some(ac_map) = ctx.uuid_to_arg_count
+            {
+                if let Some(&same_file_ac_uuid) = uuids.iter().find(|&&u| {
+                    ac_map.get(&u) == Some(&ac)
+                        && ctx
+                            .uuid_to_file
+                            .get(&u)
+                            .is_some_and(|f| f == caller_file_path)
+                }) {
+                    return Some(same_file_ac_uuid);
+                }
+                if let Some(u) = find_by_arg_count(uuids, ac, ac_map) {
+                    return Some(u);
+                }
+            }
             if let Some(same_file_uuid) =
                 find_entity_in_same_file(uuids, caller_file_path, ctx.uuid_to_file)
             {
                 return Some(same_file_uuid);
-            }
-            if let Some(ac) = intent.arg_count
-                && let Some(ac_map) = ctx.uuid_to_arg_count
-                && let Some(u) = find_by_arg_count(uuids, ac, ac_map)
-            {
-                return Some(u);
             }
             if let Some(u) = disambiguate_by_receiver_chain(uuids, receiver, ctx) {
                 return Some(u);
@@ -380,16 +390,26 @@ pub(crate) fn resolve_single_call_intent(
     if intent.receiver.is_none()
         && let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
     {
+        if let Some(ac) = intent.arg_count
+            && let Some(ac_map) = ctx.uuid_to_arg_count
+        {
+            if let Some(&same_file_ac_uuid) = uuids.iter().find(|&&u| {
+                ac_map.get(&u) == Some(&ac)
+                    && ctx
+                        .uuid_to_file
+                        .get(&u)
+                        .is_some_and(|f| f == caller_file_path)
+            }) {
+                return Some(same_file_ac_uuid);
+            }
+            if let Some(u) = find_by_arg_count(uuids, ac, ac_map) {
+                return Some(u);
+            }
+        }
         if let Some(same_file_uuid) =
             find_entity_in_same_file(uuids, caller_file_path, ctx.uuid_to_file)
         {
             return Some(same_file_uuid);
-        }
-        if let Some(ac) = intent.arg_count
-            && let Some(ac_map) = ctx.uuid_to_arg_count
-            && let Some(u) = find_by_arg_count(uuids, ac, ac_map)
-        {
-            return Some(u);
         }
         if uuids.len() == 1 {
             return uuids.first().copied();
