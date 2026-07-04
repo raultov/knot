@@ -42,6 +42,11 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 
 **Do NOT `cat` or `read` entire files just to see their signatures.**
 
+**Path handling:** `explore_file` accepts repo-relative paths (preferred, e.g. `src/pipeline/embed.rs`)
+or absolute local paths (e.g. `/home/you/work/myrepo/src/lib.rs`). The tool strips the known
+local root automatically. If you see `ambiguous_path_candidates` in the response, retry
+with a more specific path or pass `repo_name`.
+
 ## Why This Matters
 
 Traditional regex-based searches (`grep`, `rg`, `find`) have critical limitations:
@@ -77,8 +82,11 @@ Exceptions (where shell tools are acceptable):
 - The `knot` MCP server requires Qdrant and Neo4j running (default: `localhost:6334` and `bolt://localhost:7687`)
 - All tools support optional `repo_name` parameter for multi-repository filtering
 - Results include full context (signatures, docstrings, file locations, call chains)
+- **Returned file paths are repo-relative** (e.g. `src/pipeline/embed.rs`). The owning repository
+  is printed next to each path as `(repo: name)`. To open a file in your editor, resolve the
+  relative path against your local checkout of the named repository.
 
 ---
 
-**Last Updated:** 2026-04-04
+**Last Updated:** 2026-07-04
 **Applies To:** All LLMs, CLI agents, and IDE integrations accessing this codebase

@@ -338,6 +338,15 @@ Use `--clean` when:
 - You've changed Tree-sitter queries or embedding models
 - Troubleshooting indexing issues
 
+> **Upgrade note (v1.5.1):** File paths are now persisted as **repo-relative**
+> paths with POSIX separators (e.g. `src/pipeline/embed.rs`). Upgrading from
+> v1.4.x triggers an automatic full re-index on first run — the on-disk
+> `.knot/index_state.json` carries a version field that the loader rejects
+> when stale, and `knot-indexer` then wipes the repo from both databases
+> before rebuilding. No manual steps required. Entity UUIDs become
+> machine-independent in the process: the same repo indexed from different
+> checkout locations now produces identical UUIDs.
+
 ### Indexing Progress
 
 The indexer emits `[Progress]` log lines showing real-time file-based completion.
