@@ -6,6 +6,27 @@
 
 ---
 
+## v1.5.1 — Machine-Independent (Repo-Relative) File Paths
+
+- ✅ **Feat(pipeline)**: All persisted `file_path` values are now stored as **repo-relative** paths with POSIX separators (e.g. `src/pipeline/embed.rs`). New `to_repo_relative` choke point in `src/pipeline/files.rs` (with `ParseConfig.repo_root` canonicalized once at pipeline start) enforces the format: relative to repo root, POSIX separators, no leading `./`, no trailing `/`, R5 warn-and-passthrough for the degenerate out-of-root case. I/O continues to use absolute paths — only the persisted string changes.
+- ✅ **Feat(pipeline)**: Index state version bumps from 3 → 4. Existing v3 state files are rejected by `IndexState::load`; the existing stale-version mechanism triggers a one-time full re-index on upgrade with no manual steps. `file_hashes` keys are now the canonical relative path.
+- ✅ **Feat(pipeline)**: Entity UUIDs (`Uuid::new_v5` over `repo_name:file_path:fqn:start_line`) become **machine-independent**: the same repo indexed on two hosts now produces identical UUIDs. Reinforced by the new `test_uuid_stable_across_machines` unit test in `src/models/entity.rs`.
+- ✅ **Feat(cli)**: `explore_file` (shared by CLI and MCP) now accepts repo-relative paths (preferred), absolute paths under `KNOT_REPO_PATH` / CWD (auto-stripped), and falls back to a path-boundary `ENDS WITH` suffix query. Ambiguous matches across multiple repos surface a `ambiguous_path_candidates` list instead of a silent miss.
+- ✅ **Feat(cli)**: New shared `format_file_line` renderer annotates every file mention with `(repo: <name>)` when the owning repo is known, used by both the CLI and MCP answers.
+- ✅ **Feat(graph)**: New `QueryExt::find_files_by_suffix` powers the disambiguation fallback — a single Cypher query returning distinct `(file_path, repo_name)` pairs bounded by the indexed `repo_name` when provided.
+- ✅ **Feat(mcp)**: `explore_file` tool description updated to state the preferred relative-path input, the absolute-path fallback, and the disambiguation contract.
+- ✅ **Feat(parser)**: Rust crate discovery (`CrateDiscovery::crate_for_file`, `compute_rust_file_kind`) still keys on the absolute path — the relative entity path is reconstructed against `repo_root` only when the parser is invoked with a relative path. FQNs are unaffected (asserted by `tests/run_rust_reference_resolution_e2e.sh`).
+- ✅ **Test(unit)**: 6 new tests on `to_repo_relative` (nested file, root file, trailing-slash root, backslash normalization, out-of-root R5, leading-dot-slash guard); 3 tests on `IndexState` for relative keys + v3 rejection; 2 tests on the parser for relative `file_path`; 5 tests on input normalization and the suffix query; 1 test on `format_file_line`.
+- ✅ **Test(e2e)**: `tests/run_rust_reference_resolution_e2e.sh` queries updated to expect repo-relative fixture paths and to strip cypher-shell's plain-format quoting.
+- ✅ **Fix(e2e)**: `tests/docker-compose.e2e.yml` and `tests/run_all_e2e_fast.sh` hardened — Qdrant 1.16+ removed `/health` so the compose healthcheck never reports healthy; `wait_for_port` now probes the actual port via `nc -z` for non-Neo4j services. Pre-flight also frees any foreign container holding the e2e high ports (e.g. a sibling knot-server setup that would silently steal our bind).
+- ✅ **Chore(docs)**: Removed two obsolete spec files (`docs/specs/indexing_progress_api.md`, `docs/specs/performance_fix_bfcarena_and_contains.md`) — their designs are now covered by the codebase and CHANGELOG.
+- ✅ **Docs**: README upgrade note, `.prompt`, and `.knot-agent.md` updated to teach the relative-paths contract to humans and LLMs alike.
+- ⚠️ **Breaking change**: Upgrading from v1.5.0 triggers an automatic full re-index on first run. `.knot/index_state.json` carries a version field that the loader rejects when stale, and `knot-indexer` wipes the repo from both databases before rebuilding. No manual steps required.
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean
+- ✅ Unit tests passing.
+
+---
+
 ## v1.5.0 — File-Based Indexing Progress Tracking
 
 - ✅ **Feat(pipeline)**: New `ProgressTracker` API (`src/pipeline/progress.rs`) — thread-safe, pollable struct exposing `snapshot()` as a `Serialize`able `IndexingProgress` so `knot-server` can implement `GET /repos/{name}/progress` without a mapping layer. Counters use lock-free atomics; stage/error live behind an `RwLock`.
