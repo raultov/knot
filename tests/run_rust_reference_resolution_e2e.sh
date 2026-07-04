@@ -395,7 +395,9 @@ fi
 # Test PR2-1: Fixture entity has __fixture:: prefix in FQN
 echo ""
 echo "Test PR2-1: Fixture Config entity has __fixture:: FQN prefix..."
-QUERY_FIXTURE_FQN="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME'}) WHERE e.file_path CONTAINS '/tests/testing_files/sample.rs' AND e.name = 'Config' RETURN e.fqn AS fqn;"
+# File paths are now repo-relative (per docs/specs/relative_file_paths.md),
+# so the fixture file is referenced without the absolute prefix.
+QUERY_FIXTURE_FQN="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME'}) WHERE e.file_path = 'tests/testing_files/sample.rs' AND e.name = 'Config' RETURN e.fqn AS fqn;"
 FIXTURE_FQN=$(run_neo4j_cypher "$QUERY_FIXTURE_FQN")
 
 if echo "$FIXTURE_FQN" | grep -q "__fixture::"; then
@@ -411,17 +413,20 @@ echo "Test PR2-2: Real Config entity has standard crate FQN..."
 QUERY_REAL_FQN="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME', fqn:'collision_test::config::Config'}) RETURN e.file_path AS fp;"
 REAL_FP=$(run_neo4j_cypher "$QUERY_REAL_FQN")
 
-if echo "$REAL_FP" | grep -q "/src/"; then
-    echo -e "${GREEN}✓ Real Config is in src/ (file_path=$REAL_FP)${NC}"
+# cypher-shell --format plain wraps string values in quotes; strip them
+# so the substring check below sees the raw path.
+REAL_FP_CLEAN=$(echo "$REAL_FP" | sed 's/^"//;s/"$//')
+if echo "$REAL_FP_CLEAN" | grep -qE "(^|/)src/"; then
+    echo -e "${GREEN}✓ Real Config is in src/ (file_path=$REAL_FP_CLEAN)${NC}"
 else
-    echo -e "${RED}✗ Real Config should be in src/, got file_path=$REAL_FP${NC}"
+    echo -e "${RED}✗ Real Config should be in src/, got file_path=$REAL_FP_CLEAN${NC}"
     exit 1
 fi
 
 # Test PR2-3: Fixture method has __fixture:: prefix in enclosing_class_fqn
 echo ""
 echo "Test PR2-3: Fixture method 'new' has __fixture:: enclosing_class_fqn..."
-QUERY_FIXTURE_METHOD="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME'}) WHERE e.file_path CONTAINS '/tests/testing_files/sample.rs' AND e.name = 'new' RETURN e.enclosing_class_fqn AS fqn;"
+QUERY_FIXTURE_METHOD="MATCH (e:Entity {repo_name: '$COLLISION_REPO_NAME'}) WHERE e.file_path = 'tests/testing_files/sample.rs' AND e.name = 'new' RETURN e.enclosing_class_fqn AS fqn;"
 FIXTURE_METHOD_FQN=$(run_neo4j_cypher "$QUERY_FIXTURE_METHOD")
 
 if echo "$FIXTURE_METHOD_FQN" | grep -q "__fixture::"; then
