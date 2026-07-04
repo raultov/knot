@@ -78,7 +78,7 @@ fi
 
 # Single shared-DB startup
 echo -e "${YELLOW}Cleaning up stale .knot and .e2e_data directories...${NC}"
-docker run --rm -v "$SCRIPT_DIR:/tests" alpine rm -rf /tests/.e2e_data 2>/dev/null || true
+docker run --rm -v "$TESTS_DIR:/tests" alpine rm -rf /tests/.e2e_data 2>/dev/null || true
 find "$PROJECT_ROOT/tests" -type d -name ".knot" -exec rm -rf {} + 2>/dev/null || true
 
 echo -e "\n${YELLOW}Starting shared Neo4j + Qdrant (once for all suites)...${NC}"
