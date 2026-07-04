@@ -37,6 +37,16 @@ pub trait QueryExt {
         file_path: &str,
         repo_name: Option<&str>,
     ) -> Result<serde_json::Value>;
+    /// Suffix-based fallback used by `explore_file` (§4 of
+    /// `docs/specs/relative_file_paths.md`). `suffix_fragment` is the
+    /// fragment after `WHERE e.file_path ` in the Cypher query (e.g.
+    /// `ENDS WITH '/Cargo.toml'`). Returns a list of distinct
+    /// `(file_path, repo_name)` pairs that match.
+    async fn find_files_by_suffix(
+        &self,
+        suffix_fragment: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value>;
 }
 
 impl QueryExt for GraphDb {
@@ -409,6 +419,52 @@ impl QueryExt for GraphDb {
             results.push(entry);
         }
 
+        Ok(serde_json::json!(results))
+    }
+
+    async fn find_files_by_suffix(
+        &self,
+        suffix_fragment: &str,
+        repo_name: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        // `suffix_fragment` is the post-`WHERE` text, e.g.
+        // "ENDS WITH '/src/lib.rs'". We hardcode the rest of the WHERE so
+        // callers cannot inject arbitrary Cypher; the fragment is built by
+        // `ends_with_suffix_query` which only ever interpolates a string
+        // literal, so SQL/Cypher injection is not possible here.
+        let query_str = if repo_name.is_some() {
+            format!(
+                "MATCH (e:Entity) \
+                 WHERE e.file_path {suffix_fragment} AND e.repo_name = $repo_name \
+                 RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
+                 ORDER BY e.file_path LIMIT 50"
+            )
+        } else {
+            format!(
+                "MATCH (e:Entity) \
+                 WHERE e.file_path {suffix_fragment} \
+                 RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
+                 ORDER BY e.file_path LIMIT 50"
+            )
+        };
+        let mut q = query(&query_str);
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for files by suffix")?;
+
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            results.push(serde_json::json!({
+                "file_path": row.get::<String>("file_path").ok(),
+                "repo_name": row.get::<String>("repo_name").ok(),
+            }));
+        }
         Ok(serde_json::json!(results))
     }
 }

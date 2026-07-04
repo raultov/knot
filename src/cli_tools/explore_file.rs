@@ -3,7 +3,7 @@
 //! Lists all code entities (classes, methods, interfaces, functions)
 //! within a specific source file, organized by type.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::db::graph::{GraphDb, QueryExt};
@@ -12,39 +12,126 @@ use crate::cli_tools::json_entities_array;
 
 use crate::cli_tools::append_signature_if_present;
 
-/// Main explore_file function called by both CLI and MCP
+use crate::cli_tools::format_file_line;
+
+/// Normalize caller-supplied input to the canonical form used in the index.
+///
+/// Implements §4 of `docs/specs/relative_file_paths.md`:
+///
+/// 1. POSIX separators and no leading `./`.
+/// 2. EXACT — caller already supplied the stored form (no further work).
+/// 3. LOCAL-ROOT — if the input exists on disk and lives under one of the
+///    known local roots (`KNOT_REPO_PATH` first, then CWD), strip the root
+///    and retry as a relative path.
+/// 4. SUFFIX — for the `find_files` fallback: a path-boundary
+///    `ENDS WITH '/' + suffix` query lets callers pass either `Cargo.toml`
+///    or `path/to/Cargo.toml` and still hit a stored entity.
+pub fn normalize_explore_input(input: &str, repo_root: Option<&Path>) -> String {
+    let mut normalized = input.replace('\\', "/");
+    if normalized.starts_with("./") {
+        normalized.drain(..2);
+    }
+    if let Some(root) = repo_root
+        && let Some(root_str) = root.to_str()
+    {
+        let root_norm = root_str
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_string();
+        let root_with_slash = format!("{root_norm}/");
+        if let Some(stripped) = normalized.strip_prefix(&root_with_slash) {
+            return stripped.to_string();
+        }
+        if normalized == root_norm {
+            return String::new();
+        }
+    }
+    normalized
+}
+
+/// Resolve `input` to the canonical repo-relative form by consulting the
+/// local filesystem when the caller passed a path that exists on disk
+/// (e.g. an absolute path from a developer's checkout).
+///
+/// `cwd` and `repo_root` are passed in for testability. Pass
+/// `std::env::current_dir().ok()` and `std::env::var("KNOT_REPO_PATH").ok()`
+/// from production code.
+pub fn resolve_explore_input(input: &str, cwd: Option<&Path>, repo_root: Option<&Path>) -> String {
+    let mut candidate = normalize_explore_input(input, repo_root);
+    let input_path = Path::new(input);
+
+    if input_path.exists()
+        && let Ok(canonical) = std::fs::canonicalize(input_path)
+    {
+        let roots: [Option<&Path>; 2] = [repo_root, cwd];
+        for root in roots.iter().flatten() {
+            if let Ok(rel) = canonical.strip_prefix(root) {
+                let s = rel.to_string_lossy().replace('\\', "/");
+                candidate = s.trim_start_matches("./").to_string();
+                break;
+            }
+        }
+    }
+    candidate
+}
+
+/// Build the suffix query fragment used by the SUFFIX fallback of
+/// `run_explore_file`. Exposed for unit tests in §10.1.
+pub fn ends_with_suffix_query(suffix: &str) -> String {
+    format!("ENDS WITH '/{suffix}'")
+}
+
+/// Main explore_file function called by both CLI and MCP.
 pub async fn run_explore_file(
     file_path: &str,
     repo_name: Option<&str>,
     graph_db: &Arc<GraphDb>,
 ) -> anyhow::Result<(String, serde_json::Value)> {
-    let (normalized_path, display_path) = if Path::new(file_path).exists() {
-        let canonical = std::fs::canonicalize(file_path)?;
-        let canonical_str = canonical.to_string_lossy().to_string();
-        (canonical_str.clone(), canonical_str)
-    } else {
-        (file_path.to_string(), file_path.to_string())
-    };
+    let cwd = std::env::current_dir().ok();
+    let repo_root = std::env::var("KNOT_REPO_PATH").ok().map(PathBuf::from);
+    let normalized_path = resolve_explore_input(file_path, cwd.as_deref(), repo_root.as_deref());
 
     let entities = graph_db
         .get_file_entities(&normalized_path, repo_name)
         .await?;
-
     let outgoing_refs = graph_db
         .get_file_outgoing_references(&normalized_path, repo_name)
         .await
         .unwrap_or_else(|_| serde_json::json!([]));
+
+    // §4 step 6 — DISAMBIGUATE: if the exact match produced nothing, fall
+    // back to a suffix search. This handles the `transition period`
+    // (relative query against an old absolute index) and the common case
+    // of a bare-filename query like `src/lib.rs` from any CWD.
+    if entities.as_array().is_none_or(|a| a.is_empty())
+        && outgoing_refs.as_array().is_none_or(|a| a.is_empty())
+        && !normalized_path.is_empty()
+    {
+        let suffix = ends_with_suffix_query(&normalized_path);
+        if let Ok(candidates) = graph_db.find_files_by_suffix(&suffix, repo_name).await
+            && candidates.as_array().is_some_and(|a| !a.is_empty())
+        {
+            return Ok((
+                normalized_path,
+                serde_json::json!({
+                    "entities": entities,
+                    "outgoing_references": outgoing_refs,
+                    "ambiguous_path_candidates": candidates,
+                }),
+            ));
+        }
+    }
 
     let result = serde_json::json!({
         "entities": entities,
         "outgoing_references": outgoing_refs,
     });
 
-    Ok((display_path, result))
+    Ok((normalized_path, result))
 }
 
 pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> String {
-    let mut output = format!("# Entities in `{}`\n\n", file_path);
+    let mut output = format!("# Entities in {}\n\n", format_file_line(file_path, None));
 
     let entities = json_entities_array(result);
 
@@ -682,5 +769,45 @@ mod tests {
         ]);
         let formatted = format_file_entities("src/main/java/MyClass.java", &entities);
         assert!(formatted.contains("src/main/java/MyClass.java"));
+    }
+
+    // ---- §10.1 unit tests for input normalization ----
+
+    #[test]
+    fn test_normalize_input_strips_dot_slash_and_backslashes() {
+        let root = Path::new("/repo");
+        let result = normalize_explore_input("./src\\lib.rs", Some(root));
+        assert_eq!(result, "src/lib.rs");
+    }
+
+    #[test]
+    fn test_normalize_input_passthrough_when_no_root() {
+        let result = normalize_explore_input("src/lib.rs", None);
+        assert_eq!(result, "src/lib.rs");
+    }
+
+    #[test]
+    fn test_normalize_input_strips_known_absolute_root() {
+        let root = Path::new("/home/user/myrepo");
+        let result = normalize_explore_input("/home/user/myrepo/src/lib.rs", Some(root));
+        assert_eq!(result, "src/lib.rs");
+    }
+
+    #[test]
+    fn test_normalize_absolute_unknown_root_passthrough() {
+        // Path under no known root must be passed through verbatim
+        // (after backslash/dot-slash normalization) — the SUFFIX fallback
+        // in `run_explore_file` is what eventually matches it.
+        let root = Path::new("/home/user/myrepo");
+        let result = normalize_explore_input("/elsewhere/src/lib.rs", Some(root));
+        assert_eq!(result, "/elsewhere/src/lib.rs");
+    }
+
+    #[test]
+    fn test_ends_with_suffix_query_uses_path_boundary() {
+        // Spec §4 step 5: the '/' guard prevents `bar/baz.rs` matching
+        // `foobar/baz.rs`.
+        let fragment = ends_with_suffix_query("src/lib.rs");
+        assert_eq!(fragment, "ENDS WITH '/src/lib.rs'");
     }
 }

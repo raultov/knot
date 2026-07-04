@@ -77,6 +77,26 @@ pub(crate) fn append_signature_if_present(output: &mut String, entity: &serde_js
     }
 }
 
+/// Format a canonical file-line mention per §5.1 of
+/// `docs/specs/relative_file_paths.md`.
+///
+/// Canonical rendering:
+///   `src/pipeline/embed.rs  (repo: knot)`
+///
+/// When `repo_name` is unknown, the trailing `(repo: ...)` is omitted so the
+/// output degrades gracefully. When `local_absolute` is provided (the
+/// consumer knows its local checkout of that repo, e.g. `knot-mcp` via
+/// `KNOT_REPO_PATH`), it is appended for direct opening.
+///
+/// This is the single shared renderer used by both the CLI and the MCP
+/// tool answers — callers must NOT re-render file paths inline.
+pub(crate) fn format_file_line(file_path: &str, repo_name: Option<&str>) -> String {
+    match repo_name {
+        Some(repo) if !repo.is_empty() => format!("`{}`  (repo: {})", file_path, repo),
+        _ => format!("`{}`", file_path),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +214,27 @@ mod tests {
         let entity = json!({"signature": "   "});
         append_signature_if_present(&mut output, &entity);
         assert!(!output.is_empty()); // "   " is not empty, just whitespace
+    }
+
+    // --- format_file_line ---
+
+    #[test]
+    fn test_file_line_includes_repo_name() {
+        let line = format_file_line("src/pipeline/embed.rs", Some("knot"));
+        assert!(line.contains("src/pipeline/embed.rs"));
+        assert!(line.contains("(repo: knot)"), "got {line}");
+    }
+
+    #[test]
+    fn test_file_line_without_repo_name_omits_annotation() {
+        let line = format_file_line("src/lib.rs", None);
+        assert_eq!(line, "`src/lib.rs`");
+        assert!(!line.contains("repo:"));
+    }
+
+    #[test]
+    fn test_file_line_with_empty_repo_name_omits_annotation() {
+        let line = format_file_line("src/lib.rs", Some(""));
+        assert_eq!(line, "`src/lib.rs`");
     }
 }
