@@ -6,6 +6,32 @@
 
 ---
 
+## v1.5.2 — Composite Index for CONTAINS Auto-Link
+
+### Performance
+
+- **Composite index `(repo_name, fqn)` on `:Entity`** — the CONTAINS
+  auto-link query no longer degrades to O(n²) per-row label scans on
+  every entity in the repository.  Large repos (~50K entities) no
+  longer timeout at the end of indexing.  The index is created with
+  `IF NOT EXISTS` so it migrates automatically into existing
+  deployments.
+
+### Internal
+
+- Extracted `index_statements()` from `ensure_indexes()` for unit
+  testing (same pattern already used by `build_contains_auto_link_cypher()`).
+- Added unit tests covering the new composite index, idempotency of
+  `IF NOT EXISTS`, and preservation of all existing index statements.
+- Added integration test (`#[ignore]`) that verifies the index appears
+  in `SHOW INDEXES` and that `EXPLAIN` of the auto-link Cypher succeeds.
+- Added e2e regression script (`run_contains_autolink_index_e2e.sh`)
+  with a synthetic Java fixture of 5,200 entities, verifying index
+  presence, plan index-seek, correct CONTAINS edge counts, and a time
+  budget canary against O(n²) regression.
+
+---
+
 ## v1.5.1 — Machine-Independent (Repo-Relative) File Paths
 
 - ✅ **Feat(pipeline)**: All persisted `file_path` values are now stored as **repo-relative** paths with POSIX separators (e.g. `src/pipeline/embed.rs`). New `to_repo_relative` choke point in `src/pipeline/files.rs` (with `ParseConfig.repo_root` canonicalized once at pipeline start) enforces the format: relative to repo root, POSIX separators, no leading `./`, no trailing `/`, R5 warn-and-passthrough for the degenerate out-of-root case. I/O continues to use absolute paths — only the persisted string changes.
