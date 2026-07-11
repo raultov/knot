@@ -674,8 +674,6 @@ For the full release history see [CHANGELOG.md](CHANGELOG.md).
 ### Upcoming
 
 #### Long-Term Vision
-- [ ] Homogenize all E2E test suites to use the per-suite fixture directory architecture (`E2E_DATA_DIR/docker-compose.yml`) already adopted by `run_cpp_e2e.sh`, for better isolation in standalone mode and parallel-safe execution
-- [ ] Run the `test-unit` gate also on push to master (currently only runs on tag push via `release.yml`) so unit-test regressions are caught at merge time, not at release time
 - [ ] Varnish VCL support
 - [ ] Go support
 - [ ] C# support
