@@ -19,10 +19,14 @@ services:
       - ./.e2e_data/neo4j/data:/data
       - ./.e2e_data/neo4j/logs:/logs
     healthcheck:
+      # cypher-shell is a JVM tool: a cold invocation can take >3s on a loaded
+      # host, so a 3s timeout makes the check flap and the container never
+      # reports healthy within the e2e wait window.
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "e2e_test_password", "CALL db.ping()"]
       interval: 5s
-      timeout: 3s
+      timeout: 15s
       retries: 10
+      start_period: 20s
 
   # Qdrant Vector Database for E2E Tests
   # Uses high ports (16xxx) to avoid conflicts
