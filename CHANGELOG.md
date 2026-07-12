@@ -6,6 +6,15 @@
 
 ---
 
+## v1.5.3 — Groovy Inheritance & Perf Optimization
+
+- ✅ **Feat(groovy)**: The Groovy parser now emits `EXTENDS`/`IMPLEMENTS` reference intents from `class`, `interface`, `trait`, and `enum` declarations, enabling accurate Nextflow-style hierarchy traversal via `find_callers`.
+- ✅ **Chore(config)**: Increased default batch size for Rayon parallel ingestion from 64 to 128.
+- ✅ **Fix(e2e)**: Stabilized Neo4j healthchecks and Cypher `EXPLAIN` plan checks to prevent flapping timeouts in integration tests.
+- ✅ **cargo fmt** clean | **cargo clippy** clean | **894 unit tests** passing
+
+---
+
 ## v1.5.2 — Composite Index for CONTAINS Auto-Link
 
 ### Performance
