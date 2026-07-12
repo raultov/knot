@@ -342,4 +342,64 @@ mod tests {
                 .contains(&(other_uuid, RelationshipType::Implements))
         );
     }
+
+    /// End-to-end check that the Groovy parser emits an `Extends` reference
+    /// intent on `Ext1` and that `resolve_reference_intents` converts it into
+    /// an `Extends` edge pointing at the parent `PluginExtensionPoint` parsed
+    /// in the same file.
+    #[test]
+    fn test_groovy_extends_resolves_to_extends_relationship() {
+        use crate::models::ResolutionEntity;
+        use crate::pipeline::parser::languages::groovy::extract_entities_groovy;
+
+        const FILE: &str = "Plugin.groovy";
+
+        let parent_source = "abstract class PluginExtensionPoint { }";
+        let child_source = "class Ext1 extends PluginExtensionPoint { }";
+
+        let parent_entities = extract_entities_groovy(parent_source, FILE, "test-repo");
+        let child_entities = extract_entities_groovy(child_source, FILE, "test-repo");
+
+        let child_parsed = child_entities
+            .iter()
+            .find(|e| e.name == "Ext1")
+            .expect("Ext1 should be parsed");
+
+        // Sanity check: the parser must emit an `Extends` reference on the
+        // child entity before resolution runs.
+        let has_extends = child_parsed.reference_intents.iter().any(|r| {
+            matches!(r, ReferenceIntent::Extends { parent, .. } if parent == "PluginExtensionPoint")
+        });
+        assert!(
+            has_extends,
+            "Parser should emit Extends(PluginExtensionPoint) on Ext1; got {:?}",
+            child_parsed.reference_intents
+        );
+
+        // Convert ParsedEntity -> ResolutionEntity (clones reference_intents).
+        let mut resolution_entities: Vec<ResolutionEntity> = parent_entities
+            .iter()
+            .chain(child_entities.iter())
+            .map(ResolutionEntity::from)
+            .collect();
+
+        resolve_reference_intents(&mut resolution_entities);
+
+        let parent_uuid = resolution_entities
+            .iter()
+            .find(|e| e.name == "PluginExtensionPoint")
+            .expect("PluginExtensionPoint not present after conversion")
+            .uuid;
+        let ext1 = resolution_entities
+            .iter()
+            .find(|e| e.name == "Ext1")
+            .expect("Ext1 not present after conversion");
+
+        assert!(
+            ext1.relationships
+                .contains(&(parent_uuid, RelationshipType::Extends)),
+            "Ext1 should have an Extends edge to PluginExtensionPoint; got {:?}",
+            ext1.relationships
+        );
+    }
 }

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # E2E Integration Test Script for Groovy Language Support in knot (v0.10.5+)
 #
-# Tests full Groovy support across three dimensions:
+# Tests full Groovy support across four dimensions:
 #   A. Entity Extraction — classes, interfaces, enums, traits, closures, script variables
 #   B. Cross-Ref — Groovy→Groovy CALLS relationships via find_callers
 #   C. Private Methods — private method tracking, no-paren calls, innermost assignment
+#   D. Inheritance — Groovy EXTENDS / IMPLEMENTS edges surfaced by find_callers
+#                        (regression for the nextflow PluginExtensionPoint case)
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -40,6 +42,7 @@ echo -e "${BLUE}knot Groovy Language E2E Integration Test${NC}"
 echo -e "${BLUE}Group A: Entity Extraction${NC}"
 echo -e "${BLUE}Group B: Cross-Ref CALLS${NC}"
 echo -e "${BLUE}Group C: Private Method Tracking${NC}"
+echo -e "${BLUE}Group D: Inheritance EXTENDS/IMPLEMENTS${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -573,6 +576,173 @@ if [ "$UIP_COUNT" -le 1 ]; then
     echo -e "${GREEN}✓ no cross-contamination${NC}"
 else
     echo -e "${RED}✗ cross-contamination detected: $UIP_COUNT callers from UIPattern${NC}"
+    FAILED=1
+fi
+
+# ═══════════════════════════════════════════════════════════
+# GROUP D: Inheritance EXTENDS / IMPLEMENTS
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group D: Inheritance EXTENDS/IMPLEMENTS ──${NC}"
+
+REPO_D="groovy_inherit_e2e"
+COLL_D="knot_groovy_inherit_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension"
+
+# ExtensionPoint.groovy — empty marker interface
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/ExtensionPoint.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+interface ExtensionPoint {
+}
+GROOVY
+
+# Comparable.groovy — local marker interface so D7's `implements Comparable<…>`
+# edge resolves. Knot does not index the JDK, so we declare a stub here.
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/Comparable.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+interface Comparable {
+}
+GROOVY
+
+# PluginExtensionPoint.groovy — the real-world nextflow base class
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/PluginExtensionPoint.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+abstract class PluginExtensionPoint implements ExtensionPoint {
+    private boolean initialised
+    synchronized void checkInit(Object session) {
+        if( !initialised ) {
+            init(session)
+            initialised = true
+        }
+    }
+    abstract protected void init(Object session)
+}
+GROOVY
+
+# Ext1.groovy
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/Ext1.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+class Ext1 extends PluginExtensionPoint {
+    protected void init(Object session) { }
+}
+GROOVY
+
+# Ext2.groovy
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/Ext2.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+class Ext2 extends PluginExtensionPoint {
+    protected void init(Object session) { }
+}
+GROOVY
+
+# TestExtension.groovy
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/TestExtension.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+class TestExtension extends PluginExtensionPoint {
+    protected void init(Object session) { }
+}
+GROOVY
+
+# HelloExtension.groovy — extends + implements with generics
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/HelloExtension.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+class HelloExtension extends PluginExtensionPoint implements Comparable<HelloExtension> {
+    protected void init(Object session) { }
+    int compareTo(HelloExtension other) { 0 }
+}
+GROOVY
+
+# EventBus.groovy — interface extends multiple interfaces
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/EventBus.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+interface EventBus extends ExtensionPoint, Cloneable {
+}
+GROOVY
+
+# Box.groovy — anti-false-positive of generic bound (T extends Comparable)
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/Box.groovy" << 'GROOVY'
+package nextflow.plugin.extension
+class Box<T extends Comparable> {
+    T value
+}
+GROOVY
+
+run_indexer "$REPO_D" "$COLL_D"
+sleep 2
+
+# Test D1-D4: find_callers("PluginExtensionPoint") exposes Ext1, Ext2,
+# TestExtension and HelloExtension under the "Extends" section.
+echo ""
+echo "Test D1-D4: find_callers(PluginExtensionPoint) Extends list covers all 4 subclasses..."
+RESP=$(call_mcp "$REPO_D" "$COLL_D" \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"PluginExtensionPoint","repo_name":"'"$REPO_D"'"}}}')
+if echo "$RESP" | grep -qi "Extends" && echo "$RESP" | grep -q "Ext1"; then
+    echo -e "${GREEN}✓ Ext1 found under Extends of PluginExtensionPoint${NC}"
+else
+    echo -e "${RED}✗ Ext1 NOT found under Extends of PluginExtensionPoint${NC}"
+    FAILED=1
+fi
+if echo "$RESP" | grep -qi "Extends" && echo "$RESP" | grep -q "Ext2"; then
+    echo -e "${GREEN}✓ Ext2 found under Extends of PluginExtensionPoint${NC}"
+else
+    echo -e "${RED}✗ Ext2 NOT found under Extends of PluginExtensionPoint${NC}"
+    FAILED=1
+fi
+if echo "$RESP" | grep -qi "Extends" && echo "$RESP" | grep -q "TestExtension"; then
+    echo -e "${GREEN}✓ TestExtension found under Extends of PluginExtensionPoint${NC}"
+else
+    echo -e "${RED}✗ TestExtension NOT found under Extends of PluginExtensionPoint${NC}"
+    FAILED=1
+fi
+if echo "$RESP" | grep -qi "Extends" && echo "$RESP" | grep -q "HelloExtension"; then
+    echo -e "${GREEN}✓ HelloExtension found under Extends of PluginExtensionPoint${NC}"
+else
+    echo -e "${RED}✗ HelloExtension NOT found under Extends of PluginExtensionPoint${NC}"
+    FAILED=1
+fi
+
+# Test D5: find_callers("ExtensionPoint") places PluginExtensionPoint under
+# the Implements section.
+echo ""
+echo "Test D5: find_callers(ExtensionPoint) Implements list covers PluginExtensionPoint..."
+RESP_D5=$(call_mcp "$REPO_D" "$COLL_D" \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"ExtensionPoint","repo_name":"'"$REPO_D"'"}}}')
+if echo "$RESP_D5" | grep -qi "Implements" && echo "$RESP_D5" | grep -q "PluginExtensionPoint"; then
+    echo -e "${GREEN}✓ PluginExtensionPoint found under Implements of ExtensionPoint${NC}"
+else
+    echo -e "${RED}✗ PluginExtensionPoint NOT found under Implements of ExtensionPoint${NC}"
+    FAILED=1
+fi
+
+# Test D6: find_callers("ExtensionPoint") also places EventBus under Extends
+# (interface→interface inheritance, aligned with the Kotlin parser).
+echo ""
+echo "Test D6: find_callers(ExtensionPoint) Extends list covers EventBus..."
+if echo "$RESP_D5" | grep -qi "Extends" && echo "$RESP_D5" | grep -q "EventBus"; then
+    echo -e "${GREEN}✓ EventBus found under Extends of ExtensionPoint${NC}"
+else
+    echo -e "${RED}✗ EventBus NOT found under Extends of ExtensionPoint${NC}"
+    FAILED=1
+fi
+
+# Test D7: find_callers("Comparable") must NOT surface Box (a generic bound
+# `T extends Comparable` is not an EXTENDS edge), but SHOULD surface
+# HelloExtension under Implements because it implements `Comparable<HelloExtension>`.
+echo ""
+echo "Test D7: find_callers(Comparable) ignores Box (anti-false-positive) but reports HelloExtension..."
+RESP_D7=$(call_mcp "$REPO_D" "$COLL_D" \
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"Comparable","repo_name":"'"$REPO_D"'"}}}')
+if echo "$RESP_D7" | grep -q "Box"; then
+    echo -e "${RED}✗ Box should NOT appear as a subclass of Comparable (generic bound is not EXTENDS)${NC}"
+    FAILED=1
+else
+    echo -e "${GREEN}✓ Box correctly absent from Comparable callers${NC}"
+fi
+if echo "$RESP_D7" | grep -qi "Implements" && echo "$RESP_D7" | grep -q "HelloExtension"; then
+    echo -e "${GREEN}✓ HelloExtension correctly listed under Implements of Comparable${NC}"
+else
+    echo -e "${RED}✗ HelloExtension NOT found under Implements of Comparable${NC}"
     FAILED=1
 fi
 

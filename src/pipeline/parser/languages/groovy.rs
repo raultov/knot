@@ -97,10 +97,19 @@ pub(crate) fn extract_entities_groovy(
                 name.clone()
             };
             let current_brace = brace_count;
-            entities.push(ParsedEntity::new(
+            // Build a multi-line declaration so that `extends X` / `implements Y`
+            // on a following line still feed `extract_inheritance_intents`.
+            // Falls back to the single trimmed line when no `{` is in the
+            // lookahead window.
+            let decl_text =
+                build_type_declaration(source, line_idx).unwrap_or_else(|| trimmed.to_string());
+            let inheritance_intents = extract_inheritance_intents(&decl_text, &kind, line_num);
+            let mut new_entity = ParsedEntity::new(
                 &name, kind, &fqn, None, None, "groovy", file_path, line_num, line_num, None,
                 repo_name,
-            ));
+            );
+            new_entity.reference_intents.extend(inheritance_intents);
+            entities.push(new_entity);
             scope_stack.push((name, current_brace));
         }
 
@@ -535,6 +544,160 @@ fn try_extract_type_declaration(line: &str) -> Option<(String, EntityKind)> {
     None
 }
 
+/// Builds the textual declaration of a type from `line_idx` onwards, stopping at
+/// the first `{` (exclusive). Returns `None` if no `{` is found within
+/// `MAX_LOOKAHEAD` lines — the caller then falls back to the single line.
+fn build_type_declaration(source: &str, line_idx: usize) -> Option<String> {
+    const MAX_LOOKAHEAD: usize = 5;
+    let lines: Vec<&str> = source.lines().collect();
+    let mut buf = String::new();
+    for offset in 0..MAX_LOOKAHEAD {
+        let raw = lines.get(line_idx + offset)?.trim();
+        if raw.is_empty() {
+            buf.push(' ');
+            continue;
+        }
+        // Skip pure comment / javadoc continuations (mirrors the main loop's policy).
+        if raw.starts_with("//") || raw.starts_with("/*") || raw.starts_with("* ") || raw == "*" {
+            continue;
+        }
+        if !buf.is_empty() {
+            buf.push(' ');
+        }
+        buf.push_str(raw);
+        if raw.contains('{') {
+            return Some(buf);
+        }
+    }
+    None
+}
+
+/// Strips every balanced `<...>` section from `input`, preserving any characters
+/// outside them. We use a manual depth counter instead of a regex so that nested
+/// generics like `Map<List<X>, Y>` are erased in a single pass. This both
+/// neutralises generic bounds (`class Box<T extends Comparable>`) and discards
+/// type arguments on the parent (`extends AbstractRepo<Order, Long>`).
+fn strip_balanced_generics(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut depth: i32 = 0;
+    for ch in input.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' if depth > 0 => depth -= 1,
+            '>' => {} // unbalanced '>' — drop silently (defensive)
+            _ if depth == 0 => out.push(ch),
+            _ => {} // skip chars inside generics
+        }
+    }
+    out
+}
+
+/// Validates a single parent/interface name token: must start with an
+/// alphabetic character, may contain alphanumerics, underscores and dots.
+fn is_valid_type_name(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars();
+    let first = chars.next().unwrap();
+    if !first.is_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+}
+
+/// Extracts `ReferenceIntent::Extends` / `Implements` from a Groovy type
+/// declaration.
+///
+/// `decl` is the complete declaration text (possibly concatenated across
+/// multiple lines, up to the opening `{`). `kind` decides the inheritance
+/// semantics:
+///
+/// - `GroovyInterface`: every name after `extends` becomes an `Extends` intent
+///   (mirrors the Kotlin parser' choice to treat interface-extends-interface as
+///   `Extends`).
+/// - `GroovyClass`, `GroovyTrait`, `GroovyEnum`: the first name after `extends`
+///   becomes an `Extends` intent (Groovy only allows a single parent), and
+///   every name after `implements` becomes an `Implements` intent.
+///
+/// Notes:
+/// - Generic bounds inside the type header (`class Box<T extends Comparable>`)
+///   are stripped before tokenisation so the `extends Comparable` token never
+///   reaches the matcher.
+/// - Generic arguments on the parent (`extends AbstractRepo<Order, Long>`) are
+///   also stripped so resolution receives just the simple/FQN name.
+/// - Declarations with embedded block comments on the same line are out of
+///   scope — same robustness bar as the rest of the lexical parser.
+pub(crate) fn extract_inheritance_intents(
+    decl: &str,
+    kind: &EntityKind,
+    line: usize,
+) -> Vec<ReferenceIntent> {
+    let stripped = strip_balanced_generics(decl);
+    let mut intents = Vec::new();
+
+    // Look for `extends` and `implements` keywords (case-sensitive, word-bounded).
+    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+    let extends_idx = tokens.iter().position(|t| *t == "extends");
+    let implements_idx = tokens.iter().position(|t| *t == "implements");
+
+    if let Some(idx) = extends_idx {
+        let from = idx + 1;
+        let to = implements_idx.unwrap_or(tokens.len());
+        let parents: Vec<&str> = tokens[from..to]
+            .iter()
+            .copied()
+            .flat_map(|t| t.split(','))
+            .map(str::trim)
+            .filter(|t| is_valid_type_name(t))
+            .collect();
+
+        match kind {
+            EntityKind::GroovyInterface => {
+                for parent in parents {
+                    intents.push(ReferenceIntent::Extends {
+                        parent: parent.to_string(),
+                        line,
+                    });
+                }
+            }
+            _ => {
+                if let Some(first) = parents.into_iter().next() {
+                    intents.push(ReferenceIntent::Extends {
+                        parent: first.to_string(),
+                        line,
+                    });
+                }
+            }
+        }
+    }
+
+    if let Some(idx) = implements_idx {
+        let from = idx + 1;
+        for tok in &tokens[from..] {
+            // Any `{` opens the class body — stop processing names so we don't
+            // pick up enum constants or inner-class members as interfaces.
+            if tok.contains('{') {
+                break;
+            }
+            for piece in tok.split(',') {
+                let trimmed = piece.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if is_valid_type_name(trimmed) {
+                    intents.push(ReferenceIntent::Implements {
+                        interface: trimmed.to_string(),
+                        line,
+                    });
+                }
+            }
+        }
+    }
+
+    intents
+}
+
 /// Tries to extract properties (fields, script variables)
 // Reserved for future property extraction
 fn try_extract_property(line: &str) -> Option<String> {
@@ -780,6 +943,36 @@ fn try_extract_def_method(line: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::parser::test_utils::{
+        assert_extends, assert_implements, collect_extends, collect_implements,
+    };
+
+    /// Helper: pick the Groovy class entity for `name` from the parser output.
+    fn pick_class<'a>(entities: &'a [ParsedEntity], name: &str) -> &'a ParsedEntity {
+        entities
+            .iter()
+            .find(|e| e.name == name && e.kind == EntityKind::GroovyClass)
+            .unwrap_or_else(|| panic!("Groovy class '{name}' not found in entities"))
+    }
+
+    fn pick_entity<'a>(
+        entities: &'a [ParsedEntity],
+        name: &str,
+        kind: EntityKind,
+    ) -> &'a ParsedEntity {
+        entities
+            .iter()
+            .find(|e| e.name == name && e.kind == kind)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Entity '{name}' ({kind:?}) not found in entities. Available: {:?}",
+                    entities
+                        .iter()
+                        .map(|e| (&e.name, &e.kind))
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
 
     // ---- Groovy Standard (tree-sitter) extraction tests ----
 
@@ -1167,6 +1360,206 @@ class NestedMethods {
         assert!(entities.iter().any(|e| e.name == "Broken"));
         assert!(entities.iter().any(|e| e.name == "method1"));
         assert!(entities.iter().any(|e| e.name == "method2"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Group: Groovy inheritance intent extraction (Extends / Implements)
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_groovy_class_extends() {
+        let source = "class Ext1 extends PluginExtensionPoint { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let ext1 = pick_class(&entities, "Ext1");
+        assert_extends(&ext1.reference_intents, "PluginExtensionPoint");
+        assert!(collect_implements(&ext1.reference_intents).is_empty());
+    }
+
+    #[test]
+    fn test_groovy_class_implements() {
+        let source = "abstract class PluginExtensionPoint implements ExtensionPoint { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "PluginExtensionPoint");
+        assert_implements(&cls.reference_intents, "ExtensionPoint");
+        assert!(collect_extends(&cls.reference_intents).is_empty());
+    }
+
+    #[test]
+    fn test_groovy_class_extends_and_implements_multiple() {
+        let source =
+            "class OrderService extends BaseService implements Auditable, Serializable { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "OrderService");
+        let extends = collect_extends(&cls.reference_intents);
+        let implements = collect_implements(&cls.reference_intents);
+        assert_eq!(extends, vec!["BaseService"]);
+        assert_eq!(implements.len(), 2);
+        assert!(implements.contains(&"Auditable"));
+        assert!(implements.contains(&"Serializable"));
+    }
+
+    #[test]
+    fn test_groovy_extends_with_generics() {
+        let source = "class Repo extends AbstractRepo<Order, Long> { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "Repo");
+        assert_extends(&cls.reference_intents, "AbstractRepo");
+    }
+
+    #[test]
+    fn test_groovy_generic_bound_is_not_extends() {
+        let source = "class Box<T extends Comparable> { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "Box");
+        assert!(collect_extends(&cls.reference_intents).is_empty());
+        assert!(collect_implements(&cls.reference_intents).is_empty());
+    }
+
+    #[test]
+    fn test_groovy_interface_extends_multiple() {
+        let source = "interface EventBus extends Publisher, Subscriber { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let iface = pick_entity(&entities, "EventBus", EntityKind::GroovyInterface);
+        let extends = collect_extends(&iface.reference_intents);
+        assert_eq!(extends.len(), 2);
+        assert!(extends.contains(&"Publisher"));
+        assert!(extends.contains(&"Subscriber"));
+        assert!(collect_implements(&iface.reference_intents).is_empty());
+    }
+
+    #[test]
+    fn test_groovy_trait_implements() {
+        let source = "trait Auditable implements Serializable { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let trait_entity = pick_entity(&entities, "Auditable", EntityKind::GroovyTrait);
+        let implements = collect_implements(&trait_entity.reference_intents);
+        assert_eq!(implements, vec!["Serializable"]);
+        assert!(collect_extends(&trait_entity.reference_intents).is_empty());
+    }
+
+    #[test]
+    fn test_groovy_enum_implements() {
+        let source = "enum Status implements Describable { OK, KO }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let enum_entity = pick_entity(&entities, "Status", EntityKind::GroovyEnum);
+        let implements = collect_implements(&enum_entity.reference_intents);
+        assert_eq!(implements, vec!["Describable"]);
+    }
+
+    #[test]
+    fn test_groovy_extends_qualified_name() {
+        let source = "class Foo extends nextflow.plugin.BasePlugin { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "Foo");
+        assert_extends(&cls.reference_intents, "nextflow.plugin.BasePlugin");
+    }
+
+    #[test]
+    fn test_groovy_extends_multiline_declaration() {
+        let source = "class OrderService extends BaseService<Order>\n        implements Auditable, Serializable {\n}";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "OrderService");
+        let extends = collect_extends(&cls.reference_intents);
+        let implements = collect_implements(&cls.reference_intents);
+        assert_eq!(extends, vec!["BaseService"]);
+        assert_eq!(implements.len(), 2);
+        assert!(implements.contains(&"Auditable"));
+        assert!(implements.contains(&"Serializable"));
+        // The line on the intent must point at the class declaration's start line.
+        for intent in &cls.reference_intents {
+            match intent {
+                ReferenceIntent::Extends { line, .. }
+                | ReferenceIntent::Implements { line, .. } => {
+                    assert_eq!(*line, cls.start_line);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_groovy_class_without_inheritance_has_no_intents() {
+        let source = "class Plain { def m() {} }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "Plain");
+        assert!(collect_extends(&cls.reference_intents).is_empty());
+        assert!(collect_implements(&cls.reference_intents).is_empty());
+    }
+
+    #[test]
+    fn test_groovy_extends_intent_attached_to_class_not_methods() {
+        // Class with extends + a method body that contains a CALL.
+        // The Extends intent must hang on the class, not on a method.
+        let source = r#"
+class Ext1 extends PluginExtensionPoint {
+    protected void init(Object session) {
+        runAnalyzer("foo")
+    }
+}
+"#;
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "Ext1");
+        assert_extends(&cls.reference_intents, "PluginExtensionPoint");
+        let init = entities
+            .iter()
+            .find(|e| e.name == "init" && e.kind == EntityKind::GroovyMethod)
+            .expect("method 'init' not extracted");
+        // The method must NOT inherit its parent's Extends intent.
+        assert!(
+            !init
+                .reference_intents
+                .iter()
+                .any(|r| matches!(r, ReferenceIntent::Extends { .. })),
+            "method 'init' should not receive the class's Extends intent"
+        );
+        // The method should still have its Call intent intact.
+        assert!(
+            init.reference_intents.iter().any(
+                |r| matches!(r, ReferenceIntent::Call { method, .. } if method == "runAnalyzer")
+            ),
+            "method 'init' should still have CALL to runAnalyzer"
+        );
+    }
+
+    #[test]
+    fn test_groovy_extends_line_number() {
+        let source = "\n\nclass Foo extends Bar {\n}\n";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "Foo");
+        // The class is declared on line 3 (1-indexed).
+        assert_eq!(cls.start_line, 3);
+        let extends = collect_extends(&cls.reference_intents);
+        assert_eq!(extends, vec!["Bar"]);
+        let intent_line = cls
+            .reference_intents
+            .iter()
+            .find_map(|r| match r {
+                ReferenceIntent::Extends { line, .. } => Some(*line),
+                _ => None,
+            })
+            .expect("expected Extends intent on Foo");
+        assert_eq!(
+            intent_line, cls.start_line,
+            "Extends intent line must match class declaration line"
+        );
+    }
+
+    #[test]
+    fn test_groovy_extends_ignores_comments() {
+        // The commented-out class must NOT produce any intent; only the real class does.
+        let source = r#"
+// class Fake extends Nope
+class Real extends Base {
+}
+"#;
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        // No Fake entity should exist.
+        assert!(
+            !entities.iter().any(|e| e.name == "Fake"),
+            "Fake should not be extracted from a comment line"
+        );
+        let cls = pick_class(&entities, "Real");
+        assert_extends(&cls.reference_intents, "Base");
     }
 }
 
