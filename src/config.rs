@@ -79,7 +79,7 @@ pub struct IndexerCli {
     pub embedder_reset_interval: usize,
 
     /// Number of files to process in each rayon parallel batch.
-    #[arg(long, env = "KNOT_BATCH_SIZE", default_value_t = 64)]
+    #[arg(long, env = "KNOT_BATCH_SIZE", default_value_t = 128)]
     pub batch_size: usize,
 
     /// Force a full re-index by deleting all existing data for this repository.
