@@ -6,6 +6,16 @@
 
 ---
 
+## v1.5.4 — Groovy Docstring Extraction
+
+- ✅ **Fix(groovy)**: The Groovy lexical parser now extracts GroovyDoc/comment blocks as entity `docstring` for classes, interfaces, enums, traits, methods (`def`, typed single-line and multi-line signatures) and properties. Previously all 5 `ParsedEntity::new` call sites passed `None`, so semantic search could not match Groovy entities by the concepts described in their GroovyDoc (e.g. nextflow's `PluginExtensionPoint.init` was invisible to a "channel factory initialization" query despite being indexed).
+- ✅ **Feat(parser)**: New `extract_preceding_docstring` in `src/pipeline/parser/languages/groovy.rs` walks backwards from each declaration: skips annotations (`@PackageScope`, `@Override`) and tolerates one blank line; captures the adjacent `/** ... */` / `/* ... */` block or a burst of `//` lines; stops at `package`/`import`/code lines so license headers never leak into the first class of a file. Markers are stripped via the shared `strip_comment_markers`.
+- ✅ **Test(unit)**: 18 new tests — 11 for the backwards-walk policy (adjacent block, annotations, `//` bursts, blank-line tolerance, license-header guard, empty/malformed comments, file start) and 7 for the wiring into `extract_entities_groovy`, including the literal nextflow `PluginExtensionPoint` fragment; `test_groovy_parse_sample_full_file` now asserts extracted docstrings; `prepare.rs` gains a contract test that the docstring reaches `embed_text`.
+- ✅ **Test(e2e)**: `tests/run_groovy_e2e.sh` gains **Suite E — Docstrings**: the synthetic `PluginExtensionPoint.groovy` fixture now carries the verbatim nextflow GroovyDoc and `@PackageScope`, with Cypher assertions on the `init`/`checkInit` docstrings, a non-empty-docstring entity count, and a Qdrant scroll parity check (3 points for the file) via the REST port.
+- ✅ **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean | **912 unit tests** passing | `./tests/run_groovy_e2e.sh` green
+
+---
+
 ## v1.5.3 — Groovy Inheritance & Perf Optimization
 
 - ✅ **Feat(groovy)**: The Groovy parser now emits `EXTENDS`/`IMPLEMENTS` reference intents from `class`, `interface`, `trait`, and `enum` declarations, enabling accurate Nextflow-style hierarchy traversal via `find_callers`.
