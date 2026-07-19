@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # E2E Integration Test Script for Groovy Language Support in knot (v0.10.5+)
 #
-# Tests full Groovy support across four dimensions:
+# Tests full Groovy support across five dimensions:
 #   A. Entity Extraction — classes, interfaces, enums, traits, closures, script variables
 #   B. Cross-Ref — Groovy→Groovy CALLS relationships via find_callers
 #   C. Private Methods — private method tracking, no-paren calls, innermost assignment
 #   D. Inheritance — Groovy EXTENDS / IMPLEMENTS edges surfaced by find_callers
 #                        (regression for the nextflow PluginExtensionPoint case)
+#   E. Docstrings — GroovyDoc extraction into Neo4j/Qdrant (nextflow init case)
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -31,6 +32,9 @@ NEO4J_URI="bolt://localhost:17687"
 NEO4J_USER="neo4j"
 NEO4J_PASSWORD="e2e_test_password"
 QDRANT_URL="http://localhost:16334"
+# Qdrant REST API port (16334 above is gRPC, used by the knot binaries; curl
+# assertions must go through the REST port instead).
+QDRANT_REST_URL="http://localhost:16333"
 export NEO4J_URI NEO4J_USER NEO4J_PASSWORD QDRANT_URL
 
 TIMEOUT_SECONDS=60
@@ -605,17 +609,31 @@ interface Comparable {
 }
 GROOVY
 
-# PluginExtensionPoint.groovy — the real-world nextflow base class
+# PluginExtensionPoint.groovy — the real-world nextflow base class.
+# `init` carries the verbatim GroovyDoc from nextflow (Suite E regression);
+# `checkInit` is annotated with @PackageScope like the real source.
 cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/plugin/extension/PluginExtensionPoint.groovy" << 'GROOVY'
 package nextflow.plugin.extension
+
+import groovy.transform.PackageScope
+
 abstract class PluginExtensionPoint implements ExtensionPoint {
+
     private boolean initialised
+
+    @PackageScope
     synchronized void checkInit(Object session) {
         if( !initialised ) {
             init(session)
             initialised = true
         }
     }
+
+    /**
+     * Channel factory initialization. This method is invoked one and only once
+     *
+     * @param session The current nextflow session
+     */
     abstract protected void init(Object session)
 }
 GROOVY
@@ -743,6 +761,72 @@ if echo "$RESP_D7" | grep -qi "Implements" && echo "$RESP_D7" | grep -q "HelloEx
     echo -e "${GREEN}✓ HelloExtension correctly listed under Implements of Comparable${NC}"
 else
     echo -e "${RED}✗ HelloExtension NOT found under Implements of Comparable${NC}"
+    FAILED=1
+fi
+
+# ═══════════════════════════════════════════════════════════
+# GROUP E: Docstrings (GroovyDoc)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group E: Docstrings (GroovyDoc) ──${NC}"
+
+# Use cypher-shell from the running Neo4j container (same pattern as the
+# rust_reference_resolution suite) so we don't depend on a host installation.
+run_neo4j_cypher() {
+    local query="$1"
+    echo "$query" | docker exec -i knot_neo4j_e2e cypher-shell -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" \
+        --format plain 2>/dev/null \
+        | awk 'NF && NR > 1 && $0 !~ /^(Available|neo4j>|Connection|Disconnect|Connected)/ { print; exit }'
+}
+
+# Test E1: Neo4j — the abstract `init` node carries its GroovyDoc.
+# Note: cypher-shell --format plain renders booleans as TRUE/FALSE (uppercase).
+echo ""
+echo "Test E1: Neo4j docstring of PluginExtensionPoint.init contains the GroovyDoc..."
+E1=$(run_neo4j_cypher "MATCH (e:Entity {name:'init', repo_name:'$REPO_D'}) WHERE e.file_path ENDS WITH 'PluginExtensionPoint.groovy' RETURN e.docstring CONTAINS 'Channel factory initialization' AS has_doc;" | tr '[:upper:]' '[:lower:]')
+if [ "$E1" = "true" ]; then
+    echo -e "${GREEN}✓ init docstring contains 'Channel factory initialization'${NC}"
+else
+    echo -e "${RED}✗ init docstring missing or wrong (got: '$E1')${NC}"
+    FAILED=1
+fi
+
+# Test E2: Neo4j — `checkInit` has NO docstring in the fixture (explicit).
+echo ""
+echo "Test E2: Neo4j docstring of checkInit is empty (fixture has no GroovyDoc on it)..."
+E2=$(run_neo4j_cypher "MATCH (e:Entity {name:'checkInit', repo_name:'$REPO_D'}) RETURN (e.docstring IS NULL OR e.docstring = '') AS no_doc;" | tr '[:upper:]' '[:lower:]')
+if [ "$E2" = "true" ]; then
+    echo -e "${GREEN}✓ checkInit docstring is empty as expected${NC}"
+else
+    echo -e "${RED}✗ checkInit should have no docstring (got: '$E2')${NC}"
+    FAILED=1
+fi
+
+# Test E3: Neo4j — at least one Groovy entity of the repo now has a docstring.
+echo ""
+echo "Test E3: Neo4j count of Groovy entities with non-empty docstring > 0..."
+E3=$(run_neo4j_cypher "MATCH (e:Entity {language:'groovy', repo_name:'$REPO_D'}) WHERE e.docstring <> '' RETURN count(e) AS cnt;")
+E3=${E3:-0}
+if [ "$E3" -ge 1 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ $E3 Groovy entity(ies) carry a docstring${NC}"
+else
+    echo -e "${RED}✗ no Groovy entity carries a docstring (cnt=$E3)${NC}"
+    FAILED=1
+fi
+
+# Test E4: Qdrant parity — the points for PluginExtensionPoint.groovy exist
+# (graph ↔ vector parity: class + checkInit + init = 3 points).
+echo ""
+echo "Test E4: Qdrant points for PluginExtensionPoint.groovy (expect 3)..."
+E4_RAW=$(curl -s --max-time 20 -X POST "$QDRANT_REST_URL/collections/$COLL_D/points/scroll" \
+    -H 'Content-Type: application/json' \
+    -d '{"limit":100,"with_payload":true}' || true)
+E4=$(echo "$E4_RAW" | jq '[.result.points[] | select(.payload.file_path | tostring | endswith("PluginExtensionPoint.groovy"))] | length' 2>/dev/null || echo "jq_error")
+E4=${E4:-0}
+if [ "$E4" -eq 3 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ Qdrant holds the 3 points of PluginExtensionPoint.groovy${NC}"
+else
+    echo -e "${RED}✗ expected 3 Qdrant points for PluginExtensionPoint.groovy, got $E4${NC}"
+    echo -e "${YELLOW}  scroll response excerpt: $(echo "$E4_RAW" | head -c 400)${NC}"
     FAILED=1
 fi
 

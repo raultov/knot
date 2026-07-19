@@ -392,6 +392,31 @@ mod tests {
     }
 
     #[test]
+    fn test_embed_text_groovy_method_includes_docstring() {
+        // BDD contract: a Groovy entity's docstring must reach embed_text so
+        // semantic search can match its concepts (nextflow `init` regression).
+        let entity = ParsedEntity::new(
+            "init",
+            EntityKind::GroovyMethod,
+            "nextflow.plugin.extension.PluginExtensionPoint.init",
+            Some("abstract protected void init(Session session)".to_string()),
+            Some(
+                "Channel factory initialization. This method is invoked one and only once"
+                    .to_string(),
+            ),
+            "groovy",
+            "PluginExtensionPoint.groovy",
+            12,
+            12,
+            Some("PluginExtensionPoint".to_string()),
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("[groovy_method] init"));
+        assert!(embed_text.contains("Channel factory initialization"));
+    }
+
+    #[test]
     fn test_build_embed_text_groovy_property() {
         let entity = ParsedEntity::new(
             "config",
