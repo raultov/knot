@@ -1,4 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
+use crate::pipeline::parser::comments::strip_comment_markers;
 
 pub(crate) fn handle_groovy_capture(
     capture_name: &str,
@@ -65,6 +66,10 @@ pub(crate) fn extract_entities_groovy(
     let mut scope_stack: Vec<(String, usize)> = Vec::new();
     let mut brace_count = 0usize;
 
+    // Materialize lines once: docstring extraction walks backwards from each
+    // declaration and must not pay O(n²) re-scanning the source per entity.
+    let lines: Vec<&str> = source.lines().collect();
+
     for (line_idx, line) in source.lines().enumerate() {
         let line_num = line_idx + 1;
         let trimmed = line.trim();
@@ -104,8 +109,9 @@ pub(crate) fn extract_entities_groovy(
             let decl_text =
                 build_type_declaration(source, line_idx).unwrap_or_else(|| trimmed.to_string());
             let inheritance_intents = extract_inheritance_intents(&decl_text, &kind, line_num);
+            let docstring = extract_preceding_docstring(&lines, line_idx);
             let mut new_entity = ParsedEntity::new(
-                &name, kind, &fqn, None, None, "groovy", file_path, line_num, line_num, None,
+                &name, kind, &fqn, None, docstring, "groovy", file_path, line_num, line_num, None,
                 repo_name,
             );
             new_entity.reference_intents.extend(inheritance_intents);
@@ -121,12 +127,13 @@ pub(crate) fn extract_entities_groovy(
             // Try to find a `def` method declaration
             if let Some((method_name, signature)) = try_extract_def_method(trimmed) {
                 let fqn = build_fqn(&package, &enclosing, &method_name);
+                let docstring = extract_preceding_docstring(&lines, line_idx);
                 entities.push(ParsedEntity::new(
                     &method_name,
                     EntityKind::GroovyMethod,
                     &fqn,
                     Some(signature),
-                    None,
+                    docstring,
                     "groovy",
                     file_path,
                     line_num,
@@ -149,12 +156,13 @@ pub(crate) fn extract_entities_groovy(
                 let sig_end = trimmed.find('{').unwrap_or(trimmed.len());
                 let signature_full = trimmed[..sig_end].trim().to_string();
                 let fqn = build_fqn(&package, &enclosing, &method_name);
+                let docstring = extract_preceding_docstring(&lines, line_idx);
                 entities.push(ParsedEntity::new(
                     &method_name,
                     EntityKind::GroovyMethod,
                     &fqn,
                     Some(signature_full),
-                    None,
+                    docstring,
                     "groovy",
                     file_path,
                     line_num,
@@ -172,12 +180,15 @@ pub(crate) fn extract_entities_groovy(
                 && !method_name.contains('.')
             {
                 let fqn = build_fqn(&package, &enclosing, &method_name);
+                // The docstring sits above the first line of the signature
+                // (method_start_line is 1-based → subtract 1 for the 0-based index).
+                let docstring = extract_preceding_docstring(&lines, method_start_line - 1);
                 entities.push(ParsedEntity::new(
                     &method_name,
                     EntityKind::GroovyMethod,
                     &fqn,
                     None,
-                    None,
+                    docstring,
                     "groovy",
                     file_path,
                     method_start_line,
@@ -192,12 +203,13 @@ pub(crate) fn extract_entities_groovy(
         // Try to extract properties or script-level variables
         if let Some(prop_name) = try_extract_property(trimmed) {
             let fqn = build_fqn(&package, &enclosing, &prop_name);
+            let docstring = extract_preceding_docstring(&lines, line_idx);
             entities.push(ParsedEntity::new(
                 &prop_name,
                 EntityKind::GroovyProperty,
                 &fqn,
                 None,
-                None,
+                docstring,
                 "groovy",
                 file_path,
                 line_num,
@@ -454,6 +466,101 @@ fn build_fqn(package: &Option<String>, parent: &Option<String>, name: &str) -> S
         (None, Some(enclosing_class)) => format!("{}.{}", enclosing_class, name),
         (None, None) => name.to_string(),
     }
+}
+
+/// Walks backwards from the line preceding `decl_line_idx` (0-based) collecting
+/// the GroovyDoc / comment block that documents the declaration.
+///
+/// Policy (backwards walk from the declaration):
+/// 1. Skip (without stopping the search): annotation lines (`@X`) and at most
+///    one blank line — same tolerance as the generic tree-sitter extractor.
+/// 2. Capture: an adjacent `/** ... */` / `/* ... */` block, or a burst of
+///    consecutive `//` lines. Only the adjacent block is taken.
+/// 3. Stop immediately (returning whatever was captured, or `None`) on any
+///    other non-empty code line (`package`, `import`, statements) or at the
+///    start of the file — this protects against license headers leaking into
+///    the first class of a file.
+/// 4. Markers (`/**`, `*/`, leading `*`, `//`) are stripped via
+///    [`strip_comment_markers`]; an empty cleaned result maps to `None`.
+fn extract_preceding_docstring(lines: &[&str], decl_line_idx: usize) -> Option<String> {
+    let non_empty = |cleaned: String| (!cleaned.trim().is_empty()).then_some(cleaned);
+
+    // Phase 1: skip annotations and at most one blank line.
+    let mut idx = decl_line_idx;
+    let mut blank_seen = false;
+    while idx > 0 {
+        let prev = lines[idx - 1].trim();
+        if prev.starts_with('@') {
+            idx -= 1;
+            continue;
+        }
+        if prev.is_empty() && !blank_seen {
+            blank_seen = true;
+            idx -= 1;
+            continue;
+        }
+        break;
+    }
+    if idx == 0 {
+        return None;
+    }
+
+    let last = lines[idx - 1].trim();
+
+    // Case A: block comment — `/** ... */` or `/* ... */`.
+    if last.ends_with("*/") {
+        if last.starts_with("/*") {
+            // Opener and closer on the same line (or this IS the opener line of
+            // a block whose body sits above is impossible: the closer is here).
+            return non_empty(strip_comment_markers(last));
+        }
+        if !last.starts_with('*') {
+            // `code(); /* inline */` — trailing comment on a code line is not a
+            // docstring.
+            return None;
+        }
+        // Multi-line block: walk back through `*` continuation lines until the
+        // `/*` opener.
+        let mut block: Vec<&str> = vec![lines[idx - 1]];
+        let mut j = idx - 1;
+        while j > 0 {
+            j -= 1;
+            let t = lines[j].trim();
+            if t.starts_with("/*") {
+                block.push(lines[j]);
+                block.reverse();
+                return non_empty(strip_comment_markers(&block.join("\n")));
+            }
+            if t.starts_with('*') {
+                block.push(lines[j]);
+                continue;
+            }
+            // Non-comment line reached before the opener → malformed block.
+            return None;
+        }
+        // Start of file reached without an opener → malformed block.
+        return None;
+    }
+
+    // Case B: burst of consecutive `//` line comments.
+    if last.starts_with("//") {
+        let mut j = idx - 1;
+        let mut burst: Vec<&str> = Vec::new();
+        loop {
+            if !lines[j].trim().starts_with("//") {
+                break;
+            }
+            burst.push(lines[j]);
+            if j == 0 {
+                break;
+            }
+            j -= 1;
+        }
+        burst.reverse();
+        return non_empty(strip_comment_markers(&burst.join("\n")));
+    }
+
+    None
 }
 
 /// Tries to extract class, interface, enum, or trait declarations
@@ -1187,6 +1294,42 @@ mod tests {
             "Expected at least 20 entities, got {}",
             entities.len()
         );
+
+        // Docstring extraction: comments in the fixture now surface as docstrings.
+        let global_config = entities
+            .iter()
+            .find(|e| e.name == "globalConfig" && e.kind == EntityKind::GroovyProperty)
+            .expect("globalConfig not extracted");
+        assert_eq!(
+            global_config.docstring.as_deref(),
+            Some("1. Top-level script variables and closures")
+        );
+        let user_service = entities
+            .iter()
+            .find(|e| e.name == "UserService" && e.kind == EntityKind::GroovyClass)
+            .expect("UserService not extracted");
+        assert_eq!(
+            user_service.docstring.as_deref(),
+            Some("7. Main Class with Annotations, Inheritance, Traits, and inner classes")
+        );
+        let initialize = entities
+            .iter()
+            .find(|e| {
+                e.name == "initialize"
+                    && e.kind == EntityKind::GroovyMethod
+                    && e.enclosing_class.as_deref() == Some("UserService")
+            })
+            .expect("UserService.initialize not extracted");
+        assert_eq!(
+            initialize.docstring.as_deref(),
+            Some("Typed Method overriding base class")
+        );
+        // Regression: a property with no preceding comment keeps docstring == None.
+        let max_login = entities
+            .iter()
+            .find(|e| e.name == "maxLoginAttempts" && e.kind == EntityKind::GroovyProperty)
+            .expect("maxLoginAttempts not extracted");
+        assert_eq!(max_login.docstring, None);
     }
 
     #[test]
@@ -1560,6 +1703,195 @@ class Real extends Base {
         );
         let cls = pick_class(&entities, "Real");
         assert_extends(&cls.reference_intents, "Base");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Group: GroovyDoc / docstring extraction (extract_preceding_docstring)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Helper: materialize lines and run the docstring walker against the
+    /// 0-based index of the declaration line.
+    fn doc_of(source: &str, decl_line_idx: usize) -> Option<String> {
+        let lines: Vec<&str> = source.lines().collect();
+        extract_preceding_docstring(&lines, decl_line_idx)
+    }
+
+    #[test]
+    fn test_groovy_docstring_block_comment_adjacent() {
+        let source = "/**\n * Channel factory initialization. This method is invoked one and only once\n *\n * @param session The current nextflow session\n */\nabstract protected void init(Session session)\n";
+        let doc = doc_of(source, 5).expect("expected docstring for init");
+        assert!(doc.contains("Channel factory initialization"));
+        assert!(doc.contains("@param session The current nextflow session"));
+        assert!(!doc.contains("/**"), "markers must be stripped: {doc:?}");
+        assert!(!doc.contains("*/"), "markers must be stripped: {doc:?}");
+        assert!(
+            !doc.lines().any(|l| l.trim_start().starts_with('*')),
+            "leading '*' must be stripped: {doc:?}"
+        );
+    }
+
+    #[test]
+    fn test_groovy_docstring_skips_annotations() {
+        // Exact shape of the nextflow `checkInit` case: GroovyDoc, then an
+        // annotation, then the declaration.
+        let source = "/** doc */\n@PackageScope\nsynchronized void checkInit(Object session) {\n";
+        let doc = doc_of(source, 2);
+        assert_eq!(doc.as_deref(), Some("doc"));
+    }
+
+    #[test]
+    fn test_groovy_docstring_skips_multiple_annotations() {
+        let source = "/** doc */\n@PackageScope\n@Override\nvoid m() {\n";
+        let doc = doc_of(source, 3);
+        assert_eq!(doc.as_deref(), Some("doc"));
+    }
+
+    #[test]
+    fn test_groovy_docstring_line_comments_burst() {
+        let source = "// a\n// b\nclass Foo {\n";
+        let doc = doc_of(source, 2);
+        assert_eq!(doc.as_deref(), Some("a\nb"));
+    }
+
+    #[test]
+    fn test_groovy_docstring_tolerates_single_blank_line() {
+        let source = "/** doc */\n\nvoid m() {\n";
+        let doc = doc_of(source, 2);
+        assert_eq!(doc.as_deref(), Some("doc"));
+    }
+
+    #[test]
+    fn test_groovy_docstring_two_blank_lines_breaks() {
+        let source = "/** doc */\n\n\nvoid m() {\n";
+        let doc = doc_of(source, 3);
+        assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn test_groovy_docstring_none_when_absent() {
+        let source = "void other() {\nvoid m() {\n";
+        let doc = doc_of(source, 1);
+        assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn test_groovy_docstring_stops_at_import() {
+        // License header must never leak into the first class's docstring.
+        let source = "/*\n * Licensed under the Apache License\n */\npackage com.example\n\nimport foo.Bar\n\nclass Foo {\n";
+        let doc = doc_of(source, 7);
+        assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn test_groovy_docstring_empty_comment_is_none() {
+        let source = "/** */\nvoid m() {\n";
+        assert_eq!(doc_of(source, 1), None);
+        let source2 = "//\nvoid m() {\n";
+        assert_eq!(doc_of(source2, 1), None);
+    }
+
+    #[test]
+    fn test_groovy_docstring_first_line_of_file() {
+        let source = "class Foo {\n";
+        assert_eq!(doc_of(source, 0), None);
+    }
+
+    #[test]
+    fn test_groovy_docstring_malformed_block_no_panic() {
+        // Orphan `*/` with no visible opener: must not panic, returns None.
+        let source = "*/\nclass Foo {\n";
+        assert_eq!(doc_of(source, 1), None);
+        // Orphan closer further down the file.
+        let source2 = "package p\n\n * dangling\n */\nclass Foo {\n";
+        assert_eq!(doc_of(source2, 4), None);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Group: docstring wiring into extract_entities_groovy
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_groovy_class_has_docstring() {
+        let source = "/**\n * A service class.\n */\nclass MyService {\n}\n";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let cls = pick_class(&entities, "MyService");
+        assert_eq!(cls.docstring.as_deref(), Some("A service class."));
+    }
+
+    #[test]
+    fn test_groovy_abstract_method_has_docstring() {
+        // Literal fragment of nextflow's PluginExtensionPoint.groovy — the exact
+        // regression case: GroovyDoc on an abstract method with no body.
+        let source = r#"package nextflow.plugin.extension
+
+abstract class PluginExtensionPoint implements ExtensionPoint {
+
+    private boolean initialised
+
+    /**
+     * Channel factory initialization. This method is invoked one and only once
+     *
+     * @param session The current nextflow session
+     */
+    abstract protected void init(Session session)
+}
+"#;
+        let entities = extract_entities_groovy(source, "PluginExtensionPoint.groovy", "test-repo");
+        let init = pick_entity(&entities, "init", EntityKind::GroovyMethod);
+        let doc = init
+            .docstring
+            .as_deref()
+            .expect("init must carry its GroovyDoc");
+        assert!(doc.contains("Channel factory initialization"));
+        assert!(!doc.contains("/**") && !doc.contains("*/"));
+    }
+
+    #[test]
+    fn test_groovy_def_method_has_docstring() {
+        let source = "class Foo {\n    /** Computes the answer. */\n    def compute() { 42 }\n}\n";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let m = pick_entity(&entities, "compute", EntityKind::GroovyMethod);
+        assert_eq!(m.docstring.as_deref(), Some("Computes the answer."));
+    }
+
+    #[test]
+    fn test_groovy_property_has_docstring() {
+        let source = "class Foo {\n    // The default role\n    String role = \"USER\"\n}\n";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let prop = pick_entity(&entities, "role", EntityKind::GroovyProperty);
+        assert_eq!(prop.docstring.as_deref(), Some("The default role"));
+    }
+
+    #[test]
+    fn test_groovy_multiline_method_has_docstring() {
+        // Multi-line signature (`(` without `)` on the first line): the docstring
+        // must be located from the real method start line, not from the line
+        // where the parser finished scanning the signature.
+        let source = r#"class HttpUtil {
+    /**
+     * Restart the HTTP server.
+     */
+    private static SimpleHttpServer restartHttpServer(String id, String webRootPath,
+                                                       Closure handler = {null},
+                                                       Closure errorListener = {}) {
+        new SimpleHttpServer()
+    }
+}
+"#;
+        let entities = extract_entities_groovy(source, "HttpUtil.groovy", "test-repo");
+        let m = pick_entity(&entities, "restartHttpServer", EntityKind::GroovyMethod);
+        assert_eq!(m.docstring.as_deref(), Some("Restart the HTTP server."));
+    }
+
+    #[test]
+    fn test_groovy_method_without_doc_has_none() {
+        // Regression: entities without a preceding comment keep docstring == None.
+        let source = "class Foo {\n    int add(int a, int b) { a + b }\n}\n";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        let m = pick_entity(&entities, "add", EntityKind::GroovyMethod);
+        assert_eq!(m.docstring, None);
+        let cls = pick_class(&entities, "Foo");
+        assert_eq!(cls.docstring, None);
     }
 }
 
