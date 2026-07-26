@@ -1,9 +1,18 @@
 # Changelog
- 
- All notable changes to **knot** are documented here, ordered from most recent to oldest.
- For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
- 
 
+All notable changes to **knot** are documented here, ordered from most recent to oldest.
+For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
+
+---
+
+## v1.5.5 — JVM Method Override Relationships
+
+- ✅ **Feat(resolve)**: Implemented JVM method-level `OVERRIDES` relationships. The graph now links a method in a subtype directly to the method it overrides/implements in a supertype, enabling reverse-dependency queries to surface implementations and declarations bidirectionally.
+- ✅ **Feat(query)**: `find_callers` now returns two new directed buckets for JVM entities: **Overridden by** (implementations/descendants of the queried method) and **Overrides** (declarations/ancestors the queried method overrides).
+- ✅ **Refactor(query)**: Extracted duplicate Neo4j row parsing logic in `query.rs` into a shared `parse_reference_row` function.
+- ✅ **Test(e2e)**: Added Group F in the Groovy E2E suite to verify method overrides bidirectionally. Added cleanup for autolink test artifacts.
+- ✅ **Docs**: Marked the `method_override_relationships.md` spec as implemented and updated the README with the new override discovery use cases.
+- ✅ **cargo fmt** clean | **cargo clippy** clean | Unit tests passing
 ---
 
 ## v1.5.4 — Groovy Docstring Extraction
