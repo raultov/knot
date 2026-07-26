@@ -8,6 +8,8 @@
 #   D. Inheritance — Groovy EXTENDS / IMPLEMENTS edges surfaced by find_callers
 #                        (regression for the nextflow PluginExtensionPoint case)
 #   E. Docstrings — GroovyDoc extraction into Neo4j/Qdrant (nextflow init case)
+#   F. Method OVERRIDES — subtype.method -[OVERRIDES]-> supertype.method edges
+#                        surfaced bidirectionally by find_callers (nextflow init case)
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -827,6 +829,47 @@ if [ "$E4" -eq 3 ] 2>/dev/null; then
 else
     echo -e "${RED}✗ expected 3 Qdrant points for PluginExtensionPoint.groovy, got $E4${NC}"
     echo -e "${YELLOW}  scroll response excerpt: $(echo "$E4_RAW" | head -c 400)${NC}"
+    FAILED=1
+fi
+
+# ═══════════════════════════════════════════════════════════
+# GROUP F: Method-level OVERRIDES (JVM)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group F: Method-level OVERRIDES ──${NC}"
+
+# Reuses the REPO_D inheritance graph: PluginExtensionPoint declares the
+# abstract `init`, and Ext1/Ext2/TestExtension/HelloExtension each override it.
+# This is the reported nextflow case (interface/superclass method vs its
+# implementations), now linked with a real OVERRIDES edge.
+
+# Test F1: find_callers(init) "Overridden by" lists all 4 overriding methods.
+echo ""
+echo "Test F1: find_callers(init) 'Overridden by' lists all 4 overriding methods..."
+RESP_F=$(call_mcp "$REPO_D" "$COLL_D" \
+    '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"init","repo_name":"'"$REPO_D"'"}}}')
+if echo "$RESP_F" | grep -qi "Overridden by"; then
+    echo -e "${GREEN}✓ 'Overridden by' section present${NC}"
+else
+    echo -e "${RED}✗ 'Overridden by' section missing${NC}"
+    FAILED=1
+fi
+for impl in Ext1 Ext2 TestExtension HelloExtension; do
+    if echo "$RESP_F" | grep -q "${impl}.groovy"; then
+        echo -e "${GREEN}✓ ${impl}.init found as override of init${NC}"
+    else
+        echo -e "${RED}✗ ${impl}.init NOT found as override of init${NC}"
+        FAILED=1
+    fi
+done
+
+# Test F2: the same query surfaces the supertype declaration under "Overrides".
+echo ""
+echo "Test F2: find_callers(init) 'Overrides' lists PluginExtensionPoint.init..."
+if echo "$RESP_F" | grep -qi "Overrides (declared supertype methods)" \
+    && echo "$RESP_F" | grep -q "PluginExtensionPoint.groovy"; then
+    echo -e "${GREEN}✓ PluginExtensionPoint.init found under Overrides${NC}"
+else
+    echo -e "${RED}✗ PluginExtensionPoint.init NOT found under Overrides${NC}"
     FAILED=1
 fi
 
