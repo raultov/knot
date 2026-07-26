@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::comments::strip_comment_markers;
 
@@ -65,6 +67,11 @@ pub(crate) fn extract_entities_groovy(
     // Scope stack: (name, brace_count_when_entered)
     let mut scope_stack: Vec<(String, usize)> = Vec::new();
     let mut brace_count = 0usize;
+    let mut in_block_comment = false;
+
+    // Side-car: property metadata needed for accessor synthesis (Phase 3).
+    let mut prop_decls: std::collections::HashMap<(String, String), GroovyPropertyDecl> =
+        std::collections::HashMap::new();
 
     // Materialize lines once: docstring extraction walks backwards from each
     // declaration and must not pay O(n²) re-scanning the source per entity.
@@ -72,28 +79,35 @@ pub(crate) fn extract_entities_groovy(
 
     for (line_idx, line) in source.lines().enumerate() {
         let line_num = line_idx + 1;
-        let trimmed = line.trim();
 
-        // Track braces for scope
-        brace_count += trimmed.matches('{').count();
-        brace_count = brace_count.saturating_sub(trimmed.matches('}').count());
+        let effective = strip_comments_line(line, &mut in_block_comment);
 
-        // Pop scopes whose braces have closed
-        while let Some((_, entry_brace)) = scope_stack.last() {
-            if brace_count < *entry_brace {
-                scope_stack.pop();
-            } else {
-                break;
+        // Track braces on the effective (code-bearing) line only.
+        let opened = effective.matches('{').count();
+        let closed = effective.matches('}').count();
+        let prev_brace_count = brace_count;
+        brace_count += opened;
+
+        let mut early_pop = false;
+        if closed > opened {
+            let temp_brace = brace_count.saturating_sub(closed);
+            while let Some((_, entry_brace)) = scope_stack.last() {
+                if temp_brace < *entry_brace {
+                    scope_stack.pop();
+                    early_pop = true;
+                } else {
+                    break;
+                }
             }
         }
 
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") {
+        if effective.is_empty() {
             continue;
         }
 
         // Try to extract class/interface/enum/trait if tree-sitter missed it
         if !known_lines.contains(&line_num)
-            && let Some((name, kind)) = try_extract_type_declaration(trimmed)
+            && let Some((name, kind)) = try_extract_type_declaration(effective.as_ref())
         {
             // Push to scope stack BEFORE brace_count is updated for the current line's `{`
             let fqn = if let Some(pkg) = &package {
@@ -107,7 +121,7 @@ pub(crate) fn extract_entities_groovy(
             // Falls back to the single trimmed line when no `{` is in the
             // lookahead window.
             let decl_text =
-                build_type_declaration(source, line_idx).unwrap_or_else(|| trimmed.to_string());
+                build_type_declaration(source, line_idx).unwrap_or_else(|| effective.to_string());
             let inheritance_intents = extract_inheritance_intents(&decl_text, &kind, line_num);
             let docstring = extract_preceding_docstring(&lines, line_idx);
             let mut new_entity = ParsedEntity::new(
@@ -125,7 +139,7 @@ pub(crate) fn extract_entities_groovy(
         // Ad-hoc method/field/closure extraction only if tree-sitter didn't already find an entity at this line
         if !known_lines.contains(&line_num) {
             // Try to find a `def` method declaration
-            if let Some((method_name, signature)) = try_extract_def_method(trimmed) {
+            if let Some((method_name, signature)) = try_extract_def_method(effective.as_ref()) {
                 let fqn = build_fqn(&package, &enclosing, &method_name);
                 let docstring = extract_preceding_docstring(&lines, line_idx);
                 entities.push(ParsedEntity::new(
@@ -146,15 +160,15 @@ pub(crate) fn extract_entities_groovy(
 
             // Try to find typed methods or script-level methods missed by tree-sitter
             // First, try single-line detection
-            if let Some((method_name, _signature)) = try_extract_typed_method(trimmed) {
+            if let Some((method_name, _signature)) = try_extract_typed_method(effective.as_ref()) {
                 // Filter false positives: method names that contain dots or look like object.method()
                 if method_name.contains('.')
                     || method_name.chars().all(|c| c.is_uppercase() || c == '_')
                 {
                     continue;
                 }
-                let sig_end = trimmed.find('{').unwrap_or(trimmed.len());
-                let signature_full = trimmed[..sig_end].trim().to_string();
+                let sig_end = effective.find('{').unwrap_or(effective.len());
+                let signature_full = effective[..sig_end].trim().to_string();
                 let fqn = build_fqn(&package, &enclosing, &method_name);
                 let docstring = extract_preceding_docstring(&lines, line_idx);
                 entities.push(ParsedEntity::new(
@@ -200,12 +214,29 @@ pub(crate) fn extract_entities_groovy(
             }
         }
 
-        // Try to extract properties or script-level variables
-        if let Some(prop_name) = try_extract_property(trimmed) {
-            let fqn = build_fqn(&package, &enclosing, &prop_name);
+        // Try to extract properties or script-level variables.
+        // Gated at type-body depth, or at script level when no enclosing type is in scope.
+        // `at_type_body_depth` uses the post-increment brace_count so that a single-line
+        // class declaration (`class Foo { String name }`) matches: the type's `{` opens
+        // before the body's `at_type_body_depth` check happens on the same line.
+        // `at_script_level` uses `prev_brace_count == 0` so that a script-level property
+        // declaring a closure literal on the same line (`def foo = { ... }`) also matches.
+        let at_type_body_depth = scope_stack
+            .last()
+            .is_some_and(|(_, entry_brace)| brace_count == *entry_brace);
+        let at_script_level = scope_stack.is_empty() && prev_brace_count == 0;
+
+        if (at_type_body_depth || at_script_level)
+            && !known_lines.contains(&line_num)
+            && let Some(prop_decl) = try_extract_property(effective.as_ref())
+        {
+            let fqn = build_fqn(&package, &enclosing, &prop_decl.name);
             let docstring = extract_preceding_docstring(&lines, line_idx);
+            let enclosing_for_prop = enclosing.clone();
+            let name_clone = prop_decl.name.clone();
+            let enc_clone = enclosing_for_prop.clone();
             entities.push(ParsedEntity::new(
-                &prop_name,
+                &prop_decl.name,
                 EntityKind::GroovyProperty,
                 &fqn,
                 None,
@@ -214,9 +245,23 @@ pub(crate) fn extract_entities_groovy(
                 file_path,
                 line_num,
                 line_num,
-                enclosing,
+                enclosing_for_prop,
                 repo_name,
             ));
+            if let Some(enc) = enc_clone {
+                prop_decls.insert((enc, name_clone), prop_decl);
+            }
+        }
+
+        brace_count = brace_count.saturating_sub(closed);
+        if !early_pop {
+            while let Some((_, entry_brace)) = scope_stack.last() {
+                if brace_count < *entry_brace {
+                    scope_stack.pop();
+                } else {
+                    break;
+                }
+            }
         }
     }
 
@@ -231,6 +276,10 @@ pub(crate) fn extract_entities_groovy(
             entity.end_line = end_line;
         }
     }
+
+    // Phase 3: emit synthetic accessor entities for Groovy properties
+    // so OVERRIDES linking can match against interface getters/setters.
+    synthesize_property_accessors(&mut entities, &package, file_path, repo_name, &prop_decls);
 
     // Extract reference intents: for each method, scan source lines after its signature
     let mut method_spans: Vec<(usize, usize, usize)> = entities
@@ -271,6 +320,157 @@ pub(crate) fn extract_entities_groovy(
     }
 
     entities
+}
+
+/// Emits Groovy's compiler-generated property accessors as first-class
+/// method entities, so name-based OVERRIDES linking can match a subtype
+/// property against a supertype getter (see resolve/overrides.rs).
+fn synthesize_property_accessors(
+    entities: &mut Vec<ParsedEntity>,
+    package: &Option<String>,
+    file_path: &str,
+    repo_name: &str,
+    prop_decls: &std::collections::HashMap<(String, String), GroovyPropertyDecl>,
+) {
+    use std::collections::{HashMap, HashSet};
+
+    // Build declared method names per enclosing class.
+    let mut declared: HashSet<(String, String)> = HashSet::new(); // (enclosing_class, method_name)
+    let mut type_kind: HashMap<String, EntityKind> = HashMap::new();
+
+    for e in entities.iter() {
+        match e.kind {
+            EntityKind::GroovyClass
+            | EntityKind::GroovyInterface
+            | EntityKind::GroovyTrait
+            | EntityKind::GroovyEnum => {
+                type_kind.insert(e.name.clone(), e.kind.clone());
+            }
+            EntityKind::GroovyMethod => {
+                if let Some(ref cls) = e.enclosing_class {
+                    declared.insert((cls.clone(), e.name.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut synthetic: Vec<ParsedEntity> = Vec::new();
+
+    for e in entities.iter() {
+        if e.kind != EntityKind::GroovyProperty {
+            continue;
+        }
+        let Some(ref cls) = e.enclosing_class else {
+            continue;
+        };
+        let Some(kind) = type_kind.get(cls.as_str()) else {
+            continue;
+        };
+
+        // Interface fields are constants — no accessors generated.
+        if *kind == EntityKind::GroovyInterface {
+            continue;
+        }
+
+        let prop_name = &e.name;
+        if prop_name.is_empty()
+            || !prop_name
+                .as_bytes()
+                .first()
+                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+        {
+            continue;
+        }
+
+        // Skip if the property name already starts with get/set/is (would collide).
+        if (prop_name.starts_with("get")
+            && prop_name.chars().nth(3).is_some_and(|c| c.is_uppercase()))
+            || (prop_name.starts_with("set")
+                && prop_name.chars().nth(3).is_some_and(|c| c.is_uppercase()))
+            || (prop_name.starts_with("is")
+                && prop_name.chars().nth(2).is_some_and(|c| c.is_uppercase()))
+        {
+            continue;
+        }
+
+        let cap = {
+            let mut chars = prop_name.chars();
+            let first = chars.next().unwrap().to_uppercase().to_string();
+            let rest: String = chars.collect();
+            format!("{first}{rest}")
+        };
+
+        let decl_info = prop_decls.get(&(cls.clone(), e.name.clone()));
+
+        // Emit getter: `get{Cap}`
+        let getter_name = format!("get{cap}");
+        if !declared.contains(&(cls.clone(), getter_name.clone())) {
+            synthetic.push(make_synthetic_accessor(
+                &getter_name,
+                e,
+                package,
+                file_path,
+                repo_name,
+                cls,
+            ));
+        }
+
+        // Emit `is{Cap}` for boolean / Boolean properties
+        if let Some(decl) = decl_info
+            && let Some(ref dt) = decl.declared_type
+            && (dt == "boolean" || dt == "Boolean")
+        {
+            let is_name = format!("is{cap}");
+            if !declared.contains(&(cls.clone(), is_name.clone())) {
+                synthetic.push(make_synthetic_accessor(
+                    &is_name, e, package, file_path, repo_name, cls,
+                ));
+            }
+        }
+
+        // Emit setter: `set{Cap}` (suppressed for `final` properties and explicit declarations)
+        let is_final = decl_info.is_some_and(|d| d.is_final);
+        if !is_final {
+            let setter_name = format!("set{cap}");
+            if !declared.contains(&(cls.clone(), setter_name.clone())) {
+                synthetic.push(make_synthetic_accessor(
+                    &setter_name,
+                    e,
+                    package,
+                    file_path,
+                    repo_name,
+                    cls,
+                ));
+            }
+        }
+    }
+
+    entities.append(&mut synthetic);
+}
+
+fn make_synthetic_accessor(
+    name: &str,
+    property: &ParsedEntity,
+    package: &Option<String>,
+    file_path: &str,
+    repo_name: &str,
+    enclosing_class: &str,
+) -> ParsedEntity {
+    let fqn = build_fqn(package, &Some(enclosing_class.to_string()), name);
+    ParsedEntity::new(
+        name,
+        EntityKind::GroovyMethod,
+        &fqn,
+        Some("<synthetic Groovy property accessor>".to_string()),
+        property.docstring.clone(),
+        "groovy",
+        file_path,
+        property.start_line,
+        property.end_line,
+        Some(enclosing_class.to_string()),
+        repo_name,
+    )
 }
 
 /// Scans source for method call patterns and returns reference intents.
@@ -440,6 +640,99 @@ fn split_identifier(s: &str) -> Option<(&str, &str)> {
         .find(|c: char| !c.is_alphanumeric() && c != '_')
         .unwrap_or(s.len());
     Some((&s[..end], &s[end..]))
+}
+
+/// Strips comment spans from a single source line, tracking multi-line
+/// `/* … */` state across calls. Returns the code-bearing remainder.
+///
+/// The caller should count braces and inspect for declarations on the
+/// returned effective line, *not* on the raw line — this is what prevents
+/// Javadoc continuation lines from producing phantom entities and corrupting
+/// scope tracking.
+fn strip_comments_line<'a>(line: &'a str, in_block: &mut bool) -> Cow<'a, str> {
+    let trimmed = line.trim();
+    if !*in_block && !trimmed.contains('/') && !trimmed.contains('*') {
+        return Cow::Borrowed(trimmed);
+    }
+
+    if *in_block {
+        if let Some(end_idx) = trimmed.find("*/") {
+            *in_block = false;
+            let rest = trimmed[end_idx + 2..].to_string();
+            if rest.trim().is_empty() {
+                return Cow::Owned(String::new());
+            }
+            return Cow::Owned(rest);
+        }
+        return Cow::Owned(String::new());
+    }
+
+    let mut result = String::with_capacity(trimmed.len());
+    let mut chars = trimmed.char_indices().peekable();
+
+    while let Some((_i, c)) = chars.next() {
+        if c == '/'
+            && let Some(&(_, next)) = chars.peek()
+        {
+            if next == '/' {
+                // Line comment — discard rest
+                let effective = result.trim_end().to_string();
+                return if effective.is_empty() {
+                    Cow::Owned(String::new())
+                } else {
+                    Cow::Owned(effective)
+                };
+            }
+            if next == '*' {
+                chars.next(); // consume '*'
+                // Look for matching */ on the same line
+                let mut found_close = false;
+                while let Some((_, c2)) = chars.next() {
+                    if c2 == '*'
+                        && let Some(&(_, '/')) = chars.peek()
+                    {
+                        chars.next(); // consume '/'
+                        found_close = true;
+                        break;
+                    }
+                }
+                if !found_close {
+                    *in_block = true;
+                    let effective = result.trim_end().to_string();
+                    return if effective.is_empty() {
+                        Cow::Owned(String::new())
+                    } else {
+                        Cow::Owned(effective)
+                    };
+                }
+                // Single-line block comment closed — continue processing rest of line
+                continue;
+            }
+        }
+        if c == '"' || c == '\'' {
+            let quote = c;
+            result.push(quote);
+            while let Some((_, c2)) = chars.next() {
+                result.push(c2);
+                if c2 == '\\' {
+                    if let Some((_, esc)) = chars.next() {
+                        result.push(esc);
+                    }
+                } else if c2 == quote {
+                    break;
+                }
+            }
+            continue;
+        }
+        result.push(c);
+    }
+
+    let effective = result.trim().to_string();
+    if effective.is_empty() {
+        Cow::Owned(String::new())
+    } else {
+        Cow::Owned(effective)
+    }
 }
 
 /// Extract package name from source (e.g., `package com.example.service`)
@@ -805,33 +1098,197 @@ pub(crate) fn extract_inheritance_intents(
     intents
 }
 
-/// Tries to extract properties (fields, script variables)
-// Reserved for future property extraction
-fn try_extract_property(line: &str) -> Option<String> {
-    // A very basic heuristic for `Type name = ...` or `def name = ...`
-    if let Some(eq_idx) = line.find('=') {
-        let left_side = line[..eq_idx].trim();
-        // Discard things like `a == b` or assignments in methods
-        if left_side.is_empty() || line.chars().nth(eq_idx + 1) == Some('=') {
+/// Metadata for a Groovy property declaration, carried forward into accessor
+/// synthesis so the synthetic entity can inherit the declared type and `final`
+/// flag.
+#[derive(Debug, Clone)]
+struct GroovyPropertyDecl {
+    name: String,
+    declared_type: Option<String>,
+    is_final: bool,
+}
+
+/// Tries to extract properties (fields, script variables) from a single line.
+///
+/// Recognises both:
+/// - Initialized: `String name = 'test'`, `def count = 0`
+/// - Bare (no initializer): `Path baseDir`, `private static final Path ROOT`
+///
+/// The caller gates extraction via `scope_stack` depth so method-body locals
+/// are never promoted to properties.
+fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
+    let mut cleaned = line.trim().trim_end_matches(';').trim().to_string();
+
+    // Strip leading annotations (@Lazy, @PackageScope, @Deprecated, ...)
+    loop {
+        let trimmed = cleaned.trim_start();
+        if let Some(rest) = trimmed.strip_prefix('@') {
+            let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+            cleaned = rest[end..].trim().to_string();
+        } else {
+            break;
+        }
+    }
+
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    // Reject pure comments (shouldn't happen after strip_comments_line, but defensive)
+    if cleaned.starts_with("//") || cleaned.starts_with("/*") || cleaned.starts_with('*') {
+        return None;
+    }
+
+    // Reject keywords that can appear as the first token
+    let rejection_keywords = [
+        "return",
+        "import",
+        "package",
+        "class",
+        "interface",
+        "trait",
+        "enum",
+        "new",
+        "throw",
+        "assert",
+        "case",
+        "else",
+        "extends",
+        "implements",
+        "instanceof",
+    ];
+
+    // If the line has `=`, try the initialized path
+    if let Some(eq_idx) = cleaned.find('=') {
+        // Discard `==`, `!=`
+        if cleaned.chars().nth(eq_idx + 1) == Some('=') {
+            return None;
+        }
+        let left_side = cleaned[..eq_idx].trim();
+        if left_side.is_empty() {
             return None;
         }
 
         let tokens: Vec<&str> = left_side.split_whitespace().collect();
         if tokens.len() >= 2 {
             let name = tokens.last().unwrap();
-            let first_char = name.chars().next().unwrap();
-            // Must start with letter/underscore and not contain weird chars
-            if (first_char.is_alphabetic() || first_char == '_')
-                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-            {
-                // Ignore if it looks like a method signature or control structure
-                if !line.contains("if ") && !line.contains("while ") && !line.contains("for ") {
-                    return Some(name.to_string());
-                }
+            if is_valid_identifier(name) {
+                let first_token = tokens[0];
+                let declared_type = if first_token == "def" {
+                    if tokens.len() >= 2 {
+                        Some(tokens[tokens.len() - 2].to_string())
+                    } else {
+                        None
+                    }
+                } else if is_valid_type_name(first_token) {
+                    Some(first_token.to_string())
+                } else {
+                    tokens
+                        .iter()
+                        .find(|t| is_valid_type_name(t))
+                        .map(|t| t.to_string())
+                };
+                let is_final = tokens.contains(&"final");
+                return Some(GroovyPropertyDecl {
+                    name: name.to_string(),
+                    declared_type,
+                    is_final,
+                });
             }
         }
+        return None;
     }
-    None
+
+    // No `=` — bare declaration path
+    if cleaned.contains('(')
+        || cleaned.contains(')')
+        || cleaned.contains('{')
+        || cleaned.contains('}')
+    {
+        return None;
+    }
+    let tokens: Vec<&str> = cleaned.split_whitespace().collect();
+    if tokens.is_empty() || tokens.len() < 2 {
+        return None;
+    }
+
+    // Reject if the first significant token is a keyword
+    let first_token = tokens[0];
+    if rejection_keywords.contains(&first_token) {
+        return None;
+    }
+
+    // Remove modifier tokens
+    let modifiers: &[&str] = &[
+        "private",
+        "protected",
+        "public",
+        "static",
+        "final",
+        "transient",
+        "volatile",
+        "synchronized",
+        "abstract",
+        "native",
+    ];
+    let non_modifiers: Vec<&&str> = tokens.iter().filter(|t| !modifiers.contains(t)).collect();
+
+    if non_modifiers.len() < 2 {
+        return None;
+    }
+
+    // After removing modifiers, we need exactly 2 tokens: type + name
+    // But we iterate to find a valid type-name pair
+    let name = tokens.last().unwrap();
+    if !is_valid_identifier(name) {
+        return None;
+    }
+
+    // Find the type token (the token before name, or anywhere before it that's a valid type)
+    let type_token = if tokens.len() >= 2 {
+        let candidate = tokens[tokens.len() - 2];
+        let candidate_stripped = strip_balanced_generics(candidate);
+        if candidate == "def" || is_valid_type_name(&candidate_stripped) {
+            Some(candidate.to_string())
+        } else if modifiers.contains(&candidate) {
+            // e.g., `private final String name` — search backwards
+            tokens[..tokens.len() - 1]
+                .iter()
+                .rev()
+                .find(|t| {
+                    !modifiers.contains(t)
+                        && **t != "def"
+                        && is_valid_type_name(&strip_balanced_generics(t))
+                })
+                .map(|t| t.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    type_token.as_ref()?;
+
+    let is_final = tokens.contains(&"final");
+    Some(GroovyPropertyDecl {
+        name: name.to_string(),
+        declared_type: type_token,
+        is_final,
+    })
+}
+
+/// Returns true when `s` is a Groovy/Java identifier.
+fn is_valid_identifier(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars();
+    let first = chars.next().unwrap();
+    if !first.is_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// Tries to extract a method name from a multi-line method signature.
@@ -1892,6 +2349,630 @@ abstract class PluginExtensionPoint implements ExtensionPoint {
         assert_eq!(m.docstring, None);
         let cls = pick_class(&entities, "Foo");
         assert_eq!(cls.docstring, None);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phase 0-3: Groovy property accessors & parser hardening regression
+    // ─────────────────────────────────────────────────────────────────────
+
+    const ISESSION_SRC: &str = r#"
+package nf
+
+interface ISession {
+
+    /**
+     * The folder where the main script is contained
+     */
+    Path getBaseDir()
+
+    /**
+     * The pipeline script name (without parent path)
+     */
+    String getScriptName()
+}
+"#;
+
+    const SESSION_SRC: &str = r#"
+package nf
+
+class Session implements ISession {
+
+    /**
+     * The folder where the main script is contained
+     */
+    Path baseDir
+
+    /**
+     * The pipeline script name (without parent path)
+     */
+    String scriptName
+
+    void setBaseDir( Path baseDir ) {
+        this.baseDir = baseDir
+    }
+}
+"#;
+
+    // --- Phase 0: Regression pinning (RED, fail before implementation) ---
+
+    #[test]
+    fn bug_javadoc_body_line_yields_no_entity() {
+        let entities = extract_entities_groovy(ISESSION_SRC, "ISession.groovy", "test-repo");
+        assert!(
+            !entities.iter().any(|e| e.name == "name"),
+            "Phantom entity 'name' from Javadoc body line must NOT exist"
+        );
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "getBaseDir" && e.kind == EntityKind::GroovyMethod),
+            "getBaseDir must still be extracted"
+        );
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "getScriptName" && e.kind == EntityKind::GroovyMethod),
+            "getScriptName must still be extracted"
+        );
+    }
+
+    #[test]
+    fn bug_bare_property_is_indexed() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        let base_dir = entities
+            .iter()
+            .find(|e| e.name == "baseDir" && e.kind == EntityKind::GroovyProperty);
+        assert!(
+            base_dir.is_some(),
+            "Bare property 'baseDir' must be indexed"
+        );
+        assert_eq!(
+            base_dir.unwrap().fqn,
+            "nf.Session.baseDir",
+            "FQN should include enclosing class"
+        );
+    }
+
+    #[test]
+    fn bug_property_getter_is_synthesised() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        let getter = entities.iter().find(|e| {
+            e.name == "getBaseDir"
+                && e.kind == EntityKind::GroovyMethod
+                && e.enclosing_class.as_deref() == Some("Session")
+        });
+        assert!(
+            getter.is_some(),
+            "Synthetic getter 'Session.getBaseDir' must exist"
+        );
+        assert!(
+            getter
+                .unwrap()
+                .signature
+                .as_deref()
+                .is_some_and(|s| s.contains("synthetic")),
+            "Synthetic getter must carry a synthetic marker in its signature"
+        );
+    }
+
+    #[test]
+    fn bug_groovy_scm_query_compiles() {
+        let q = tree_sitter::Query::new(
+            &tree_sitter_groovy::LANGUAGE.into(),
+            include_str!("../../../../queries/groovy.scm"),
+        );
+        assert!(q.is_ok(), "groovy.scm failed to compile: {:?}", q.err());
+    }
+
+    #[test]
+    fn groovy_scm_captures_expected_patterns() {
+        let q = tree_sitter::Query::new(
+            &tree_sitter_groovy::LANGUAGE.into(),
+            include_str!("../../../../queries/groovy.scm"),
+        )
+        .expect("groovy.scm must compile");
+        assert!(
+            q.pattern_count() >= 12,
+            "expected at least 12 patterns, got {}",
+            q.pattern_count()
+        );
+        let required: &[&str] = &[
+            "groovy.method.name",
+            "groovy.field.name",
+            "groovy.class.name",
+            "groovy.interface.name",
+            "groovy.enum.name",
+            "groovy.signature",
+        ];
+        let capture_names: Vec<String> = q.capture_names().iter().map(|c| c.to_string()).collect();
+        for name in required {
+            assert!(
+                capture_names.iter().any(|c| c == name),
+                "capture '{name}' missing from groovy.scm"
+            );
+        }
+    }
+
+    // --- Phase 1: Comment stripping regression ---
+
+    #[test]
+    fn javadoc_body_with_parens_is_not_a_method() {
+        let entities = extract_entities_groovy(ISESSION_SRC, "ISession.groovy", "test-repo");
+        for e in &entities {
+            if e.kind == EntityKind::GroovyMethod {
+                assert!(
+                    !e.signature
+                        .as_deref()
+                        .is_some_and(|s| s.contains("parent path")),
+                    "Javadoc body line '{}' must not be a method entity: {:?}",
+                    e.name,
+                    e.signature
+                );
+            }
+        }
+        // Confirm the real methods are intact
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "getBaseDir" && e.kind == EntityKind::GroovyMethod)
+        );
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "getScriptName" && e.kind == EntityKind::GroovyMethod)
+        );
+    }
+
+    #[test]
+    fn javadoc_body_does_not_shadow_next_declaration() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        let setter = entities.iter().find(|e| {
+            e.name == "setBaseDir"
+                && e.kind == EntityKind::GroovyMethod
+                && e.enclosing_class.as_deref() == Some("Session")
+        });
+        assert!(
+            setter.is_some(),
+            "setBaseDir must be present with enclosing_class=Session"
+        );
+    }
+
+    #[test]
+    fn braces_inside_block_comment_do_not_corrupt_scope() {
+        let source = r#"
+class MyService {
+    /**
+     * Example: if (x) { doSomething() }
+     */
+    String getName() { "svc" }
+}
+"#;
+        let entities = extract_entities_groovy(source, "MyService.groovy", "test-repo");
+        let method = entities
+            .iter()
+            .find(|e| e.name == "getName" && e.kind == EntityKind::GroovyMethod)
+            .expect("getName not found");
+        assert_eq!(
+            method.enclosing_class.as_deref(),
+            Some("MyService"),
+            "method's enclosing_class must be the class, not None"
+        );
+    }
+
+    #[test]
+    fn single_line_block_comment_does_not_leak() {
+        let source = "class Foo { /* note */ void run() {} }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "Foo" && e.kind == EntityKind::GroovyClass),
+            "Foo should be extracted"
+        );
+    }
+
+    #[test]
+    fn trailing_line_comment_is_ignored() {
+        let source = "class Foo {\n    Path baseDir // the base dir\n}";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "baseDir" && e.kind == EntityKind::GroovyProperty),
+            "baseDir with trailing line comment should be extracted"
+        );
+    }
+
+    #[test]
+    fn unterminated_block_comment_swallows_rest_of_file() {
+        let source = "class Foo {\n/**\nPath baseDir\nString name\n}";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            !entities.iter().any(|e| e.name == "baseDir"),
+            "entities after unterminated /** should not exist"
+        );
+        assert!(
+            !entities.iter().any(|e| e.name == "name"),
+            "entities after unterminated /** should not exist"
+        );
+    }
+
+    #[test]
+    fn strip_comments_line_unit() {
+        // Table-driven tests for the comment-stripping helper.
+        let cases: &[(&str, bool, &str, bool)] = &[
+            // (input, in_block_before, expected_output, in_block_after)
+            ("code", false, "code", false),
+            ("code // comment", false, "code", false),
+            ("/* block */ code", false, "code", false),
+            ("/* start", false, "", true),
+            ("* mid", true, "", true),
+            ("*/ after", true, "after", false),
+            ("/** doc */", false, "", false),
+            ("  ", false, "", false),
+            (
+                "x = \"// not a comment\"",
+                false,
+                "x = \"// not a comment\"",
+                false,
+            ),
+        ];
+        for (i, (input, in_before, expected, in_after)) in cases.iter().enumerate() {
+            let mut in_block = *in_before;
+            let result = strip_comments_line(input, &mut in_block);
+            assert_eq!(
+                result.trim(),
+                *expected,
+                "case {i}: strip_comments_line({input:?}, {in_before})"
+            );
+            assert_eq!(
+                in_block, *in_after,
+                "case {i}: in_block after strip_comments_line"
+            );
+        }
+    }
+
+    // --- Phase 2: Bare property declarations ---
+
+    #[test]
+    fn bare_typed_property_is_extracted() {
+        let source = "class Session {\n    Path baseDir\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        let prop = pick_entity(&entities, "baseDir", EntityKind::GroovyProperty);
+        assert_eq!(prop.enclosing_class.as_deref(), Some("Session"));
+        assert_eq!(prop.fqn, "Session.baseDir");
+    }
+
+    #[test]
+    fn generic_typed_property_is_extracted() {
+        let source = "class Session {\n    Map<String,Object> config\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "config" && e.kind == EntityKind::GroovyProperty),
+            "generic property 'config' not found"
+        );
+    }
+
+    #[test]
+    fn def_property_is_extracted() {
+        let source = "class Session {\n    def anything\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "anything" && e.kind == EntityKind::GroovyProperty),
+            "def property 'anything' not found"
+        );
+    }
+
+    #[test]
+    fn modifier_prefixed_property_is_extracted() {
+        let source = "class Session {\n    private static final Path ROOT\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "ROOT" && e.kind == EntityKind::GroovyProperty),
+            "modifier-prefixed property 'ROOT' not found"
+        );
+    }
+
+    #[test]
+    fn java_style_semicolon_field_is_extracted() {
+        let source = "class Session {\n    private int count;\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "count" && e.kind == EntityKind::GroovyProperty),
+            "semicolon field 'count' not found"
+        );
+    }
+
+    #[test]
+    fn initialized_property_still_extracted() {
+        let source = "class Foo { String name = 'test' }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "name" && e.kind == EntityKind::GroovyProperty),
+            "initialized property 'name' not found"
+        );
+    }
+
+    #[test]
+    fn local_variable_inside_method_is_not_a_property() {
+        let source = "class Foo { void m() { Path tmp\n } }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            !entities.iter().any(|e| e.name == "tmp"),
+            "local variable 'tmp' inside method must NOT be a property"
+        );
+    }
+
+    #[test]
+    fn return_statement_is_not_a_property() {
+        let source = "class Foo { void m() { return baseDir } }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            !entities.iter().any(|e| e.name == "return"),
+            "'return' must not be a property"
+        );
+    }
+
+    #[test]
+    fn import_and_package_lines_are_not_properties() {
+        let source = "package com.foo\nimport java.nio.Path\nclass Foo { }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        // import/java/nio/Path should not be properties
+        assert!(
+            !entities
+                .iter()
+                .any(|e| e.name == "Path" && e.kind == EntityKind::GroovyProperty),
+            "'Path' from import must not be a property"
+        );
+    }
+
+    #[test]
+    fn type_declaration_line_is_not_a_property() {
+        let source = "class Session implements ISession { String name }";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        // class/Session/implements/ISession should not be properties
+        assert!(
+            !entities
+                .iter()
+                .any(|e| e.name == "Session" && e.kind == EntityKind::GroovyProperty),
+            "class name must not be misclassified as property"
+        );
+    }
+
+    #[test]
+    fn script_level_bare_identifier_is_not_a_property() {
+        let source = "println";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            !entities
+                .iter()
+                .any(|e| e.name == "println" && e.kind == EntityKind::GroovyProperty),
+            "single token 'println' must not be a property"
+        );
+    }
+
+    // --- Phase 3: Synthetic accessor entities ---
+
+    #[test]
+    fn property_generates_getter_and_setter() {
+        let source = "class Session {\n    Path baseDir\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        let getter = entities.iter().find(|e| {
+            e.name == "getBaseDir"
+                && e.kind == EntityKind::GroovyMethod
+                && e.enclosing_class.as_deref() == Some("Session")
+        });
+        assert!(getter.is_some(), "getter 'getBaseDir' must be synthesised");
+        let setter = entities.iter().find(|e| {
+            e.name == "setBaseDir"
+                && e.kind == EntityKind::GroovyMethod
+                && e.enclosing_class.as_deref() == Some("Session")
+        });
+        assert!(setter.is_some(), "setter 'setBaseDir' must be synthesised");
+    }
+
+    #[test]
+    fn boolean_property_generates_is_and_get() {
+        let source = "class Session {\n    boolean cacheable\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities.iter().any(|e| {
+                e.name == "isCacheable"
+                    && e.kind == EntityKind::GroovyMethod
+                    && e.enclosing_class.as_deref() == Some("Session")
+            }),
+            "boolean is-accessor not synthesised"
+        );
+        assert!(
+            entities.iter().any(|e| {
+                e.name == "getCacheable"
+                    && e.kind == EntityKind::GroovyMethod
+                    && e.enclosing_class.as_deref() == Some("Session")
+            }),
+            "boolean getter not synthesised"
+        );
+    }
+
+    #[test]
+    fn boxed_boolean_property_generates_is_and_get() {
+        let source = "class Session {\n    Boolean resumeMode\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities.iter().any(|e| e.name == "isResumeMode"),
+            "Boolean is-accessor not synthesised"
+        );
+        assert!(
+            entities.iter().any(|e| e.name == "getResumeMode"),
+            "Boolean getter not synthesised"
+        );
+    }
+
+    #[test]
+    fn final_property_generates_getter_only() {
+        let source = "class Session {\n    final Path root\n}";
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "getRoot" && e.kind == EntityKind::GroovyMethod),
+            "final property must have getter"
+        );
+        assert!(
+            !entities
+                .iter()
+                .any(|e| e.name == "setRoot" && e.kind == EntityKind::GroovyMethod),
+            "final property must NOT have setter"
+        );
+    }
+
+    #[test]
+    fn explicit_setter_suppresses_synthetic_setter() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        let setters: Vec<_> = entities
+            .iter()
+            .filter(|e| e.name == "setBaseDir" && e.kind == EntityKind::GroovyMethod)
+            .collect();
+        assert_eq!(
+            setters.len(),
+            1,
+            "must be exactly one setBaseDir, got {}",
+            setters.len()
+        );
+        let s = setters[0];
+        assert!(
+            !s.signature
+                .as_deref()
+                .is_some_and(|sig| sig.contains("synthetic")),
+            "the setBaseDir must be the real one, not synthetic"
+        );
+    }
+
+    #[test]
+    fn explicit_getter_suppresses_synthetic_getter() {
+        let source = r#"
+class Session {
+    Path baseDir
+    Path getBaseDir() { baseDir }
+}
+"#;
+        let entities = extract_entities_groovy(source, "Session.groovy", "test-repo");
+        let getters: Vec<_> = entities
+            .iter()
+            .filter(|e| e.name == "getBaseDir" && e.kind == EntityKind::GroovyMethod)
+            .collect();
+        assert_eq!(getters.len(), 1, "exactly one getBaseDir expected");
+    }
+
+    #[test]
+    fn interface_constant_generates_no_accessor() {
+        let source = "interface I { String NAME }";
+        let entities = extract_entities_groovy(source, "I.groovy", "test-repo");
+        assert!(
+            !entities.iter().any(|e| e.name == "getNAME"),
+            "interface constants must not generate accessors"
+        );
+    }
+
+    #[test]
+    fn script_level_variable_generates_no_accessor() {
+        let source = "def globalConfig = [:]";
+        let entities = extract_entities_groovy(source, "script.groovy", "test-repo");
+        assert!(
+            !entities.iter().any(|e| e.name == "getGlobalConfig"),
+            "script-level variable must not generate accessor"
+        );
+    }
+
+    #[test]
+    fn synthetic_accessor_metadata() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        let getter = entities
+            .iter()
+            .find(|e| {
+                e.name == "getBaseDir"
+                    && e.kind == EntityKind::GroovyMethod
+                    && e.signature
+                        .as_deref()
+                        .is_some_and(|s| s.contains("synthetic"))
+            })
+            .expect("synthetic getter not found");
+        let prop = entities
+            .iter()
+            .find(|e| e.name == "baseDir" && e.kind == EntityKind::GroovyProperty)
+            .expect("baseDir property not found");
+        assert_eq!(
+            getter.enclosing_class.as_deref(),
+            Some("Session"),
+            "synthetic getter must have enclosing class"
+        );
+        assert_eq!(
+            getter.start_line, prop.start_line,
+            "synthetic getter must share property's start_line"
+        );
+    }
+
+    #[test]
+    fn synthetic_accessor_uuid_is_distinct() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        let getter = entities
+            .iter()
+            .find(|e| {
+                e.name == "getBaseDir"
+                    && e.kind == EntityKind::GroovyMethod
+                    && e.signature
+                        .as_deref()
+                        .is_some_and(|s| s.contains("synthetic"))
+            })
+            .expect("synthetic getter not found");
+        let prop = entities
+            .iter()
+            .find(|e| e.name == "baseDir" && e.kind == EntityKind::GroovyProperty)
+            .expect("baseDir property not found");
+        assert_ne!(
+            getter.uuid, prop.uuid,
+            "synthetic getter UUID must be distinct from property UUID"
+        );
+    }
+
+    #[test]
+    fn synthetic_accessors_have_no_reference_intents() {
+        let entities = extract_entities_groovy(SESSION_SRC, "Session.groovy", "test-repo");
+        for e in entities.iter().filter(|e| {
+            e.kind == EntityKind::GroovyMethod
+                && e.signature
+                    .as_deref()
+                    .is_some_and(|s| s.contains("synthetic"))
+        }) {
+            assert!(
+                e.reference_intents.is_empty(),
+                "synthetic accessor '{}' must have no reference intents",
+                e.name
+            );
+        }
+    }
+
+    #[test]
+    fn url_string_with_double_slash_is_tolerated() {
+        // Pinning test: current comment stripping may handle this imperfectly.
+        // This test records behaviour — it must not panic.
+        let source = "class Foo {\n    String url = \"https://example.com/path\"\n}";
+        let entities = extract_entities_groovy(source, "test.groovy", "test-repo");
+        assert!(
+            entities
+                .iter()
+                .any(|e| e.name == "url" && e.kind == EntityKind::GroovyProperty),
+            "url property should still be extracted"
+        );
     }
 }
 

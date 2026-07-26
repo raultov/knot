@@ -35,6 +35,13 @@
 (constructor_declaration
   name: (identifier) @groovy.method.name)
 
+; --- Function definitions (Groovy `def foo() { }`) ---
+(function_definition
+  name: (identifier) @groovy.method.name)
+
+(function_definition
+  parameters: (formal_parameters) @groovy.signature)
+
 ; --- Field declarations (assigned to variable) ---
 (field_declaration
   declarator: (variable_declarator
@@ -46,7 +53,7 @@
     name: (identifier) @groovy.field.name))
 
 ; --- Script-level variable declarations ---
-(variable_declaration
+(local_variable_declaration
   declarator: (variable_declarator
     name: (identifier) @groovy.field.name))
 
