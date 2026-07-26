@@ -5,6 +5,19 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.5.6 — Groovy Property Accessors & Parser Hardening
+
+- **Fix(groovy)**: Javadoc block-comment continuation lines no longer produce phantom method entities or corrupt scope tracking. New `strip_comments_line` helper tracks multi-line `/* */` state across lines, and brace counting operates on the code-bearing remainder only.
+- **Feat(groovy)**: Bare property declarations (`Path baseDir`, `boolean cacheable`, `private final Path ROOT`) are now indexed as `GroovyProperty` entities. Previously only initialized properties (`String name = 'test'`) were detected.
+- **Feat(groovy)**: Compiler-generated property accessors (`getX`/`setX`/`isX`) are synthesised as first-class `GroovyMethod` entities, enabling `OVERRIDES` linking between Groovy properties and interface getter declarations. Explicit getters/setters suppress synthetic ones, and `final` properties emit getters only.
+- **Fix(groovy-scm)**: Fixed `queries/groovy.scm` to compile against tree-sitter-groovy v0.1.2 by replacing `variable_declaration` with `local_variable_declaration`. Added `function_definition` capture patterns for `def`-style methods.
+- **Test(unit)**: 30+ new unit tests covering comment stripping, bare property detection, synthetic accessor generation, override linking for property accessors vs interface getters, and the tree-sitter query compilation assertion.
+- **Test(e2e)**: Added Group G in `tests/run_groovy_e2e.sh` — validates `find_callers` Overridden-by/Overrides for properties, `explore_file` lists properties, Javadoc phantom regression guard, and Neo4j dedup/no-override invariants.
+- **Docs**: Updated README Groovy section with property accessor synthesis details.
+- **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean | **969 unit tests** passing
+
+---
+
 ## v1.5.5 — JVM Method Override Relationships
 
 - ✅ **Feat(resolve)**: Implemented JVM method-level `OVERRIDES` relationships. The graph now links a method in a subtype directly to the method it overrides/implements in a supertype, enabling reverse-dependency queries to surface implementations and declarations bidirectionally.
