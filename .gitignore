@@ -36,3 +36,4 @@ tests/testing_files/**/.knot/
 
 # Agent skills generated artifacts
 .knot-agent-skills/
+/tests/testing_files/autolink_scale/

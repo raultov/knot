@@ -72,9 +72,11 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
+    if [ -d "$FIXTURE_DIR" ]; then
+        rm -rf "$FIXTURE_DIR" 2>/dev/null || true
+    fi
     echo -e "${GREEN}Cleanup complete${NC}"
 }
-
 trap cleanup EXIT INT TERM
 
 # -----------------------------------------------------------------------
