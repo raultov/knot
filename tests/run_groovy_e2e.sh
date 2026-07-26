@@ -10,6 +10,8 @@
 #   E. Docstrings — GroovyDoc extraction into Neo4j/Qdrant (nextflow init case)
 #   F. Method OVERRIDES — subtype.method -[OVERRIDES]-> supertype.method edges
 #                        surfaced bidirectionally by find_callers (nextflow init case)
+#   G. Property Accessors — Groovy auto-generated getters/setters as synthetic
+#                        entities linked via OVERRIDES to interface getters
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -21,6 +23,8 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+export KNOT_FASTEMBED_CACHE_DIR="${KNOT_FASTEMBED_CACHE_DIR:-$HOME/.cache/knot/fastembed_cache}"
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -49,6 +53,9 @@ echo -e "${BLUE}Group A: Entity Extraction${NC}"
 echo -e "${BLUE}Group B: Cross-Ref CALLS${NC}"
 echo -e "${BLUE}Group C: Private Method Tracking${NC}"
 echo -e "${BLUE}Group D: Inheritance EXTENDS/IMPLEMENTS${NC}"
+echo -e "${BLUE}Group E: Docstrings${NC}"
+echo -e "${BLUE}Group F: Method OVERRIDES${NC}"
+echo -e "${BLUE}Group G: Property Accessors${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -816,16 +823,16 @@ else
 fi
 
 # Test E4: Qdrant parity — the points for PluginExtensionPoint.groovy exist
-# (graph ↔ vector parity: class + checkInit + init = 3 points).
+# (graph ↔ vector parity: class + checkInit + init + property + 3 accessors = 7 points).
 echo ""
-echo "Test E4: Qdrant points for PluginExtensionPoint.groovy (expect 3)..."
+echo "Test E4: Qdrant points for PluginExtensionPoint.groovy (expect 7)..."
 E4_RAW=$(curl -s --max-time 20 -X POST "$QDRANT_REST_URL/collections/$COLL_D/points/scroll" \
     -H 'Content-Type: application/json' \
     -d '{"limit":100,"with_payload":true}' || true)
 E4=$(echo "$E4_RAW" | jq '[.result.points[] | select(.payload.file_path | tostring | endswith("PluginExtensionPoint.groovy"))] | length' 2>/dev/null || echo "jq_error")
 E4=${E4:-0}
-if [ "$E4" -eq 3 ] 2>/dev/null; then
-    echo -e "${GREEN}✓ Qdrant holds the 3 points of PluginExtensionPoint.groovy${NC}"
+if [ "$E4" -eq 7 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ Qdrant holds the 7 points of PluginExtensionPoint.groovy${NC}"
 else
     echo -e "${RED}✗ expected 3 Qdrant points for PluginExtensionPoint.groovy, got $E4${NC}"
     echo -e "${YELLOW}  scroll response excerpt: $(echo "$E4_RAW" | head -c 400)${NC}"
@@ -870,6 +877,134 @@ if echo "$RESP_F" | grep -qi "Overrides (declared supertype methods)" \
     echo -e "${GREEN}✓ PluginExtensionPoint.init found under Overrides${NC}"
 else
     echo -e "${RED}✗ PluginExtensionPoint.init NOT found under Overrides${NC}"
+    FAILED=1
+fi
+
+# ═══════════════════════════════════════════════════════════
+# GROUP G: Property Accessors (getter/setter synthesis & comment hygiene)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group G: Property Accessors ──${NC}"
+
+REPO_G="groovy_props_e2e"
+COLL_G="knot_groovy_props_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow"
+
+# ISession.groovy — interface with getBaseDir and isCacheable
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/ISession.groovy" << 'GROOVY'
+package nextflow
+
+interface ISession {
+    /**
+     * The folder where the main script is contained (without parent path)
+     */
+    Path getBaseDir()
+
+    boolean isCacheable()
+}
+GROOVY
+
+# Session.groovy — class implementing ISession with bare properties
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/Session.groovy" << 'GROOVY'
+package nextflow
+
+class Session implements ISession {
+    /**
+     * The folder where the main script is contained (without parent path)
+     */
+    Path baseDir
+
+    boolean cacheable
+
+    void setBaseDir( Path baseDir ) {
+        this.baseDir = baseDir
+    }
+}
+GROOVY
+
+run_indexer "$REPO_G" "$COLL_G" "--clean"
+
+# Test G1: find_callers(getBaseDir) "Overridden by" lists Session.groovy
+echo ""
+echo "Test G1: find_callers(getBaseDir) 'Overridden by' lists Session.groovy..."
+RESP_G1=$(call_mcp "$REPO_G" "$COLL_G" \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"getBaseDir","repo_name":"'"$REPO_G"'"}}}')
+if echo "$RESP_G1" | grep -qi "Overridden by" \
+    && echo "$RESP_G1" | grep -q "Session.groovy"; then
+    echo -e "${GREEN}✓ Session.getBaseDir found under Overridden by${NC}"
+else
+    echo -e "${RED}✗ Session.getBaseDir NOT found under Overridden by${NC}"
+    FAILED=1
+fi
+
+# Test G2: find_callers(getBaseDir) "Overrides" section lists ISession.groovy
+echo ""
+echo "Test G2: find_callers(getBaseDir) 'Overrides' lists ISession.groovy..."
+if echo "$RESP_G1" | grep -qi "Overrides (declared supertype methods)" \
+    && echo "$RESP_G1" | grep -q "ISession.groovy"; then
+    echo -e "${GREEN}✓ ISession.getBaseDir found under Overrides${NC}"
+else
+    echo -e "${RED}✗ ISession.getBaseDir NOT found under Overrides${NC}"
+    FAILED=1
+fi
+
+# Test G3: find_callers(isCacheable) links Session → ISession (boolean is accessor path)
+echo ""
+echo "Test G3: find_callers(isCacheable) links Session → ISession..."
+RESP_G3=$(call_mcp "$REPO_G" "$COLL_G" \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"isCacheable","repo_name":"'"$REPO_G"'"}}}')
+if echo "$RESP_G3" | grep -qi "Overridden by" \
+    && echo "$RESP_G3" | grep -q "Session.groovy"; then
+    echo -e "${GREEN}✓ Session.cacheable → ISession.isCacheable linked${NC}"
+else
+    echo -e "${RED}✗ Session.cacheable → ISession.isCacheable NOT linked${NC}"
+    FAILED=1
+fi
+
+# Test G4: explore Session.groovy lists property baseDir
+echo ""
+echo "Test G4: explore Session.groovy lists property baseDir..."
+RESP_G4=$(call_mcp "$REPO_G" "$COLL_G" \
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"explore_file","arguments":{"file_path":"'"$TMP_REPO_DIR"'/src/main/groovy/nextflow/Session.groovy","repo_name":"'"$REPO_G"'"}}}')
+if echo "$RESP_G4" | grep -q "baseDir"; then
+    echo -e "${GREEN}✓ baseDir property listed in explore_file${NC}"
+else
+    echo -e "${RED}✗ baseDir property NOT listed in explore_file${NC}"
+    FAILED=1
+fi
+
+# Test G5: explore Session.groovy does NOT list phantom 'name' entity from Javadoc
+echo ""
+echo "Test G5: explore Session.groovy does NOT list phantom 'name' entity..."
+if ! echo "$RESP_G4" | grep -q '"name"'; then
+    echo -e "${GREEN}✓ no phantom 'name' entity from Javadoc body${NC}"
+else
+    echo -e "${RED}✗ phantom 'name' entity detected (Javadoc body line leaked)${NC}"
+    FAILED=1
+fi
+
+# Test G6: Neo4j — exactly one setBaseDir (no synthetic duplicate)
+echo ""
+echo "Test G6: Neo4j count of setBaseDir = 1 (no synthetic duplicate)..."
+G6=$(run_neo4j_cypher "MATCH (e:Entity {repo_name:'$REPO_G', name:'setBaseDir'}) RETURN count(e) AS cnt;")
+G6=${G6:-0}
+if [ "$G6" -eq 1 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ exactly one setBaseDir (explicit setter, no synthetic duplicate)${NC}"
+else
+    echo -e "${RED}✗ expected 1 setBaseDir, got $G6${NC}"
+    FAILED=1
+fi
+
+# Test G7: Neo4j — property node baseDir has ZERO OVERRIDES edges
+echo ""
+echo "Test G7: Neo4j — baseDir property node has no OVERRIDES edges..."
+G7=$(run_neo4j_cypher "MATCH (e:Entity {fqn:'nextflow.Session.baseDir', repo_name:'$REPO_G'})-[r:OVERRIDES]->() RETURN count(r) AS cnt;")
+G7=${G7:-0}
+if [ "$G7" -eq 0 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ baseDir property node has zero OVERRIDES edges${NC}"
+else
+    echo -e "${RED}✗ baseDir property node should have zero OVERRIDES edges, got $G7${NC}"
     FAILED=1
 fi
 
