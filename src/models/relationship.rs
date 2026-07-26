@@ -128,6 +128,10 @@ pub enum RelationshipType {
     GenericBound,
     /// Repository -> Repository dependency edge.
     DependsOn,
+    /// JVM (Java/Kotlin/Groovy): a method in a subtype overrides or implements
+    /// the corresponding method declared in a supertype (interface or superclass).
+    /// Edge direction: `subtype.method -[Overrides]-> supertype.method`.
+    Overrides,
 }
 
 impl std::fmt::Display for RelationshipType {
@@ -145,6 +149,7 @@ impl std::fmt::Display for RelationshipType {
             RelationshipType::Contains => write!(f, "CONTAINS"),
             RelationshipType::GenericBound => write!(f, "GENERIC_BOUND"),
             RelationshipType::DependsOn => write!(f, "DEPENDS_ON"),
+            RelationshipType::Overrides => write!(f, "OVERRIDES"),
         }
     }
 }

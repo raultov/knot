@@ -130,7 +130,9 @@ impl QueryExt for GraphDb {
             "calls": [],
             "extends": [],
             "implements": [],
-            "references": []
+            "references": [],
+            "overridden_by": [],
+            "overrides": []
         });
 
         // Query for each relationship type
@@ -180,19 +182,103 @@ impl QueryExt for GraphDb {
 
             let mut type_results = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
-                let entity_json = serde_json::json!({
-                    "name": row.get::<String>("entity.name").ok(),
-                    "kind": row.get::<String>("entity.kind").ok(),
-                    "file_path": row.get::<String>("entity.file_path").ok(),
-                    "start_line": row.get::<i64>("entity.start_line").ok(),
-                    "signature": row.get::<String>("entity.signature").ok(),
-                    "target_name": row.get::<String>("target_name").ok(),
-                    "target_fqn": row.get::<String>("target_fqn").ok(),
-                    "target_file_path": row.get::<String>("target_file_path").ok(),
-                    "target_start_line": row.get::<i64>("target_start_line").ok(),
-                    "target_signature": row.get::<String>("target_signature").ok(),
-                });
-                type_results.push(entity_json);
+                type_results.push(parse_reference_row(row));
+            }
+
+            if let Some(arr) = results.get_mut(result_key) {
+                *arr = serde_json::json!(type_results);
+            }
+        }
+
+        // --- OVERRIDES buckets (JVM method-level, variable-length traversal) ---
+        //
+        // `OVERRIDES` edges point subtype.method -> supertype.method. Two
+        // directed buckets are needed because both endpoints share the method
+        // name; an undirected match would mix ancestors and descendants and
+        // return the queried node itself.
+        //
+        // - "overridden_by": incoming edges -> implementations/descendants of
+        //   the queried (declared) method.
+        // - "overrides": outgoing edges -> declarations/ancestors the queried
+        //   (implementing) method overrides.
+        //
+        // `*1..` gives transitive visibility; DISTINCT dedups diamond paths and
+        // `entity.uuid <> target.uuid` guards pathological cyclic edges. All
+        // `OVERRIDES` edges are intra-repo, so scoping the matched endpoint by
+        // repo_name is sufficient.
+        let overridden_by_query = if repo_name.is_some() {
+            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
+             WHERE target.repo_name = $repo_name
+               AND (target.name = $name
+                OR target.fqn = $name
+                OR target.fqn CONTAINS $name
+                OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
+               AND entity.uuid <> target.uuid
+             RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                    target.name AS target_name, target.fqn AS target_fqn,
+                    target.file_path AS target_file_path,
+                    target.start_line AS target_start_line, target.signature AS target_signature"
+        } else {
+            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
+             WHERE (target.name = $name
+                OR target.fqn = $name
+                OR target.fqn CONTAINS $name
+                OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
+               AND entity.uuid <> target.uuid
+             RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                    target.name AS target_name, target.fqn AS target_fqn,
+                    target.file_path AS target_file_path,
+                    target.start_line AS target_start_line, target.signature AS target_signature"
+        };
+
+        // In the "overrides" bucket the found endpoint (the declaration) is
+        // projected into the `entity.*` slots so downstream formatting is
+        // unchanged; the queried method fills the `target_*` slots.
+        let overrides_query = if repo_name.is_some() {
+            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
+             WHERE entity.repo_name = $repo_name
+               AND (entity.name = $name
+                OR entity.fqn = $name
+                OR entity.fqn CONTAINS $name
+                OR (entity.name + COALESCE(entity.signature, '')) CONTAINS $name)
+               AND entity.uuid <> target.uuid
+             RETURN DISTINCT target.name AS `entity.name`, target.kind AS `entity.kind`,
+                    target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
+                    target.signature AS `entity.signature`,
+                    entity.name AS target_name, entity.fqn AS target_fqn,
+                    entity.file_path AS target_file_path,
+                    entity.start_line AS target_start_line, entity.signature AS target_signature"
+        } else {
+            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
+             WHERE (entity.name = $name
+                OR entity.fqn = $name
+                OR entity.fqn CONTAINS $name
+                OR (entity.name + COALESCE(entity.signature, '')) CONTAINS $name)
+               AND entity.uuid <> target.uuid
+             RETURN DISTINCT target.name AS `entity.name`, target.kind AS `entity.kind`,
+                    target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
+                    target.signature AS `entity.signature`,
+                    entity.name AS target_name, entity.fqn AS target_fqn,
+                    entity.file_path AS target_file_path,
+                    entity.start_line AS target_start_line, entity.signature AS target_signature"
+        };
+
+        for (result_key, query_str) in [
+            ("overridden_by", overridden_by_query),
+            ("overrides", overrides_query),
+        ] {
+            let mut q = query(query_str).param("name", entity_name);
+            if let Some(repo) = repo_name {
+                q = q.param("repo_name", repo);
+            }
+
+            let mut rows = self.graph.execute(q).await.context(format!(
+                "Failed to query Neo4j for {result_key} relationships"
+            ))?;
+
+            let mut type_results = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                type_results.push(parse_reference_row(row));
             }
 
             if let Some(arr) = results.get_mut(result_key) {
@@ -467,6 +553,21 @@ impl QueryExt for GraphDb {
         }
         Ok(serde_json::json!(results))
     }
+}
+
+fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
+    serde_json::json!({
+        "name": row.get::<String>("entity.name").ok(),
+        "kind": row.get::<String>("entity.kind").ok(),
+        "file_path": row.get::<String>("entity.file_path").ok(),
+        "start_line": row.get::<i64>("entity.start_line").ok(),
+        "signature": row.get::<String>("entity.signature").ok(),
+        "target_name": row.get::<String>("target_name").ok(),
+        "target_fqn": row.get::<String>("target_fqn").ok(),
+        "target_file_path": row.get::<String>("target_file_path").ok(),
+        "target_start_line": row.get::<i64>("target_start_line").ok(),
+        "target_signature": row.get::<String>("target_signature").ok(),
+    })
 }
 
 #[cfg(test)]

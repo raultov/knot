@@ -33,6 +33,8 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         ("extends", "Extends (class inheritance)"),
         ("implements", "Implements (interface implementation)"),
         ("references", "References (type annotations/usages)"),
+        ("overridden_by", "Overridden by (method implementations)"),
+        ("overrides", "Overrides (declared supertype methods)"),
     ];
 
     for (key, _) in &rel_types {
@@ -317,6 +319,31 @@ mod tests {
         assert!(formatted.contains("caller1"));
         assert!(formatted.contains("caller2"));
         assert!(formatted.contains("caller3"));
+    }
+
+    #[test]
+    fn test_format_references_result_renders_override_buckets() {
+        // Scenario Q3 — formatter renders the new OVERRIDES buckets.
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "overridden_by": [
+                {"name": "Session.getUniqueId", "kind": "groovy_method",
+                 "file_path": "Session.groovy", "start_line": 26}
+            ],
+            "overrides": [
+                {"name": "ISession.getUniqueId", "kind": "groovy_method",
+                 "file_path": "ISession.groovy", "start_line": 3}
+            ]
+        });
+        let formatted = format_references_result("getUniqueId", &references);
+        assert!(formatted.contains("Found 2 reference(s)"));
+        assert!(formatted.contains("Overridden by (method implementations)"));
+        assert!(formatted.contains("Overrides (declared supertype methods)"));
+        assert!(formatted.contains("Session.getUniqueId"));
+        assert!(formatted.contains("ISession.getUniqueId"));
     }
 
     #[test]

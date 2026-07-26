@@ -3,6 +3,7 @@ pub mod calls;
 pub mod context;
 pub mod cross_repo;
 pub mod non_calls;
+pub mod overrides;
 
 #[cfg(test)]
 mod test_utils;
@@ -290,6 +291,11 @@ pub fn resolve_reference_intents_with_context(
             }
         }
     });
+
+    // JVM method-level OVERRIDES linking. Runs after type-level
+    // Extends/Implements edges are resolved above and before upsert. Additive
+    // and batch-local (see `overrides::link_method_overrides`).
+    overrides::link_method_overrides(entities);
 
     metrics
 }

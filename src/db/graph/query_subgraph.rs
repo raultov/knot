@@ -34,6 +34,7 @@ impl SubgraphQueryExt for GraphDb {
             "CONTAINS",
             "GENERIC_BOUND",
             "DEPENDS_ON",
+            "OVERRIDES",
         ];
 
         for rel in options.relationships {
