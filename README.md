@@ -46,7 +46,7 @@ This dual-database approach powers both:
 
 **🔍 Code Intelligence Tools**
 - **`search_hybrid_context`**: Semantic + structural search. Find code by meaning, class name, method signature, docstrings, or comments. Returns full context including dependencies.
-- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references. Supports cross-repository call resolution via `DEPENDS_ON` graph edges.
+- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references. Supports cross-repository call resolution via `DEPENDS_ON` graph edges. For JVM languages (Java/Kotlin/Groovy) it also surfaces method-level `OVERRIDES` edges bidirectionally — an **Overridden by** group listing subtype implementations/overrides and an **Overrides** group listing the supertype methods a method implements/overrides.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
 - **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Supports optional case-insensitive name filtering via `--filter` (CLI) or `filter` parameter (MCP). Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
@@ -451,6 +451,13 @@ echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entit
 - **Dead Code Detection**: Zero callers = unused code
 - **Impact Analysis**: "What breaks if I modify this?"
 - **Refactoring Safety**: Find all references before removing
+- **Override Discovery (JVM)**: For Java/Kotlin/Groovy methods, results include an
+  **Overridden by** group (implementations/overrides in subtypes) and an
+  **Overrides** group (the supertype methods a method implements/overrides). These
+  are backed by real `OVERRIDES` edges built at index time and resolved
+  transitively at query time, so querying an interface/superclass method surfaces
+  every implementation, and querying an implementation surfaces the declaration it
+  overrides.
 
 #### Tool 3: `explore_file`
 **Understand file structure**
