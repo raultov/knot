@@ -129,6 +129,7 @@ pub enum EntityKind {
 }
 
 impl std::fmt::Display for EntityKind {
+    #[expect(clippy::too_many_lines, reason = "Formatting logic is sequential")]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             EntityKind::Class => "class",
@@ -420,7 +421,10 @@ impl ParsedEntity {
     /// The UUID is derived from the entity's unique identity (repo_name:file_path:fqn)
     /// to ensure the same entity always receives the same UUID across indexing runs.
     /// This is critical for incremental indexing to avoid breaking graph relationships.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Entity constructor requires many fields"
+    )]
     pub fn new(
         name: impl Into<String>,
         kind: EntityKind,

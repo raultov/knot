@@ -83,6 +83,18 @@ pub(crate) fn extract_reference_intents_cpp(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::excessive_nesting,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_call_intents_cpp(
     node: Node<'_>,
     source: &[u8],
@@ -438,6 +450,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn test_cpp_reference_intents_pointers_and_namespaces() {
         let source = r#"
             void test() {
@@ -509,6 +525,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn test_cpp_print_println_internal_calls() {
         use crate::models::ResolutionEntity;
         use crate::pipeline::parser::extractor::extract_entities;

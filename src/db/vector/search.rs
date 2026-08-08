@@ -5,7 +5,10 @@ use qdrant_client::qdrant::{SearchPoints, WithPayloadSelector};
 use super::{VectorDb, utils};
 
 /// Extension trait for query and search operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait VectorSearchExt {
     async fn search(
         &self,

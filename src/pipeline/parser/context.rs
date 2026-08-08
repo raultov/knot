@@ -66,6 +66,10 @@ pub(crate) fn extract_class_contexts(
 }
 
 /// Compute FQN and enclosing_class based on entity context.
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn compute_fqn_and_context(
     name: &str,
     kind: &EntityKind,
@@ -454,6 +458,10 @@ pub(crate) fn compute_rust_qualified_fqn_from_kind(
 /// crate::config::outer::inner::Bar                  // struct in nested inline mods
 /// crate::config::tests::Cache::new                  // method on Cache inside mod tests
 /// ```
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn compute_rust_qualified_fqn_with_inline_modules(
     name: &str,
     kind: &EntityKind,

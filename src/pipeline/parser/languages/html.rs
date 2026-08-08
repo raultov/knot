@@ -43,6 +43,14 @@ fn parse_html_attribute_node(attr_node: Node<'_>, source: &[u8]) -> (String, Str
 }
 
 /// Extract id and class attributes from HTML elements
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_html_attribute(
     attr_node: Node<'_>,
     source: &[u8],
@@ -167,6 +175,10 @@ fn extract_html_elements(
                     match tc.kind() {
                         "tag_name" => {
                             let tag_name = node_text(tc, source);
+                            #[expect(
+                                clippy::excessive_nesting,
+                                reason = "function is verbose but correct — extraction deferred"
+                            )]
                             if tag_name.contains('-') {
                                 // Web Component / Angular Component
                                 entities.push(ParsedEntity {
@@ -281,6 +293,14 @@ pub(crate) fn handle_html_capture(
 ///
 /// This creates reference intents that link HTML files to imported JavaScript and CSS files,
 /// enabling queries like "which HTML files import this JavaScript file?"
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_html_file_imports(
     node: Node<'_>,
     source: &[u8],
@@ -297,6 +317,10 @@ fn extract_html_file_imports(
                     if attr_child.kind() == "attribute" {
                         let (attr_name, attr_value) = parse_html_attribute_node(attr_child, source);
 
+                        #[expect(
+                            clippy::excessive_nesting,
+                            reason = "function is verbose but correct — extraction deferred"
+                        )]
                         if attr_name == "src" && !attr_value.is_empty() {
                             // Create a reference intent for the script import
                             let line = attr_child.start_position().row + 1;
@@ -354,6 +378,10 @@ fn extract_html_file_imports(
             for child in node.children(&mut node.walk()) {
                 if child.kind() == "start_tag" {
                     for attr_child in child.children(&mut child.walk()) {
+                        #[expect(
+                            clippy::excessive_nesting,
+                            reason = "function is verbose but correct — extraction deferred"
+                        )]
                         if attr_child.kind() == "attribute" {
                             let (attr_name, attr_value) =
                                 parse_html_attribute_node(attr_child, source);

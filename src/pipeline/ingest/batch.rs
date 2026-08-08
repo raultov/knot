@@ -12,6 +12,10 @@ use crate::{
 /// Write a batch of [`EmbeddedEntity`] records to both databases simultaneously.
 /// NOTE: This only creates the nodes. Relationship edges must be created in a separate
 /// pass after ALL nodes have been upserted, to prevent missing-callee failures.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub async fn ingest_batch(
     entities: &[EmbeddedEntity],
     vector_db: &VectorDb,

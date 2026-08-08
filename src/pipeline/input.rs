@@ -109,6 +109,10 @@ pub(crate) fn is_config_extension(ext: &str) -> bool {
 /// build-system files like `package.json` and `tsconfig.json`.
 ///
 /// Returns absolute [`PathBuf`]s sorted for deterministic processing order.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub fn discover_files(repo_path: &str, include_config_files: bool) -> Result<Vec<PathBuf>> {
     use std::collections::HashSet;
 

@@ -5,7 +5,6 @@ use crate::pipeline::parser::utils::truncate_string;
 /// Supports: key=value, key: value, key value formats.
 /// Comments: lines starting with # or ! are skipped.
 /// Line continuation: trailing \ joins with the next line.
-#[allow(dead_code)] // Reserved for future .properties parsing
 pub(crate) fn extract_entities_properties(
     source: &str,
     file_path: &str,
@@ -82,7 +81,6 @@ pub(crate) fn extract_entities_properties(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future property line processing
 fn process_property_line(
     line: &str,
     comments: &[String],

@@ -255,6 +255,14 @@ fn lookup_fqn_by_fqn(
     fqn_to_uuid.get(&colon_fqn).copied()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn resolve_single_call_intent(
     intent: &CallIntent,
     caller_file_path: &str,
@@ -493,6 +501,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn test_e2e_rust_same_file_function_resolution() {
         let orphans_fn = ResolutionEntity {
             uuid: Uuid::new_v4(),

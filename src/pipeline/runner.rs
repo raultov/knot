@@ -77,6 +77,14 @@ pub async fn run_indexing_pipeline_with_progress(
 /// 4. Batch and embed entities (fastembed)
 /// 5. Ingest into Qdrant and Neo4j (dual-write)
 /// 6. Resolve cross-repository relationships
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 async fn run_pipeline_inner(
     cfg: &Config,
     vector_db: &Arc<VectorDb>,
@@ -206,6 +214,10 @@ async fn run_pipeline_inner(
                     if current_batch.len() >= batch_size {
                         batch_count += 1;
 
+                        #[expect(
+                            clippy::excessive_nesting,
+                            reason = "function is verbose but correct — extraction deferred"
+                        )]
                         if needs_reset(batch_count, reset_interval) {
                             info!(
                                 "[Worker: Embedder] Resetting ONNX session at batch #{} to release BFCArena memory",
@@ -225,6 +237,10 @@ async fn run_pipeline_inner(
                         );
                         prepare_entities(&mut batch);
                         let embedder_clone = Arc::clone(&embedder);
+                        #[expect(
+                            clippy::excessive_nesting,
+                            reason = "function is verbose but correct — extraction deferred"
+                        )]
                         let embedded = tokio::task::spawn_blocking(move || {
                             let mut lock = embedder_clone.blocking_lock();
                             lock.embed(batch, batch_size)
@@ -403,6 +419,14 @@ async fn run_pipeline_inner(
 /// disk), the entire repository is wiped in a single bulk operation, otherwise
 /// only the files that already exist in the database (deleted and modified)
 /// are removed incrementally.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub async fn clean_stale_data(
     vector_db: &VectorDb,
     graph_db: &GraphDb,

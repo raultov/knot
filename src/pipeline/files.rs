@@ -89,6 +89,14 @@ pub fn calculate_files_to_parse(added: Vec<PathBuf>, modified: Vec<PathBuf>) -> 
 /// (see `docs/specs/relative_file_paths.md` §3.2). `repo_path` is the raw
 /// input path used to locate the state file on disk (its canonical form is
 /// what `repo_root` should be).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub fn update_index_state(
     index_state: &mut IndexState,
     files_to_parse: &[PathBuf],

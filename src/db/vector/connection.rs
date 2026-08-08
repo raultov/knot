@@ -8,7 +8,10 @@ use tracing::info;
 use super::VectorDb;
 
 /// Extension trait for connection and initialization operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait VectorConnectExt {
     async fn connect(url: &str, collection: &str, embed_dim: u64) -> Result<Self>
     where
@@ -34,6 +37,10 @@ impl VectorConnectExt for VectorDb {
 
     /// Ensure the collection exists; create it with cosine distance if not.
     /// Also ensures a Keyword payload index on 'repo_name' for optimized multi-repo queries.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Collection checking logic is sequential"
+    )]
     async fn ensure_collection(&self) -> Result<()> {
         let exists = self
             .client

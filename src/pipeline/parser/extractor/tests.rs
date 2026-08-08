@@ -1,4 +1,3 @@
-#[allow(unused_imports)]
 use super::*;
 use crate::models::{EntityKind, ReferenceIntent};
 
@@ -2370,6 +2369,10 @@ fn test_extract_ts_import_alias() {
 // Markdown section embed_text and end_line tests
 // ============================================================
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn test_extract_entities_markdown_section_body_in_embed_text() {
     // The core of the issue: when a Markdown section is captured, its
     // embed_text must contain the section body (paragraphs, lists, code

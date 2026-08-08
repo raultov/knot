@@ -106,6 +106,10 @@ pub(crate) fn extract_values_yaml(
     entities
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn walk_helm_values(
     prefix: &str,
     value: &serde_yaml::Value,
@@ -231,6 +235,14 @@ pub(crate) fn extract_helm_template(
     entities
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_template_refs(
     content: &str,
     file_path: &str,

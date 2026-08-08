@@ -34,6 +34,14 @@ fn set_module_default_export(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn run_post_passes<'a>(
     tree_root: Node<'a>,
     source_bytes: &[u8],

@@ -8,7 +8,10 @@ use crate::models::{
 };
 
 /// Extension trait for subgraph traversal operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait SubgraphQueryExt {
     async fn get_entity_subgraph(
         &self,
@@ -17,6 +20,11 @@ pub trait SubgraphQueryExt {
 }
 
 impl SubgraphQueryExt for GraphDb {
+    #[expect(clippy::too_many_lines, reason = "Query generation logic is complex")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Query generation logic is complex"
+    )]
     async fn get_entity_subgraph(
         &self,
         options: SubgraphQueryOptions<'_>,

@@ -8,7 +8,10 @@ use super::{VectorDb, utils};
 use crate::models::EmbeddedEntity;
 
 /// Extension trait for upsert and write operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait VectorUpsertExt {
     async fn upsert(&self, entities: &[EmbeddedEntity]) -> Result<()>;
 }

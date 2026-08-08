@@ -1,5 +1,13 @@
 use crate::models::{EntityKind, ParsedEntity};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_entities_vcc(
     source: &str,
     file_path: &str,

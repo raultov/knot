@@ -2,10 +2,8 @@ use crate::models::{EntityKind, ParsedEntity};
 use crate::pipeline::parser::utils::truncate_string;
 
 /// Maximum nesting depth for JSON tree walking.
-#[allow(dead_code)] // Used in tree walking depth checks
 const MAX_DEPTH: usize = 10;
 
-#[allow(dead_code)] // Reserved for future JSON config parsing
 pub(crate) fn extract_entities_json_config(
     source: &str,
     file_path: &str,
@@ -38,7 +36,10 @@ pub(crate) fn extract_entities_json_config(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future package.json extraction
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_package_json(
     value: &serde_json::Value,
     file_path: &str,
@@ -151,7 +152,10 @@ fn extract_package_json(
     }
 }
 
-#[allow(dead_code)] // Reserved for future JSON tree walking
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn walk_json(
     prefix: &str,
     value: &serde_json::Value,
@@ -208,7 +212,6 @@ fn walk_json(
     }
 }
 
-#[allow(dead_code)] // Reserved for future JSON value serialization
 fn json_value_to_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".to_string(),

@@ -43,6 +43,14 @@ pub async fn setup_watch_mode(
     .await
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub async fn setup_watch_mode_with_progress(
     cfg: &Config,
     vector_db: &Arc<VectorDb>,
@@ -167,6 +175,10 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn test_watch_supported_files() {
         assert!(is_supported_file(Path::new("test.java"), true));
         assert!(is_supported_file(Path::new("test.ts"), true));

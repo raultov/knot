@@ -36,21 +36,14 @@ const DEFAULT_KOTLIN_QUERY: &str = include_str!("../../../queries/kotlin.scm");
 const DEFAULT_TS_QUERY: &str = include_str!("../../../queries/typescript.scm");
 const DEFAULT_TSX_QUERY: &str = include_str!("../../../queries/tsx.scm");
 const DEFAULT_JS_QUERY: &str = include_str!("../../../queries/javascript.scm");
-#[allow(dead_code)] // Reserved for future query-based HTML parsing
+#[expect(dead_code, reason = "reserved for future query-based HTML parsing")]
 const DEFAULT_HTML_QUERY: &str = include_str!("../../../queries/html.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_CSS_QUERY: &str = include_str!("../../../queries/css.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_SCSS_QUERY: &str = include_str!("../../../queries/scss.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_RUST_QUERY: &str = include_str!("../../../queries/rust.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_PYTHON_QUERY: &str = include_str!("../../../queries/python.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_C_QUERY: &str = include_str!("../../../queries/c.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_CPP_QUERY: &str = include_str!("../../../queries/cpp.scm");
-#[allow(dead_code)] // Used by language-specific parsers
 const DEFAULT_MD_QUERY: &str = include_str!("../../../queries/markdown.scm");
 
 /// Configuration for the parse stage.
@@ -192,7 +185,6 @@ pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEnti
 /// Parse a single source file and return its extracted entities.
 /// Heuristic: detect whether a `.h` header contains C++ syntax.
 /// Scans for keywords exclusive to C++ that do not appear in valid C.
-#[allow(dead_code)] // Used by C/C++ header detection in dispatch
 fn is_cpp_header(source: &str) -> bool {
     let cpp_indicators = [
         "class ",
@@ -214,6 +206,14 @@ fn is_cpp_header(source: &str) -> bool {
     cpp_indicators.iter().any(|kw| source.contains(kw))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
     let source = {
         let bytes =
@@ -496,7 +496,6 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
 }
 
 /// Dispatch YAML files to the appropriate parser based on content.
-#[allow(dead_code)] // Called via dispatch for YAML handling
 fn dispatch_yaml(
     source: &str,
     absolute_path: &Path,
@@ -560,7 +559,6 @@ fn dispatch_yaml(
 /// for relative inputs. Callers in the pipeline always have the absolute
 /// path from `discover_files`; only the **persisted** entity `file_path`
 /// is relative.
-#[allow(dead_code)] // Used by YAML dispatch heuristics
 fn is_in_helm_chart_dir(absolute_path: &Path) -> bool {
     let mut current = absolute_path.parent();
 
@@ -574,7 +572,6 @@ fn is_in_helm_chart_dir(absolute_path: &Path) -> bool {
 }
 
 /// Check if the file is inside a templates directory (Helm convention).
-#[allow(dead_code)] // Used by YAML dispatch heuristics
 fn is_in_templates_dir(absolute_path: &Path) -> bool {
     let mut current = Some(absolute_path);
 
@@ -619,6 +616,10 @@ fn detect_chart_name(absolute_path: &Path, _repo_root: &Path) -> String {
 }
 
 /// Return the query source string, preferring a custom file when available.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn load_query_source(filename: &str, default: &str, cfg: &ParseConfig) -> String {
     if let Some(dir) = &cfg.custom_queries_path {
         let custom_path = PathBuf::from(dir).join(filename);

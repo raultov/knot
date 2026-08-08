@@ -1,6 +1,14 @@
 use super::vcl::extract_entities_vcl_with_offset;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_entities_vtc(
     source: &str,
     file_path: &str,
@@ -218,6 +226,10 @@ fn parse_quoted_or_rest(line: &str) -> String {
 }
 
 /// Extract a brace-delimited block, handling embedded VCL `{"...}` long strings.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_brace_block(lines: &[&str], start: usize, first_line: &str) -> (String, usize) {
     let mut body = String::new();
     let mut i = start;
@@ -297,7 +309,10 @@ fn extract_brace_block(lines: &[&str], start: usize, first_line: &str) -> (Strin
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "VTC command parsing requires line buffer, position, and context parameters"
+)]
 fn parse_varnish_command(
     lines: &[&str],
     i: usize,

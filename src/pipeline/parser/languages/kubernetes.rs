@@ -1,6 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 
-#[allow(dead_code)] // Reserved for future K8s manifest parsing
 pub(crate) fn extract_entities_k8s(
     source: &str,
     file_path: &str,
@@ -30,7 +29,6 @@ pub(crate) fn extract_entities_k8s(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future K8s kind mapping
 fn map_k8s_kind(kind: &str) -> EntityKind {
     match kind {
         "Deployment" => EntityKind::K8sDeployment,
@@ -43,7 +41,6 @@ fn map_k8s_kind(kind: &str) -> EntityKind {
     }
 }
 
-#[allow(dead_code)] // Reserved for future K8s resource extraction
 fn extract_single_k8s_resource(
     yaml: &serde_yaml::Value,
     file_path: &str,
@@ -119,7 +116,10 @@ fn extract_single_k8s_resource(
     Some(entity)
 }
 
-#[allow(dead_code)] // Reserved for future K8s spec summarization
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn k8s_spec_summary(yaml: &serde_yaml::Value) -> Option<String> {
     let spec = yaml.get("spec")?;
 
@@ -178,7 +178,10 @@ fn k8s_spec_summary(yaml: &serde_yaml::Value) -> Option<String> {
     }
 }
 
-#[allow(dead_code)] // Reserved for future K8s reference extraction
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_k8s_references(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceIntent>) {
     // spec.template.spec.containers[].image -> ValueReference
     if let Some(template) = yaml

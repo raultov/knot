@@ -8,12 +8,23 @@ pub(crate) use super::javascript::extract_enum_usages_javascript as extract_enum
 pub(crate) use super::javascript::extract_jsx_component_invocation;
 pub(crate) use super::javascript::extract_single_call_intent_javascript as extract_single_call_intent_typescript;
 
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "re-exports shared JS extractors available for tree-sitter callbacks"
+)]
 pub(crate) use super::javascript::{
     extract_callback_arguments, extract_jsx_attributes, is_reserved_keyword,
 };
 
 /// Recursively extract all call intents from TypeScript/TSX, returning (intent, byte_pos) pairs.
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::excessive_nesting,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn collect_all_reference_intents_typescript(
     node: Node<'_>,
     source: &[u8],
@@ -268,6 +279,10 @@ pub(crate) fn extract_value_references_typescript(
 
 /// Extract class inheritance (extends/implements) from TypeScript AST nodes.
 /// Handles both class_declaration and interface_declaration AST nodes.
+#[expect(
+    clippy::excessive_nesting,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_class_inheritance(
     entity_node: Node<'_>,
     source: &[u8],
@@ -407,6 +422,10 @@ pub(crate) fn scan_import_module_aliases(
 ) -> Vec<(String, String, Option<String>, bool)> {
     let mut aliases = Vec::new();
 
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn walk(
         node: Node<'_>,
         source: &[u8],

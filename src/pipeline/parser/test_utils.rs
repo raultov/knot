@@ -57,7 +57,7 @@ pub(crate) fn parse_javascript_snippet(code: &str) -> Result<Tree, String> {
 
 /// Parse a JSX code snippet and return the syntax tree.
 #[cfg(test)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "only used in specific test cases")]
 pub(crate) fn parse_jsx_snippet(code: &str) -> Result<Tree, String> {
     let mut parser = Parser::new();
     parser

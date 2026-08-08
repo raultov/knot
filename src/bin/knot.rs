@@ -16,6 +16,10 @@ use knot::{
 };
 
 #[tokio::main]
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI argument parsing is inherently long"
+)]
 async fn main() -> anyhow::Result<()> {
     utils::init_logging_for_cli()?;
 
@@ -51,9 +55,11 @@ async fn main() -> anyhow::Result<()> {
                 &query,
                 max_results,
                 Some(target_repo),
-                &vector_db,
-                &graph_db,
-                &embedder,
+                &cli_tools::SearchContext {
+                    vector_db: &vector_db,
+                    graph_db: &graph_db,
+                    embedder: &embedder,
+                },
             )
             .await?;
             let formatted = utils::format_output(json_result, output);

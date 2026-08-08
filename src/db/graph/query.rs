@@ -4,7 +4,10 @@ use neo4rs::query;
 use super::GraphDb;
 
 /// Extension trait for query and read operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait QueryExt {
     async fn get_entities_with_dependencies(
         &self,
@@ -121,6 +124,11 @@ impl QueryExt for GraphDb {
 
     /// Find all entities that reference a given entity via any relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
     /// Returns results grouped by relationship type.
+    #[expect(clippy::too_many_lines, reason = "Query generation logic is complex")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Query generation logic is complex"
+    )]
     async fn find_references(
         &self,
         entity_name: &str,

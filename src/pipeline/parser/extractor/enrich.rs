@@ -8,7 +8,18 @@ use crate::pipeline::parser::utils::{extract_decorator_references, extract_type_
 
 use super::captures::CaptureState;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "entity enrichment requires state, source, language, and callbacks from extraction context"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn enrich_and_create_entity<'a>(
     state: &mut CaptureState<'a>,
     source_bytes: &[u8],

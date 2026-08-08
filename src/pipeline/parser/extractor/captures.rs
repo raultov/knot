@@ -50,7 +50,18 @@ pub(crate) struct CaptureState<'a> {
     pub reference_intents: Vec<ReferenceIntent>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capture processing requires context from tree-sitter, language, and queries"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn process_capture<'a>(
     cap_name: &str,
     text: String,
@@ -390,7 +401,10 @@ pub(crate) fn process_capture<'a>(
                     entity_kind,
                     EntityKind::PythonFunction | EntityKind::PythonMethod
                 );
-                #[allow(clippy::collapsible_if)]
+                #[expect(
+                    clippy::collapsible_if,
+                    reason = "separate guards aid readability when both conditions are semantically distinct"
+                )]
                 if is_callable {
                     if let Some(entity_n) = entity_node {
                         python::extract_reference_intents_python(

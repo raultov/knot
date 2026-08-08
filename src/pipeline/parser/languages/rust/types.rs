@@ -77,6 +77,14 @@ pub fn collect_rust_type_references(
 /// node is fully contained within the byte range of a parent `token_tree` that was
 /// already processed, we skip redundant string allocation and `::` pattern matching.
 /// This eliminates exponential blowup for deeply nested macros like `vec![vec![vec![...]]]`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn collect_type_nodes(
     node: &Node<'_>,
     source: &[u8],

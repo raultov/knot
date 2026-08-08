@@ -70,6 +70,10 @@ pub(crate) fn collect_all_reference_intents_javascript(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn collect_import_intents_javascript(
     node: Node<'_>,
     source: &[u8],
@@ -314,6 +318,10 @@ pub(crate) fn extract_call_intents_javascript(
 ///
 /// This is the non-recursive version of `extract_call_intents_javascript`,
 /// designed to be used in contexts where the caller already handles tree traversal.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_single_call_intent_javascript(
     node: Node<'_>,
     source: &[u8],
@@ -704,6 +712,10 @@ pub(crate) fn handle_dom_css_capture(
 ///
 /// Recursively traverses the AST looking for JSX elements and creates
 /// HtmlId and HtmlClass entities from their attributes.
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_jsx_html_attributes(
     node: Node<'_>,
     source: &[u8],

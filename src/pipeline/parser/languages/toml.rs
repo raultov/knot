@@ -1,6 +1,9 @@
 use crate::models::{EntityKind, ParsedEntity};
 
-#[allow(dead_code)] // Reserved for future TOML parsing
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_entities_toml(
     source: &str,
     file_path: &str,
@@ -138,7 +141,6 @@ pub(crate) fn extract_entities_toml(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future dependency extraction
 fn extract_dependency(
     dep_name: &str,
     dep_value: &toml::Value,

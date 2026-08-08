@@ -67,6 +67,10 @@ impl Embedder {
     ///
     /// `batch_size` controls how many texts are passed to the ONNX runtime at once.
     /// Tuning this trades memory usage against throughput.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     pub fn embed(
         &mut self,
         entities: Vec<ParsedEntity>,

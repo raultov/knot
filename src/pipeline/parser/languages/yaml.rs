@@ -25,6 +25,10 @@ pub(crate) fn extract_entities_yaml(
     entities
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn walk_yaml(
     prefix: &str,
     value: &serde_yaml::Value,

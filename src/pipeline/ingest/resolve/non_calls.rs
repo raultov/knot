@@ -6,6 +6,10 @@ use uuid::Uuid;
 use super::calls::find_entity_in_same_file;
 use super::context::RunMetrics;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn resolve_non_call_reference(
     name: &str,
     source_file: &str,

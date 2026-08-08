@@ -1,6 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity};
 
-#[allow(dead_code)] // Reserved for future XML parsing
 pub(crate) fn extract_entities_xml(
     source: &str,
     file_path: &str,
@@ -75,7 +74,6 @@ pub(crate) fn extract_entities_xml(
     entities
 }
 
-#[allow(dead_code)] // Reserved for future dependency extraction
 fn extract_dependency(
     dep_node: &roxmltree::Node,
     file_path: &str,
@@ -104,7 +102,6 @@ fn extract_dependency(
     ))
 }
 
-#[allow(dead_code)] // Reserved for future plugin extraction
 fn extract_plugin(
     plugin_node: &roxmltree::Node,
     file_path: &str,
@@ -130,7 +127,6 @@ fn extract_plugin(
     ))
 }
 
-#[allow(dead_code)] // Reserved for future child text extraction
 fn child_text(parent: &roxmltree::Node, tag: &str) -> Option<String> {
     for child in parent.children() {
         if child.tag_name().name() == tag {

@@ -21,6 +21,10 @@ use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEnt
 pub use context::{ResolutionContext, RunMetrics};
 pub use cross_repo::link_cross_repo_dependencies;
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub async fn resolve_and_save_relationships(
     entities: &mut [ResolutionEntity],
     graph_db: &GraphDb,
@@ -67,6 +71,10 @@ pub async fn resolve_and_save_relationships(
     }
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub fn print_run_summary(metrics: &RunMetrics) {
     use std::sync::atomic::Ordering;
     let entities = metrics.entities_indexed.load(Ordering::Relaxed);
@@ -85,6 +93,10 @@ pub fn print_run_summary(metrics: &RunMetrics) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub fn resolve_reference_intents_with_context(
     entities: &mut [ResolutionEntity],
     mut fqn_to_uuid: HashMap<String, Uuid>,

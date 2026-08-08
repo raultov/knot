@@ -5,7 +5,10 @@ use tracing::info;
 use super::GraphDb;
 
 /// Extension trait for connection and initialization operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait ConnectExt {
     async fn connect(uri: &str, user: &str, password: &str) -> Result<Self>
     where

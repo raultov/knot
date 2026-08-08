@@ -17,7 +17,10 @@ async fn collect_column_strings(rows: &mut DetachedRowStream, column: &str) -> V
 }
 
 /// Extension trait for repository dependency query operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait RepoQueryExt {
     async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>>;
     async fn find_repo_dependents(&self, repo_name: &str) -> Result<Vec<String>>;

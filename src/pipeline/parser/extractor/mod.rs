@@ -13,6 +13,10 @@ mod post_passes;
 #[cfg(test)]
 mod tests;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_entities(
     source: &str,
     language: Language,

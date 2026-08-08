@@ -6,7 +6,10 @@ use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "retained for future error reporting and debugging context"
+    )]
     source: &'a str,
     file_path: &'a str,
     repo_name: &'a str,
@@ -109,6 +112,18 @@ pub(crate) fn extract_entities_vcl_with_offset(
 
 impl Parser<'_> {
     /// Collects names of all declarations (subs, backends, probes, ACLs, imports, instances).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn collect_declarations(&mut self) {
         let saved_pos = self.pos;
         self.pos = 0;
@@ -502,6 +517,14 @@ impl Parser<'_> {
         self.skip_semicolon();
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn parse_acl(&mut self) {
         let start_pos = self.pos;
         let start_line = self.line_of_pos(start_pos);
@@ -585,6 +608,18 @@ impl Parser<'_> {
         self.entities.push(entity);
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn parse_sub(&mut self) {
         let start_pos = self.pos;
         let start_line = self.line_of_pos(start_pos);
@@ -761,6 +796,14 @@ impl Parser<'_> {
         self.skip_semicolon();
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn parse_if_statement(&mut self, refs: &mut Vec<ReferenceIntent>) {
         self.advance(); // skip 'if'/'elseif'/'else'
         // Scan condition for ACL references

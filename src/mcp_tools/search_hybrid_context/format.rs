@@ -18,6 +18,11 @@ pub fn format_search_results(context: &serde_json::Value) -> String {
     output
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Formatting logic is sequential"
+)]
+#[expect(clippy::too_many_lines, reason = "Formatting logic is sequential")]
 pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
     let mut output = String::new();
 

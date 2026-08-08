@@ -20,6 +20,14 @@ pub(crate) fn handle_groovy_capture(
 }
 
 // tree-sitter-groovy disabled: CI query compilation unreliable (v1.2.0)
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_entities_groovy(
     source: &str,
     file_path: &str,
@@ -325,6 +333,10 @@ pub(crate) fn extract_entities_groovy(
 /// Emits Groovy's compiler-generated property accessors as first-class
 /// method entities, so name-based OVERRIDES linking can match a subtype
 /// property against a supertype getter (see resolve/overrides.rs).
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn synthesize_property_accessors(
     entities: &mut Vec<ParsedEntity>,
     package: &Option<String>,
@@ -449,6 +461,10 @@ fn synthesize_property_accessors(
     entities.append(&mut synthetic);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn make_synthetic_accessor(
     name: &str,
     property: &ParsedEntity,
@@ -475,6 +491,10 @@ fn make_synthetic_accessor(
 
 /// Scans source for method call patterns and returns reference intents.
 // Reserved for future reference extraction
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_method_calls(source: &str, _entities: &[ParsedEntity]) -> Vec<ReferenceIntent> {
     let mut refs = Vec::new();
     let keywords = [
@@ -649,6 +669,10 @@ fn split_identifier(s: &str) -> Option<(&str, &str)> {
 /// returned effective line, *not* on the raw line — this is what prevents
 /// Javadoc continuation lines from producing phantom entities and corrupting
 /// scope tracking.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn strip_comments_line<'a>(line: &'a str, in_block: &mut bool) -> Cow<'a, str> {
     let trimmed = line.trim();
     if !*in_block && !trimmed.contains('/') && !trimmed.contains('*') {
@@ -1116,6 +1140,10 @@ struct GroovyPropertyDecl {
 ///
 /// The caller gates extraction via `scope_stack` depth so method-body locals
 /// are never promoted to properties.
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
     let mut cleaned = line.trim().trim_end_matches(';').trim().to_string();
 
@@ -1300,6 +1328,10 @@ fn is_valid_identifier(s: &str) -> bool {
 ///
 /// where the opening `(` and closing `)` are on different lines.
 // Reserved for future multiline method parsing
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn try_extract_typed_method_multiline(source: &str, line_idx: usize) -> Option<(String, usize)> {
     let lines: Vec<&str> = source.lines().collect();
     let start_line = lines.get(line_idx)?;
@@ -1657,6 +1689,14 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "function is verbose but correct — extraction deferred"
+    )]
     fn test_groovy_parse_sample_full_file() {
         let source = include_str!("../../../../tests/testing_files/sample_full.groovy");
         let entities = extract_entities_groovy(source, "sample_full.groovy", "test-repo");

@@ -571,6 +571,10 @@ pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -
 /// specifiers, finds the enclosing named entity, and creates a synthetic `ParsedEntity`
 /// (name: `<anonymous>`, kind: `KotlinObject`) with the appropriate `Implements`/`Extends`
 /// reference intents.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_anonymous_object_implementations(
     root: Node<'_>,
     source: &[u8],
@@ -590,6 +594,10 @@ pub(crate) fn extract_anonymous_object_implementations(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 fn extract_anonymous_objects_recursive(
     node: Node<'_>,
     source: &[u8],

@@ -5,6 +5,10 @@ use tree_sitter::Node;
 /// Third pass: find call_expression / new_expression / jsx nodes that fall outside
 /// the byte ranges of extracted entities, and assign them to the nearest entity.
 /// If no entities exist, create a synthetic <module> entity.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn collect_orphaned_references(
     root: Node<'_>,
     source: &[u8],

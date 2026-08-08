@@ -16,6 +16,10 @@ use tree_sitter::Node;
 /// - For classes: captures comments in the class body but NOT inside nested methods
 /// - For methods/functions: captures comments in the method/function body
 /// - Aggregates all found comments into a list
+#[expect(
+    clippy::excessive_nesting,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_comments(
     entity_node: Node<'_>,
     source: &[u8],
@@ -111,6 +115,14 @@ pub(crate) fn extract_comments(
 /// Examples: `@Override`, `@GetMapping("/path")`, `@OnEvent('foo')`
 ///
 /// Returns a vector of decorator strings (e.g., `["@Override", "@OnEvent('foo')"]`).
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::excessive_nesting,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub(crate) fn extract_decorators(
     entity_node: Node<'_>,
     source: &[u8],

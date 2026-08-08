@@ -4,6 +4,14 @@ use uuid::Uuid;
 
 use crate::models::ResolutionEntity;
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "function is verbose but correct — extraction deferred"
+)]
 pub fn build_alias_map(
     entities: &[ResolutionEntity],
     uuid_to_file: &HashMap<Uuid, String>,

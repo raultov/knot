@@ -130,9 +130,11 @@ impl SearchHybridContextTool {
             query,
             max_results,
             repo_name,
-            vector_db,
-            graph_db,
-            embedder,
+            &cli_tools::SearchContext {
+                vector_db,
+                graph_db,
+                embedder,
+            },
         )
         .await
         .map_err(|e| CallToolError::from_message(format!("Search failed: {}", e)))?;

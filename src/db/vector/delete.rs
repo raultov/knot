@@ -5,7 +5,10 @@ use tracing::warn;
 use super::VectorDb;
 
 /// Extension trait for deletion operations.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "async trait method is required for the db interfaces"
+)]
 pub trait VectorDeleteExt {
     async fn delete_by_repo(&self, repo_name: &str) -> Result<()>;
     async fn delete_by_file_paths(&self, repo_name: &str, file_paths: &[String]) -> Result<()>;

@@ -39,6 +39,10 @@ pub struct KnotMcpHandler {
 
 impl KnotMcpHandler {
     /// Create a new handler with initialized database connections (online mode).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Server constructor needs many dependencies"
+    )]
     pub async fn new(
         qdrant_url: &str,
         qdrant_collection: &str,

@@ -1,6 +1,10 @@
 use crate::models::EntityKind;
 
 /// Map an [`EntityKind`] to its Neo4j node label string.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Massive match statement is inherently long but readable"
+)]
 pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
     match kind {
         EntityKind::Class => "Class",
@@ -180,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Test cases are inherently long")]
     fn test_kind_to_label_all_variants() {
         let variants = [
             EntityKind::Class,
