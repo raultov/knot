@@ -149,454 +149,275 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
 
     if !entities.is_empty() {
         output.push_str(&format!("Found {} entity/entities:\n\n", entities.len()));
-
-        // Group entities by kind for better organization
-        let mut classes = Vec::new();
-        let mut interfaces = Vec::new();
-        let mut objects = Vec::new();
-        let mut companions = Vec::new();
-        let mut methods = Vec::new();
-        let mut functions = Vec::new();
-        let mut properties = Vec::new();
-        let mut python_classes = Vec::new();
-        let mut python_constants = Vec::new();
-        let mut python_functions = Vec::new();
-        let mut python_methods = Vec::new();
-        let mut python_modules = Vec::new();
-        let mut rust_structs = Vec::new();
-        let mut rust_enums = Vec::new();
-        let mut rust_unions = Vec::new();
-        let mut rust_traits = Vec::new();
-        let mut rust_impls = Vec::new();
-        let mut rust_functions = Vec::new();
-        let mut rust_methods = Vec::new();
-        let mut rust_macros = Vec::new();
-        let mut rust_type_aliases = Vec::new();
-        let mut rust_constants = Vec::new();
-        let mut rust_statics = Vec::new();
-        let mut rust_modules = Vec::new();
-        let mut build_deps = Vec::new();
-        let mut build_plugins = Vec::new();
-        let mut build_tasks = Vec::new();
-        let mut pipeline_stages = Vec::new();
-        let mut pipeline_steps = Vec::new();
-        let mut groovy_classes = Vec::new();
-        let mut groovy_interfaces = Vec::new();
-        let mut groovy_traits = Vec::new();
-        let mut groovy_methods = Vec::new();
-        let mut groovy_functions = Vec::new();
-        let mut groovy_enums = Vec::new();
-        let mut groovy_properties = Vec::new();
-        let mut cargo_packages = Vec::new();
-        let mut cargo_features = Vec::new();
-        let mut workspace_members = Vec::new();
-        let mut config_properties = Vec::new();
-        let mut k8s_resources = Vec::new();
-        let mut helm_charts = Vec::new();
-        let mut helm_values = Vec::new();
-        let mut helm_template_vars = Vec::new();
-        let mut others: Vec<&serde_json::Value> = Vec::new();
-
-        for entity in &entities {
-            if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
-                match kind {
-                    "class" | "kotlin_class" => classes.push(entity),
-                    "interface" | "kotlin_interface" => interfaces.push(entity),
-                    "kotlin_object" => objects.push(entity),
-                    "kotlin_companion" => companions.push(entity),
-                    "method" | "kotlin_method" => methods.push(entity),
-                    "function" | "kotlin_function" => functions.push(entity),
-                    "kotlin_property" => properties.push(entity),
-                    "python_class" => python_classes.push(entity),
-                    "python_constant" => python_constants.push(entity),
-                    "python_function" => python_functions.push(entity),
-                    "python_method" => python_methods.push(entity),
-                    "python_module" => python_modules.push(entity),
-                    "rust_struct" => rust_structs.push(entity),
-                    "rust_enum" => rust_enums.push(entity),
-                    "rust_union" => rust_unions.push(entity),
-                    "rust_trait" => rust_traits.push(entity),
-                    "rust_impl" => rust_impls.push(entity),
-                    "rust_function" => rust_functions.push(entity),
-                    "rust_method" => rust_methods.push(entity),
-                    "rust_macro_def" | "rust_macro_invoke" => rust_macros.push(entity),
-                    "rust_type_alias" => rust_type_aliases.push(entity),
-                    "rust_constant" => rust_constants.push(entity),
-                    "rust_static" => rust_statics.push(entity),
-                    "rust_module" => rust_modules.push(entity),
-                    "build_dependency" => build_deps.push(entity),
-                    "build_plugin" => build_plugins.push(entity),
-                    "build_task" => build_tasks.push(entity),
-                    "pipeline_stage" => pipeline_stages.push(entity),
-                    "pipeline_step" => pipeline_steps.push(entity),
-                    "groovy_class" => groovy_classes.push(entity),
-                    "groovy_interface" => groovy_interfaces.push(entity),
-                    "groovy_trait" => groovy_traits.push(entity),
-                    "groovy_method" => groovy_methods.push(entity),
-                    "groovy_function" => groovy_functions.push(entity),
-                    "groovy_enum" => groovy_enums.push(entity),
-                    "groovy_property" => groovy_properties.push(entity),
-                    "cargo_package" => cargo_packages.push(entity),
-                    "cargo_feature" => cargo_features.push(entity),
-                    "workspace_member" => workspace_members.push(entity),
-                    "config_property" => config_properties.push(entity),
-                    "k8s_deployment" | "k8s_service" | "k8s_configmap" | "k8s_secret"
-                    | "k8s_ingress" | "k8s_namespace" | "k8s_resource" => {
-                        k8s_resources.push(entity)
-                    }
-                    "helm_chart" => helm_charts.push(entity),
-                    "helm_value" => helm_values.push(entity),
-                    "helm_template_var" => helm_template_vars.push(entity),
-                    _ => others.push(entity),
-                }
-            }
-        }
-
-        // Format in order: Classes, Interfaces, Objects, Companions, Methods, Functions, Properties
-        if !classes.is_empty() {
-            output.push_str("## Classes\n\n");
-            for entity in classes {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !interfaces.is_empty() {
-            output.push_str("## Interfaces\n\n");
-            for entity in interfaces {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !objects.is_empty() {
-            output.push_str("## Objects (Singletons)\n\n");
-            for entity in objects {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !companions.is_empty() {
-            output.push_str("## Companion Objects\n\n");
-            for entity in companions {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !methods.is_empty() {
-            output.push_str("## Methods\n\n");
-            for entity in methods {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !functions.is_empty() {
-            output.push_str("## Functions\n\n");
-            for entity in functions {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !properties.is_empty() {
-            output.push_str("## Properties\n\n");
-            for entity in properties {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        // Python entities
-        if !python_classes.is_empty() {
-            output.push_str("## Python Classes\n\n");
-            for entity in python_classes {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !python_constants.is_empty() {
-            output.push_str("## Python Constants\n\n");
-            for entity in python_constants {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !python_functions.is_empty() {
-            output.push_str("## Python Functions\n\n");
-            for entity in python_functions {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !python_methods.is_empty() {
-            output.push_str("## Python Methods\n\n");
-            for entity in python_methods {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !python_modules.is_empty() {
-            output.push_str("## Python Modules\n\n");
-            for entity in python_modules {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        // Rust entities
-        if !rust_structs.is_empty() {
-            output.push_str("## Structs (Rust)\n\n");
-            for entity in rust_structs {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_enums.is_empty() {
-            output.push_str("## Enums (Rust)\n\n");
-            for entity in rust_enums {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_unions.is_empty() {
-            output.push_str("## Unions (Rust)\n\n");
-            for entity in rust_unions {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_traits.is_empty() {
-            output.push_str("## Traits (Rust)\n\n");
-            for entity in rust_traits {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_impls.is_empty() {
-            output.push_str("## Impl Blocks (Rust)\n\n");
-            for entity in rust_impls {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_functions.is_empty() {
-            output.push_str("## Functions (Rust)\n\n");
-            for entity in rust_functions {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_methods.is_empty() {
-            output.push_str("## Methods (Rust)\n\n");
-            for entity in rust_methods {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_macros.is_empty() {
-            output.push_str("## Macros (Rust)\n\n");
-            for entity in rust_macros {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_type_aliases.is_empty() {
-            output.push_str("## Type Aliases (Rust)\n\n");
-            for entity in rust_type_aliases {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_constants.is_empty() {
-            output.push_str("## Constants (Rust)\n\n");
-            for entity in rust_constants {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_statics.is_empty() {
-            output.push_str("## Statics (Rust)\n\n");
-            for entity in rust_statics {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !rust_modules.is_empty() {
-            output.push_str("## Modules (Rust)\n\n");
-            for entity in rust_modules {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        // Build Systems & CI/CD entities
-        if !build_deps.is_empty() {
-            output.push_str("## Dependencies\n\n");
-            for entity in build_deps {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !build_plugins.is_empty() {
-            output.push_str("## Plugins\n\n");
-            for entity in build_plugins {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !build_tasks.is_empty() {
-            output.push_str("## Tasks\n\n");
-            for entity in build_tasks {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !pipeline_stages.is_empty() {
-            output.push_str("## Pipeline Stages\n\n");
-            for entity in pipeline_stages {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !pipeline_steps.is_empty() {
-            output.push_str("## Pipeline Steps\n\n");
-            for entity in pipeline_steps {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_classes.is_empty() {
-            output.push_str("## Classes (Groovy)\n\n");
-            for entity in groovy_classes {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_interfaces.is_empty() {
-            output.push_str("## Interfaces (Groovy)\n\n");
-            for entity in groovy_interfaces {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_traits.is_empty() {
-            output.push_str("## Traits (Groovy)\n\n");
-            for entity in groovy_traits {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_enums.is_empty() {
-            output.push_str("## Enums (Groovy)\n\n");
-            for entity in groovy_enums {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_methods.is_empty() {
-            output.push_str("## Methods (Groovy)\n\n");
-            for entity in groovy_methods {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_functions.is_empty() {
-            output.push_str("## Functions (Groovy)\n\n");
-            for entity in groovy_functions {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !groovy_properties.is_empty() {
-            output.push_str("## Properties (Groovy)\n\n");
-            for entity in groovy_properties {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !cargo_packages.is_empty() {
-            output.push_str("## Cargo Package\n\n");
-            for entity in cargo_packages {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !cargo_features.is_empty() {
-            output.push_str("## Cargo Features\n\n");
-            for entity in cargo_features {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !workspace_members.is_empty() {
-            output.push_str("## Workspace Members\n\n");
-            for entity in workspace_members {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !config_properties.is_empty() {
-            output.push_str("## Configuration Properties\n\n");
-            for entity in config_properties {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !k8s_resources.is_empty() {
-            output.push_str("## Kubernetes Resources\n\n");
-            for entity in k8s_resources {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !helm_charts.is_empty() {
-            output.push_str("## Helm Chart\n\n");
-            for entity in helm_charts {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !helm_values.is_empty() {
-            output.push_str("## Helm Values\n\n");
-            for entity in helm_values {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !helm_template_vars.is_empty() {
-            output.push_str("## Template Variables\n\n");
-            for entity in helm_template_vars {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
-
-        if !others.is_empty() {
-            output.push_str("## Other Entities\n\n");
-            for entity in others {
-                output.push_str(&format_entity_summary(entity));
-            }
-        }
+        append_entity_groups(&mut output, &entities);
     }
 
-    if !outgoing_refs.is_empty() {
-        output.push_str("## Imports / Referenced Types\n\n");
-        let mut seen = std::collections::HashSet::new();
-        for entry in &outgoing_refs {
-            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let fp = entry
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let line_num = entry.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
-
-            let key = format!("{}:{}:{}", name, kind, fp);
-            if seen.insert(key) {
-                if line_num > 0 && !fp.is_empty() {
-                    output.push_str(&format!("- {} ({}) — {}:{}\n", name, kind, fp, line_num));
-                } else {
-                    output.push_str(&format!("- {} ({})\n", name, kind));
-                }
-            }
-        }
-        output.push('\n');
-    }
+    append_outgoing_references(&mut output, &outgoing_refs);
 
     output
+}
+
+/// One bucket in the entity grouping table — collects every JSON `kind`
+/// that maps to a given Markdown section header.
+struct KindBucket {
+    header: &'static str,
+    kinds: &'static [&'static str],
+}
+
+/// Ordered table of every recognised entity kind and the Markdown section
+/// header it should appear under. Ordering determines the section order
+/// in the rendered output.
+const KIND_BUCKETS: &[KindBucket] = &[
+    KindBucket {
+        header: "Classes",
+        kinds: &["class", "kotlin_class"],
+    },
+    KindBucket {
+        header: "Interfaces",
+        kinds: &["interface", "kotlin_interface"],
+    },
+    KindBucket {
+        header: "Objects (Singletons)",
+        kinds: &["kotlin_object"],
+    },
+    KindBucket {
+        header: "Companion Objects",
+        kinds: &["kotlin_companion"],
+    },
+    KindBucket {
+        header: "Methods",
+        kinds: &["method", "kotlin_method"],
+    },
+    KindBucket {
+        header: "Functions",
+        kinds: &["function", "kotlin_function"],
+    },
+    KindBucket {
+        header: "Properties",
+        kinds: &["kotlin_property"],
+    },
+    KindBucket {
+        header: "Python Classes",
+        kinds: &["python_class"],
+    },
+    KindBucket {
+        header: "Python Constants",
+        kinds: &["python_constant"],
+    },
+    KindBucket {
+        header: "Python Functions",
+        kinds: &["python_function"],
+    },
+    KindBucket {
+        header: "Python Methods",
+        kinds: &["python_method"],
+    },
+    KindBucket {
+        header: "Python Modules",
+        kinds: &["python_module"],
+    },
+    KindBucket {
+        header: "Structs (Rust)",
+        kinds: &["rust_struct"],
+    },
+    KindBucket {
+        header: "Enums (Rust)",
+        kinds: &["rust_enum"],
+    },
+    KindBucket {
+        header: "Unions (Rust)",
+        kinds: &["rust_union"],
+    },
+    KindBucket {
+        header: "Traits (Rust)",
+        kinds: &["rust_trait"],
+    },
+    KindBucket {
+        header: "Impl Blocks (Rust)",
+        kinds: &["rust_impl"],
+    },
+    KindBucket {
+        header: "Functions (Rust)",
+        kinds: &["rust_function"],
+    },
+    KindBucket {
+        header: "Methods (Rust)",
+        kinds: &["rust_method"],
+    },
+    KindBucket {
+        header: "Macros (Rust)",
+        kinds: &["rust_macro_def", "rust_macro_invoke"],
+    },
+    KindBucket {
+        header: "Type Aliases (Rust)",
+        kinds: &["rust_type_alias"],
+    },
+    KindBucket {
+        header: "Constants (Rust)",
+        kinds: &["rust_constant"],
+    },
+    KindBucket {
+        header: "Statics (Rust)",
+        kinds: &["rust_static"],
+    },
+    KindBucket {
+        header: "Modules (Rust)",
+        kinds: &["rust_module"],
+    },
+    KindBucket {
+        header: "Dependencies",
+        kinds: &["build_dependency"],
+    },
+    KindBucket {
+        header: "Plugins",
+        kinds: &["build_plugin"],
+    },
+    KindBucket {
+        header: "Tasks",
+        kinds: &["build_task"],
+    },
+    KindBucket {
+        header: "Pipeline Stages",
+        kinds: &["pipeline_stage"],
+    },
+    KindBucket {
+        header: "Pipeline Steps",
+        kinds: &["pipeline_step"],
+    },
+    KindBucket {
+        header: "Classes (Groovy)",
+        kinds: &["groovy_class"],
+    },
+    KindBucket {
+        header: "Interfaces (Groovy)",
+        kinds: &["groovy_interface"],
+    },
+    KindBucket {
+        header: "Traits (Groovy)",
+        kinds: &["groovy_trait"],
+    },
+    KindBucket {
+        header: "Enums (Groovy)",
+        kinds: &["groovy_enum"],
+    },
+    KindBucket {
+        header: "Methods (Groovy)",
+        kinds: &["groovy_method"],
+    },
+    KindBucket {
+        header: "Functions (Groovy)",
+        kinds: &["groovy_function"],
+    },
+    KindBucket {
+        header: "Properties (Groovy)",
+        kinds: &["groovy_property"],
+    },
+    KindBucket {
+        header: "Cargo Package",
+        kinds: &["cargo_package"],
+    },
+    KindBucket {
+        header: "Cargo Features",
+        kinds: &["cargo_feature"],
+    },
+    KindBucket {
+        header: "Workspace Members",
+        kinds: &["workspace_member"],
+    },
+    KindBucket {
+        header: "Configuration Properties",
+        kinds: &["config_property"],
+    },
+    KindBucket {
+        header: "Kubernetes Resources",
+        kinds: &[
+            "k8s_deployment",
+            "k8s_service",
+            "k8s_configmap",
+            "k8s_secret",
+            "k8s_ingress",
+            "k8s_namespace",
+            "k8s_resource",
+        ],
+    },
+    KindBucket {
+        header: "Helm Chart",
+        kinds: &["helm_chart"],
+    },
+    KindBucket {
+        header: "Helm Values",
+        kinds: &["helm_value"],
+    },
+    KindBucket {
+        header: "Template Variables",
+        kinds: &["helm_template_var"],
+    },
+];
+
+const OTHERS_HEADER: &str = "Other Entities";
+
+/// Group `entities` by [`KIND_BUCKETS`] and append a Markdown section per
+/// non-empty bucket (plus a final `Other Entities` bucket for any kinds
+/// not present in the table).
+fn append_entity_groups(output: &mut String, entities: &[serde_json::Value]) {
+    let mut buckets: Vec<Vec<&serde_json::Value>> = vec![Vec::new(); KIND_BUCKETS.len()];
+    let mut others: Vec<&serde_json::Value> = Vec::new();
+
+    for entity in entities {
+        let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        match KIND_BUCKETS.iter().position(|b| b.kinds.contains(&kind)) {
+            Some(idx) => buckets[idx].push(entity),
+            None => others.push(entity),
+        }
+    }
+
+    for (bucket, items) in KIND_BUCKETS.iter().zip(buckets) {
+        if items.is_empty() {
+            continue;
+        }
+        output.push_str(&format!("## {}\n\n", bucket.header));
+        for entity in items {
+            output.push_str(&format_entity_summary(entity));
+        }
+    }
+
+    if !others.is_empty() {
+        output.push_str(&format!("## {OTHERS_HEADER}\n\n"));
+        for entity in others {
+            output.push_str(&format_entity_summary(entity));
+        }
+    }
+}
+
+/// Append the "Imports / Referenced Types" section, deduplicating on
+/// `(name, kind, file_path)`.
+fn append_outgoing_references(output: &mut String, outgoing_refs: &[serde_json::Value]) {
+    if outgoing_refs.is_empty() {
+        return;
+    }
+
+    output.push_str("## Imports / Referenced Types\n\n");
+    let mut seen = std::collections::HashSet::new();
+    for entry in outgoing_refs {
+        let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let fp = entry
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let line_num = entry.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        let key = format!("{}:{}:{}", name, kind, fp);
+        if !seen.insert(key) {
+            continue;
+        }
+        if line_num > 0 && !fp.is_empty() {
+            output.push_str(&format!("- {} ({}) — {}:{}\n", name, kind, fp, line_num));
+        } else {
+            output.push_str(&format!("- {} ({})\n", name, kind));
+        }
+    }
+    output.push('\n');
 }
 
 /// Format entity summary as Markdown

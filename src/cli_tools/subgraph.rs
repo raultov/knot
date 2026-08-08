@@ -11,6 +11,23 @@ use crate::models::{SubgraphDirection, SubgraphQueryOptions, SubgraphResult};
 
 pub const DEFAULT_MAX_NODES: usize = 500;
 
+/// Bundled parameters for [`run_get_subgraph`].
+///
+/// Bundling the inputs into a single struct keeps the function signature
+/// within clippy's `too_many_arguments` threshold while preserving the
+/// documented parameter set.
+#[derive(Debug, Clone)]
+pub struct SubgraphQueryParams<'a> {
+    pub entity_name: &'a str,
+    pub repo_name: &'a str,
+    pub depth: u32,
+    pub relationships: &'a [&'a str],
+    pub direction: SubgraphDirection,
+    pub max_nodes: Option<usize>,
+    pub entity_uuid: Option<&'a str>,
+    pub visible_kinds: Option<&'a [&'a str]>,
+}
+
 /// Main get_entity_subgraph function called by both CLI and MCP.
 ///
 /// Returns a subgraph centered on the named entity within the given repository,
@@ -18,29 +35,21 @@ pub const DEFAULT_MAX_NODES: usize = 500;
 /// is provided, only nodes of those kinds are returned, but traversal walks through
 /// ALL intermediate nodes so that class-to-class paths connected through methods
 /// are preserved via synthetic roll-up edges.
-#[allow(clippy::too_many_arguments)]
 pub async fn run_get_subgraph(
-    entity_name: &str,
-    repo_name: &str,
-    depth: u32,
-    relationships: &[&str],
-    direction: SubgraphDirection,
-    max_nodes: Option<usize>,
+    params: SubgraphQueryParams<'_>,
     graph_db: &Arc<GraphDb>,
-    entity_uuid: Option<&str>,
-    visible_kinds: Option<&[&str]>,
 ) -> anyhow::Result<SubgraphResult> {
-    let max_nodes = max_nodes.unwrap_or(DEFAULT_MAX_NODES);
+    let max_nodes = params.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
     let result = graph_db
         .get_entity_subgraph(SubgraphQueryOptions {
-            entity_name,
-            repo_name,
-            depth,
-            relationships,
-            direction,
+            entity_name: params.entity_name,
+            repo_name: params.repo_name,
+            depth: params.depth,
+            relationships: params.relationships,
+            direction: params.direction,
             max_nodes,
-            entity_uuid,
-            visible_kinds,
+            entity_uuid: params.entity_uuid,
+            visible_kinds: params.visible_kinds,
         })
         .await?;
     Ok(result)

@@ -15,25 +15,40 @@ use crate::db::{
 };
 use crate::pipeline::embed::Embedder;
 
+/// Bundled database and embedder dependencies for [`run_search_hybrid_context`].
+///
+/// Holding the three shared handles in one struct keeps the public function
+/// within clippy's `too_many_arguments` threshold and lets callers (CLI bin,
+/// MCP tool) hand over the same handles without copying.
+#[derive(Clone)]
+pub struct SearchContext<'a> {
+    pub vector_db: &'a Arc<VectorDb>,
+    pub graph_db: &'a Arc<GraphDb>,
+    pub embedder: &'a Arc<Mutex<Embedder>>,
+}
+
 /// Main search function called by both CLI and MCP
 pub async fn run_search_hybrid_context(
     query: &str,
     max_results: usize,
     repo_name: Option<&str>,
-    vector_db: &Arc<VectorDb>,
-    graph_db: &Arc<GraphDb>,
-    embedder: &Arc<Mutex<Embedder>>,
+    ctx: &SearchContext<'_>,
 ) -> anyhow::Result<serde_json::Value> {
-    let vector = embedder
+    let vector = ctx
+        .embedder
         .lock()
         .unwrap()
         .embed_query(query)
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
 
-    let search_results = vector_db.search(&vector, max_results, repo_name).await?;
+    let search_results = ctx
+        .vector_db
+        .search(&vector, max_results, repo_name)
+        .await?;
 
     // Boost: prepend entities whose name matches the query as a case-insensitive prefix
-    let prefix_results = graph_db
+    let prefix_results = ctx
+        .graph_db
         .find_entities_by_name_prefix(query, repo_name, max_results)
         .await
         .unwrap_or_else(|_| json!([]));
@@ -78,13 +93,15 @@ pub async fn run_search_hybrid_context(
         })
         .collect();
 
-    let context = graph_db
+    let context = ctx
+        .graph_db
         .get_entities_with_dependencies(&uuids, repo_name)
         .await?;
 
-    let enriched_context = enrich_with_relationships(&context, &entity_names, graph_db, repo_name)
-        .await
-        .unwrap_or(context);
+    let enriched_context =
+        enrich_with_relationships(&context, &entity_names, ctx.graph_db, repo_name)
+            .await
+            .unwrap_or(context);
 
     Ok(enriched_context)
 }
