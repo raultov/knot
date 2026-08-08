@@ -84,7 +84,6 @@ impl Lexer {
         tokens
     }
 
-
     fn peek(&self, offset: usize) -> Option<char> {
         self.chars.get(self.pos + offset).copied()
     }
