@@ -1,0 +1,50 @@
+# Clippy thresholds for knot.
+#
+# Counts below were measured on production code (excluding `*/tests.rs`,
+# `tests/` and `benches/`) with `cargo clippy --all-targets --all-features`
+# on clippy 0.1.97.
+#
+# NOTE: a threshold here does NOT enable a lint, it only parametrises it.
+# The lint's default level decides whether it fires:
+#
+#   too_many_arguments    complexity  warn   -> active out of the box
+#   type_complexity       complexity  warn   -> active out of the box
+#   excessive_nesting     complexity  warn   -> active once threshold > 0
+#   too_many_lines        pedantic    allow  -> needs [lints.clippy]
+#   cognitive_complexity  nursery     allow  -> needs [lints.clippy]
+#
+# The last two are enabled in Cargo.toml's [lints.clippy] section.
+
+# --- Active by default (complexity group) ---
+
+# clippy::too_many_arguments (default: 7)
+# Measured curve: 4 -> 45 | 5 -> 19 | 6 -> 6 | 7 -> 0
+# The repo's real maximum is 7, so the distribution is narrow. 4 is
+# disproportionate, 6 barely helps. 5 is the useful point.
+too-many-arguments-threshold = 5
+
+# clippy::type_complexity (default: 250)
+# Measured curve: 150 -> 10 | 200 -> 1 | 250 -> 0
+# 200 costs a single violation and already improves on the default.
+# Later target: 150.
+type-complexity-threshold = 200
+
+# clippy::excessive_nesting (default: 0, which disables the lint)
+# The lint is warn-by-default; the zero threshold is what silences it,
+# so setting a value here activates it without touching Cargo.toml.
+# Measured curve: 3 -> 519 | 4 -> 220 | 5 -> 77 | 6 -> 26
+# 6 is the only manageable entry point. Later target: 5.
+excessive-nesting-threshold = 6
+
+# --- Enabled via [lints.clippy] in Cargo.toml ---
+
+# clippy::too_many_lines (pedantic, default: 100)
+# Measured curve: 50 -> 97 | 60 -> 67 | 80 -> 42 | 100 -> 26 | 150 -> 12
+# Median function length: 71 lines. Worst offender: 448 lines.
+# 50 would mean 97 refactors at once; enter at 80 and tighten in steps.
+too-many-lines-threshold = 80
+
+# clippy::cognitive_complexity (nursery, default: 25)
+# Measured curve: 15 -> 46 | 20 -> 26 | 25 -> 14 | 30 -> 8 | 40 -> 5
+# Worst offender: cognitive complexity of 100.
+cognitive-complexity-threshold = 15
