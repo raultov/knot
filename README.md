@@ -640,8 +640,8 @@ This ensures that when you ask an AI agent to analyze, refactor, or understand y
 ## 🤝 Contributing
 
 Contributions are welcome! Please ensure:
-- All code passes `cargo clippy`
-- Code is formatted with `cargo fmt`
+- All code passes `cargo clippy` and `cargo fmt`
+- No new `unsafe` code (`unsafe_code = "deny"` at crate level; one audited exception in `src/utils/mod.rs` for corporate proxy CA bundle injection, documented via `#[expect(unsafe_code, reason = "…")]`)
 - Changes are compatible with Rust 2024 edition
 - All new functionality includes unit tests
 - Performance regressions are validated with the benchmark framework before submitting PRs

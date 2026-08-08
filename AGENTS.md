@@ -126,7 +126,7 @@ Crate discovery runs before parsing and maps each `.rs` file to its nearest `Car
 - **BDD**: E2E tests written **first**, must fail before logic implemented
 - **TDD**: Unit tests in parser modules before implementation
 - **E2E Regression**: Every bug must have E2E case before fix
-- **No `unsafe`**: All code must be safe Rust
+- **No `unsafe`**: All code must be safe Rust (enforced by `unsafe_code = "deny"` in `Cargo.toml`). One audited exception exists in `src/utils/mod.rs` for `std::env::set_var("SSL_CERT_FILE")`, documented via `#[expect(unsafe_code, reason = "…")]`.
 
 ### Unit Tests
 Located inline in source modules. Example: `src/pipeline/parser/languages/rust.rs#1234`.
@@ -263,7 +263,7 @@ cargo test
 ./tests/run_all_e2e_fast.sh
 ```
 
-**No `unsafe` blocks** allowed except in unavoidable ONNX Runtime interop.
+`unsafe_code = "deny"` is enforced at crate level. One audited exception survives in `src/utils/mod.rs` for `std::env::set_var("SSL_CERT_FILE")`, documented via `#[expect(unsafe_code, reason = "…")]`. fastembed/hf-hub expose no API to supply a CA bundle, making environment mutation the only mechanism for corporate proxy support.
 
 ---
 
