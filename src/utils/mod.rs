@@ -69,6 +69,15 @@ pub fn inject_custom_ca_certs(cert_path: &Option<String>) {
         // 1. Called before any threads exist (single-threaded main context)
         // 2. No other code can concurrently modify env vars at this point
         // 3. Tokio runtime hasn't been entered yet
+        #[expect(
+            unsafe_code,
+            reason = "std::env::set_var is unsafe in Rust 2024. fastembed 5.13 and \
+                      hf-hub expose no API to supply a CA bundle (InitOptions has no \
+                      TLS options; ApiBuilder is constructed internally), so \
+                      SSL_CERT_FILE is the only mechanism. Called once from main() \
+                      before the Tokio runtime starts, so no other thread can observe \
+                      the mutation."
+        )]
         unsafe {
             std::env::set_var("SSL_CERT_FILE", path);
         }
@@ -194,6 +203,10 @@ pub fn configure_rayon(threads: Option<usize>) -> Result<usize> {
 }
 
 /// Print startup banner with configuration details for the indexer.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Banner printing is sequential formatting logic"
+)]
 pub fn print_startup_banner(cfg: &crate::config::Config, rayon_threads: usize) {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -226,46 +239,36 @@ mod tests {
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-    fn save_env(key: &str) -> Option<String> {
-        std::env::var(key).ok()
-    }
-
-    fn restore_env(key: &str, original: Option<String>) {
-        match original {
-            Some(val) => unsafe { std::env::set_var(key, val) },
-            None => unsafe { std::env::remove_var(key) },
-        }
-    }
-
     #[test]
     fn test_inject_custom_ca_certs_none() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        let original = save_env("SSL_CERT_FILE");
-        inject_custom_ca_certs(&None);
-        assert_eq!(save_env("SSL_CERT_FILE"), original);
-        restore_env("SSL_CERT_FILE", original);
+        temp_env::with_var("SSL_CERT_FILE", None::<&str>, || {
+            let original = std::env::var("SSL_CERT_FILE").ok();
+            inject_custom_ca_certs(&None);
+            assert_eq!(std::env::var("SSL_CERT_FILE").ok(), original);
+        });
     }
 
     #[test]
     fn test_inject_custom_ca_certs_some() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        let original = save_env("SSL_CERT_FILE");
-        let test_path = "/path/to/test/ca-bundle.crt".to_string();
-        inject_custom_ca_certs(&Some(test_path.clone()));
-        assert_eq!(save_env("SSL_CERT_FILE"), Some(test_path));
-        restore_env("SSL_CERT_FILE", original);
+        temp_env::with_var("SSL_CERT_FILE", None::<&str>, || {
+            let test_path = "/path/to/test/ca-bundle.crt".to_string();
+            inject_custom_ca_certs(&Some(test_path.clone()));
+            assert_eq!(std::env::var("SSL_CERT_FILE").ok(), Some(test_path));
+        });
     }
 
     #[test]
     fn test_inject_custom_ca_certs_overwrites_previous() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        let original = save_env("SSL_CERT_FILE");
-        let first = "/first/path.pem".to_string();
-        let second = "/second/path.pem".to_string();
-        inject_custom_ca_certs(&Some(first));
-        inject_custom_ca_certs(&Some(second.clone()));
-        assert_eq!(save_env("SSL_CERT_FILE"), Some(second));
-        restore_env("SSL_CERT_FILE", original);
+        temp_env::with_var("SSL_CERT_FILE", None::<&str>, || {
+            let first = "/first/path.pem".to_string();
+            let second = "/second/path.pem".to_string();
+            inject_custom_ca_certs(&Some(first));
+            inject_custom_ca_certs(&Some(second.clone()));
+            assert_eq!(std::env::var("SSL_CERT_FILE").ok(), Some(second));
+        });
     }
 
     // --- format_output tests ---

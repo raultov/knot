@@ -223,20 +223,21 @@ pub struct Config {
 ///
 /// This **never** resolves to the current working directory, unlike
 /// `dotenvy::dotenv()` which walks up the directory tree from CWD.
-fn knot_env_path() -> Option<std::path::PathBuf> {
-    std::env::var("KNOT_CONFIG_DIR")
-        .ok()
+/// Pure resolution logic. `get` supplies environment lookups.
+fn knot_env_path_from<F>(get: F) -> Option<std::path::PathBuf>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    get("KNOT_CONFIG_DIR")
         .map(|d| std::path::PathBuf::from(d).join(".env"))
+        .or_else(|| get("HOME").map(|d| std::path::PathBuf::from(d).join(".config/knot/.env")))
         .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|d| std::path::PathBuf::from(d).join(".config/knot/.env"))
+            get("USERPROFILE").map(|d| std::path::PathBuf::from(d).join(".config/knot/.env"))
         })
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .ok()
-                .map(|d| std::path::PathBuf::from(d).join(".config/knot/.env"))
-        })
+}
+
+fn knot_env_path() -> Option<std::path::PathBuf> {
+    knot_env_path_from(|k| std::env::var(k).ok())
 }
 
 /// Load environment variables from knot's `.env` file.
@@ -244,6 +245,10 @@ fn knot_env_path() -> Option<std::path::PathBuf> {
 /// Only loads from knot's XDG-style config directory (see [`knot_env_path`]).
 /// Never loads from the current working directory, preventing `.env` files in
 /// target repositories from hijacking knot's configuration.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Environment loading logic is sequential"
+)]
 fn load_knot_env() {
     let Some(env_path) = knot_env_path() else {
         tracing::debug!("No .env location found (set KNOT_CONFIG_DIR, HOME, or USERPROFILE)");
@@ -934,23 +939,18 @@ mod tests {
     #[test]
     fn test_ingest_concurrency_default() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev = std::env::var("KNOT_INGEST_CONCURRENCY").ok();
-        unsafe { std::env::remove_var("KNOT_INGEST_CONCURRENCY") };
-        let args = vec![
-            "knot-indexer",
-            "--repo-path",
-            "/tmp/repo",
-            "--neo4j-password",
-            "secret",
-        ];
+        temp_env::with_var("KNOT_INGEST_CONCURRENCY", None::<&str>, || {
+            let args = vec![
+                "knot-indexer",
+                "--repo-path",
+                "/tmp/repo",
+                "--neo4j-password",
+                "secret",
+            ];
 
-        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
-        // Default should be 4
-        assert_eq!(cli.ingest_concurrency, 4);
-        // Restore previous env var if it was set
-        if let Some(val) = prev {
-            unsafe { std::env::set_var("KNOT_INGEST_CONCURRENCY", val) };
-        }
+            let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+            assert_eq!(cli.ingest_concurrency, 4);
+        });
     }
 
     #[test]
@@ -971,27 +971,19 @@ mod tests {
 
     #[test]
     fn test_ingest_concurrency_env_var() {
-        // Test that the env var is mapped correctly (check the attribute)
-        // Clap sets env = "KNOT_INGEST_CONCURRENCY" for this field
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev = std::env::var("KNOT_INGEST_CONCURRENCY").ok();
-        unsafe { std::env::set_var("KNOT_INGEST_CONCURRENCY", "16") };
-        let args = vec![
-            "knot-indexer",
-            "--repo-path",
-            "/tmp/repo",
-            "--neo4j-password",
-            "secret",
-        ];
+        temp_env::with_var("KNOT_INGEST_CONCURRENCY", Some("16"), || {
+            let args = vec![
+                "knot-indexer",
+                "--repo-path",
+                "/tmp/repo",
+                "--neo4j-password",
+                "secret",
+            ];
 
-        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
-        assert_eq!(cli.ingest_concurrency, 16);
-        // Restore previous env var value
-        if let Some(val) = prev {
-            unsafe { std::env::set_var("KNOT_INGEST_CONCURRENCY", val) };
-        } else {
-            unsafe { std::env::remove_var("KNOT_INGEST_CONCURRENCY") };
-        }
+            let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+            assert_eq!(cli.ingest_concurrency, 16);
+        });
     }
 
     #[test]
@@ -1025,22 +1017,18 @@ mod tests {
     #[test]
     fn test_rayon_threads_default() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev = std::env::var("KNOT_RAYON_THREADS").ok();
-        unsafe { std::env::remove_var("KNOT_RAYON_THREADS") };
-        let args = vec![
-            "knot-indexer",
-            "--repo-path",
-            "/tmp/repo",
-            "--neo4j-password",
-            "secret",
-        ];
+        temp_env::with_var("KNOT_RAYON_THREADS", None::<&str>, || {
+            let args = vec![
+                "knot-indexer",
+                "--repo-path",
+                "/tmp/repo",
+                "--neo4j-password",
+                "secret",
+            ];
 
-        let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
-        assert_eq!(cli.rayon_threads, None);
-        // Restore previous env var if it was set
-        if let Some(val) = prev {
-            unsafe { std::env::set_var("KNOT_RAYON_THREADS", val) };
-        }
+            let cli = IndexerCli::try_parse_from(args).expect("Failed to parse CLI args");
+            assert_eq!(cli.rayon_threads, None);
+        });
     }
 
     #[test]
@@ -1117,10 +1105,11 @@ mod tests {
 
     #[test]
     fn test_knot_env_path_prefers_knot_config_dir() {
-        unsafe { std::env::set_var("KNOT_CONFIG_DIR", "/custom/knot/config") };
-        let path = knot_env_path();
-        unsafe { std::env::remove_var("KNOT_CONFIG_DIR") };
-
+        let env = std::collections::HashMap::from([
+            ("KNOT_CONFIG_DIR", "/custom/knot/config"),
+            ("HOME", "/home/user"),
+        ]);
+        let path = knot_env_path_from(|k| env.get(k).map(|s| s.to_string()));
         assert_eq!(
             path,
             Some(std::path::PathBuf::from("/custom/knot/config/.env"))
@@ -1129,30 +1118,12 @@ mod tests {
 
     #[test]
     fn test_knot_env_path_falls_back_to_home() {
-        // Remove KNOT_CONFIG_DIR to test HOME fallback
-        let had_config_dir = std::env::var("KNOT_CONFIG_DIR").ok();
-        unsafe { std::env::remove_var("KNOT_CONFIG_DIR") };
-
-        let home = std::env::var("HOME").ok();
-        let path = knot_env_path();
-
-        // Restore KNOT_CONFIG_DIR if it was set
-        if let Some(v) = had_config_dir {
-            unsafe { std::env::set_var("KNOT_CONFIG_DIR", v) };
-        }
-
-        match home {
-            Some(h) => {
-                assert_eq!(
-                    path,
-                    Some(std::path::PathBuf::from(format!("{h}/.config/knot/.env")))
-                );
-            }
-            None => {
-                // On Windows with no HOME, may fall through to USERPROFILE
-                // or return None
-            }
-        }
+        let env = std::collections::HashMap::from([("HOME", "/home/user")]);
+        let path = knot_env_path_from(|k| env.get(k).map(|s| s.to_string()));
+        assert_eq!(
+            path,
+            Some(std::path::PathBuf::from("/home/user/.config/knot/.env"))
+        );
     }
 
     #[test]
@@ -1178,14 +1149,14 @@ mod tests {
         fs::write(&env_file, "KNOT_REPO_PATH=/from/explicit/path\n").unwrap();
 
         // dotenvy::from_path should load from the specified path
-        let result = dotenvy::from_path(&env_file);
-        assert!(result.is_ok(), "Should load .env from explicit path");
-        assert_eq!(
-            std::env::var("KNOT_REPO_PATH").unwrap(),
-            "/from/explicit/path"
-        );
+        let vars: std::collections::HashMap<String, String> = dotenvy::from_path_iter(&env_file)
+            .expect("failed to read .env")
+            .collect::<Result<_, _>>()
+            .expect("failed to parse .env");
 
-        // Cleanup
-        unsafe { std::env::remove_var("KNOT_REPO_PATH") };
+        assert_eq!(
+            vars.get("KNOT_REPO_PATH").map(String::as_str),
+            Some("/from/explicit/path")
+        );
     }
 }
