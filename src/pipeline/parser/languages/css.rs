@@ -55,40 +55,52 @@ pub(crate) fn handle_css_capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tree_sitter::Parser;
+
+    fn parse_css(source: &str) -> tree_sitter::Tree {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_css::LANGUAGE.into())
+            .expect("failed to load CSS grammar");
+        parser.parse(source, None).expect("failed to parse CSS")
+    }
 
     #[test]
     fn test_handle_css_class() {
-        let node = unsafe {
-            // Create a dummy node for testing - in real code, this comes from tree-sitter
-            std::mem::zeroed()
-        };
+        let tree = parse_css(".btn-primary {}");
+        let node = tree.root_node();
         let result = handle_css_capture("css.class", ".btn-primary", node);
 
         assert!(result.is_some());
-        let (name, kind, _) = result.unwrap();
+        let (name, kind, start_line) = result.unwrap();
         assert_eq!(name, "btn-primary");
         assert_eq!(kind, EntityKind::CssClass);
+        assert_eq!(start_line, 1);
     }
 
     #[test]
     fn test_handle_css_id() {
-        let node = unsafe { std::mem::zeroed() };
+        let tree = parse_css("#header {}");
+        let node = tree.root_node();
         let result = handle_css_capture("css.id", "#header", node);
 
         assert!(result.is_some());
-        let (name, kind, _) = result.unwrap();
+        let (name, kind, start_line) = result.unwrap();
         assert_eq!(name, "header");
         assert_eq!(kind, EntityKind::CssId);
+        assert_eq!(start_line, 1);
     }
 
     #[test]
     fn test_handle_scss_mixin() {
-        let node = unsafe { std::mem::zeroed() };
+        let tree = parse_css("@mixin flex-center {}");
+        let node = tree.root_node();
         let result = handle_css_capture("scss.mixin", "flex-center", node);
 
         assert!(result.is_some());
-        let (name, kind, _) = result.unwrap();
+        let (name, kind, start_line) = result.unwrap();
         assert_eq!(name, "flex-center");
         assert_eq!(kind, EntityKind::ScssMixin);
+        assert_eq!(start_line, 1);
     }
 }
