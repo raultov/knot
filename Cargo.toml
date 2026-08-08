@@ -13,6 +13,24 @@ path-guid = "577497D8-48AD-474A-B0C7-FF85F4EB383E"
 license = false
 eula = false
 
+[lints.rust]
+# Enforces the no-unsafe policy stated in AGENTS.md. `deny` rather than
+# `forbid`; `deny` still blocks new unsafe while allowing documented,
+# audited exceptions via `#[expect(unsafe_code, reason = "...")]`.
+unsafe_code = "deny"
+
+[lints.clippy]
+# Readability gates. Thresholds live in clippy.toml; these lints are
+# allow-by-default (pedantic/nursery), so they are inert without this.
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+
+# Ban bare `#[allow]` in favour of `#[expect(..., reason = "...")]`, which
+# warns once the suppression is no longer needed. This keeps the refactor
+# backlog self-cleaning instead of accumulating stale opt-outs.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
 [features]
 default = ["indexer"]
 indexer = ["dep:fastembed", "dep:ort"]
@@ -105,6 +123,7 @@ async-trait = "0.1"
 [dev-dependencies]
 tempfile = "3.10"
 criterion = "0.4"
+temp-env = "0.3"
 
 [[bench]]
 name = "token_tree_bench"

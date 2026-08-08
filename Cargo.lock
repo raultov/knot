@@ -2085,6 +2085,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "streaming-iterator",
+ "temp-env",
  "tempfile",
  "tokio",
  "toml",
@@ -3947,6 +3948,15 @@ checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "temp-env"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96374855068f47402c3121c6eed88d29cb1de8f3ab27090e273e420bdabcf050"
+dependencies = [
+ "parking_lot",
 ]
 
 [[package]]
