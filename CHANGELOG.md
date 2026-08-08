@@ -5,6 +5,22 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.5.7 — Varnish Cache Language Support
+
+- **Feat(parser)**: Full **Varnish Cache** support via hand-written parsers for `.vcl` (configuration), `.vtc` (test cases), and `.vcc` (VMOD C source). No tree-sitter grammars required — all three formats are decoded by a single hand-rolled lexer that handles VCL's 15 documented gotchas (duration maximal-munch, adjacent string concatenation, ACL mask literals, identifier hyphens, `${...}` macro tokens, version markers, dotted paths, quoted header names, comment forms, etc.).
+- **Feat(vcl)**: VCL extraction emits `vcl_version`, `vcl_subroutine` (custom), `vcl_builtin_sub` (with `vcl_*` name + multi-part aggregator), `vcl_backend`, `vcl_probe` (named and inline), `vcl_acl`, `vcl_import` (with `as` alias + `from` path), `vcl_object_instance` (`new x = directors.round_robin()`), plus declarations for `include`, `unused`, VMOD method calls, and `req.backend_hint = X;` assignments (resolved to `USES_BACKEND` edges). Bodies of `if/elseif/else` blocks are scanned recursively so `set req.backend_hint = …` inside conditionals still emits the edge. The Fastly VCL dialect is detected and skipped (returns empty entities, logs `debug`).
+- **Feat(vtc)**: VTC extraction emits `vtc_test_case` (from `varnishtest`/`vtest`), `vtc_server`, `vtc_client`, `vtc_varnish_instance`, `vtc_logexpect`, `vtc_barrier`. Embedded VCL inside `varnish vX { … }` blocks is delegated to the VCL parser with line offsets so cross-references resolve. `-errvcl` blocks are skipped. `-vcl+backend` synthesises `vcl_backend` entities per `server` declaration with `is_test_context = true` and `ValueReference` to `vtc:server:<name>`.
+- **Feat(vcc)**: VMOD C source extraction emits `vcc_module`, `vcc_function`, `vcc_object`, `vcc_method`, plus `$Event`, `$Restrict`, ENUMs, and default parameters. Methods are bound to their owning object via `enclosing_class`.
+- **Feat(relationships)**: 7 new `ReferenceIntent` variants (`VclSubCall`, `VclBackendRef`, `VclProbeRef`, `VclAclRef`, `VclInclude`, `VclVmodImport`, `VclUnusedRef`) and 6 new `RelationshipType` variants with directed `Display` forms (`UsesBackend`, `UsesProbe`, `UsesAcl`, `Includes`, `ImportsVmod`, `DeclaredUnused`). Three-way match enforced across `entity.rs` (Display), `db/graph/utils.rs` (kind_to_label), `pipeline/parser/context.rs` (compute_fqn_and_context).
+- **Feat(parser-orchestrator)**: Varnish built-in sub aggregators (`vcl_recv_aggregator`, etc.) are now emitted globally in `parse_files_stream` via a new `aggregate_varnish_builtin_subs` post-parse step in `languages/varnish/mod.rs`, ensuring one aggregator per sub name across the repo (with `file_path` = lex first match per `discover_files` sort order). Wired into `src/pipeline/parser/mod.rs` via a shared `Arc<Mutex<Vec<ParsedEntity>>>` buffer.
+- **Feat(cli)**: `explore_file` now displays Varnish entities via a fallback `## Other Entities` bucket so all 18 Varnish kinds remain visible to LLMs (previously fell through `_ => {}` and were silently dropped).
+- **Test(unit)**: 68 unit tests in `pipeline::parser::languages::varnish` covering lexer gotchas, dialect guard, VCL sub/backend/probe/acl/import/include/unused/aggregate, VTC server/client/varnish/logexpect/barrier/errvcl/vcl+backend synthesis, VCC module/function/object/method/default params.
+- **Test(e2e)**: New `tests/run_varnish_e2e.sh` with **25 assertions** covering entity counts, all 6 relationship types, VCL/VTC/VCC extraction, multi-part sub aggregation, Fastly suppression, unique-token semantic search, and `explore_file` listing. Registered as the 19th suite in `tests/run_all_e2e_fast.sh`.
+- **Docs**: New spec `docs/specs/varnish_support.md` (1072 lines covering scope, data model, hard problems, lexing gotchas, phases, gotcha catalog). README updated with Varnish language section + E2E command.
+- **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean | **1037 unit tests** passing | **19/19 E2E suites** passing
+
+---
+
 ## v1.5.6 — Groovy Property Accessors & Parser Hardening
 
 - **Fix(groovy)**: Javadoc block-comment continuation lines no longer produce phantom method entities or corrupt scope tracking. New `strip_comments_line` helper tracks multi-line `/* */` state across lines, and brace counting operates on the code-bearing remainder only.
