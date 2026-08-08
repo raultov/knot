@@ -102,6 +102,27 @@ pub enum EntityKind {
     HelmTemplateVar, // {{ .Values.x }} template variable usage
     // Cross-repo linking
     ProjectIdentity, // Build file project declaration (Maven GAV, Cargo package, npm name)
+    // Varnish VCL entities
+    VclVersion,        // vcl 4.1;
+    VclSubroutine,     // sub my_helper { }
+    VclBuiltinSub,     // sub vcl_recv { }   (multi-part)
+    VclBackend,        // backend default { }
+    VclProbe,          // probe healthcheck { }
+    VclAcl,            // acl localnetwork { }
+    VclImport,         // import std;  /  import std as s;
+    VclObjectInstance, // new cluster = directors.round_robin();
+    // Varnish VTC entities
+    VtcTestCase,        // varnishtest "..." / vtest "..."
+    VtcServer,          // server s1 { }
+    VtcClient,          // client c1 { }
+    VtcVarnishInstance, // varnish v1 { }
+    VtcLogexpect,       // logexpect l1 { }
+    VtcBarrier,         // barrier b1 cond 2
+    // Varnish VCC entities
+    VccModule,   // $Module cookie 3 "..."
+    VccFunction, // $Function VOID parse(STRING)
+    VccObject,   // $Object counter(STRING, INT)
+    VccMethod,   // $Method VOID .incr(INT)
     // Markdown entities
     MarkdownDocument, // A full markdown file or frontmatter
     MarkdownSection,  // A section under a markdown heading
@@ -184,6 +205,24 @@ impl std::fmt::Display for EntityKind {
             EntityKind::HelmValue => "helm_value",
             EntityKind::HelmTemplateVar => "helm_template_var",
             EntityKind::ProjectIdentity => "project_identity",
+            EntityKind::VclVersion => "vcl_version",
+            EntityKind::VclSubroutine => "vcl_subroutine",
+            EntityKind::VclBuiltinSub => "vcl_builtin_sub",
+            EntityKind::VclBackend => "vcl_backend",
+            EntityKind::VclProbe => "vcl_probe",
+            EntityKind::VclAcl => "vcl_acl",
+            EntityKind::VclImport => "vcl_import",
+            EntityKind::VclObjectInstance => "vcl_object_instance",
+            EntityKind::VtcTestCase => "vtc_test_case",
+            EntityKind::VtcServer => "vtc_server",
+            EntityKind::VtcClient => "vtc_client",
+            EntityKind::VtcVarnishInstance => "vtc_varnish_instance",
+            EntityKind::VtcLogexpect => "vtc_logexpect",
+            EntityKind::VtcBarrier => "vtc_barrier",
+            EntityKind::VccModule => "vcc_module",
+            EntityKind::VccFunction => "vcc_function",
+            EntityKind::VccObject => "vcc_object",
+            EntityKind::VccMethod => "vcc_method",
             EntityKind::MarkdownDocument => "markdown_document",
             EntityKind::MarkdownSection => "markdown_section",
         };

@@ -279,6 +279,85 @@ pub fn resolve_reference_intents_with_context(
                     ),
                     RelationshipType::MacroCalls,
                 ),
+                ReferenceIntent::VclSubCall { sub_name, .. } => {
+                    let call_intent = crate::models::CallIntent {
+                        method: sub_name.clone(),
+                        receiver: None,
+                        line: 0,
+                        arg_count: None,
+                    };
+                    let resolved = calls::resolve_single_call_intent(
+                        &call_intent,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        &ctx,
+                    );
+                    (resolved, RelationshipType::Calls)
+                }
+                ReferenceIntent::VclBackendRef { backend_name, .. } => (
+                    non_calls::resolve_non_call_reference(
+                        backend_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        ctx.fqn_to_uuid,
+                        ctx.name_to_uuids,
+                        ctx.uuid_to_file,
+                        &metrics,
+                    ),
+                    RelationshipType::UsesBackend,
+                ),
+                ReferenceIntent::VclProbeRef { probe_name, .. } => (
+                    non_calls::resolve_non_call_reference(
+                        probe_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        ctx.fqn_to_uuid,
+                        ctx.name_to_uuids,
+                        ctx.uuid_to_file,
+                        &metrics,
+                    ),
+                    RelationshipType::UsesProbe,
+                ),
+                ReferenceIntent::VclAclRef { acl_name, .. } => (
+                    non_calls::resolve_non_call_reference(
+                        acl_name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        ctx.fqn_to_uuid,
+                        ctx.name_to_uuids,
+                        ctx.uuid_to_file,
+                        &metrics,
+                    ),
+                    RelationshipType::UsesAcl,
+                ),
+                ReferenceIntent::VclInclude { path, .. } => (
+                    ctx.fqn_to_uuid.get(path).copied(),
+                    RelationshipType::Includes,
+                ),
+                ReferenceIntent::VclVmodImport { module, .. } => (
+                    non_calls::resolve_non_call_reference(
+                        module,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        ctx.fqn_to_uuid,
+                        ctx.name_to_uuids,
+                        ctx.uuid_to_file,
+                        &metrics,
+                    ),
+                    RelationshipType::ImportsVmod,
+                ),
+                ReferenceIntent::VclUnusedRef { name, .. } => (
+                    non_calls::resolve_non_call_reference(
+                        name,
+                        &entity.file_path,
+                        entity.enclosing_class.as_deref(),
+                        ctx.fqn_to_uuid,
+                        ctx.name_to_uuids,
+                        ctx.uuid_to_file,
+                        &metrics,
+                    ),
+                    RelationshipType::DeclaredUnused,
+                ),
             };
 
             if let Some(mut uuid) = resolved_uuid {

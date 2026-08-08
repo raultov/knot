@@ -98,6 +98,62 @@ pub enum ReferenceIntent {
         /// Line number where this macro invocation occurs.
         line: usize,
     },
+    /// VCL subroutine call.
+    /// Example: `call pipe_if_local;`
+    VclSubCall {
+        /// The subroutine name being called.
+        sub_name: String,
+        /// Line number where this call occurs.
+        line: usize,
+    },
+    /// VCL backend reference (set req.backend_hint, beresp.backend etc).
+    /// Example: `set req.backend_hint = b;`
+    VclBackendRef {
+        /// The backend name being referenced.
+        backend_name: String,
+        /// Line number where this reference occurs.
+        line: usize,
+    },
+    /// VCL probe reference (.probe = myprobe;).
+    VclProbeRef {
+        /// The probe name being referenced.
+        probe_name: String,
+        /// Line number where this reference occurs.
+        line: usize,
+    },
+    /// VCL ACL reference (client.ip ~ aclname).
+    VclAclRef {
+        /// The ACL name being referenced.
+        acl_name: String,
+        /// Line number where this reference occurs.
+        line: usize,
+    },
+    /// VCL file include.
+    /// Example: `include "foo.vcl";`
+    VclInclude {
+        /// The include path string.
+        path: String,
+        /// Line number where this include occurs.
+        line: usize,
+    },
+    /// VCL VMOD import.
+    /// Example: `import std;`
+    VclVmodImport {
+        /// The module name being imported.
+        module: String,
+        /// The alias if using `import std as s;`.
+        alias: Option<String>,
+        /// Line number where this import occurs.
+        line: usize,
+    },
+    /// VCL `unused` marker.
+    /// Example: `unused b1;`
+    VclUnusedRef {
+        /// The name of the unused declaration.
+        name: String,
+        /// Line number where this unused declaration occurs.
+        line: usize,
+    },
 }
 
 /// Represents a typed relationship edge in the dependency graph.
@@ -132,6 +188,18 @@ pub enum RelationshipType {
     /// the corresponding method declared in a supertype (interface or superclass).
     /// Edge direction: `subtype.method -[Overrides]-> supertype.method`.
     Overrides,
+    /// VCL: subroutine or entity uses a backend.
+    UsesBackend,
+    /// VCL: entity uses a probe.
+    UsesProbe,
+    /// VCL: entity uses an ACL.
+    UsesAcl,
+    /// VCL: file includes another file.
+    Includes,
+    /// VCL: file imports a VMOD.
+    ImportsVmod,
+    /// VCL: `unused` declaration marks an entity as intentionally unreferenced.
+    DeclaredUnused,
 }
 
 impl std::fmt::Display for RelationshipType {
@@ -150,6 +218,12 @@ impl std::fmt::Display for RelationshipType {
             RelationshipType::GenericBound => write!(f, "GENERIC_BOUND"),
             RelationshipType::DependsOn => write!(f, "DEPENDS_ON"),
             RelationshipType::Overrides => write!(f, "OVERRIDES"),
+            RelationshipType::UsesBackend => write!(f, "USES_BACKEND"),
+            RelationshipType::UsesProbe => write!(f, "USES_PROBE"),
+            RelationshipType::UsesAcl => write!(f, "USES_ACL"),
+            RelationshipType::Includes => write!(f, "INCLUDES"),
+            RelationshipType::ImportsVmod => write!(f, "IMPORTS_VMOD"),
+            RelationshipType::DeclaredUnused => write!(f, "DECLARED_UNUSED"),
         }
     }
 }

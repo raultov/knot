@@ -108,12 +108,17 @@ pub fn parse_files_stream(
     // Concurrency limiter: Condvar-based semaphore backed by a Mutex.
     let sem = Arc::new((Mutex::new(0usize), Condvar::new()));
 
+    // Collect entities into a shared buffer so we can run a global post-parse
+    // aggregation step (e.g. Varnish built-in sub aggregators) before sending
+    // them down the pipeline.
+    let buffer: Arc<Mutex<Vec<ParsedEntity>>> = Arc::new(Mutex::new(Vec::new()));
+
     std::thread::scope(|s| {
         for path in files {
             let path = path.clone();
             let parse_cfg = parse_cfg.clone();
-            let sender = sender.clone();
             let sem = Arc::clone(&sem);
+            let buffer = Arc::clone(&buffer);
 
             // Acquire: block until active < max_concurrent
             {
@@ -128,18 +133,9 @@ pub fn parse_files_stream(
             let on_file_parsed = on_file_parsed.clone();
 
             s.spawn(move || {
-                match parse_single_file(&path, &parse_cfg) {
-                    Ok(entities) => {
-                        for entity in entities {
-                            if sender.blocking_send(entity).is_err() {
-                                warn!("Failed to send entity to channel");
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse {}: {e:#}", path.display());
-                    }
+                if let Ok(entities) = parse_single_file(&path, &parse_cfg) {
+                    let mut buf = buffer.lock().unwrap();
+                    buf.extend(entities);
                 }
 
                 if let Some(cb) = &on_file_parsed {
@@ -155,6 +151,19 @@ pub fn parse_files_stream(
         }
     });
     // All threads joined here (std::thread::scope guarantees this).
+
+    // Post-parse: aggregate Varnish built-in subs globally.
+    let mut entities = Arc::try_unwrap(buffer)
+        .map(|m| m.into_inner().unwrap_or_default())
+        .unwrap_or_default();
+    languages::varnish::aggregate_varnish_builtin_subs(&mut entities, &parse_cfg.repo_name);
+
+    for entity in entities {
+        if sender.blocking_send(entity).is_err() {
+            warn!("Failed to send entity to channel");
+            break;
+        }
+    }
 }
 
 /// Parse a collection of source files in parallel and return all extracted entities.
@@ -173,6 +182,10 @@ pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEnti
     while let Ok(entity) = rx.try_recv() {
         entities.push(entity);
     }
+
+    // Post-process Varnish built-in sub aggregators globally.
+    languages::varnish::aggregate_varnish_builtin_subs(&mut entities, &parse_cfg.repo_name);
+
     entities
 }
 
@@ -462,6 +475,15 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &file_path,
                 &parse_cfg.repo_name,
             )?
+        }
+        "vcl" => {
+            languages::varnish::extract_entities_vcl(&source, &file_path, &parse_cfg.repo_name)
+        }
+        "vtc" => {
+            languages::varnish::extract_entities_vtc(&source, &file_path, &parse_cfg.repo_name)
+        }
+        "vcc" => {
+            languages::varnish::extract_entities_vcc(&source, &file_path, &parse_cfg.repo_name)
         }
         other => {
             warn!("Unsupported extension '{other}', skipping");

@@ -16,5 +16,6 @@ pub mod python;
 pub mod rust;
 pub mod toml;
 pub mod typescript;
+pub mod varnish;
 pub mod xml;
 pub mod yaml;

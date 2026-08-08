@@ -78,6 +78,13 @@ pub(crate) fn collect_orphaned_references(
             ReferenceIntent::HtmlFileImport { line, .. } => *line,
             ReferenceIntent::CssFileImport { line, .. } => *line,
             ReferenceIntent::RustMacroCall { line, .. } => *line,
+            ReferenceIntent::VclSubCall { line, .. } => *line,
+            ReferenceIntent::VclBackendRef { line, .. } => *line,
+            ReferenceIntent::VclProbeRef { line, .. } => *line,
+            ReferenceIntent::VclAclRef { line, .. } => *line,
+            ReferenceIntent::VclInclude { line, .. } => *line,
+            ReferenceIntent::VclVmodImport { line, .. } => *line,
+            ReferenceIntent::VclUnusedRef { line, .. } => *line,
         };
         let target_idx = find_nearest_entity_by_line(entities, orphan_line);
         entities[target_idx].reference_intents.push(intent);

@@ -12,7 +12,7 @@ use tracing::{debug, info};
 const CORE_EXTENSIONS: &[&str] = &[
     "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "py", "pyi", "pyw", "html",
     "htm", "css", "scss", "sass", "rs", "groovy", "gradle", "c", "h", "cpp", "hpp", "cc", "cxx",
-    "hh", "hxx", "md",
+    "hh", "hxx", "md", "vcl", "vtc", "vcc",
 ];
 
 /// Configuration / Kubernetes / Helm file extensions — indexed only when
@@ -53,6 +53,9 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "hh",
     "hxx",
     "md",
+    "vcl",
+    "vtc",
+    "vcc",
     // Config
     "yml",
     "yaml",

@@ -219,6 +219,27 @@ pub(crate) fn compute_fqn_and_context(
         }
         EntityKind::MacroDefinition => name.to_string(),
         EntityKind::MarkdownDocument | EntityKind::MarkdownSection => name.to_string(),
+        // Varnish VCL entities — flat global namespace, FQN is just the name
+        EntityKind::VclVersion
+        | EntityKind::VclSubroutine
+        | EntityKind::VclBuiltinSub
+        | EntityKind::VclBackend
+        | EntityKind::VclProbe
+        | EntityKind::VclAcl
+        | EntityKind::VclImport
+        | EntityKind::VclObjectInstance => name.to_string(),
+        // Varnish VTC entities — file-scoped
+        EntityKind::VtcTestCase
+        | EntityKind::VtcServer
+        | EntityKind::VtcClient
+        | EntityKind::VtcVarnishInstance
+        | EntityKind::VtcLogexpect
+        | EntityKind::VtcBarrier => name.to_string(),
+        // Varnish VCC entities — module-scoped
+        EntityKind::VccModule
+        | EntityKind::VccFunction
+        | EntityKind::VccObject
+        | EntityKind::VccMethod => name.to_string(),
     };
 
     (fqn, enclosing_class)
