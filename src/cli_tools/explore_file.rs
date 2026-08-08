@@ -195,6 +195,7 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
         let mut helm_charts = Vec::new();
         let mut helm_values = Vec::new();
         let mut helm_template_vars = Vec::new();
+        let mut others: Vec<&serde_json::Value> = Vec::new();
 
         for entity in &entities {
             if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
@@ -246,7 +247,7 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
                     "helm_chart" => helm_charts.push(entity),
                     "helm_value" => helm_values.push(entity),
                     "helm_template_var" => helm_template_vars.push(entity),
-                    _ => {}
+                    _ => others.push(entity),
                 }
             }
         }
@@ -562,6 +563,13 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
                 output.push_str(&format_entity_summary(entity));
             }
         }
+
+        if !others.is_empty() {
+            output.push_str("## Other Entities\n\n");
+            for entity in others {
+                output.push_str(&format_entity_summary(entity));
+            }
+        }
     }
 
     if !outgoing_refs.is_empty() {
@@ -757,9 +765,10 @@ mod tests {
             }
         ]);
         let formatted = format_file_entities("src/main.java", &entities);
-        // Unknown kinds should be silently ignored
-        assert!(!formatted.contains("UnknownEntity"));
+        // Unknown kinds fall into the "Other Entities" bucket so they remain visible.
+        assert!(formatted.contains("UnknownEntity"));
         assert!(formatted.contains("Found 1 entity/entities"));
+        assert!(formatted.contains("## Other Entities"));
     }
 
     #[test]
