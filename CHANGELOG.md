@@ -5,6 +5,21 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.6.0 — Unsafe Elimination & Code Quality Enforcement
+
+- **Fix(css)**: Replaced three `mem::zeroed::<Node>()` unsafe blocks with real tree-sitter-css parse nodes. The zeroed nodes dereferenced null pointers in `start_position()` — genuine undefined behaviour, not a lint technicality. Tests now additionally assert `start_line`, closing a real coverage gap.
+- **Refactor(unsafe)**: Eliminated 17 of 18 `unsafe` blocks across the codebase. Environment mutation in tests (`std::env::set_var`/`remove_var`) replaced with `temp_env::with_var()` (panic-safe), `dotenvy::from_path_iter()` (non-mutating), and dependency injection for `knot_env_path()` (HashMap-driven tests). A single audited exception survives in `src/utils/mod.rs` for `SSL_CERT_FILE` injection behind corporate proxies, annotated with `#[expect(unsafe_code, reason = "...")]`.
+- **Refactor(lint)**: Converted all bare `#[allow(...)]` attributes to `#[expect(lint, reason = "...")]` with documented justifications across 55 source files. Added documented expects for `too_many_lines` (threshold 80), `cognitive_complexity` (threshold 15), `too_many_arguments` (threshold 5), `excessive_nesting` (threshold 6), and `type_complexity` (threshold 200).
+- **Refactor(cli)**: Extracted `SubgraphQueryParams` and `SearchContext` structs to reduce argument counts below the 5-arg threshold. Rewrote `format_file_entities` with a data-driven `KIND_BUCKETS` table, shrinking from 467 to ~30 lines.
+- **Refactor(lexer)**: Removed unused `source` field and `current()` helper from the Varnish lexer, eliminating the `Lexer<'a>` lifetime parameter. Test-only `tokenize_hash_comments` gated behind `#[cfg(test)]`.
+- **Chore(config)**: Added `clippy.toml` with readability thresholds measured against current production code. Enabled `too_many_lines`, `cognitive_complexity`, `allow_attributes`, and `allow_attributes_without_reason` as warnings in `[lints.clippy]`.
+- **Chore(deps)**: Added `temp-env = "0.3"` as a dev-dependency for panic-safe environment mutation in test helpers.
+- **Chore(lints)**: Enforced `unsafe_code = "deny"` at crate level. Any newly introduced `unsafe` block (without a documented `#[expect]`) is a compilation error.
+- **Docs**: Removed obsolete implementation specs (`unsafe_removal.md`, `varnish_support.md`) — both are now fully implemented and covered by the codebase and CHANGELOG.
+- **cargo fmt** clean | **cargo clippy --all-targets -- -D warnings** clean | **19/19 E2E suites** passing | **1037 unit tests** passing
+
+---
+
 ## v1.5.7 — Varnish Cache Language Support
 
 - **Feat(parser)**: Full **Varnish Cache** support via hand-written parsers for `.vcl` (configuration), `.vtc` (test cases), and `.vcc` (VMOD C source). No tree-sitter grammars required — all three formats are decoded by a single hand-rolled lexer that handles VCL's 15 documented gotchas (duration maximal-munch, adjacent string concatenation, ACL mask literals, identifier hyphens, `${...}` macro tokens, version markers, dotted paths, quoted header names, comment forms, etc.).
