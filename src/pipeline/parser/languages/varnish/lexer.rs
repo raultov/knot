@@ -41,21 +41,17 @@ pub(crate) fn tokenize(source: &str) -> Vec<Token> {
     Lexer::new(source).tokenize()
 }
 
-struct Lexer<'a> {
-    #[allow(dead_code)]
-    source: &'a str,
+struct Lexer {
     chars: Vec<char>,
     pos: usize,
-    #[allow(dead_code)]
     in_attr_block: bool,
     /// When true, `#` starts a line comment (VTC context).
     hash_comments: bool,
 }
 
-impl<'a> Lexer<'a> {
-    fn new(source: &'a str) -> Self {
+impl Lexer {
+    fn new(source: &str) -> Self {
         Self {
-            source,
             chars: source.chars().collect(),
             pos: 0,
             in_attr_block: false,
@@ -63,10 +59,9 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    #[allow(dead_code)]
-    fn new_hash_comments(source: &'a str) -> Self {
+    #[cfg(test)]
+    fn new_hash_comments(source: &str) -> Self {
         Self {
-            source,
             chars: source.chars().collect(),
             pos: 0,
             in_attr_block: false,
@@ -89,10 +84,6 @@ impl<'a> Lexer<'a> {
         tokens
     }
 
-    #[allow(dead_code)]
-    fn current(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
-    }
 
     fn peek(&self, offset: usize) -> Option<char> {
         self.chars.get(self.pos + offset).copied()
@@ -505,7 +496,7 @@ fn parse_byte_unit(s: &str) -> Option<ByteUnit> {
 }
 
 /// Tokenize source with hash comments (# for line comments, VTC context).
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn tokenize_hash_comments(source: &str) -> Vec<Token> {
     Lexer::new_hash_comments(source).tokenize()
 }
