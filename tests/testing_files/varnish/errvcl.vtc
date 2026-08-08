@@ -1,0 +1,17 @@
+# VTC_ARTIFACT_TOKEN_ERRVCL_01 — -errvcl block must yield NO entities
+varnishtest "Error VCL test"
+
+server s1 {
+    rxreq
+    txresp
+} -start
+
+varnish v1 -errvcl "expected compilation failure" {
+    this is not valid vcl @@@@!!!
+    syntaX error here
+} -start
+
+client c1 {
+    txreq -url "/"
+    rxresp
+} -run

@@ -1,0 +1,9 @@
+# VTC_ARTIFACT_TOKEN_EXTERNAL_01 — external VCL ref
+varnishtest "External VCL reference test"
+
+varnish v1 -arg "-f ${testdir}/basic_hit.vtc" -start
+
+client c1 {
+    txreq -url "/foo"
+    rxresp
+} -run

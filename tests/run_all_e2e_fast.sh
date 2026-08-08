@@ -37,7 +37,7 @@ echo -e "${BLUE}========================================${NC}"
 FAILED_TESTS=()
 PASSED_TESTS=()
 
-# All 18 suites now use the shared DB. Order matches CI.
+# All 19 suites now use the shared DB. Order matches CI.
 SUITES=(
     "run_typescript_e2e.sh"
     "run_java_e2e.sh"
@@ -57,6 +57,7 @@ SUITES=(
     "run_cpp_e2e.sh"
     "run_markdown_e2e.sh"
     "run_contains_autolink_index_e2e.sh"
+    "run_varnish_e2e.sh"
 )
 
 # Pre-flight: free the e2e ports of any foreign container. Other e2e
@@ -171,10 +172,10 @@ run_suite() {
     fi
 }
 
-# Run all 18 suites sequentially against the same live DB.
+# Run all 19 suites sequentially against the same live DB.
 # --clean is repo-scoped in the indexer, so each suite only wipes its own
 # repo's data — earlier suites' data is preserved.
-echo -e "\n${BLUE}── Running all 18 suites against shared DB ──${NC}"
+echo -e "\n${BLUE}── Running all 19 suites against shared DB ──${NC}"
 for suite in "${SUITES[@]}"; do
     run_suite "$suite"
 done

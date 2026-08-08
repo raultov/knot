@@ -1,0 +1,47 @@
+$Module cookie 3 "Varnish Cookie Module"
+$ABI strict
+
+DESCRIPTION
+===========
+
+// VCC_GIZMO_TOKEN_99 — module-level prose
+
+This VMOD parses and manipulates cookies.
+
+// VCC_GIZMO_TOKEN_FUNC_01
+$Function VOID parse(STRING cookieheader)
+
+Parse the cookie header string into the internal data structure.
+
+// VCC_GIZMO_TOKEN_FUNC_02
+$Function STRING get(STRING cookiename)
+
+Get the value of a specific cookie.
+
+// VCC_GIZMO_TOKEN_FUNC_03
+$Function BOOL isset(STRING cookiename)
+
+Check if a cookie with the given name exists.
+
+// VCC_GIZMO_TOKEN_OBJECT_01
+$Object counter(STRING name, INT initial = 0)
+
+A counter object that tracks numeric values.
+
+// VCC_GIZMO_TOKEN_METHOD_01
+$Method VOID .incr(INT n = 1)
+
+Increment the counter by n.
+
+// VCC_GIZMO_TOKEN_METHOD_02
+$Method INT .get()
+
+Get the current counter value.
+
+// VCC_GIZMO_TOKEN_METHOD_03
+$Method VOID .reset()
+
+Reset the counter to zero.
+
+$Event cookie_init
+$Restrict client backend

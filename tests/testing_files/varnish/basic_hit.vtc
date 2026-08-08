@@ -1,0 +1,41 @@
+# VTC_ARTIFACT_TOKEN_31 — basic VTC test
+varnishtest "Basic cache hit test"
+
+# VTC_ARTIFACT_TOKEN_SERVER_01
+server s1 {
+    rxreq
+    expect req.url == "/foo"
+    txresp -status 200 -hdr "Cache-Control: max-age=60" -body "hello"
+} -start
+
+# VTC_ARTIFACT_TOKEN_VARNISH_01
+varnish v1 -vcl+backend {
+    import std;
+    sub vcl_recv {
+        std.log("VTC_ARTIFACT_TOKEN_VCL_BODY_01");
+        set req.backend_hint = s1;
+    }
+    sub vcl_backend_response {
+        set beresp.ttl = 60s;
+    }
+} -start
+
+# VTC_ARTIFACT_TOKEN_CLIENT_01
+client c1 {
+    txreq -url "/foo"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "hello"
+} -run
+
+# VTC_ARTIFACT_TOKEN_LOGEXPECT_01
+logexpect l1 -v v1 -g vxid -q "vxid > 0" {
+    expect * = ReqURL "^/foo$"
+    expect * = VCL_call "^RECV$"
+    expect * = End
+} -run
+
+# VTC_ARTIFACT_TOKEN_BARRIER_01
+barrier b1 cond 2
+
+varnish v1 -expect cache_hit == 1
