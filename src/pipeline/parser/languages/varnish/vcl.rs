@@ -1085,7 +1085,7 @@ impl Parser<'_> {
             );
 
             entity.reference_intents.push(ReferenceIntent::VclInclude {
-                path: format!("vcl:{}:{}", self.repo_name, p),
+                path: p.clone(),
                 line,
             });
 
@@ -1509,11 +1509,15 @@ sub vcl_recv {
 
     #[test]
     fn test_extract_include() {
-        let entities = extract_entities_vcl("include \"foo.vcl\";\n", "test.vcl", "test-repo");
+        let entities = extract_entities_vcl(
+            "include \"/etc/varnish/foo.vcl\";\n",
+            "test.vcl",
+            "test-repo",
+        );
         assert!(entities.iter().any(|e| {
-            e.reference_intents
-                .iter()
-                .any(|r| matches!(r, ReferenceIntent::VclInclude { path, .. } if path == "vcl:test-repo:foo.vcl"))
+            e.reference_intents.iter().any(|r| {
+                matches!(r, ReferenceIntent::VclInclude { path, .. } if path == "/etc/varnish/foo.vcl")
+            })
         }));
     }
 

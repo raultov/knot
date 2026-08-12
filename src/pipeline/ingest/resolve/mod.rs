@@ -93,6 +93,47 @@ pub fn print_run_summary(metrics: &RunMetrics) {
     }
 }
 
+fn resolve_vcl_include(
+    path: &str,
+    file_path: &str,
+    repo_name: &str,
+    fqn_to_uuid: &HashMap<String, Uuid>,
+) -> Option<Uuid> {
+    let stripped_path = path.strip_prefix('/').unwrap_or(path);
+
+    let root_fqn = format!("vcl:{}:{}", repo_name, stripped_path);
+    if let Some(&uuid) = fqn_to_uuid.get(&root_fqn) {
+        return Some(uuid);
+    }
+
+    let parent_dir = std::path::Path::new(file_path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("");
+
+    let relative_path = if parent_dir.is_empty() {
+        path.to_string()
+    } else {
+        format!("{}/{}", parent_dir, stripped_path)
+    };
+
+    let relative_fqn = format!("vcl:{}:{}", repo_name, relative_path);
+    if let Some(&uuid) = fqn_to_uuid.get(&relative_fqn) {
+        return Some(uuid);
+    }
+
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+    let vcl_prefix = format!("vcl:{}", repo_name);
+
+    fqn_to_uuid
+        .iter()
+        .find(|(fqn, _)| fqn.starts_with(&vcl_prefix) && fqn.ends_with(file_name))
+        .map(|(_, &uuid)| uuid)
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "function is verbose but correct — extraction deferred"
@@ -342,10 +383,12 @@ pub fn resolve_reference_intents_with_context(
                     ),
                     RelationshipType::UsesAcl,
                 ),
-                ReferenceIntent::VclInclude { path, .. } => (
-                    ctx.fqn_to_uuid.get(path).copied(),
-                    RelationshipType::Includes,
-                ),
+                ReferenceIntent::VclInclude { path, .. } => {
+                    let repo_name = entity.fqn.split(':').nth(1).unwrap_or("");
+                    let resolved_uuid =
+                        resolve_vcl_include(path, &entity.file_path, repo_name, ctx.fqn_to_uuid);
+                    (resolved_uuid, RelationshipType::Includes)
+                }
                 ReferenceIntent::VclVmodImport { module, .. } => (
                     non_calls::resolve_non_call_reference(
                         module,
