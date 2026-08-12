@@ -6,6 +6,7 @@ import directors;
 import std as standard;
 
 include "backends.vcl";
+include "/etc/varnish/language.vcl";
 
 // VARNISH_SPHINX_TOKEN_BACKEND_01
 backend backend_default {

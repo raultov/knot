@@ -311,6 +311,11 @@ else
     echo -e "${YELLOW}  Response: ${EXPLORE_RESPONSE}${NC}"
 fi
 
+# [26] Absolute INCLUDES edge
+assert_cypher_exists "26. Absolute INCLUDES edge" \
+    "MATCH (a:Entity)-[r:INCLUDES]->(b:Entity) WHERE b.file_path = 'etc/varnish/language.vcl' AND a.repo_name = '$REPO_NAME' RETURN count(r)"
+
+
 # ── Results ───────────────────────────────────────────────────────────────────
 echo ""
 if [ "$FAILURES" -eq 0 ]; then
