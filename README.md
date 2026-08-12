@@ -685,13 +685,11 @@ For the full release history see [CHANGELOG.md](CHANGELOG.md).
 ### Upcoming
 
 #### Long-Term Vision
-- [ ] Varnish VCL support
 - [ ] Go support
 - [ ] C# support
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)
 - [ ] Language Server Protocol (LSP) integration
 - [ ] Automated Code Review tool (MCP-based)
-- [ ] CLI commands (opencode, claude, agy) to index repos
 - [ ] Ruby support
 
 ---
