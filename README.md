@@ -350,17 +350,40 @@ Use `--clean` when:
 
 ### Indexing Progress
 
-The indexer emits `[Progress]` log lines showing real-time file-based completion.
-Example with 5000 files where 1000 have been parsed:
+The indexer emits `[Progress]` log lines showing real-time completion across
+the whole pipeline (parsing, embedding, ingestion, reference resolution).
+The percentage is **monotonically non-decreasing** and reaches `100%` only
+once the run genuinely terminates.
+
+> **Upgrade note (v1.6.2):** The percentage now spans the entire pipeline via
+> weighted bands. Previously it measured only file reading and saturated at
+> `100%` within seconds of starting, then froze for minutes while embedding
+> and ingestion were still running. See
+> [`docs/specs/indexing_progress_accuracy_plan.md`](docs/specs/indexing_progress_accuracy_plan.md)
+> for the full design.
+
+Example with 5000 files where 1000 have been parsed and 5,000 entities are
+half-way through ingestion:
 
 ```
-[Progress] [my-repo] 1000/5000 files (20.0%) — batch #16 ingested (64 entities)
+[Progress] [my-repo] 50.0% — files 5000/5000, entities 41600/83200, batch #325 (128 entities)
 ```
+
+#### Band table
+
+| Phase | Band | Driver |
+|---|---|---|
+| `Idle` / `Discovering` / `Classifying` / `CleaningStaleData` | `0%` | — |
+| Parsing | `0% → 10%` | `parsed_files / total_files` |
+| Embedding + Ingestion | `10% → 90%` | `entities_ingested / total_entities` |
+| `ResolvingReferences` | `95%` | fixed (no sub-counters available) |
+| `Completed` | `100%` | forced |
+| `Failed` | last computed value | frozen |
 
 A final log line confirms completion:
 
 ```
-[Progress] [my-repo] 5000/5000 files (100.0%) — parsing and ingestion complete, resolving references...
+[Progress] [my-repo] 100.0% — files 5000/5000, entities 83200/83200 — parsing and ingestion complete, resolving references...
 ```
 
 #### Library API (knot-server integration)
@@ -378,7 +401,14 @@ let progress_clone = Arc::clone(&progress);
 tokio::spawn(async move {
     loop {
         let snap = progress_clone.snapshot();
-        println!("{}/{} files ({:.1}%)", snap.parsed_files, snap.total_files, snap.percent_complete);
+        println!(
+            "{:.1}% — files {}/{}, entities {}/{}",
+            snap.percent_complete,
+            snap.parsed_files,
+            snap.total_files,
+            snap.entities_ingested,
+            snap.total_entities
+        );
         if snap.stage == IndexingStage::Completed || snap.stage == IndexingStage::Failed {
             break;
         }
