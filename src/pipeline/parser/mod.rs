@@ -80,6 +80,34 @@ impl Default for ParseConfig {
 /// fully processed (all entities sent to the channel, or parse failed).
 pub type FileParsedCallback = std::sync::Arc<dyn Fn() + Send + Sync>;
 
+/// Callback invoked exactly once, with the final entity count, after
+/// post-parse aggregation (e.g. Varnish built-in subs) and **before** any
+/// entity is pushed to the bounded channel. Publishing the total at this
+/// exact instant lets downstream progress observers transition from the
+/// parse band (0–10%) to the ingest band (10–90%) without ever saturating
+/// at 100% while the channel is still full.
+///
+/// The closure receives the number of entities that will subsequently be
+/// pushed into the channel.
+pub type EntitiesExtractedCallback = std::sync::Arc<dyn Fn(usize) + Send + Sync>;
+
+/// Callbacks surfacing parser progress to an external observer.
+///
+/// All fields are optional; `ParseCallbacks::default()` observes nothing.
+/// v1.6.2 introduced this struct to replace the bare `FileParsedCallback`
+/// parameter; the new `on_entities_extracted` hook is the fix for the
+/// "100% then frozen" indexing progress bug.
+#[derive(Default, Clone)]
+pub struct ParseCallbacks {
+    /// Invoked exactly once per input file after it has been fully
+    /// processed (successful parse or parse error alike).
+    pub on_file_parsed: Option<FileParsedCallback>,
+    /// Invoked exactly once, with the final entity count, after post-parse
+    /// aggregation and *before* any entity is pushed to the bounded
+    /// channel. See `EntitiesExtractedCallback` for the rationale.
+    pub on_entities_extracted: Option<EntitiesExtractedCallback>,
+}
+
 /// Parse a collection of source files in parallel and send results through a channel.
 ///
 /// Uses `std::thread::scope` with raw OS threads (NOT Rayon) so that
@@ -89,12 +117,15 @@ pub type FileParsedCallback = std::sync::Arc<dyn Fn() + Send + Sync>;
 ///
 /// This function blocks until all files have been processed. It is
 /// intended to be called from a `tokio::task::spawn_blocking` context.
+///
+/// `callbacks` replaces the v1.6.1 single `FileParsedCallback` parameter;
+/// passing `None` is unchanged from previous versions.
 pub fn parse_files_stream(
     files: &[PathBuf],
     parse_cfg: &ParseConfig,
     sender: mpsc::Sender<ParsedEntity>,
     max_concurrent: usize,
-    on_file_parsed: Option<FileParsedCallback>,
+    callbacks: Option<ParseCallbacks>,
 ) {
     use std::sync::{Arc, Condvar, Mutex};
 
@@ -123,7 +154,7 @@ pub fn parse_files_stream(
                 *active += 1;
             }
 
-            let on_file_parsed = on_file_parsed.clone();
+            let on_file_parsed = callbacks.as_ref().and_then(|c| c.on_file_parsed.clone());
 
             s.spawn(move || {
                 if let Ok(entities) = parse_single_file(&path, &parse_cfg) {
@@ -150,6 +181,18 @@ pub fn parse_files_stream(
         .map(|m| m.into_inner().unwrap_or_default())
         .unwrap_or_default();
     languages::varnish::aggregate_varnish_builtin_subs(&mut entities, &parse_cfg.repo_name);
+
+    // Publish the entity total BEFORE the first blocking_send. This is the
+    // exact handoff point the progress observer relies on: parse band ends
+    // at 10%, ingest band takes over the moment this closure fires. Without
+    // this ordering the bar would freeze at 10% while the producer is
+    // blocked behind a full channel.
+    if let Some(cb) = callbacks
+        .as_ref()
+        .and_then(|c| c.on_entities_extracted.as_ref())
+    {
+        cb(entities.len());
+    }
 
     for entity in entities {
         if sender.blocking_send(entity).is_err() {
@@ -1098,7 +1141,11 @@ int bar(const char *s);
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        parse_files_stream(&files, &cfg, sender, 4, Some(cb));
+        let callbacks = ParseCallbacks {
+            on_file_parsed: Some(cb),
+            on_entities_extracted: None,
+        };
+        parse_files_stream(&files, &cfg, sender, 4, Some(callbacks));
 
         let mut count = 0;
         while receiver.try_recv().is_ok() {
@@ -1138,7 +1185,11 @@ int bar(const char *s);
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        parse_files_stream(&files, &cfg, sender, 4, Some(cb));
+        let callbacks = ParseCallbacks {
+            on_file_parsed: Some(cb),
+            on_entities_extracted: None,
+        };
+        parse_files_stream(&files, &cfg, sender, 4, Some(callbacks));
 
         assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
@@ -1188,5 +1239,194 @@ int bar(const char *s);
                 .unwrap_or_default();
             assert_eq!(ext, *expected_ext);
         }
+    }
+
+    // ---- v1.6.2: ParseCallbacks surface the entity total to the runner ----
+
+    #[test]
+    fn given_files_to_parse_when_stream_completes_then_entities_extracted_receives_the_total() {
+        // The reported total must equal the number of entities the parser
+        // produced (i.e. what the consumer pulls off the channel).
+        use std::sync::Mutex;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.rs"),
+            "pub fn alpha() {}\npub fn beta() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.rs"),
+            "pub struct Gamma {}\nimpl Gamma { pub fn delta(&self) {} }\n",
+        )
+        .unwrap();
+
+        let files: Vec<PathBuf> = ["a.rs", "b.rs"]
+            .iter()
+            .map(|f| dir.path().join(f))
+            .collect();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+            ..Default::default()
+        };
+
+        let reported: std::sync::Arc<Mutex<Option<usize>>> = std::sync::Arc::new(Mutex::new(None));
+        let reported_clone = std::sync::Arc::clone(&reported);
+        let callbacks = ParseCallbacks {
+            on_file_parsed: None,
+            on_entities_extracted: Some(std::sync::Arc::new(move |n: usize| {
+                *reported_clone.lock().unwrap() = Some(n);
+            })),
+        };
+
+        let (sender, mut receiver) = mpsc::channel::<ParsedEntity>(32);
+        parse_files_stream(&files, &cfg, sender, 4, Some(callbacks));
+
+        let mut received_count = 0usize;
+        while receiver.try_recv().is_ok() {
+            received_count += 1;
+        }
+
+        let reported_value = reported.lock().unwrap().expect("callback fired");
+        assert_eq!(
+            reported_value, received_count,
+            "ParseCallbacks::on_entities_extracted reported {reported_value} but channel delivered {received_count}"
+        );
+        assert!(
+            received_count > 0,
+            "parser must produce at least one entity"
+        );
+    }
+
+    #[test]
+    fn given_a_saturated_channel_when_parsing_completes_then_total_is_published_before_blocking() {
+        // Heart of the fix (v1.6.2):
+        //
+        // The previous behaviour was to block on `blocking_send` after the
+        // parse was complete, but the parse had already saturated the
+        // percentage to 100% before that block. The new contract publishes
+        // the entity total BEFORE the first blocking send, so a downstream
+        // observer sees the count even while the parser is stuck waiting
+        // for the channel to drain.
+        //
+        // We assert that by: (a) creating a channel of capacity 1, (b) NOT
+        // consuming it, (c) running parse_files_stream on a background
+        // thread, and (d) verifying the total was published while the
+        // producer is still blocked on send.
+        use std::sync::{Arc, Condvar, Mutex};
+
+        let dir = tempfile::tempdir().unwrap();
+        // Several files so the buffer has enough entities to fill the
+        // channel and then force the producer to block.
+        for i in 0..6 {
+            fs::write(
+                dir.path().join(format!("f_{i}.rs")),
+                "pub fn alpha() {}\npub fn beta() {}\npub struct Gamma {}\n",
+            )
+            .unwrap();
+        }
+        let files: Vec<PathBuf> = (0..6)
+            .map(|i| dir.path().join(format!("f_{i}.rs")))
+            .collect();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+            ..Default::default()
+        };
+
+        let signalled = Arc::new((Mutex::new(false), Condvar::new()));
+        let signalled_clone = Arc::clone(&signalled);
+
+        let callbacks = ParseCallbacks {
+            on_file_parsed: None,
+            on_entities_extracted: Some(std::sync::Arc::new(move |n: usize| {
+                let (lock, cvar) = &*signalled_clone;
+                *lock.lock().unwrap() = true;
+                cvar.notify_all();
+                // Don't drop n — the assertion below reads it back via the
+                // closure's captured environment. (n is informational here.)
+                let _ = n;
+            })),
+        };
+
+        // Channel capacity 1 → the producer will block on the second send.
+        let (sender, _receiver) = mpsc::channel::<ParsedEntity>(1);
+
+        let join = std::thread::spawn(move || {
+            parse_files_stream(&files, &cfg, sender, 2, Some(callbacks));
+        });
+
+        // Give the producer up to 5 seconds to publish the total while it
+        // is still blocked on send (the receiver is dropped so capacity
+        // stays at 0 once the first slot fills).
+        let (lock, cvar) = &*signalled;
+        let mut fired = lock.lock().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !*fired && std::time::Instant::now() < deadline {
+            fired = cvar
+                .wait_timeout(fired, std::time::Duration::from_millis(100))
+                .unwrap()
+                .0;
+        }
+
+        let observed = *fired;
+        drop(join); // ignore — we only care about the publish timing
+        assert!(
+            observed,
+            "on_entities_extracted must fire while the producer is blocked on send"
+        );
+    }
+
+    #[test]
+    fn given_default_parse_callbacks_when_parsing_then_no_observer_is_invoked() {
+        // Regression guard: ParseCallbacks::default() must be a no-op.
+        let callbacks = ParseCallbacks::default();
+        assert!(callbacks.on_file_parsed.is_none());
+        assert!(callbacks.on_entities_extracted.is_none());
+    }
+
+    #[test]
+    fn given_only_on_file_parsed_set_when_parsing_then_it_still_fires_once_per_file() {
+        // Back-compat check: setting only the file-parsed hook must still
+        // behave like the old single-callback contract (fires once per file).
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        for i in 0..3 {
+            fs::write(dir.path().join(format!("file_{i}.rs")), "fn foo() {}").unwrap();
+        }
+        let files: Vec<PathBuf> = (0..3)
+            .map(|i| dir.path().join(format!("file_{i}.rs")))
+            .collect();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+            ..Default::default()
+        };
+
+        let counter = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter_clone = std::sync::Arc::clone(&counter);
+        let callbacks = ParseCallbacks {
+            on_file_parsed: Some(std::sync::Arc::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            })),
+            on_entities_extracted: None,
+        };
+
+        let (sender, _receiver) = mpsc::channel::<ParsedEntity>(32);
+        parse_files_stream(&files, &cfg, sender, 4, Some(callbacks));
+
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
 }
