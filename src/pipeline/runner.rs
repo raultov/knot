@@ -24,7 +24,7 @@ use crate::pipeline::{
         resolve_and_save_relationships,
     },
     input::discover_files,
-    parser::{FileParsedCallback, ParseConfig, parse_files_stream},
+    parser::{FileParsedCallback, ParseCallbacks, ParseConfig, parse_files_stream},
     prepare::prepare_entities,
     progress::{IndexingStage, ProgressTracker},
     state::IndexState,
@@ -62,7 +62,22 @@ pub async fn run_indexing_pipeline_with_progress(
     progress.begin_run(&cfg.repo_name);
     let result = run_pipeline_inner(cfg, vector_db, graph_db, index_state, &progress).await;
     match &result {
-        Ok(_) => progress.complete(),
+        Ok(_) => {
+            progress.complete();
+            // Emit a final log line so operators see the explicit 100%
+            // completion signal. The in-pipeline log at 90% fires before
+            // reference resolution; without this terminal line the user
+            // would never see the bar actually reach 100%.
+            let snap = progress.snapshot();
+            info!(
+                "[Progress] [{}] 100.0% — files {}/{}, entities {}/{} — indexing complete",
+                snap.repo_name,
+                snap.parsed_files,
+                snap.total_files,
+                snap.entities_ingested,
+                snap.total_entities,
+            );
+        }
         Err(e) => progress.fail(&format!("{e:#}")),
     }
     result
@@ -179,16 +194,31 @@ async fn run_pipeline_inner(
         let on_file_parsed: FileParsedCallback =
             Arc::new(move || parse_progress.incr_parsed_files());
 
+        // Hook invoked exactly once, after the parser has aggregated every
+        // entity and *before* any entity is pushed into the bounded channel.
+        // This is the moment the progress observer learns the total entity
+        // count and switches from the parse band (0–10%) to the ingest band
+        // (10–90%) — preventing the "100% then frozen" bug.
+        let total_progress = Arc::clone(progress);
+        let on_entities_extracted: crate::pipeline::parser::EntitiesExtractedCallback =
+            Arc::new(move |n: usize| {
+                total_progress.set_total_entities(n as u64);
+            });
+
         progress.set_stage(IndexingStage::Parsing);
 
         let parse_done_progress = Arc::clone(progress);
+        let parse_callbacks = ParseCallbacks {
+            on_file_parsed: Some(on_file_parsed),
+            on_entities_extracted: Some(on_entities_extracted),
+        };
         tokio::task::spawn_blocking(move || {
             parse_files_stream(
                 &files_to_parse_clone,
                 &parse_cfg,
                 parse_tx,
                 cpus,
-                Some(on_file_parsed),
+                Some(parse_callbacks),
             );
             info!("Stage 2: Parallel parsing complete.");
             // Parsing stage done; ingest continues draining.
@@ -312,11 +342,13 @@ async fn run_pipeline_inner(
                     ingest_progress.record_batch_ingested(bl as u64);
                     let snap = ingest_progress.snapshot();
                     info!(
-                        "[Progress] [{}] {}/{} files ({:.1}%) — batch #{} ingested ({} entities)",
+                        "[Progress] [{}] {:.1}% — files {}/{}, entities {}/{}, batch #{} ({} entities)",
                         snap.repo_name,
+                        snap.percent_complete,
                         snap.parsed_files,
                         snap.total_files,
-                        snap.percent_complete,
+                        snap.entities_ingested,
+                        snap.total_entities,
                         snap.batches_ingested,
                         bl
                     );
@@ -365,11 +397,13 @@ async fn run_pipeline_inner(
         // Final progress log showing 100% parse completion
         let final_snap = progress.snapshot();
         info!(
-            "[Progress] [{}] {}/{} files ({:.1}%) — parsing and ingestion complete, resolving references...",
+            "[Progress] [{}] {:.1}% — files {}/{}, entities {}/{} — parsing and ingestion complete, resolving references...",
             final_snap.repo_name,
+            final_snap.percent_complete,
             final_snap.parsed_files,
             final_snap.total_files,
-            final_snap.percent_complete
+            final_snap.entities_ingested,
+            final_snap.total_entities
         );
 
         // Stage 7: Relationship Resolution
