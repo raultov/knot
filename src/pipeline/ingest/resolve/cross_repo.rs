@@ -16,10 +16,14 @@ pub async fn link_cross_repo_dependencies(
         .collect();
 
     if let Some(primary) = project_identities.iter().min_by_key(|e| {
-        std::path::Path::new(&e.file_path)
-            .strip_prefix(std::path::Path::new(&cfg.repo_path))
-            .map(|p| p.components().count().saturating_sub(1))
-            .unwrap_or(usize::MAX)
+        let p = std::path::Path::new(&e.file_path);
+        let rel_path = if p.is_absolute() {
+            p.strip_prefix(std::path::Path::new(&cfg.repo_path))
+                .unwrap_or(p)
+        } else {
+            p
+        };
+        rel_path.components().count().saturating_sub(1)
     }) {
         let build_system = parse_build_system_from_fqn(&primary.fqn);
         let (group_id, artifact_id) = parse_artifact_identity(&primary.fqn, build_system);
