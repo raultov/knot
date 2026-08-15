@@ -4,6 +4,62 @@ All notable changes to **knot** are documented here, ordered from most recent to
 For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
+## v1.6.2 — Accurate Indexing Progress
+
+Indexing progress now reflects the **whole pipeline**, not just file reading.
+The percentage used to jump to 100% within ~6 seconds on a 3,713-file repository
+and then freeze for several minutes while embedding and ingestion were still
+running. v1.6.2 fixes this with a banded formula and a new entity-total signal
+from the parser.
+
+- **Fix(progress)**: The percentage now spans the entire run via weighted bands:
+  `0–10%` for parsing (`parsed_files / total_files`), `10–90%` for embedding +
+  ingestion (`entities_ingested / total_entities`), `95%` during reference
+  resolution (no sub-counters available), and `100%` only on `Completed`.
+  The bar is monotonically non-decreasing across a full run, and a `Failed`
+  state freezes the bar at the last computed value rather than snapping to 0%
+  or 100%.
+- **Feat(progress)**: `IndexingProgress` exposes `total_entities: u64` (and the
+  equivalent JSON field) so downstream consumers can render the entity-level
+  counter alongside the file-level one.
+- **Feat(parser)**: New `ParseCallbacks` struct replaces the v1.6.1
+  `FileParsedCallback` parameter on `parse_files_stream`. It carries the
+  existing per-file hook plus a new `on_entities_extracted` hook that fires
+  exactly once, after post-parse aggregation and **before** any entity is
+  pushed into the bounded channel. This is the exact handoff point that lets
+  the percentage transition from the parse band to the ingest band without
+  ever saturating at 100% while the channel is still full. Passing `None` is
+  unchanged from previous versions, so every existing `None` call site compiles
+  untouched.
+- **Test(progress)**: New unit tests cover the banded formula edge cases
+  (`zero entities`, over-counting, `ResolvingReferences`, `Failed`),
+  the monotonicity property over the full pipeline sequence, and the parser's
+  publish-before-blocking invariant (`given_a_saturated_channel_when_parsing_completes_then_total_is_published_before_blocking`).
+- **Docs**: Updated the `Indexing Progress` section of `README.md` to describe
+  the band table and the new `total_entities` field. The `[Progress]` log
+  format now also prints `entities <ingested>/<total>` so the curve is
+  informative during the long ingestion phase.
+
+> **Semver caveat (deliberate, not accidental):** v1.6.2 is a patch release
+> that contains two technically-breaking changes for downstream crates:
+>
+> 1. Adding `pub total_entities: u64` to `IndexingProgress` breaks any
+>    downstream code that constructs `IndexingProgress` with a struct
+>    literal. `knot-server` (the only known consumer) is updated in lockstep
+>    to `0.3.2`.
+> 2. The 5th parameter of `parse_files_stream` changes type from
+>    `Option<FileParsedCallback>` to `Option<ParseCallbacks>`. Callers passing
+>    `None` are unaffected; callers passing `Some(cb)` must wrap the callback
+>    in `ParseCallbacks { on_file_parsed: Some(cb), on_entities_extracted: None }`.
+>
+> A strict reading of semver would call for `1.7.0`. We are shipping this as
+> `1.6.2` because the only known consumer is updated in lockstep. If a third
+> party pins `knot = "1.6"` they will get a compile error on upgrade.
+
+See [`docs/specs/indexing_progress_accuracy_plan.md`](docs/specs/indexing_progress_accuracy_plan.md)
+for the full design rationale, including the rejected alternatives.
+
+---
 ## v1.6.1 — Varnish VCL Include Resolution
 
 - **Fix(varnish)**: Resolved an issue where Varnish `include` directives with absolute paths failed to map to their target files. The parser now preserves raw path strings and the resolver uses a multi-strategy approach (repo-root fallback, relative path fallback, and filename fuzzy match) to reliably build the `INCLUDES` relationship.
