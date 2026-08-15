@@ -161,7 +161,7 @@ if echo "$INDEXER_OUTPUT" | grep -q "No files changed"; then
 elif echo "$INDEXER_OUTPUT" | grep -q "No supported source files found"; then
     echo -e "${YELLOW}⚠ Empty repo — skipping progress log checks${NC}"
 else
-    if ! echo "$INDEXER_OUTPUT" | grep -qE '\[Progress\] \[.*\] [0-9]+/[0-9]+ files \([0-9.]+%\)'; then
+    if ! echo "$INDEXER_OUTPUT" | grep -qE '\[Progress\] \[.*\] [0-9.]+% — files [0-9]+/[0-9]+'; then
         echo -e "${RED}✗ No [Progress] log line found in indexer output${NC}"
         exit 1
     fi
