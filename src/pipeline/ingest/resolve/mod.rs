@@ -241,37 +241,43 @@ pub fn resolve_reference_intents_with_context(
                     (resolved, RelationshipType::Calls)
                 }
                 ReferenceIntent::Extends { parent, .. } => (
-                    non_calls::resolve_non_call_reference(
+                    non_calls::resolve_non_call_reference_typed(
                         parent,
                         &entity.file_path,
                         entity.enclosing_class.as_deref(),
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_kind,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::Extends,
                 ),
                 ReferenceIntent::Implements { interface, .. } => (
-                    non_calls::resolve_non_call_reference(
+                    non_calls::resolve_non_call_reference_typed(
                         interface,
                         &entity.file_path,
                         entity.enclosing_class.as_deref(),
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_kind,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::Implements,
                 ),
                 ReferenceIntent::TypeReference { type_name, .. } => (
-                    non_calls::resolve_non_call_reference(
+                    non_calls::resolve_non_call_reference_typed(
                         type_name,
                         &entity.file_path,
                         entity.enclosing_class.as_deref(),
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_kind,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::References,
@@ -284,6 +290,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::References,
@@ -296,6 +303,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::ReferencesDOM,
@@ -308,6 +316,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::UsesCSSClass,
@@ -328,6 +337,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::MacroCalls,
@@ -355,6 +365,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::UsesBackend,
@@ -367,6 +378,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::UsesProbe,
@@ -379,6 +391,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::UsesAcl,
@@ -397,6 +410,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::ImportsVmod,
@@ -409,6 +423,7 @@ pub fn resolve_reference_intents_with_context(
                         ctx.fqn_to_uuid,
                         ctx.name_to_uuids,
                         ctx.uuid_to_file,
+                        ctx.uuid_to_fqn,
                         &metrics,
                     ),
                     RelationshipType::DeclaredUnused,
@@ -418,6 +433,18 @@ pub fn resolve_reference_intents_with_context(
             if let Some(mut uuid) = resolved_uuid {
                 if let Some(&target) = alias_map.get(&uuid) {
                     uuid = target;
+                }
+                if rel_type == RelationshipType::References
+                    && let Some(uuid_to_fqn) = ctx.uuid_to_fqn
+                    && let Some(target_fqn) = uuid_to_fqn.get(&uuid)
+                    && target_fqn.starts_with(&format!("{}.", entity.fqn))
+                {
+                    // A parent should not emit a References edge to one of
+                    // its own nested declarations (the parent → child
+                    // direction is implicit ownership, not a usage
+                    // reference). Examples: a record's static field typed
+                    // by one of its nested records.
+                    continue;
                 }
                 if seen.insert((uuid, rel_type)) {
                     entity.relationships.push((uuid, rel_type));
@@ -521,10 +548,12 @@ mod tests {
     fn test_parallel_resolution_deterministic() {
         let mut entities: Vec<ResolutionEntity> = (0..50)
             .map(|i| {
-                let mut e = mock_resolution_entity(
+                let mut e = mock_resolution_entity_with_kind(
                     &format!("Entity{i}"),
                     &format!("com.example.Entity{i}"),
                     Some(&format!("Class{i}")),
+                    "test/file.java",
+                    EntityKind::Class,
                 );
                 if i % 2 == 0 && i + 1 < 50 {
                     e.reference_intents.push(ReferenceIntent::TypeReference {
@@ -573,7 +602,13 @@ mod tests {
 
     #[test]
     fn test_parallel_resolution_many_to_one() {
-        let callee = mock_resolution_entity("Target", "com.Target", None);
+        let callee = mock_resolution_entity_with_kind(
+            "Target",
+            "com.Target",
+            None,
+            "test/target.java",
+            EntityKind::Class,
+        );
         let callee_uuid = callee.uuid;
 
         let mut callers: Vec<ResolutionEntity> = (0..20)

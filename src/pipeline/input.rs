@@ -12,7 +12,7 @@ use tracing::{debug, info};
 const CORE_EXTENSIONS: &[&str] = &[
     "java", "ts", "tsx", "cts", "js", "mjs", "cjs", "jsx", "kt", "kts", "py", "pyi", "pyw", "html",
     "htm", "css", "scss", "sass", "rs", "groovy", "gradle", "c", "h", "cpp", "hpp", "cc", "cxx",
-    "hh", "hxx", "md", "vcl", "vtc", "vcc",
+    "hh", "hxx", "cs", "md", "vcl", "vtc", "vcc", "csproj",
 ];
 
 /// Configuration / Kubernetes / Helm file extensions — indexed only when
@@ -52,10 +52,12 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "cxx",
     "hh",
     "hxx",
+    "cs",
     "md",
     "vcl",
     "vtc",
     "vcc",
+    "csproj",
     // Config
     "yml",
     "yaml",
@@ -88,6 +90,7 @@ pub(crate) const BUILD_SYSTEM_NAMES: &[&str] = &[
     "Cargo.toml",
     "package.json",
     "tsconfig.json",
+    "Directory.Packages.props",
 ];
 
 /// Check whether a filename (with `.json` extension) is a build-system file
@@ -349,5 +352,89 @@ mod tests {
         // With include_config_files=true, all 4 should be found
         let files = discover_files(repo_path, true).unwrap();
         assert_eq!(files.len(), 4);
+    }
+
+    // ---- §11.2 / §12 B-1 discovery sync-guard tests (csproj + props) ----
+
+    #[test]
+    fn test_discover_files_csproj_always_indexed() {
+        // `.csproj` is an extension entry, not a config-flag-gated one:
+        // discovered even with include_config_files=false.
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let src = dir.path().join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("App.csproj"), "<Project></Project>").unwrap();
+        fs::write(
+            dir.path().join("Directory.Packages.props"),
+            "<Project></Project>",
+        )
+        .unwrap();
+        fs::write(src.join("Program.cs"), "class Program {}").unwrap();
+
+        let files = discover_files(repo_path, false).unwrap();
+        let filenames: Vec<&str> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .collect();
+
+        assert!(
+            filenames.contains(&"App.csproj"),
+            "App.csproj should always be discovered, got {filenames:?}"
+        );
+        assert!(
+            filenames.contains(&"Directory.Packages.props"),
+            "Directory.Packages.props should always be discovered, got {filenames:?}"
+        );
+        assert!(
+            filenames.contains(&"Program.cs"),
+            "Program.cs should be discovered, got {filenames:?}"
+        );
+    }
+
+    #[test]
+    fn test_discover_files_csproj_and_props_in_both_extension_and_name_paths() {
+        // Sync-guard: incremental re-indexing reads `SUPPORTED_EXTENSIONS`
+        // (via `is_supported_file`); fresh discovery reads `CORE_EXTENSIONS`
+        // (via the extension branch). Both must admit `.csproj`, and both
+        // must admit `Directory.Packages.props`. If one table is updated
+        // and the other isn't, this test fails.
+        assert!(CORE_EXTENSIONS.contains(&"csproj"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"csproj"));
+        assert!(BUILD_SYSTEM_NAMES.contains(&"Directory.Packages.props"));
+    }
+
+    #[test]
+    fn test_discover_files_props_not_swept_by_extension() {
+        // `Some.props` (a non-canonical filename) must NOT be discovered:
+        // only the exact name `Directory.Packages.props` matches the
+        // filename branch. The `props` extension is in no table.
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        fs::write(dir.path().join("Some.props"), "<Project></Project>").unwrap();
+        fs::write(
+            dir.path().join("Directory.Packages.props"),
+            "<Project></Project>",
+        )
+        .unwrap();
+        fs::write(dir.path().join("Main.java"), "class Main {}").unwrap();
+
+        let files = discover_files(repo_path, true).unwrap();
+        let filenames: Vec<&str> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .collect();
+
+        assert!(
+            !filenames.contains(&"Some.props"),
+            "Some.props must NOT be discovered (props is not an extension, and \
+             the name is not a build-system name), got {filenames:?}"
+        );
+        assert!(
+            filenames.contains(&"Directory.Packages.props"),
+            "exact filename match should win, got {filenames:?}"
+        );
     }
 }
