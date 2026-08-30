@@ -1,8 +1,8 @@
 [package]
 name = "knot"
-version = "1.6.2"
+version = "1.7.2"
 edition = "2024"
-description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, Groovy, C/C++, Build Systems, and HTML/CSS codebases"
+description = "Codebase Graph + Vector RAG Indexer for Java, TypeScript, JavaScript, Kotlin, Rust, Python, Groovy, C/C++, C#, Build Systems, and HTML/CSS codebases"
 authors = ["Raul Tovar <raultov@protonmail.com>"]
 license = "MIT"
 repository = "https://github.com/raultov/knot"
@@ -67,6 +67,7 @@ tree-sitter-python = "0.23"
 tree-sitter-groovy = "0.1.2"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
 tree-sitter-md = "0.5.3"
 
 # --- Local Embeddings ---

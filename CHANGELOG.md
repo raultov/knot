@@ -4,6 +4,175 @@ All notable changes to **knot** are documented here, ordered from most recent to
 For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
+## v1.7.2 — Deterministic Subgraph Root Resolution & MSBuild/NuGet Build-System Support
+
+Part A: deterministic subgraph root resolution (the `get_entity_subgraph`
+root pick is no longer arbitrary on a bare-name query). Part B: MSBuild
+(`.csproj` + `Directory.Packages.props`) is now a first-class build system
+— C# repos report `build_system: "nuget"` and produce cross-repo
+`DEPENDS_ON` edges. Plan:
+`docs/specs/subgraph_root_resolution_and_msbuild_support_plan.md`.
+
+### Part A — Subgraph
+
+- **Feat(query)**: New pure `root_kind_rank(kind)` precedence in
+  `src/db/graph/query.rs` — types (`csharp_class`, `rust_struct`,
+  `python_class`, etc.) outrank callables (the constructor homonym in C#,
+  for instance); callables outrank members; namespaces / modules /
+  markdown rank below callables; everything else lands at rank 4. None
+  → rank 4. Used by `rank_root_candidates` to order candidates within
+  a tier by `(rank, file_path, start_line, uuid)` — the trailing tuple
+  is a total order because neither `name` nor `fqn` is unique (`<module>`
+  entities and partial classes share both).
+- **Feat(query)**: New `resolve_subgraph_root(name, repo_name)` method on
+  `GraphDb` walks the existing `target_resolution_tiers` ladder
+  (`query.rs:46-77`) with early stop, then applies `rank_root_candidates`
+  to the winning tier. First non-empty tier wins; result is a
+  `(winner, tier, total_candidates)` triple.
+- **Feat(query)**: `get_entity_subgraph` now anchors the traversal on the
+  resolved UUID, not on the bare name — eliminates the prior
+  homonym-union defect (where `?entity=McpServer` returned the union of
+  the class and the constructor neighbourhoods under a single
+  `root_id`). The `root_match_clause` Cypher splicer has been deleted.
+- **Feat(query)**: `get_entity_subgraph` now sorts the collected nodes
+  by `uuid` before truncating under `max_nodes`, so the retained subset
+  is identical across repeated calls.
+- **Feat(models)**: New optional `root_resolution: Option<RootResolution>`
+  field on `SubgraphResult` (`src/models/subgraph.rs`). When the
+  subgraph was queried by name, it carries `{ query, tier,
+  total_candidates, chosen, candidates[≤10] }` so consumers can
+  understand how the root was picked. `serde(default)` keeps older
+  payloads deserialisable; knot-server is not required to surface it.
+- **Behavior Change**: Callers that previously passed a bare name and
+  received the union of all homonyms' neighbourhoods now receive the
+  chosen root's neighbourhood only — result sets get **smaller**, not
+  just differently rooted. Fully-qualified `?entity=<fqn>` queries now
+  resolve via the `ExactFqn` tier instead of returning an empty
+  subgraph.
+
+### Part B — MSBuild/NuGet
+
+- **Feat(input)**: `csproj` is now in both `CORE_EXTENSIONS` and
+  `SUPPORTED_EXTENSIONS` (extension-based discovery, indexed regardless
+  of `--include-config-files`); `Directory.Packages.props` is in
+  `BUILD_SYSTEM_NAMES` (exact-filename match — the `props` extension is
+  in no table, so only the exact name is admitted). No new crates; no
+  CURRENT_STATE_VERSION bump.
+- **Feat(parser)**: New `src/pipeline/parser/languages/msbuild.rs`
+  module. Mirrors the Maven `xml.rs` parser shape (roxmltree, local-name
+  helper, BOM-tolerant string source). Emits one `ProjectIdentity` per
+  `.csproj` and one `BuildDependency` per `<PackageReference>`.
+  Identity fallback chain: `<PackageId>` → `<AssemblyName>` → file
+  stem. `<ProjectReference>` is intentionally skipped (see
+  `§10.4 / §15` of the plan). UTF-8 BOMs are stripped defensively
+  before parsing — pinned by a unit test against the literal BOM bytes
+  rather than relying on `roxmltree` tolerance (the spec notes the
+  library's BOM behaviour is reported inconsistently across versions).
+- **Feat(parser)**: Central Package Management (CPM) resolution.
+  Version-less `<PackageReference>` elements look up their version in
+  the nearest ancestor `Directory.Packages.props`, walking up from the
+  csproj's directory to the repo root. The map is built and cached
+  once per props file in a process-local `OnceLock<Mutex<HashMap>>` so
+  N csproj projects sharing the same props file produce 1 read. Cache
+  lifetime = process (build files do not change mid-run).
+- **Feat(ingest)**: `parse_build_system_from_fqn` and
+  `parse_artifact_identity` recognise the `nuget:` prefix (NuGet IDs
+  are flat, like Cargo). `match_dependency_to_repository` gains a
+  NuGet arm **before** the Maven-style branch (the `nuget:` prefix has
+  no dot — without the early arm, `parse_maven_style_dep` would
+  mis-read `nuget:Acme.Auth.Lib:1.0.0` as group="Acme.Auth.Lib",
+  artifact="1.0.0"); the Cargo fallback also gains a
+  `crate_name != "nuget"` guard.
+- **Feat(ingest)**: `link_cross_repo_dependencies` primary selection
+  now prefers NuGet identities carrying the `identity: package_id`
+  marker over depth-tied unmarked candidates — partition by marker
+  first; fall back to the unmodified shallowest-`min_by_key` when no
+  marker is present. The marker is emitted only by the MSBuild parser,
+  so Maven / Gradle / Cargo / npm selection is bit-for-bit unchanged
+  (pinned by cross-repo e2e Test 8). The known consequence: a repo
+  with no `<PackageId>` (e.g. `openlogi-net`) falls through to the
+  alphabetically-first depth-2 stem — harmless for cross-repo because
+  nothing consumes it as a package; solution-level identity is
+  deferred.
+- **Docs(mcp)**: `list_repo_dependencies` tool description now lists
+  NuGet among the supported build systems and notes the `--clean`
+  re-index recommendation for repos previously reported as
+  `build_system: "none"`.
+- **Test**: 11 new pure unit tests (4 for kind ranking,
+  4 for candidate ordering, 3 for disclosure serialisation), 3 new
+  discovery sync-guard tests, 18 new MSBuild parser tests (csproj
+  core, CPM resolution, BOM handling), 6 new cross_repo wiring tests
+  (NuGet parser, marker detection, ordering-hazard regression marker).
+- **Docs**: `docs/specs/csharp_support_plan.md` §14.1 is now marked
+  superseded by this plan (its "suffix-based discovery" blocker
+  premise was wrong — `Path::extension()` yields `"csproj"`, the
+  ordinary extension branch suffices).
+
+---
+## v1.7.1 — find_callers Target Resolution & Substring Noise Reduction
+
+- **Feat(query)**: Implement a two-stage target resolution ladder for `find_references` / `find_callers`. Matching is precedence-based: exact FQN → FQN suffix (`Type.member`) → exact name → signature prefix (`accept(List`) → fuzzy substring. An exact match now suppresses all fuzzy substring noise. **Behavior Change**: Queries that previously returned fuzzy noise alongside an exact hit now return only the exact hit.
+- **Feat(db)**: Add `entity_name_text` and `entity_fqn_text` `TEXT` indexes to Neo4j to speed up `ENDS WITH` and `CONTAINS` queries.
+- **Feat(cli)**: Surface resolution metadata (tier matched, fuzzy warning, truncation notice) in both the CLI table formatter and markdown formatter.
+
+## v1.7.0 — C# Language Support
+
+Closes [#5 — help wanted: add C# support](https://github.com/raultov/knot/issues/5).
+C#/.NET codebases now get the same indexing fidelity as Java and Kotlin: entity
+extraction, namespace-qualified FQNs, `CALLS` / `EXTENDS` / `IMPLEMENTS` /
+`REFERENCES` / `CONTAINS` / `OVERRIDES` edges, XML doc comments, and attributes.
+Plan: `docs/specs/csharp_support_plan.md`.
+
+- **Feat(parser)**: Full C# extraction (`.cs`) via `tree-sitter-c-sharp 0.23`.
+  Sixteen new `CSharp*` entity kinds: `CSharpClass`, `CSharpInterface`,
+  `CSharpStruct`, `CSharpRecord` (both `record class` and `record struct`),
+  `CSharpEnum`, `CSharpMethod`, `CSharpConstructor`, `CSharpProperty`,
+  `CSharpField` (with `const` → `CSharpConstant` promotion),
+  `CSharpDelegate`, `CSharpEvent`, `CSharpIndexer` (`this[]`),
+  `CSharpOperator` (`operator +`), `CSharpNamespace`, and
+  `CSharpLocalFunction`. Grammar gaps are handled in Rust: `field_declaration`
+  has no `name` field (the declarator identifier is resolved up the tree),
+  and indexer/operator declarations get synthesised names.
+- **Feat(parser)**: Namespace-qualified FQNs — `<namespace>.<Type>.<member>`
+  across both namespace forms. A file-level pre-pass handles file-scoped
+  namespaces (C# 10, no `body` in the grammar, so types are siblings and
+  unreachable by a parent walk); an ancestor walk collects block-form
+  namespaces and containing types. Methods also persist
+  `enclosing_class_fqn`, so Neo4j `CONTAINS` auto-linking matches by exact
+  FQN (Rust parity).
+- **Feat(parser)**: `base_list` disambiguation heuristic — interfaces always
+  emit `EXTENDS`, structs (and record-structs) always `IMPLEMENTS`, and
+  classes/record-classes emit the first entry as `EXTENDS` unless it matches
+  the `^I[A-Z]` interface convention. Generic arguments are stripped
+  (`IRepository<User>` → `IRepository`).
+- **Feat(parser)**: Reference extraction with two C#-specific refinements:
+  field-typed receivers are substituted with the declared field type
+  (`_repository.FindByIdAsync()` resolves to the exact implementation
+  method rather than staying ambiguous), and `base.Method()` is emitted with
+  the resolver's `super` receiver so it walks the extends map. Attributes
+  (`[Obsolete]`) are captured as decorators **and** as call intents; `using`
+  directives and top-level statements (C# 9) are handled by the orphan pass
+  with a `CSharpNamespace` synthetic `<module>` entity.
+- **Feat(overrides)**: `OVERRIDES` linking extended beyond the JVM. C# joins
+  via the `.cs` extension guard plus the `CSharp*` kind allowlists
+  (`CSharpMethod`/`CSharpProperty` method-like; the five C# type kinds
+  type-like). The module's `JVM_*` vocabulary was renamed to
+  `OVERRIDE_CAPABLE_*` to match its widened scope.
+- **Feat(tools)**: `explore_file` gains C# kind buckets (Classes, Interfaces,
+  Structs, Records, Enums, Methods, Properties & Fields, Delegates & Events,
+  Operators & Indexers, Namespaces); `search_hybrid_context`, `find_callers`,
+  and `explore_file` descriptions now list C#.
+- **Test**: 42 C# parser unit tests (entity kinds, grammar gaps, FQN shapes
+  across namespace forms, inheritance heuristic, receiver substitution,
+  OVERRIDES end-to-end through resolution, top-level statement orphaning) and
+  a new `tests/run_csharp_e2e.sh` suite (registered as the 20th E2E suite)
+  covering entity extraction, FQNs, relationships, OVERRIDES, doc comments,
+  attributes, semantic search, and find_callers — validated through both the
+  MCP server and the CLI.
+- **Docs**: README language list + C# section, AGENTS.md parser table and
+  entity kinds, Phase 15 marked complete in `docs/specs/multilanguage_roadmap.md`.
+
+---
 ## v1.6.2 — Accurate Indexing Progress
 
 Indexing progress now reflects the **whole pipeline**, not just file reading.
