@@ -68,6 +68,23 @@ pub enum EntityKind {
     CppMethod,       // methods inside classes
     CppNamespace,    // namespace definitions
     MacroDefinition, // #define macros
+    // C# entities
+    CSharpClass,         // class declarations
+    CSharpInterface,     // interface declarations
+    CSharpStruct,        // struct declarations
+    CSharpRecord,        // record class / record struct declarations
+    CSharpEnum,          // enum declarations
+    CSharpMethod,        // methods inside types
+    CSharpConstructor,   // constructor declarations
+    CSharpProperty,      // property declarations (get/set/init)
+    CSharpField,         // field declarations
+    CSharpConstant,      // const fields
+    CSharpDelegate,      // delegate declarations
+    CSharpEvent,         // event / event field declarations
+    CSharpIndexer,       // this[...] indexer declarations
+    CSharpOperator,      // operator overloads
+    CSharpNamespace,     // namespace declarations (block + file-scoped)
+    CSharpLocalFunction, // local functions inside method bodies
     // Build Systems & CI/CD entities
     BuildDependency, // Maven/Gradle dependency (groupId:artifactId:version)
     BuildPlugin,     // Maven/Gradle build plugin
@@ -191,6 +208,22 @@ impl std::fmt::Display for EntityKind {
             EntityKind::CppMethod => "cpp_method",
             EntityKind::CppNamespace => "cpp_namespace",
             EntityKind::MacroDefinition => "macro_definition",
+            EntityKind::CSharpClass => "csharp_class",
+            EntityKind::CSharpInterface => "csharp_interface",
+            EntityKind::CSharpStruct => "csharp_struct",
+            EntityKind::CSharpRecord => "csharp_record",
+            EntityKind::CSharpEnum => "csharp_enum",
+            EntityKind::CSharpMethod => "csharp_method",
+            EntityKind::CSharpConstructor => "csharp_constructor",
+            EntityKind::CSharpProperty => "csharp_property",
+            EntityKind::CSharpField => "csharp_field",
+            EntityKind::CSharpConstant => "csharp_constant",
+            EntityKind::CSharpDelegate => "csharp_delegate",
+            EntityKind::CSharpEvent => "csharp_event",
+            EntityKind::CSharpIndexer => "csharp_indexer",
+            EntityKind::CSharpOperator => "csharp_operator",
+            EntityKind::CSharpNamespace => "csharp_namespace",
+            EntityKind::CSharpLocalFunction => "csharp_local_function",
             EntityKind::CargoPackage => "cargo_package",
             EntityKind::CargoFeature => "cargo_feature",
             EntityKind::WorkspaceMember => "workspace_member",

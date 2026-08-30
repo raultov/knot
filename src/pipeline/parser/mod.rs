@@ -44,6 +44,7 @@ const DEFAULT_RUST_QUERY: &str = include_str!("../../../queries/rust.scm");
 const DEFAULT_PYTHON_QUERY: &str = include_str!("../../../queries/python.scm");
 const DEFAULT_C_QUERY: &str = include_str!("../../../queries/c.scm");
 const DEFAULT_CPP_QUERY: &str = include_str!("../../../queries/cpp.scm");
+const DEFAULT_CSHARP_QUERY: &str = include_str!("../../../queries/csharp.scm");
 const DEFAULT_MD_QUERY: &str = include_str!("../../../queries/markdown.scm");
 
 /// Configuration for the parse stage.
@@ -286,6 +287,18 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
         ));
     }
 
+    if filename == "Directory.Packages.props" {
+        // MSBuild Central Package Management: emits no entities of its
+        // own — the CPM map is consumed lazily by csproj parsing. The
+        // dispatcher must still have a target so the file is recognised
+        // when discovered.
+        return Ok(languages::msbuild::extract_entities_props(
+            &source,
+            &file_path,
+            &parse_cfg.repo_name,
+        ));
+    }
+
     let entities = match ext {
         "java" => {
             let query_src = load_query_source("java.scm", DEFAULT_JAVA_QUERY, parse_cfg);
@@ -497,6 +510,17 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
                 &parse_cfg.repo_name,
             )?
         }
+        "cs" => {
+            let query_src = load_query_source("csharp.scm", DEFAULT_CSHARP_QUERY, parse_cfg);
+            extractor::extract_entities(
+                &source,
+                tree_sitter_c_sharp::LANGUAGE.into(),
+                &query_src,
+                "csharp",
+                &file_path,
+                &parse_cfg.repo_name,
+            )?
+        }
         "groovy" => {
             languages::groovy::extract_entities_groovy(&source, &file_path, &parse_cfg.repo_name)
         }
@@ -507,6 +531,19 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
             languages::jenkins::extract_entities_jenkins(&source, &file_path, &parse_cfg.repo_name)
         }
         "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),
+        "csproj" => {
+            // MSBuild: requires the csproj's directory + repo_root so the
+            // CPM lookup can walk up to `Directory.Packages.props`.
+            let csproj_abs_dir = path.parent().unwrap_or(path);
+            let ctx = languages::msbuild::MsbuildContext {
+                source: &source,
+                file_path: &file_path,
+                repo_name: &parse_cfg.repo_name,
+                csproj_abs_dir,
+                repo_root: &parse_cfg.repo_root,
+            };
+            languages::msbuild::extract_entities_csproj(&ctx)
+        }
         "toml" => languages::toml::extract_entities_toml(&source, &file_path, &parse_cfg.repo_name),
         "md" | "markdown" => {
             let query_src = load_query_source("markdown.scm", DEFAULT_MD_QUERY, parse_cfg);

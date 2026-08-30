@@ -24,6 +24,9 @@ pub(crate) fn extract_class_contexts(
             | "abstract_class_declaration"
             | "class_definition" // Python
             | "object_declaration"
+            | "struct_declaration"    // C#
+            | "record_declaration"    // C#
+            | "enum_declaration" // C#
     ) {
         // Find the name child
         let mut child = node.child(0);
@@ -109,6 +112,33 @@ pub(crate) fn compute_fqn_and_context(
                 name.to_string()
             }
         }
+        // C# entities — intermediate form only. The extractor's C# branch
+        // replaces the FQN with the namespace-qualified form
+        // `<namespace>.<Outer>.<Nested>.<member>` via the ancestor walk
+        // (see `csharp::build_csharp_fqn_prefix`). This arm keeps a sensible
+        // dot-joined fallback when no namespace prefix is available.
+        EntityKind::CSharpClass
+        | EntityKind::CSharpInterface
+        | EntityKind::CSharpStruct
+        | EntityKind::CSharpRecord
+        | EntityKind::CSharpEnum
+        | EntityKind::CSharpMethod
+        | EntityKind::CSharpConstructor
+        | EntityKind::CSharpProperty
+        | EntityKind::CSharpField
+        | EntityKind::CSharpConstant
+        | EntityKind::CSharpDelegate
+        | EntityKind::CSharpEvent
+        | EntityKind::CSharpIndexer
+        | EntityKind::CSharpOperator
+        | EntityKind::CSharpLocalFunction => {
+            if let Some(class_name) = &enclosing_class {
+                format!("{}.{}", class_name, name)
+            } else {
+                name.to_string()
+            }
+        }
+        EntityKind::CSharpNamespace => name.to_string(),
         EntityKind::Function | EntityKind::KotlinFunction | EntityKind::CFunction => {
             // Top-level function - just the function name
             name.to_string()

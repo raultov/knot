@@ -72,6 +72,7 @@ pub(crate) fn run_post_passes<'a>(
         || lang_name == "javascript"
         || lang_name == "kotlin"
         || lang_name == "python"
+        || lang_name == "csharp"
     {
         collect_orphaned_references(
             tree_root,

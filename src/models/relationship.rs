@@ -184,7 +184,8 @@ pub enum RelationshipType {
     GenericBound,
     /// Repository -> Repository dependency edge.
     DependsOn,
-    /// JVM (Java/Kotlin/Groovy): a method in a subtype overrides or implements
+    /// Override-capable languages (Java/Kotlin/Groovy/C#): a method in a
+    /// subtype overrides or implements
     /// the corresponding method declared in a supertype (interface or superclass).
     /// Edge direction: `subtype.method -[Overrides]-> supertype.method`.
     Overrides,

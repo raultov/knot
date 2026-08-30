@@ -60,7 +60,17 @@ pub(crate) fn extract_comments(
                 }
                 "comment" | "block_comment" => {
                     let text = node_text(node, source);
-                    comment_buffer.insert(0, strip_comment_markers(&text));
+                    let stripped = strip_comment_markers(&text);
+                    // C# XML doc comments wrap prose in tags (`<summary>`,
+                    // `</summary>`, …). Stripping the known doc tags keeps
+                    // the actual prose (which is what gets displayed and
+                    // embedded) instead of a leading `<summary>` line.
+                    let stripped = if lang_name == "csharp" {
+                        strip_xml_doc_tags(&stripped)
+                    } else {
+                        stripped
+                    };
+                    comment_buffer.insert(0, stripped);
                     current = node.prev_sibling();
                 }
                 // Allow single blank lines between comments
@@ -202,6 +212,27 @@ pub(crate) fn extract_decorators(
             }
             child = c.next_sibling();
         }
+    } else if lang_name == "csharp" {
+        // For C#: attributes live in `attribute_list` children of the
+        // declaration — NOT inside a `modifiers` node as in Java/Kotlin —
+        // so this cannot reuse either existing branch.
+        // Example: `[Obsolete("Use UserServiceV2 instead")]`
+        let mut child = entity_node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "attribute_list" {
+                let mut attr_child = c.child(0);
+                while let Some(ac) = attr_child {
+                    if ac.kind() == "attribute" {
+                        let attribute_text = node_text(ac, source);
+                        if !attribute_text.is_empty() {
+                            decorators.push(attribute_text);
+                        }
+                    }
+                    attr_child = ac.next_sibling();
+                }
+            }
+            child = c.next_sibling();
+        }
     }
 
     decorators
@@ -218,6 +249,19 @@ pub(crate) fn extract_child_entity_nodes<'a>(node: Node<'a>, lang_name: &str) ->
             "method_declaration",
             "class_declaration",
             "interface_declaration",
+        ]
+    } else if lang_name == "csharp" {
+        // C# child declarations whose comments belong to the child, not the
+        // enclosing type.
+        vec![
+            "method_declaration",
+            "constructor_declaration",
+            "property_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "struct_declaration",
+            "record_declaration",
+            "enum_declaration",
         ]
     } else {
         vec![
@@ -294,6 +338,70 @@ pub(crate) fn strip_comment_markers(raw: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// XML documentation tags recognised by [`strip_xml_doc_tags`]. Tags whose
+/// name (ignoring `/` closers, `?` declarations, and attributes) is in this
+/// set are removed together with their angle brackets; unknown text in angle
+/// brackets (e.g. a generic `List<T>` mention in prose) is preserved.
+const XML_DOC_TAGS: &[&str] = &[
+    "summary",
+    "remarks",
+    "param",
+    "typeparam",
+    "returns",
+    "value",
+    "example",
+    "exception",
+    "permission",
+    "see",
+    "seealso",
+    "paramref",
+    "typeparamref",
+    "cref",
+    "para",
+    "c",
+    "code",
+    "list",
+    "item",
+    "term",
+    "description",
+    "inheritdoc",
+    "include",
+    "br",
+    "b",
+    "i",
+    "langword",
+];
+
+/// Strip XML doc-comment tags (`<summary>`, `</summary>`, `<param name="x">`,
+/// `<see cref="Y"/>`, …) from a C# doc string so the prose survives.
+pub(crate) fn strip_xml_doc_tags(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+
+    while let Some(start) = rest.find('<') {
+        let Some(end_offset) = rest[start..].find('>') else {
+            break;
+        };
+        let end = start + end_offset;
+        out.push_str(&rest[..start]);
+
+        let tag = &rest[start + 1..end];
+        let tag_name = tag
+            .trim()
+            .trim_start_matches('/')
+            .trim_start_matches('?')
+            .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+            .next()
+            .unwrap_or("");
+        if !XML_DOC_TAGS.contains(&tag_name) {
+            out.push_str(&rest[start..=end]);
+        }
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]

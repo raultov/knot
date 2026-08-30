@@ -1,6 +1,6 @@
 use crate::models::{EntityKind, ReferenceIntent};
 use crate::pipeline::parser::languages::{
-    cpp, css, groovy, html, java, javascript, kotlin, markdown, python, rust, typescript,
+    cpp, csharp, css, groovy, html, java, javascript, kotlin, markdown, python, rust, typescript,
 };
 use crate::pipeline::parser::utils::*;
 use tree_sitter::Node;
@@ -483,6 +483,38 @@ pub(crate) fn process_capture<'a>(
                 // Java's tree-sitter ref extraction is unreliable for Groovy because
                 // tree-sitter-groovy misparses methods nested inside closures (e.g.,
                 // `new AnAction() { @Override void actionPerformed(...) { ... } }`).
+            }
+        }
+        // C#: Handle C# entity captures (grammar-gap handling in the module)
+        name_or_intent if name_or_intent.starts_with("csharp.") => {
+            // Signature capture rides along with the name capture in the
+            // same match; it does not introduce an entity.
+            if name_or_intent == "csharp.signature" {
+                signature = Some(text.clone());
+            } else if let Some(capture) =
+                csharp::handle_csharp_capture(name_or_intent, node, source_bytes)
+            {
+                let csharp_kind = capture.kind.clone();
+                name = Some(capture.name);
+                kind = Some(capture.kind);
+                start_line = capture.start_line;
+                entity_node = Some(capture.entity_node);
+
+                // Extract call + type-reference intents from method-like
+                // bodies (constructor bodies included). Class-level
+                // inheritance/attribute/type refs are handled in enrich.
+                if matches!(
+                    csharp_kind,
+                    EntityKind::CSharpMethod
+                        | EntityKind::CSharpConstructor
+                        | EntityKind::CSharpLocalFunction
+                ) {
+                    csharp::extract_reference_intents_csharp(
+                        capture.entity_node,
+                        source_bytes,
+                        &mut reference_intents,
+                    );
+                }
             }
         }
         // C/C++ Entities

@@ -51,11 +51,17 @@ pub(crate) fn extract_entities(
     let mut class_contexts: Vec<ClassContext> = Vec::new();
     extract_class_contexts(tree.root_node(), source_bytes, &mut class_contexts);
 
-    // Extract Java package name for FQN prefixing
-    let java_package = if lang_name == "java" {
-        java::extract_package_name(tree.root_node(), source_bytes)
-    } else {
-        None
+    // Extract the package / file-scoped namespace name for FQN prefixing.
+    // Java contributes its `package` declaration; C# its file-scoped
+    // namespace (C# 10+), which has no body and cannot be reached by the
+    // ancestor walk (plan §3.2).
+    let package_prefix = match lang_name {
+        "java" => java::extract_package_name(tree.root_node(), source_bytes),
+        "csharp" => crate::pipeline::parser::languages::csharp::extract_file_scoped_namespace(
+            tree.root_node(),
+            source_bytes,
+        ),
+        _ => None,
     };
 
     // Second pass: extract entities and resolve their contexts
@@ -83,7 +89,7 @@ pub(crate) fn extract_entities(
             file_path,
             repo_name,
             &class_contexts,
-            &java_package,
+            &package_prefix,
             &mut entities,
             &mut covered_ranges,
         );

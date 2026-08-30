@@ -121,6 +121,19 @@ pub(crate) fn parse_python_snippet(code: &str) -> Result<Tree, String> {
         .ok_or_else(|| "Failed to parse Python code snippet".to_string())
 }
 
+/// Parse a C# code snippet and return the syntax tree.
+#[cfg(test)]
+pub(crate) fn parse_csharp_snippet(code: &str) -> Result<Tree, String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+        .map_err(|e| format!("Failed to set C# language: {e}"))?;
+
+    parser
+        .parse(code, None)
+        .ok_or_else(|| "Failed to parse C# code snippet".to_string())
+}
+
 /// Collect `Extends` parent names from a slice of reference intents.
 #[cfg(test)]
 pub(crate) fn collect_extends(intents: &[ReferenceIntent]) -> Vec<&str> {

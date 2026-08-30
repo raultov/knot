@@ -1,4 +1,5 @@
 pub mod cpp;
+pub mod csharp;
 pub mod css;
 pub mod gradle;
 pub mod groovy;
@@ -11,6 +12,7 @@ pub mod json_config;
 pub mod kotlin;
 pub mod kubernetes;
 pub mod markdown;
+pub mod msbuild;
 pub mod properties;
 pub mod python;
 pub mod rust;

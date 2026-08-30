@@ -1,4 +1,5 @@
-//! Method-level `OVERRIDES` linking for JVM languages (Java, Kotlin, Groovy).
+//! Method-level `OVERRIDES` linking for override-capable languages
+//! (Java, Kotlin, Groovy, C#).
 //!
 //! knot models inheritance only at the type level (`EXTENDS` / `IMPLEMENTS`).
 //! This pass adds an additive, method-granular edge
@@ -8,9 +9,11 @@
 //!
 //! Design (see `docs/specs/method_override_relationships.md`):
 //! - **Additive only** — never mutates or removes existing entities/edges.
-//! - **JVM guard** — a file-extension guard plus a kind allowlist. The generic
-//!   `Class`/`Interface`/`Method` kinds are shared with TypeScript, so the
-//!   extension guard is what keeps non-JVM languages at zero `OVERRIDES` edges.
+//! - **Override-capable guard** — a file-extension guard plus a kind
+//!   allowlist. The generic `Class`/`Interface`/`Method` kinds are shared
+//!   with TypeScript, so the extension guard is what keeps non-participating
+//!   languages at zero `OVERRIDES` edges. C# joins the guard via dedicated
+//!   `CSharp*` kinds and the `.cs` extension.
 //! - **Nearest-declaration linking** — each method links only to the nearest
 //!   declaration(s) of the same name walking up its type hierarchy. Full
 //!   transitive visibility is resolved at query time with variable-length
@@ -28,30 +31,39 @@ use crate::models::{EntityKind, RelationshipType, ResolutionEntity};
 /// Entry in the methods-by-type map: (method_name, method_uuid, entity_index).
 type MethodEntry<'a> = (&'a str, Uuid, usize);
 
-/// JVM source file extensions. The guard is applied FIRST to every entity;
-/// this is what excludes TypeScript, which shares the generic
-/// `Class`/`Interface`/`Method` kinds.
-const JVM_EXTENSIONS: &[&str] = &[".java", ".kt", ".kts", ".groovy", ".gvy", ".gradle"];
+/// Source file extensions of override-capable languages. The guard is
+/// applied FIRST to every entity; this is what excludes TypeScript, which
+/// shares the generic `Class`/`Interface`/`Method` kinds.
+const OVERRIDE_CAPABLE_EXTENSIONS: &[&str] =
+    &[".java", ".kt", ".kts", ".groovy", ".gvy", ".gradle", ".cs"];
 
-/// Returns `true` if the file path ends in a JVM source extension.
-fn is_jvm_file(file_path: &str) -> bool {
-    JVM_EXTENSIONS.iter().any(|ext| file_path.ends_with(ext))
+/// Returns `true` if the file path ends in an override-capable extension.
+fn is_override_capable_file(file_path: &str) -> bool {
+    OVERRIDE_CAPABLE_EXTENSIONS
+        .iter()
+        .any(|ext| file_path.ends_with(ext))
 }
 
-/// JVM method-like kinds that can override/implement a supertype method.
+/// Method-like kinds that can override/implement a supertype method.
 ///
 /// `KotlinFunction` is intentionally excluded: top-level and extension
-/// functions are statically dispatched and cannot override.
-fn is_jvm_method_like(kind: &EntityKind) -> bool {
+/// functions are statically dispatched and cannot override. `CSharpProperty`
+/// is included because C# properties can be `virtual`/`override`.
+fn is_override_capable_method(kind: &EntityKind) -> bool {
     matches!(
         kind,
-        EntityKind::Method | EntityKind::KotlinMethod | EntityKind::GroovyMethod
+        EntityKind::Method
+            | EntityKind::KotlinMethod
+            | EntityKind::GroovyMethod
+            | EntityKind::CSharpMethod
+            | EntityKind::CSharpProperty
     )
 }
 
-/// JVM type-like kinds that can declare overridable methods and participate in
-/// an inheritance hierarchy (includes Kotlin objects/companions and enums).
-fn is_jvm_type_like(kind: &EntityKind) -> bool {
+/// Type-like kinds that can declare overridable methods and participate in
+/// an inheritance hierarchy (includes Kotlin objects/companions, enums, and
+/// the C# type kinds).
+fn is_override_capable_type(kind: &EntityKind) -> bool {
     matches!(
         kind,
         EntityKind::Class
@@ -66,18 +78,23 @@ fn is_jvm_type_like(kind: &EntityKind) -> bool {
             | EntityKind::GroovyInterface
             | EntityKind::GroovyTrait
             | EntityKind::GroovyEnum
+            | EntityKind::CSharpClass
+            | EntityKind::CSharpInterface
+            | EntityKind::CSharpStruct
+            | EntityKind::CSharpRecord
+            | EntityKind::CSharpEnum
     )
 }
 
 /// Strips a method FQN down to its enclosing type FQN.
 ///
-/// All three JVM parsers emit `method_fqn == type_fqn + "." + method_name`
+/// All override-capable parsers emit `method_fqn == type_fqn + "." + method_name`
 /// (including nested classes `Outer.Inner.method` and Kotlin anonymous objects
 /// `Foo.bar.<anonymous@30>.foo`). Returns `None` for top-level entities with no
 /// enclosing type (e.g. a method FQN equal to its own name).
 fn enclosing_type_fqn<'a>(method_fqn: &'a str, method_name: &str) -> Option<&'a str> {
     // Prefer stripping the exact ".<method_name>" suffix (robust for names that
-    // themselves contain dots, though JVM method names do not).
+    // themselves contain dots, though method names in these languages do not).
     if let Some(prefix) = method_fqn.strip_suffix(method_name)
         && let Some(without_dot) = prefix.strip_suffix('.')
         && !without_dot.is_empty()
@@ -94,13 +111,13 @@ fn enclosing_type_fqn<'a>(method_fqn: &'a str, method_name: &str) -> Option<&'a 
 
 /// Returns `true` if a method-like entity is a constructor and must be excluded.
 ///
-/// Uses the name-based heuristic that covers all JVM parsers: the method name
+/// Uses the name-based heuristic that covers all supported parsers: the method name
 /// equals its enclosing type's name, or equals `<init>`.
 fn is_constructor(method_name: &str, enclosing_type_name: &str) -> bool {
     method_name == "<init>" || method_name == enclosing_type_name
 }
 
-/// Adds `subtype.method -[Overrides]-> supertype.method` edges for JVM entities.
+/// Adds `subtype.method -[Overrides]-> supertype.method` edges for override-capable entities.
 ///
 /// Runs AFTER type-level `Extends`/`Implements` edges are resolved and BEFORE
 /// upsert. Pure in-memory, batch-local, additive: it only pushes new
@@ -122,16 +139,16 @@ pub(crate) fn link_method_overrides(entities: &mut [ResolutionEntity]) {
     let edges: Vec<(usize, Uuid)> = {
         // --- Phase 1: immutable analysis ---------------------------------
 
-        // Map JVM type FQN -> type uuid (types only; methods are never looked
-        // up by FQN, since overloads share an FQN). Restricting to JVM files
-        // prevents a same-FQN non-JVM type from being matched.
+        // Map type FQN -> type uuid (types only; methods are never looked
+        // up by FQN, since overloads share an FQN). Restricting to capable files
+        // prevents a same-FQN non-participating type from being matched.
         let mut type_fqn_to_uuid: HashMap<&str, Uuid> = HashMap::new();
         // uuid -> index, for name lookups (constructor check) and presence tests.
         let mut uuid_to_index: HashMap<Uuid, usize> = HashMap::new();
 
         for (idx, e) in entities.iter().enumerate() {
             uuid_to_index.insert(e.uuid, idx);
-            if is_jvm_file(&e.file_path) && is_jvm_type_like(&e.kind) {
+            if is_override_capable_file(&e.file_path) && is_override_capable_type(&e.kind) {
                 type_fqn_to_uuid.insert(e.fqn.as_str(), e.uuid);
             }
         }
@@ -142,11 +159,11 @@ pub(crate) fn link_method_overrides(entities: &mut [ResolutionEntity]) {
         let mut methods_by_type: HashMap<Uuid, Vec<MethodEntry<'_>>> = HashMap::new();
 
         for (idx, e) in entities.iter().enumerate() {
-            if !is_jvm_file(&e.file_path) {
+            if !is_override_capable_file(&e.file_path) {
                 continue;
             }
 
-            if is_jvm_type_like(&e.kind) {
+            if is_override_capable_type(&e.kind) {
                 let parents: Vec<Uuid> = e
                     .relationships
                     .iter()
@@ -161,7 +178,7 @@ pub(crate) fn link_method_overrides(entities: &mut [ResolutionEntity]) {
                 if !parents.is_empty() {
                     supertypes.entry(e.uuid).or_default().extend(parents);
                 }
-            } else if is_jvm_method_like(&e.kind) {
+            } else if is_override_capable_method(&e.kind) {
                 let Some(type_fqn) = enclosing_type_fqn(&e.fqn, &e.name) else {
                     continue;
                 };
@@ -247,13 +264,13 @@ mod tests {
     use super::*;
     use crate::models::{EntityKind, RelationshipType};
 
-    /// Convenience: build a type entity in a JVM file.
-    fn jvm_type(name: &str, fqn: &str, file: &str, kind: EntityKind) -> ResolutionEntity {
+    /// Convenience: build a type entity in an override-capable file.
+    fn capable_type(name: &str, fqn: &str, file: &str, kind: EntityKind) -> ResolutionEntity {
         mock_resolution_entity_with_kind(name, fqn, None, file, kind)
     }
 
-    /// Convenience: build a method entity in a JVM file.
-    fn jvm_method(name: &str, fqn: &str, file: &str, kind: EntityKind) -> ResolutionEntity {
+    /// Convenience: build a method entity in an override-capable file.
+    fn capable_method(name: &str, fqn: &str, file: &str, kind: EntityKind) -> ResolutionEntity {
         mock_resolution_entity_with_kind(name, fqn, None, file, kind)
     }
 
@@ -272,19 +289,19 @@ mod tests {
     // --- Scenario A — Groovy interface implementation ---------------------
     #[test]
     fn scenario_a_groovy_interface_impl() {
-        let iface = jvm_type(
+        let iface = capable_type(
             "ISession",
             "nf.ISession",
             "ISession.groovy",
             EntityKind::GroovyInterface,
         );
-        let iface_method = jvm_method(
+        let iface_method = capable_method(
             "getUniqueId",
             "nf.ISession.getUniqueId",
             "ISession.groovy",
             EntityKind::GroovyMethod,
         );
-        let mut cls = jvm_type(
+        let mut cls = capable_type(
             "Session",
             "nf.Session",
             "Session.groovy",
@@ -292,7 +309,7 @@ mod tests {
         );
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
-        let cls_method = jvm_method(
+        let cls_method = capable_method(
             "getUniqueId",
             "nf.Session.getUniqueId",
             "Session.groovy",
@@ -312,14 +329,14 @@ mod tests {
     // --- Scenario B — Java interface implementation -----------------------
     #[test]
     fn scenario_b_java_interface_impl() {
-        let iface = jvm_type(
+        let iface = capable_type(
             "Repository",
             "Repository",
             "Repo.java",
             EntityKind::Interface,
         );
-        let iface_save = jvm_method("save", "Repository.save", "Repo.java", EntityKind::Method);
-        let mut cls = jvm_type(
+        let iface_save = capable_method("save", "Repository.save", "Repo.java", EntityKind::Method);
+        let mut cls = capable_type(
             "UserRepository",
             "UserRepository",
             "UserRepo.java",
@@ -327,7 +344,7 @@ mod tests {
         );
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
-        let cls_save = jvm_method(
+        let cls_save = capable_method(
             "save",
             "UserRepository.save",
             "UserRepo.java",
@@ -344,13 +361,13 @@ mod tests {
     // --- Scenario C — Kotlin superclass override --------------------------
     #[test]
     fn scenario_c_kotlin_superclass_override() {
-        let base = jvm_type("Base", "Base", "Base.kt", EntityKind::KotlinClass);
-        let base_greet = jvm_method("greet", "Base.greet", "Base.kt", EntityKind::KotlinMethod);
-        let mut derived = jvm_type("Derived", "Derived", "Derived.kt", EntityKind::KotlinClass);
+        let base = capable_type("Base", "Base", "Base.kt", EntityKind::KotlinClass);
+        let base_greet = capable_method("greet", "Base.greet", "Base.kt", EntityKind::KotlinMethod);
+        let mut derived = capable_type("Derived", "Derived", "Derived.kt", EntityKind::KotlinClass);
         derived
             .relationships
             .push((base.uuid, RelationshipType::Extends));
-        let derived_greet = jvm_method(
+        let derived_greet = capable_method(
             "greet",
             "Derived.greet",
             "Derived.kt",
@@ -367,14 +384,14 @@ mod tests {
     // --- Scenario D — Multi-level hierarchy (nearest-declaration) ----------
     #[test]
     fn scenario_d_multilevel_nearest() {
-        let a = jvm_type("A", "A", "A.java", EntityKind::Interface);
-        let a_run = jvm_method("run", "A.run", "A.java", EntityKind::Method);
-        let mut b = jvm_type("B", "B", "B.java", EntityKind::Class);
+        let a = capable_type("A", "A", "A.java", EntityKind::Interface);
+        let a_run = capable_method("run", "A.run", "A.java", EntityKind::Method);
+        let mut b = capable_type("B", "B", "B.java", EntityKind::Class);
         b.relationships.push((a.uuid, RelationshipType::Implements));
-        let b_run = jvm_method("run", "B.run", "B.java", EntityKind::Method);
-        let mut c = jvm_type("C", "C", "C.java", EntityKind::Class);
+        let b_run = capable_method("run", "B.run", "B.java", EntityKind::Method);
+        let mut c = capable_type("C", "C", "C.java", EntityKind::Class);
         c.relationships.push((b.uuid, RelationshipType::Extends));
-        let c_run = jvm_method("run", "C.run", "C.java", EntityKind::Method);
+        let c_run = capable_method("run", "C.run", "C.java", EntityKind::Method);
 
         let a_run_uuid = a_run.uuid;
         let b_run_uuid = b_run.uuid;
@@ -392,14 +409,14 @@ mod tests {
     // --- Scenario D2 — Skipped intermediate declaration (walk-through) -----
     #[test]
     fn scenario_d2_walk_through() {
-        let a = jvm_type("A", "A", "A.java", EntityKind::Interface);
-        let a_run = jvm_method("run", "A.run", "A.java", EntityKind::Method);
+        let a = capable_type("A", "A", "A.java", EntityKind::Interface);
+        let a_run = capable_method("run", "A.run", "A.java", EntityKind::Method);
         // B implements A but does NOT declare run.
-        let mut b = jvm_type("B", "B", "B.java", EntityKind::Class);
+        let mut b = capable_type("B", "B", "B.java", EntityKind::Class);
         b.relationships.push((a.uuid, RelationshipType::Implements));
-        let mut c = jvm_type("C", "C", "C.java", EntityKind::Class);
+        let mut c = capable_type("C", "C", "C.java", EntityKind::Class);
         c.relationships.push((b.uuid, RelationshipType::Extends));
-        let c_run = jvm_method("run", "C.run", "C.java", EntityKind::Method);
+        let c_run = capable_method("run", "C.run", "C.java", EntityKind::Method);
 
         let a_run_uuid = a_run.uuid;
         let mut entities = vec![a, a_run, b, c, c_run];
@@ -413,25 +430,25 @@ mod tests {
     // --- Scenario E — Diamond / cycle safety ------------------------------
     #[test]
     fn scenario_e_diamond_all_declare() {
-        let top = jvm_type("Top", "Top", "Top.java", EntityKind::Interface);
-        let top_f = jvm_method("f", "Top.f", "Top.java", EntityKind::Method);
-        let mut left = jvm_type("Left", "Left", "Left.java", EntityKind::Interface);
+        let top = capable_type("Top", "Top", "Top.java", EntityKind::Interface);
+        let top_f = capable_method("f", "Top.f", "Top.java", EntityKind::Method);
+        let mut left = capable_type("Left", "Left", "Left.java", EntityKind::Interface);
         left.relationships
             .push((top.uuid, RelationshipType::Extends));
-        let left_f = jvm_method("f", "Left.f", "Left.java", EntityKind::Method);
-        let mut right = jvm_type("Right", "Right", "Right.java", EntityKind::Interface);
+        let left_f = capable_method("f", "Left.f", "Left.java", EntityKind::Method);
+        let mut right = capable_type("Right", "Right", "Right.java", EntityKind::Interface);
         right
             .relationships
             .push((top.uuid, RelationshipType::Extends));
-        let right_f = jvm_method("f", "Right.f", "Right.java", EntityKind::Method);
-        let mut impl_ = jvm_type("Impl", "Impl", "Impl.java", EntityKind::Class);
+        let right_f = capable_method("f", "Right.f", "Right.java", EntityKind::Method);
+        let mut impl_ = capable_type("Impl", "Impl", "Impl.java", EntityKind::Class);
         impl_
             .relationships
             .push((left.uuid, RelationshipType::Implements));
         impl_
             .relationships
             .push((right.uuid, RelationshipType::Implements));
-        let impl_f = jvm_method("f", "Impl.f", "Impl.java", EntityKind::Method);
+        let impl_f = capable_method("f", "Impl.f", "Impl.java", EntityKind::Method);
 
         let top_f_uuid = top_f.uuid;
         let left_f_uuid = left_f.uuid;
@@ -453,23 +470,23 @@ mod tests {
     #[test]
     fn scenario_e_diamond_dedup_converging() {
         // Left/Right do NOT declare f -> Impl.f -> Top.f exactly once.
-        let top = jvm_type("Top", "Top", "Top.java", EntityKind::Interface);
-        let top_f = jvm_method("f", "Top.f", "Top.java", EntityKind::Method);
-        let mut left = jvm_type("Left", "Left", "Left.java", EntityKind::Interface);
+        let top = capable_type("Top", "Top", "Top.java", EntityKind::Interface);
+        let top_f = capable_method("f", "Top.f", "Top.java", EntityKind::Method);
+        let mut left = capable_type("Left", "Left", "Left.java", EntityKind::Interface);
         left.relationships
             .push((top.uuid, RelationshipType::Extends));
-        let mut right = jvm_type("Right", "Right", "Right.java", EntityKind::Interface);
+        let mut right = capable_type("Right", "Right", "Right.java", EntityKind::Interface);
         right
             .relationships
             .push((top.uuid, RelationshipType::Extends));
-        let mut impl_ = jvm_type("Impl", "Impl", "Impl.java", EntityKind::Class);
+        let mut impl_ = capable_type("Impl", "Impl", "Impl.java", EntityKind::Class);
         impl_
             .relationships
             .push((left.uuid, RelationshipType::Implements));
         impl_
             .relationships
             .push((right.uuid, RelationshipType::Implements));
-        let impl_f = jvm_method("f", "Impl.f", "Impl.java", EntityKind::Method);
+        let impl_f = capable_method("f", "Impl.f", "Impl.java", EntityKind::Method);
 
         let top_f_uuid = top_f.uuid;
         let mut entities = vec![top, top_f, left, right, impl_, impl_f];
@@ -482,12 +499,12 @@ mod tests {
     // --- Scenario F — FQN strip grouping (nested + no-match skip) ----------
     #[test]
     fn scenario_f_nested_class_grouping() {
-        let outer_inner = jvm_type("Inner", "Outer.Inner", "Outer.java", EntityKind::Interface);
-        let inner_m = jvm_method("m", "Outer.Inner.m", "Outer.java", EntityKind::Method);
-        let mut sub = jvm_type("Sub", "Sub", "Sub.java", EntityKind::Class);
+        let outer_inner = capable_type("Inner", "Outer.Inner", "Outer.java", EntityKind::Interface);
+        let inner_m = capable_method("m", "Outer.Inner.m", "Outer.java", EntityKind::Method);
+        let mut sub = capable_type("Sub", "Sub", "Sub.java", EntityKind::Class);
         sub.relationships
             .push((outer_inner.uuid, RelationshipType::Implements));
-        let sub_m = jvm_method("m", "Sub.m", "Sub.java", EntityKind::Method);
+        let sub_m = capable_method("m", "Sub.m", "Sub.java", EntityKind::Method);
 
         let inner_m_uuid = inner_m.uuid;
         let mut entities = vec![outer_inner, inner_m, sub, sub_m];
@@ -499,7 +516,7 @@ mod tests {
     #[test]
     fn scenario_f_unmatched_fqn_skipped() {
         // Method whose stripped FQN matches no type in the batch: no crash.
-        let orphan = jvm_method(
+        let orphan = capable_method(
             "ghost",
             "NoSuchType.ghost",
             "Ghost.java",
@@ -513,10 +530,10 @@ mod tests {
     // --- Scenario G — No false positives across unrelated types -----------
     #[test]
     fn scenario_g_unrelated_types() {
-        let foo = jvm_type("Foo", "Foo", "Foo.java", EntityKind::Class);
-        let foo_p = jvm_method("process", "Foo.process", "Foo.java", EntityKind::Method);
-        let bar = jvm_type("Bar", "Bar", "Bar.java", EntityKind::Class);
-        let bar_p = jvm_method("process", "Bar.process", "Bar.java", EntityKind::Method);
+        let foo = capable_type("Foo", "Foo", "Foo.java", EntityKind::Class);
+        let foo_p = capable_method("process", "Foo.process", "Foo.java", EntityKind::Method);
+        let bar = capable_type("Bar", "Bar", "Bar.java", EntityKind::Class);
+        let bar_p = capable_method("process", "Bar.process", "Bar.java", EntityKind::Method);
 
         let mut entities = vec![foo, foo_p, bar, bar_p];
         link_method_overrides(&mut entities);
@@ -528,15 +545,15 @@ mod tests {
     // --- Scenario H — Overloads (name-only N×M fan-out) -------------------
     #[test]
     fn scenario_h_overload_fanout() {
-        let iface = jvm_type("I", "I", "I.java", EntityKind::Interface);
-        let i_visit_a = jvm_method("visit", "I.visit", "I.java", EntityKind::Method);
-        let i_visit_b = jvm_method("visit", "I.visit", "I.java", EntityKind::Method);
-        let mut impl_ = jvm_type("Impl", "Impl", "Impl.java", EntityKind::Class);
+        let iface = capable_type("I", "I", "I.java", EntityKind::Interface);
+        let i_visit_a = capable_method("visit", "I.visit", "I.java", EntityKind::Method);
+        let i_visit_b = capable_method("visit", "I.visit", "I.java", EntityKind::Method);
+        let mut impl_ = capable_type("Impl", "Impl", "Impl.java", EntityKind::Class);
         impl_
             .relationships
             .push((iface.uuid, RelationshipType::Implements));
-        let impl_visit_a = jvm_method("visit", "Impl.visit", "Impl.java", EntityKind::Method);
-        let impl_visit_b = jvm_method("visit", "Impl.visit", "Impl.java", EntityKind::Method);
+        let impl_visit_a = capable_method("visit", "Impl.visit", "Impl.java", EntityKind::Method);
+        let impl_visit_b = capable_method("visit", "Impl.visit", "Impl.java", EntityKind::Method);
 
         let ia = i_visit_a.uuid;
         let ib = i_visit_b.uuid;
@@ -560,12 +577,12 @@ mod tests {
     // --- Scenario I — No supertype method match ---------------------------
     #[test]
     fn scenario_i_no_supertype_method() {
-        let iface = jvm_type("I", "I", "I.java", EntityKind::Interface);
+        let iface = capable_type("I", "I", "I.java", EntityKind::Interface);
         // I declares nothing relevant.
-        let mut cls = jvm_type("C", "C", "C.java", EntityKind::Class);
+        let mut cls = capable_type("C", "C", "C.java", EntityKind::Class);
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
-        let helper = jvm_method("helper", "C.helper", "C.java", EntityKind::Method);
+        let helper = capable_method("helper", "C.helper", "C.java", EntityKind::Method);
 
         let mut entities = vec![iface, cls, helper];
         link_method_overrides(&mut entities);
@@ -576,15 +593,15 @@ mod tests {
     // --- Scenario J — Constructors are excluded ---------------------------
     #[test]
     fn scenario_j_constructors_excluded() {
-        let base = jvm_type("Base", "Base", "Base.java", EntityKind::Class);
+        let base = capable_type("Base", "Base", "Base.java", EntityKind::Class);
         // Constructor: name == type name.
-        let base_ctor = jvm_method("Base", "Base.Base", "Base.java", EntityKind::Method);
-        let mut sub = jvm_type("Sub", "Sub", "Sub.java", EntityKind::Class);
+        let base_ctor = capable_method("Base", "Base.Base", "Base.java", EntityKind::Method);
+        let mut sub = capable_type("Sub", "Sub", "Sub.java", EntityKind::Class);
         sub.relationships
             .push((base.uuid, RelationshipType::Extends));
         // <init>-style constructor.
-        let sub_ctor = jvm_method("Sub", "Sub.Sub", "Sub.java", EntityKind::Method);
-        let sub_init = jvm_method("<init>", "Sub.<init>", "Sub.java", EntityKind::Method);
+        let sub_ctor = capable_method("Sub", "Sub.Sub", "Sub.java", EntityKind::Method);
+        let sub_init = capable_method("<init>", "Sub.<init>", "Sub.java", EntityKind::Method);
 
         let mut entities = vec![base, base_ctor, sub, sub_ctor, sub_init];
         link_method_overrides(&mut entities);
@@ -597,12 +614,12 @@ mod tests {
     #[test]
     fn scenario_k_static_hiding_pinned() {
         // Modifiers are not persisted; name-only cannot distinguish hiding.
-        let base = jvm_type("Base", "Base", "Base.java", EntityKind::Class);
-        let base_util = jvm_method("util", "Base.util", "Base.java", EntityKind::Method);
-        let mut sub = jvm_type("Sub", "Sub", "Sub.java", EntityKind::Class);
+        let base = capable_type("Base", "Base", "Base.java", EntityKind::Class);
+        let base_util = capable_method("util", "Base.util", "Base.java", EntityKind::Method);
+        let mut sub = capable_type("Sub", "Sub", "Sub.java", EntityKind::Class);
         sub.relationships
             .push((base.uuid, RelationshipType::Extends));
-        let sub_util = jvm_method("util", "Sub.util", "Sub.java", EntityKind::Method);
+        let sub_util = capable_method("util", "Sub.util", "Sub.java", EntityKind::Method);
 
         let base_util_uuid = base_util.uuid;
         let mut entities = vec![base, base_util, sub, sub_util];
@@ -616,7 +633,7 @@ mod tests {
     #[test]
     fn scenario_m_incremental_batch_missing_supertype() {
         // Only the subtype is in the batch; supertype methods absent.
-        let mut cls = jvm_type(
+        let mut cls = capable_type(
             "Session",
             "nf.Session",
             "Session.groovy",
@@ -625,7 +642,7 @@ mod tests {
         // Implements target uuid points to an entity not in this batch.
         cls.relationships
             .push((Uuid::new_v4(), RelationshipType::Implements));
-        let cls_method = jvm_method(
+        let cls_method = capable_method(
             "getUniqueId",
             "nf.Session.getUniqueId",
             "Session.groovy",
@@ -637,33 +654,35 @@ mod tests {
         assert_eq!(override_count(&entities[1]), 0);
     }
 
-    // --- Scenario N — Non-JVM languages are unaffected --------------------
+    // --- Scenario N — Non-participating languages are unaffected ----------
     #[test]
-    fn scenario_n_non_jvm_unaffected() {
+    fn scenario_n_non_participating_unaffected() {
         // Rust trait + impl method.
-        let rust_trait = jvm_type("Greeter", "crate::Greeter", "lib.rs", EntityKind::RustTrait);
-        let rust_trait_m = jvm_method(
+        let rust_trait = capable_type("Greeter", "crate::Greeter", "lib.rs", EntityKind::RustTrait);
+        let rust_trait_m = capable_method(
             "greet",
             "crate::Greeter::greet",
             "lib.rs",
             EntityKind::RustMethod,
         );
         // Python base/derived.
-        let py_base = jvm_type("Base", "Base", "base.py", EntityKind::PythonClass);
-        let py_base_m = jvm_method("run", "Base.run", "base.py", EntityKind::PythonMethod);
-        let mut py_derived = jvm_type("Derived", "Derived", "derived.py", EntityKind::PythonClass);
+        let py_base = capable_type("Base", "Base", "base.py", EntityKind::PythonClass);
+        let py_base_m = capable_method("run", "Base.run", "base.py", EntityKind::PythonMethod);
+        let mut py_derived =
+            capable_type("Derived", "Derived", "derived.py", EntityKind::PythonClass);
         py_derived
             .relationships
             .push((py_base.uuid, RelationshipType::Extends));
-        let py_derived_m = jvm_method("run", "Derived.run", "derived.py", EntityKind::PythonMethod);
+        let py_derived_m =
+            capable_method("run", "Derived.run", "derived.py", EntityKind::PythonMethod);
         // TypeScript interface + class (shares generic Class/Interface/Method).
-        let ts_iface = jvm_type("Repo", "Repo", "repo.ts", EntityKind::Interface);
-        let ts_iface_m = jvm_method("save", "Repo.save", "repo.ts", EntityKind::Method);
-        let mut ts_cls = jvm_type("UserRepo", "UserRepo", "user.ts", EntityKind::Class);
+        let ts_iface = capable_type("Repo", "Repo", "repo.ts", EntityKind::Interface);
+        let ts_iface_m = capable_method("save", "Repo.save", "repo.ts", EntityKind::Method);
+        let mut ts_cls = capable_type("UserRepo", "UserRepo", "user.ts", EntityKind::Class);
         ts_cls
             .relationships
             .push((ts_iface.uuid, RelationshipType::Implements));
-        let ts_cls_m = jvm_method("save", "UserRepo.save", "user.ts", EntityKind::Method);
+        let ts_cls_m = capable_method("save", "UserRepo.save", "user.ts", EntityKind::Method);
 
         let mut entities = vec![
             rust_trait,
@@ -683,7 +702,7 @@ mod tests {
             assert_eq!(
                 override_count(e),
                 0,
-                "non-JVM entity {} gained an OVERRIDES edge",
+                "non-participating entity {} gained an OVERRIDES edge",
                 e.fqn
             );
         }
@@ -709,34 +728,35 @@ mod tests {
     }
 
     #[test]
-    fn is_jvm_file_guard() {
-        assert!(is_jvm_file("a/b/C.java"));
-        assert!(is_jvm_file("x.kt"));
-        assert!(is_jvm_file("x.kts"));
-        assert!(is_jvm_file("x.groovy"));
-        assert!(is_jvm_file("x.gvy"));
-        assert!(is_jvm_file("build.gradle"));
-        assert!(!is_jvm_file("x.ts"));
-        assert!(!is_jvm_file("x.py"));
-        assert!(!is_jvm_file("lib.rs"));
+    fn is_override_capable_file_guard() {
+        assert!(is_override_capable_file("a/b/C.java"));
+        assert!(is_override_capable_file("x.kt"));
+        assert!(is_override_capable_file("x.kts"));
+        assert!(is_override_capable_file("x.groovy"));
+        assert!(is_override_capable_file("x.gvy"));
+        assert!(is_override_capable_file("build.gradle"));
+        assert!(is_override_capable_file("Services/UserService.cs"));
+        assert!(!is_override_capable_file("x.ts"));
+        assert!(!is_override_capable_file("x.py"));
+        assert!(!is_override_capable_file("lib.rs"));
     }
 
     // --- Scenario O — Groovy property accessor overrides interface getter ---
     #[test]
     fn scenario_o_groovy_property_accessor_overrides_interface_getter() {
-        let iface = jvm_type(
+        let iface = capable_type(
             "ISession",
             "nf.ISession",
             "ISession.groovy",
             EntityKind::GroovyInterface,
         );
-        let iface_method = jvm_method(
+        let iface_method = capable_method(
             "getBaseDir",
             "nf.ISession.getBaseDir",
             "ISession.groovy",
             EntityKind::GroovyMethod,
         );
-        let mut cls = jvm_type(
+        let mut cls = capable_type(
             "Session",
             "nf.Session",
             "Session.groovy",
@@ -745,14 +765,14 @@ mod tests {
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
         // Synthetic accessor from Session.baseDir
-        let cls_getter = jvm_method(
+        let cls_getter = capable_method(
             "getBaseDir",
             "nf.Session.getBaseDir",
             "Session.groovy",
             EntityKind::GroovyMethod,
         );
         // The property itself — must NOT get an Overrides edge
-        let _cls_prop = jvm_method(
+        let _cls_prop = capable_method(
             "baseDir",
             "nf.Session.baseDir",
             "Session.groovy",
@@ -774,19 +794,19 @@ mod tests {
         // GIVEN ISession with getBaseDir, AND Session with baseDir property
         // (NOT the synthetic getter), WHEN link_method_overrides runs,
         // THEN the GroovyProperty entity gains ZERO Overrides edges.
-        let iface = jvm_type(
+        let iface = capable_type(
             "ISession",
             "nf.ISession",
             "ISession.groovy",
             EntityKind::GroovyInterface,
         );
-        let iface_method = jvm_method(
+        let iface_method = capable_method(
             "getBaseDir",
             "nf.ISession.getBaseDir",
             "ISession.groovy",
             EntityKind::GroovyMethod,
         );
-        let mut cls = jvm_type(
+        let mut cls = capable_type(
             "Session",
             "nf.Session",
             "Session.groovy",
@@ -795,7 +815,7 @@ mod tests {
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
         // Only the property node, no synthetic getter
-        let cls_prop = jvm_method(
+        let cls_prop = capable_method(
             "baseDir",
             "nf.Session.baseDir",
             "Session.groovy",
@@ -818,26 +838,26 @@ mod tests {
         // reported bug: Session.baseDir must override ISession.getBaseDir.
         // We build the entities manually (mimicking what the Groovy parser
         // now produces after Phase 1-3).
-        let iface = jvm_type(
+        let iface = capable_type(
             "ISession",
             "nf.ISession",
             "ISession.groovy",
             EntityKind::GroovyInterface,
         );
-        let iface_get_base_dir = jvm_method(
+        let iface_get_base_dir = capable_method(
             "getBaseDir",
             "nf.ISession.getBaseDir",
             "ISession.groovy",
             EntityKind::GroovyMethod,
         );
-        let iface_get_script_name = jvm_method(
+        let iface_get_script_name = capable_method(
             "getScriptName",
             "nf.ISession.getScriptName",
             "ISession.groovy",
             EntityKind::GroovyMethod,
         );
 
-        let mut cls = jvm_type(
+        let mut cls = capable_type(
             "Session",
             "nf.Session",
             "Session.groovy",
@@ -846,33 +866,33 @@ mod tests {
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
 
-        let cls_base_dir = jvm_method(
+        let cls_base_dir = capable_method(
             "baseDir",
             "nf.Session.baseDir",
             "Session.groovy",
             EntityKind::GroovyProperty,
         );
-        let cls_script_name = jvm_method(
+        let cls_script_name = capable_method(
             "scriptName",
             "nf.Session.scriptName",
             "Session.groovy",
             EntityKind::GroovyProperty,
         );
         // Synthetic getters emitted by the parser
-        let cls_get_base_dir = jvm_method(
+        let cls_get_base_dir = capable_method(
             "getBaseDir",
             "nf.Session.getBaseDir",
             "Session.groovy",
             EntityKind::GroovyMethod,
         );
-        let cls_get_script_name = jvm_method(
+        let cls_get_script_name = capable_method(
             "getScriptName",
             "nf.Session.getScriptName",
             "Session.groovy",
             EntityKind::GroovyMethod,
         );
         // Real setter suppresses synthetic one
-        let cls_set_base_dir = jvm_method(
+        let cls_set_base_dir = capable_method(
             "setBaseDir",
             "nf.Session.setBaseDir",
             "Session.groovy",

@@ -5,6 +5,46 @@ use uuid::Uuid;
 
 use super::calls::find_entity_in_same_file;
 use super::context::RunMetrics;
+use crate::models::EntityKind;
+
+/// Type-like kinds that may be the target of an inheritance or type-usage
+/// reference. C# constructor entities share their class's name
+/// (`BaseService` class + `BaseService` constructor), so name-only
+/// resolution for `Extends` / `Implements` / `TypeReference` intents must
+/// restrict candidates to types or the constructor wins the ambiguity and
+/// the edge is dropped as ambiguous.
+fn is_type_like(kind: &EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::Class
+            | EntityKind::Interface
+            | EntityKind::Enum
+            | EntityKind::KotlinClass
+            | EntityKind::KotlinInterface
+            | EntityKind::KotlinObject
+            | EntityKind::KotlinCompanionObject
+            | EntityKind::KotlinEnum
+            | EntityKind::GroovyClass
+            | EntityKind::GroovyInterface
+            | EntityKind::GroovyTrait
+            | EntityKind::GroovyEnum
+            | EntityKind::CSharpClass
+            | EntityKind::CSharpInterface
+            | EntityKind::CSharpStruct
+            | EntityKind::CSharpRecord
+            | EntityKind::CSharpEnum
+            | EntityKind::CSharpDelegate
+            | EntityKind::CSharpNamespace
+            | EntityKind::CppClass
+            | EntityKind::CppNamespace
+            | EntityKind::CStruct
+            | EntityKind::PythonClass
+            | EntityKind::RustStruct
+            | EntityKind::RustEnum
+            | EntityKind::RustUnion
+            | EntityKind::RustTrait
+    )
+}
 
 #[expect(
     clippy::too_many_arguments,
@@ -17,13 +57,69 @@ pub(crate) fn resolve_non_call_reference(
     fqn_to_uuid: &HashMap<String, Uuid>,
     name_to_uuids: &HashMap<String, Vec<Uuid>>,
     uuid_to_file: &HashMap<Uuid, String>,
+    uuid_to_fqn: Option<&HashMap<Uuid, String>>,
     metrics: &RunMetrics,
 ) -> Option<Uuid> {
-    let Some(candidate_uuids) = name_to_uuids.get(name) else {
+    resolve_non_call_reference_typed(
+        name,
+        source_file,
+        enclosing_class,
+        fqn_to_uuid,
+        name_to_uuids,
+        uuid_to_file,
+        None,
+        uuid_to_fqn,
+        metrics,
+    )
+}
+
+/// Type-aware variant of [`resolve_non_call_reference`]: when
+/// `type_targets_only` is set, candidates are first filtered to type-like
+/// kinds (see [`is_type_like`]) before the disambiguation ladder runs.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "function is verbose but correct — extraction deferred"
+)]
+pub(crate) fn resolve_non_call_reference_typed(
+    name: &str,
+    source_file: &str,
+    enclosing_class: Option<&str>,
+    fqn_to_uuid: &HashMap<String, Uuid>,
+    name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    uuid_to_file: &HashMap<Uuid, String>,
+    uuid_to_kind: Option<&HashMap<Uuid, EntityKind>>,
+    uuid_to_fqn: Option<&HashMap<Uuid, String>>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    if name.contains('.') || name.contains("::") {
+        // Exact FQN wins outright.
+        if let Some(&uuid) = fqn_to_uuid.get(name) {
+            metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+            return Some(uuid);
+        }
+        // Otherwise fall back to candidates whose FQN ends with the qualified
+        // name — this catches partially qualified refs (`GestureOwner.Off`).
+        let candidates =
+            qualified_suffix_candidates(name, name_to_uuids, uuid_to_fqn).unwrap_or_default();
+        return pick_unambiguous_candidate(&candidates, source_file, uuid_to_file, metrics);
+    }
+
+    let Some(all_candidates) = name_to_uuids.get(name) else {
         metrics
             .references_unresolved
             .fetch_add(1, Ordering::Relaxed);
         return None;
+    };
+
+    let candidate_uuids: Vec<Uuid> = match uuid_to_kind {
+        // Type targets (Extends/Implements/TypeReference): a constructor or
+        // method sharing the name is never the right target.
+        Some(kinds) => all_candidates
+            .iter()
+            .filter(|u| kinds.get(*u).is_some_and(is_type_like))
+            .copied()
+            .collect(),
+        None => all_candidates.clone(),
     };
 
     if candidate_uuids.is_empty() {
@@ -34,7 +130,7 @@ pub(crate) fn resolve_non_call_reference(
     }
 
     if let Some(same_file_uuid) =
-        find_entity_in_same_file(candidate_uuids, source_file, uuid_to_file)
+        find_entity_in_same_file(&candidate_uuids, source_file, uuid_to_file)
     {
         metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
         return Some(same_file_uuid);
@@ -70,6 +166,66 @@ pub(crate) fn resolve_non_call_reference(
     None
 }
 
+/// Pick a single target from `candidates`, preferring one declared in
+/// `source_file`, and record the outcome in `metrics`.
+fn pick_unambiguous_candidate(
+    candidates: &[Uuid],
+    source_file: &str,
+    uuid_to_file: &HashMap<Uuid, String>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    if candidates.is_empty() {
+        metrics
+            .references_unresolved
+            .fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+
+    if let Some(same_file_uuid) = find_entity_in_same_file(candidates, source_file, uuid_to_file) {
+        metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+        return Some(same_file_uuid);
+    }
+
+    if let [only] = candidates {
+        metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+        return Some(*only);
+    }
+
+    metrics
+        .references_ambiguous_skipped
+        .fetch_add(1, Ordering::Relaxed);
+    None
+}
+
+/// Candidates sharing the last segment of `name` whose FQN ends with `name`.
+fn qualified_suffix_candidates(
+    name: &str,
+    name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    uuid_to_fqn: Option<&HashMap<Uuid, String>>,
+) -> Option<Vec<Uuid>> {
+    let uuid_to_fqn_map = uuid_to_fqn?;
+    let last_segment = if name.contains("::") {
+        name.rsplit("::").next()?
+    } else {
+        name.rsplit('.').next()?
+    };
+    let candidates = name_to_uuids.get(last_segment)?;
+
+    Some(
+        candidates
+            .iter()
+            .filter(|u| {
+                uuid_to_fqn_map.get(*u).is_some_and(|fqn| {
+                    fqn == name
+                        || fqn.ends_with(&format!(".{name}"))
+                        || fqn.ends_with(&format!("::{name}"))
+                })
+            })
+            .copied()
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_utils::*;
@@ -79,7 +235,14 @@ mod tests {
     #[test]
     fn test_resolve_inheritance() {
         let mut child = mock_resolution_entity("Child", "com.Child", None);
-        let parent = mock_resolution_entity("Parent", "com.Parent", None);
+        // Inheritance targets must be type-like entities.
+        let parent = mock_resolution_entity_with_kind(
+            "Parent",
+            "com.Parent",
+            None,
+            "test/file.java",
+            EntityKind::Class,
+        );
 
         child.reference_intents.push(ReferenceIntent::Extends {
             parent: "Parent".to_string(),
@@ -99,7 +262,14 @@ mod tests {
     #[test]
     fn test_resolve_type_reference() {
         let mut entity = mock_resolution_entity("service", "service", None);
-        let type_entity = mock_resolution_entity("MyType", "com.MyType", None);
+        // Type targets must be type-like entities.
+        let type_entity = mock_resolution_entity_with_kind(
+            "MyType",
+            "com.MyType",
+            None,
+            "test/file.java",
+            EntityKind::Class,
+        );
 
         entity
             .reference_intents
@@ -404,6 +574,194 @@ mod tests {
                 .contains(&(parent_uuid, RelationshipType::Extends)),
             "Ext1 should have an Extends edge to PluginExtensionPoint; got {:?}",
             ext1.relationships
+        );
+    }
+
+    #[test]
+    fn test_qualified_type_reference_resolves_by_fqn_suffix() {
+        let target = mock_resolution_entity_with_kind(
+            "Off",
+            "MyApp.Gestures.GestureOwner.Off",
+            None,
+            "src/GestureOwner.cs",
+            EntityKind::CSharpRecord,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "GesturesEnabled",
+            "MyApp.Gestures.GestureConfig.GesturesEnabled",
+            None,
+            "src/GestureConfig.cs",
+            EntityKind::CSharpMethod,
+        );
+        caller.reference_intents = vec![ReferenceIntent::TypeReference {
+            type_name: "GestureOwner.Off".to_string(),
+            line: 10,
+        }];
+        let target_uuid = target.uuid;
+        let mut entities = vec![target, caller];
+        resolve_reference_intents(&mut entities);
+        let caller_entity = entities
+            .iter()
+            .find(|e| e.name == "GesturesEnabled")
+            .unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(target_uuid, RelationshipType::References)),
+            "should resolve by FQN suffix, got {:?}",
+            caller_entity.relationships
+        );
+    }
+
+    #[test]
+    fn test_qualified_reference_resolves_non_type_member() {
+        let target = mock_resolution_entity_with_kind(
+            "OffValue",
+            "MyApp.Gestures.GestureOwner.OffValue",
+            None,
+            "src/GestureOwner.cs",
+            EntityKind::CSharpField,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "Disable",
+            "MyApp.Gestures.GestureConfig.Disable",
+            None,
+            "src/GestureConfig.cs",
+            EntityKind::CSharpMethod,
+        );
+        caller.reference_intents = vec![ReferenceIntent::TypeReference {
+            type_name: "GestureOwner.OffValue".to_string(),
+            line: 10,
+        }];
+        let target_uuid = target.uuid;
+        let mut entities = vec![target, caller];
+        resolve_reference_intents(&mut entities);
+        let caller_entity = entities.iter().find(|e| e.name == "Disable").unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(target_uuid, RelationshipType::References)),
+            "should resolve field target by dotted path, got {:?}",
+            caller_entity.relationships
+        );
+    }
+
+    #[test]
+    fn test_qualified_reference_has_no_bare_last_segment_fallback() {
+        let target = mock_resolution_entity_with_kind(
+            "FromResult",
+            "SomeNamespace.FromResult",
+            None,
+            "src/other.cs",
+            EntityKind::CSharpMethod,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "Disable",
+            "MyApp.Gestures.GestureConfig.Disable",
+            None,
+            "src/GestureConfig.cs",
+            EntityKind::CSharpMethod,
+        );
+        caller.reference_intents = vec![ReferenceIntent::TypeReference {
+            type_name: "Task.FromResult".to_string(),
+            line: 10,
+        }];
+        let mut entities = vec![target, caller];
+        resolve_reference_intents(&mut entities);
+        let caller_entity = entities.iter().find(|e| e.name == "Disable").unwrap();
+        assert!(
+            caller_entity.relationships.is_empty(),
+            "should not resolve to bare last segment fallback, got {:?}",
+            caller_entity.relationships
+        );
+    }
+
+    #[test]
+    fn test_qualified_reference_ambiguous_suffix_is_skipped() {
+        let target1 = mock_resolution_entity_with_kind(
+            "Off",
+            "Namespace1.GestureOwner.Off",
+            None,
+            "src/File1.cs",
+            EntityKind::CSharpRecord,
+        );
+        let target2 = mock_resolution_entity_with_kind(
+            "Off",
+            "Namespace2.GestureOwner.Off",
+            None,
+            "src/File2.cs",
+            EntityKind::CSharpRecord,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "GesturesEnabled",
+            "MyApp.Gestures.GestureConfig.GesturesEnabled",
+            None,
+            "src/GestureConfig.cs",
+            EntityKind::CSharpMethod,
+        );
+        caller.reference_intents = vec![ReferenceIntent::TypeReference {
+            type_name: "GestureOwner.Off".to_string(),
+            line: 10,
+        }];
+        let mut entities = vec![target1, target2, caller];
+        resolve_reference_intents(&mut entities);
+        let caller_entity = entities
+            .iter()
+            .find(|e| e.name == "GesturesEnabled")
+            .unwrap();
+        assert!(
+            caller_entity.relationships.is_empty(),
+            "should skip ambiguous suffix, got {:?}",
+            caller_entity.relationships
+        );
+    }
+
+    #[test]
+    fn test_qualified_reference_prefers_same_file() {
+        let target_foreign = mock_resolution_entity_with_kind(
+            "Off",
+            "Namespace1.GestureOwner.Off",
+            None,
+            "src/File1.cs",
+            EntityKind::CSharpRecord,
+        );
+        let target_same = mock_resolution_entity_with_kind(
+            "Off",
+            "Namespace2.GestureOwner.Off",
+            None,
+            "src/GestureConfig.cs",
+            EntityKind::CSharpRecord,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "GesturesEnabled",
+            "MyApp.Gestures.GestureConfig.GesturesEnabled",
+            None,
+            "src/GestureConfig.cs",
+            EntityKind::CSharpMethod,
+        );
+        caller.reference_intents = vec![ReferenceIntent::TypeReference {
+            type_name: "GestureOwner.Off".to_string(),
+            line: 10,
+        }];
+        let same_uuid = target_same.uuid;
+        let foreign_uuid = target_foreign.uuid;
+        let mut entities = vec![target_foreign, target_same, caller];
+        resolve_reference_intents(&mut entities);
+        let caller_entity = entities
+            .iter()
+            .find(|e| e.name == "GesturesEnabled")
+            .unwrap();
+        assert!(
+            caller_entity
+                .relationships
+                .contains(&(same_uuid, RelationshipType::References)),
+            "should prefer same file, got {:?}",
+            caller_entity.relationships
+        );
+        assert!(
+            !caller_entity
+                .relationships
+                .contains(&(foreign_uuid, RelationshipType::References))
         );
     }
 }

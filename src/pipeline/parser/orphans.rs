@@ -1,4 +1,4 @@
-use super::languages::{java, javascript, kotlin, python, typescript};
+use super::languages::{csharp, java, javascript, kotlin, python, typescript};
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use tree_sitter::Node;
 
@@ -43,6 +43,10 @@ pub(crate) fn collect_orphaned_references(
     let module_kind = match lang_name {
         "python" => EntityKind::PythonModule,
         "rust" => EntityKind::RustModule,
+        // C# top-level statements (C# 9 Program.cs with no class) live in a
+        // file-scoped, namespace-less context — surface the synthetic module
+        // as a namespace.
+        "csharp" => EntityKind::CSharpNamespace,
         _ => EntityKind::Function,
     };
     let mut module_entity = ParsedEntity::new(
@@ -154,6 +158,12 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
         // collect_all_reference_intents_kotlin emits each intent with its correct byte_pos,
         // ensuring calls inside method bodies fall within covered ranges and are NOT orphaned.
         kotlin::collect_all_reference_intents_kotlin(node, source, intents);
+    } else if lang_name == "csharp" {
+        // collect_all_reference_intents_csharp emits each intent with its
+        // correct byte_pos (the Kotlin approach), so calls inside method
+        // bodies fall within covered ranges and are NOT orphaned. Top-level
+        // statements, usings, and attributes outside entity ranges survive.
+        csharp::collect_all_reference_intents_csharp(node, source, intents);
     }
 }
 

@@ -2,11 +2,35 @@ use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::comments::{extract_comments, extract_decorators};
 use crate::pipeline::parser::context::{ClassContext, compute_fqn_and_context};
 use crate::pipeline::parser::languages::{
-    cpp, java, javascript, kotlin, markdown, python, typescript,
+    cpp, csharp, java, javascript, kotlin, markdown, python, typescript,
 };
 use crate::pipeline::parser::utils::{extract_decorator_references, extract_type_references};
 
 use super::captures::CaptureState;
+
+/// `true` for every `CSharp*` entity kind — the gate for the C# FQN prefix
+/// branch below.
+fn is_csharp_kind(kind: &EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::CSharpClass
+            | EntityKind::CSharpInterface
+            | EntityKind::CSharpStruct
+            | EntityKind::CSharpRecord
+            | EntityKind::CSharpEnum
+            | EntityKind::CSharpMethod
+            | EntityKind::CSharpConstructor
+            | EntityKind::CSharpProperty
+            | EntityKind::CSharpField
+            | EntityKind::CSharpConstant
+            | EntityKind::CSharpDelegate
+            | EntityKind::CSharpEvent
+            | EntityKind::CSharpIndexer
+            | EntityKind::CSharpOperator
+            | EntityKind::CSharpNamespace
+            | EntityKind::CSharpLocalFunction
+    )
+}
 
 #[expect(
     clippy::too_many_arguments,
@@ -27,7 +51,7 @@ pub(crate) fn enrich_and_create_entity<'a>(
     file_path: &str,
     repo_name: &str,
     class_contexts: &[ClassContext],
-    java_package: &Option<String>,
+    package_prefix: &Option<String>,
     entities: &mut Vec<ParsedEntity>,
     covered_ranges: &mut Vec<(usize, usize)>,
 ) {
@@ -38,6 +62,7 @@ pub(crate) fn enrich_and_create_entity<'a>(
     let end_line;
     let entity_node = state.entity_node.take();
     let mut reference_intents = std::mem::take(&mut state.reference_intents);
+    let mut enclosing_class_fqn: Option<String> = None;
 
     if let (Some(mut name), Some(kind)) = (name, kind) {
         // Extract docstring and inline comments dynamically from the entity node
@@ -66,7 +91,9 @@ pub(crate) fn enrich_and_create_entity<'a>(
             compute_fqn_and_context(&name, &kind, start_line, lang_name, class_contexts);
 
         // Prefix FQN with Java package name if available
-        if let Some(pkg) = java_package {
+        if lang_name == "java"
+            && let Some(pkg) = package_prefix
+        {
             fqn = format!("{}.{}", pkg, fqn);
         }
 
@@ -84,6 +111,41 @@ pub(crate) fn enrich_and_create_entity<'a>(
         {
             enclosing_class = Some(cpp_fqn.clone());
             fqn = format!("{}::{}", cpp_fqn, name);
+        }
+
+        // C#: namespace-qualified FQN — the file-scoped namespace pre-pass
+        // supplies the outermost scope, then an ancestor walk collects block
+        // namespaces and containing types (plan §3.2). Namespace entities
+        // anchor at their own name and are skipped by the prefix logic.
+        if is_csharp_kind(&kind)
+            && let Some(node) = entity_node
+        {
+            let is_namespace_decl = kind == EntityKind::CSharpNamespace
+                && matches!(
+                    node.kind(),
+                    "namespace_declaration" | "file_scoped_namespace_declaration"
+                );
+            if is_namespace_decl {
+                if let Some(anc) = csharp::build_csharp_fqn_prefix(node, source_bytes) {
+                    fqn = format!("{}.{}", anc, name);
+                    enclosing_class_fqn = Some(anc);
+                }
+            } else {
+                let mut parts: Vec<String> = Vec::new();
+                if lang_name == "csharp"
+                    && let Some(pkg) = package_prefix
+                {
+                    parts.push(pkg.clone());
+                }
+                if let Some(anc) = csharp::build_csharp_fqn_prefix(node, source_bytes) {
+                    parts.push(anc);
+                }
+                if !parts.is_empty() {
+                    let prefix = parts.join(".");
+                    fqn = format!("{}.{}", prefix, name);
+                    enclosing_class_fqn = Some(prefix);
+                }
+            }
         }
 
         // derive the document's display name from repo + file path, and the FQN from the file path so entities don't collide.
@@ -115,6 +177,11 @@ pub(crate) fn enrich_and_create_entity<'a>(
                 | EntityKind::KotlinInterface
                 | EntityKind::KotlinObject
                 | EntityKind::KotlinEnum
+                | EntityKind::CSharpClass
+                | EntityKind::CSharpInterface
+                | EntityKind::CSharpStruct
+                | EntityKind::CSharpRecord
+                | EntityKind::CSharpEnum
         ) && let Some(class_node) = entity_node
         {
             if lang_name == "javascript" {
@@ -175,6 +242,27 @@ pub(crate) fn enrich_and_create_entity<'a>(
                 );
                 // Extract type references (e.g., constructor parameters, property types)
                 kotlin::extract_type_references(class_node, source_bytes, &mut reference_intents);
+            } else if lang_name == "csharp" {
+                // Extract extends/implements from the C# base_list using the
+                // §3.3 heuristic (first entry extends unless `^I[A-Z]`, …)
+                csharp::extract_class_inheritance_csharp(
+                    class_node,
+                    source_bytes,
+                    &mut reference_intents,
+                );
+                // Extract attribute references (e.g., [Obsolete], [Authorize]) —
+                // attributes live in attribute_list children, not modifiers.
+                csharp::extract_attribute_references(
+                    class_node,
+                    source_bytes,
+                    &mut reference_intents,
+                );
+                // Extract type references (e.g., property types, generic args)
+                csharp::extract_type_references_csharp(
+                    class_node,
+                    source_bytes,
+                    &mut reference_intents,
+                );
             }
         }
 
@@ -220,6 +308,10 @@ pub(crate) fn enrich_and_create_entity<'a>(
         });
         entity.inline_comments = inline_comments;
         entity.decorators = decorators;
+        // C#: persist the FQN of the enclosing scope (namespace + containing
+        // types) so the CONTAINS auto-link in Neo4j can match by FQN instead
+        // of by bare name (mirrors the Rust post-pass).
+        entity.enclosing_class_fqn = enclosing_class_fqn;
 
         // Extract text below header/document entity for each markdown entity
         if lang_name == "markdown"
