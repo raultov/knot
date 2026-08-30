@@ -6,10 +6,11 @@ This document outlines the planned expansion of `knot` to support Python, C/C++,
 
 ## Overview
 
-**Current State (v1.4.9):**
-- Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, HTML, CSS, SCSS support
+**Current State (v1.6.2):**
+- Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, C/C++, HTML, CSS, SCSS support
 - Markdown (v1.4.9): `MarkdownDocument` (one per `.md`/`.markdown` file) and `MarkdownSection` (one per ATX heading H1–H6) with section bodies embedded for full semantic search over docs
-- Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, ValueReference)
+- Varnish Cache (v1.5.7): `.vcl` / `.vtc` / `.vcc` via a hand-written lexer (no tree-sitter grammar exists), 18 entity kinds and 6 dedicated relationship types (USES_BACKEND, USES_PROBE, USES_ACL, INCLUDES, IMPORTS_VMOD, DECLARED_UNUSED)
+- Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, CONTAINS, OVERRIDES, ValueReference)
 - Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
 - Configuration Files: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with leaf-key granularity and package.json special handling
 - Kubernetes + Helm: K8s manifest parsing (Deployment, Service, ConfigMap, Secret, Ingress, Namespace) and Helm chart indexing (Chart.yaml, values.yaml, templates)
@@ -193,6 +194,81 @@ Enable `knot` to index Markdown (`.md`/`.markdown`) documentation files so that 
 
 ---
 
+## Phase 14: Varnish Cache Language Support (v1.5.7 / v1.6.1 — ✅ Completed)
+
+### Objective
+Enable `knot` to index Varnish Cache deployments end-to-end: `.vcl` configuration, `.vtc` test cases, and `.vcc` VMOD interface definitions — with a relationship model rich enough to answer operational questions ("which subroutine routes to this backend?", "which file includes this one?", "which VMOD does this config import?").
+
+Varnish is the first language in `knot` supported **without a tree-sitter grammar**: no maintained grammar exists for VCL, so all three formats are decoded by a single hand-rolled lexer plus per-dialect parsers.
+
+### Planned → ✅ Completed
+- ✅ Hand-written lexer (`languages/varnish/lexer.rs`) covering VCL's 15 documented gotchas: duration maximal-munch (`10s` vs `10` `s`), adjacent string concatenation, ACL mask literals (`"192.0.2.0"/24`), identifier hyphens, `${...}` macro tokens, version markers, dotted paths, quoted header names, and all comment forms (`#`, `//`, `/* */`)
+- ✅ Dialect guard (`languages/varnish/dialect.rs`): the Fastly VCL dialect is detected and skipped (returns empty entities, logs at `debug`) rather than mis-parsed
+- ✅ **8 VCL EntityKinds**: `VclVersion`, `VclSubroutine`, `VclBuiltinSub`, `VclBackend`, `VclProbe`, `VclAcl`, `VclImport`, `VclObjectInstance`
+- ✅ **6 VTC EntityKinds**: `VtcTestCase`, `VtcServer`, `VtcClient`, `VtcVarnishInstance`, `VtcLogexpect`, `VtcBarrier`
+- ✅ **4 VCC EntityKinds**: `VccModule`, `VccFunction`, `VccObject`, `VccMethod` (methods bound to their owning object via `enclosing_class`)
+- ✅ **7 new `ReferenceIntent` variants**: `VclSubCall`, `VclBackendRef`, `VclProbeRef`, `VclAclRef`, `VclInclude`, `VclVmodImport`, `VclUnusedRef`
+- ✅ **6 new `RelationshipType` variants** with directed `Display` forms: `USES_BACKEND`, `USES_PROBE`, `USES_ACL`, `INCLUDES`, `IMPORTS_VMOD`, `DECLARED_UNUSED`
+- ✅ Three-way exhaustive match enforced across `models/entity.rs` (`Display`), `db/graph/utils.rs` (`kind_to_label`), and `pipeline/parser/context.rs` (`compute_fqn_and_context`)
+- ✅ Recursive scanning of `if`/`elseif`/`else` bodies, so `set req.backend_hint = X;` inside a conditional still emits a `USES_BACKEND` edge
+- ✅ Multi-part built-in subs: `sub vcl_recv { }` declared across several files aggregates into one `vcl_recv_aggregator` entity, emitted globally in `parse_files_stream` via `aggregate_varnish_builtin_subs` (shared `Arc<Mutex<Vec<ParsedEntity>>>` buffer wired through `parser/mod.rs`)
+- ✅ VTC embedded VCL: `varnish vX { … }` blocks are delegated to the VCL parser with line offsets so cross-references resolve to the right lines; `-errvcl` blocks are skipped; `-vcl+backend` synthesises `vcl_backend` entities per `server` with `is_test_context = true`
+- ✅ `explore_file` fallback `## Other Entities` bucket so all 18 Varnish kinds stay visible to LLMs (they previously fell through `_ => {}` and were silently dropped)
+- ✅ **68 unit tests** in `pipeline::parser::languages::varnish`
+- ✅ **E2E suite** `tests/run_varnish_e2e.sh` (~24 Cypher assertions) — entity counts, all 6 relationship types, VCL/VTC/VCC extraction, multi-part sub aggregation, Fastly suppression, unique-token semantic search, `explore_file` listing. Registered as the 19th suite in `tests/run_all_e2e_fast.sh`
+- ✅ **v1.6.1 follow-up — include resolution**: `include` directives with absolute paths (`include "/etc/varnish/language.vcl";`) failed to map to their target files because the parser pre-formatted the path into an FQN. Fixed by storing the raw path and resolving with a three-strategy fallback (repo-root, relative-to-current-file, filename fuzzy match). Spec: `docs/specs/varnish_include_resolution_plan.md`
+
+#### Implementation Files
+- `src/pipeline/parser/languages/varnish/lexer.rs` — shared hand-rolled lexer for all three formats
+- `src/pipeline/parser/languages/varnish/dialect.rs` — Fastly dialect detection guard
+- `src/pipeline/parser/languages/varnish/vcl.rs` — `.vcl` configuration parser
+- `src/pipeline/parser/languages/varnish/vtc.rs` — `.vtc` test-case parser with embedded-VCL delegation
+- `src/pipeline/parser/languages/varnish/vcc.rs` — `.vcc` VMOD interface parser
+- `src/pipeline/parser/languages/varnish/mod.rs` — module wiring + `aggregate_varnish_builtin_subs`
+- `src/pipeline/input.rs` — `vcl`, `vtc`, `vcc` registered in `CORE_EXTENSIONS` / `SUPPORTED_EXTENSIONS`
+- `src/pipeline/ingest/resolve/mod.rs` — `VclInclude` multi-strategy resolution (v1.6.1)
+- `tests/run_varnish_e2e.sh` — Varnish E2E suite; the reference template for `KNOT_SKIP_BUILD`-aware suites
+- `tests/testing_files/varnish/` — 12 fixtures: `default.vcl`, `backends.vcl`, `edge_cases.vcl`, `inline_probe.vcl`, `multi_recv_a.vcl`, `multi_recv_b.vcl`, `fastly_sample.vcl`, `etc/varnish/language.vcl`, `basic_hit.vtc`, `errvcl.vtc`, `external_ref.vtc`, `vmod_cookie.vcc`
+
+#### Design Notes
+- No tree-sitter grammar exists for VCL, and the three formats share enough lexical structure (identifiers, durations, strings, comments) that one lexer serving three parsers was cheaper than three independent parsers.
+- Built-in sub aggregation had to move *out* of `parse_single_file` and into the streaming orchestrator: a `vcl_recv` split across files cannot be aggregated from inside a single-file parse, so `parse_files_stream` collects them repo-wide.
+- `tests/run_varnish_e2e.sh` is the only per-language suite that honours `KNOT_SKIP_BUILD`, which is how CI invokes the orchestrator. It is therefore the correct template for any new language suite — `run_kotlin_e2e.sh` and `run_rust_e2e.sh` ignore the flag and pass in CI only incidentally.
+
+---
+
+## Phase 15: C# Support (v1.7.0 — ✅ Completed)
+
+### Objective
+Enable `knot` to index C#/.NET codebases with the same fidelity already provided for Java and Kotlin: namespace-qualified FQNs, full type/member extraction, `CALLS` / `EXTENDS` / `IMPLEMENTS` / `REFERENCES` / `CONTAINS` / `OVERRIDES` edges, XML doc comments, and attributes — validated end-to-end through both the MCP server and the CLI.
+
+**Closes** [issue #5](https://github.com/raultov/knot/issues/5).
+
+**Full plan:** [`docs/specs/csharp_support_plan.md`](csharp_support_plan.md) — grammar evaluation, design decisions, integration map, 7 implementation phases, 31 E2E assertions.
+
+### Grammar
+`tree-sitter-c-sharp = "0.23.5"` (official `tree-sitter` org, MIT). Verified compatible: grammar ABI 15 is within the range accepted by `tree-sitter 0.26.8` (`LANGUAGE_VERSION_WITH_RESERVED_WORDS 15`), and `tree-sitter-language 0.1.7` is already in `Cargo.lock` — **zero new transitive dependencies**.
+
+### Delivered
+- [x] **16 new `CSharp*` EntityKinds**: `CSharpClass`, `CSharpInterface`, `CSharpStruct`, `CSharpRecord`, `CSharpEnum`, `CSharpMethod`, `CSharpConstructor`, `CSharpProperty`, `CSharpField`, `CSharpConstant`, `CSharpDelegate`, `CSharpEvent`, `CSharpIndexer`, `CSharpOperator`, `CSharpNamespace`, `CSharpLocalFunction`
+- [x] `queries/csharp.scm` with `csharp.`-prefixed captures, routed through the delegating arm in `extractor/captures.rs` (Rust/Groovy pattern)
+- [x] `src/pipeline/parser/languages/csharp/` as a directory (`mod.rs`, `capture.rs`, `fqn.rs`, `refs.rs`, `tests.rs`), following the `rust/` and `varnish/` layout
+- [x] **Hybrid FQN resolution** — file-scoped namespaces (C# 10 `namespace X;`) have no `body` in the grammar, so the types that follow are *siblings* under `compilation_unit`, unreachable by a parent walk. Implemented as a file-level pre-pass (`csharp::extract_file_scoped_namespace`, Java `extract_package_name` model) **plus** an ancestor walk for block-form namespaces and nested types (`csharp::build_csharp_fqn_prefix`, C++ `build_cpp_fqn` model). Neither model alone is sufficient
+- [x] **`base_list` disambiguation heuristic** — C# has no syntactic distinction between inheritance and implementation (`class Foo : Bar, IBaz` is one `base_list`). Resolved by declarer kind plus the `I`-prefix convention: interfaces always `EXTENDS`, structs always `IMPLEMENTS`, classes take the first entry as `EXTENDS` unless it matches `^I[A-Z]`
+- [x] Reference extraction: `invocation_expression`, `member_access_expression`, `object_creation_expression` (redirected to constructors), `attribute`, type positions, `using_directive`. Field-typed receivers (`_repository.FindByIdAsync()`) are substituted with the field's declared type so calls resolve to the exact implementation method; `base.Method()` maps to the resolver's `super` receiver
+- [x] **`OVERRIDES` extended beyond the JVM** — `resolve/overrides.rs` gained `.cs` and the C# kinds; its `JVM_*` vocabulary was renamed to `OVERRIDE_CAPABLE_*` so the module stops misdescribing its own scope
+- [x] XML doc comments (`/// <summary>`) — no new code needed; `strip_comment_markers` already handles `///`
+- [x] 42 unit tests + `tests/run_csharp_e2e.sh` (registered as the 20th suite) with dual MCP + CLI validation across 7 fixtures
+- [x] `CURRENT_STATE_VERSION` deliberately **not** bumped — C# changes no existing FQN shape, so no user is forced into a full re-index
+
+### Out of Scope (follow-up issues)
+- `.csproj` / `.sln` / NuGet cross-repo linking — requires suffix-based discovery, since `BUILD_SYSTEM_NAMES` matches filenames exactly and `.csproj` names are project-specific
+- `partial class` / `partial method` unification across files
+- Resolution-time EXTENDS/IMPLEMENTS correction (replacing the naming heuristic)
+- Generic constraints (`where T : IComparable<T>`) as `GENERIC_BOUND` edges
+
+---
+
 ## Implementation Priority & Timeline
 
 | Phase | Complexity | Status |
@@ -206,6 +282,8 @@ Enable `knot` to index Markdown (`.md`/`.markdown`) documentation files so that 
 | Phase 12: Performance Optimization | High | ✅ Completed (v1.1.0) |
 | Phase 12A-C: Cargo.toml, Config, K8s/Helm | Medium | ✅ Completed (v1.2.0) |
 | Phase 13: Markdown Documentation Indexing | Low | ✅ Completed (v1.4.9) |
+| Phase 14: Varnish Cache (VCL/VTC/VCC) | High | ✅ Completed (v1.5.7, include resolution v1.6.1) |
+| Phase 15: C# Support | High | ✅ Completed (v1.7.0) |
 
 ---
 

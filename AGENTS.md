@@ -33,6 +33,7 @@ cargo test
 ./tests/run_build_systems_e2e.sh     # Maven/Gradle/Jenkins/Cargo.toml
 ./tests/run_groovy_e2e.sh            # Groovy
 ./tests/run_cpp_e2e.sh               # C/C++
+./tests/run_csharp_e2e.sh            # C#
 ./tests/run_cross_lang_ref_e2e.sh    # Cross-language validation
 ./tests/run_config_e2e.sh            # YAML/JSON/.properties config
 ./tests/run_k8s_helm_e2e.sh          # Kubernetes + Helm
@@ -71,6 +72,7 @@ Located in `src/pipeline/parser/languages/`:
 - `python.rs` (v0.9.3) — Full async/decorator/type hint support
 - `groovy.rs` (v0.10.3) — Hybrid tree-sitter + lexical parser
 - `c_cpp.rs` (v1.0.0) — Namespace-aware FQN for C++
+- `csharp/` (tree-sitter-c-sharp 0.23) — C# classes/interfaces/structs/records/enums, members, namespaces; FQN `<namespace>.<Type>.<member>` across file-scoped and block forms
 - `html.rs`, `css.rs` — Web stack support
 - `toml.rs` (v1.2.5) — Cargo.toml parser (package, deps, features, workspace)
 - `yaml.rs` (v1.2.5) — Generic YAML config parser (recursive walk, max depth 10)
@@ -224,7 +226,7 @@ Each language defines entity kinds (enum `EntityKind`). Common across all:
 - `Function`, `Method`, `Constructor`
 - `Variable`, `Constant`, `Field`, `Property`
 
-Language-specific (e.g., Rust): `Macro`, `TypeAlias`, `Union`; Groovy: `Closure`, `GroovyTrait`; C++: `CppNamespace`.
+Language-specific (e.g., Rust): `Macro`, `TypeAlias`, `Union`; Groovy: `Closure`, `GroovyTrait`; C++: `CppNamespace`; C#: `CSharpClass`, `CSharpInterface`, `CSharpStruct`, `CSharpRecord`, `CSharpEnum`, `CSharpMethod`, `CSharpConstructor`, `CSharpProperty`, `CSharpField`, `CSharpConstant`, `CSharpDelegate`, `CSharpEvent`, `CSharpIndexer`, `CSharpOperator`, `CSharpNamespace`, `CSharpLocalFunction`.
 
 v1.2.5 additions: `CargoPackage`, `CargoFeature`, `WorkspaceMember`, `ConfigProperty`, `K8sDeployment`, `K8sService`, `K8sConfigMap`, `K8sSecret`, `K8sIngress`, `K8sNamespace`, `K8sResource`, `HelmChart`, `HelmValue`, `HelmTemplateVar`, `ProjectIdentity`.
 

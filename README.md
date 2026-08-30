@@ -10,7 +10,7 @@
   </a>
 </div>
 
-**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin, TypeScript, JavaScript/Node.js, Rust, Python, **Groovy**, **C/C++**, HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml**), **Configuration Files** (YAML, JSON, .properties — optional), **Kubernetes + Helm** (optional), and **Cross-Repo Dependency Linking** with full cross-language linking.
+**knot** is a high-performance codebase indexer that extracts structural and semantic information from source code, enabling AI agents to understand, analyze, and navigate large code repositories. Currently supports Java, Kotlin, TypeScript, JavaScript/Node.js, Rust, Python, **Groovy**, **C/C++**, **C#**, HTML, and CSS/SCSS, plus **Build Systems** (Maven pom.xml, Gradle build.gradle, Jenkins pipeline, **Cargo.toml**, **MSBuild .csproj + Directory.Packages.props**), **Configuration Files** (YAML, JSON, .properties — optional), **Kubernetes + Helm** (optional), and **Cross-Repo Dependency Linking** with full cross-language linking.
 
 For recent release notes see [CHANGELOG.md](CHANGELOG.md).
 
@@ -42,6 +42,81 @@ This dual-database approach powers both:
 
 ---
 
+## 🧮 Token Efficiency — Measured, Not Claimed
+
+An LLM agent exploring an unfamiliar codebase pays for every byte it reads.
+Without an index it greps and then reads whole files; with knot it receives a
+targeted answer. The difference was measured on **three real indexed
+repositories** across nine realistic exploration tasks:
+
+| Repo | Lang | Task | knot tokens | Read-the-code tokens | Reduction |
+|------|------|------|------------:|---------------------:|----------:|
+| spring-ai | Java | discovery — *how does the chat client run the advisor chain?* | 1 092 | 10 168 | **89.3%** |
+| spring-ai | Java | callers — *who uses `ToolCallingManager`?* | 8 808 | 15 554 | **43.4%** |
+| spring-ai | Java | explore — *structure of `DefaultChatClient.java`* | 4 865 | 7 838 | **37.9%** |
+| puppeteer | TypeScript | discovery — *how is a CDP session created?* | 609 | 4 149 | **85.3%** |
+| puppeteer | TypeScript | callers — *who calls `createCDPSession`?* | 1 004 | 39 878 | **97.5%** |
+| puppeteer | TypeScript | explore — *structure of the `Page` API* | 7 287 | 25 300 | **71.2%** |
+| knot | Rust | discovery — *how are call intents resolved?* | 594 | 14 824 | **96.0%** |
+| knot | Rust | callers — *who calls `format_references_result`?* | 461 | 10 949 | **95.8%** |
+| knot | Rust | explore — *structure of the graph query module* | 978 | 12 103 | **91.9%** |
+| **TOTAL** | — | **9 tasks** | **25 698** | **140 763** | **81.7%** |
+
+**≈ 5.5× fewer tokens** for the same nine questions — 115 000 tokens saved,
+enough to keep a long refactoring session inside a single context window.
+
+<details>
+<summary><b>Methodology (and how to reproduce it)</b></summary>
+
+Both sides are measured on the **exact bytes an LLM would receive as tool
+output**, counted with OpenAI's `cl100k_base` tokenizer (tiktoken):
+
+| Task | knot side | Read-the-code side |
+|------|-----------|--------------------|
+| `discovery` | `knot search "<question>" --repo <r> --output markdown` | `rg -l <keyword>` (candidate list) **+ full read of the files that actually answer the question** |
+| `callers` | `knot callers "<symbol>" --repo <r> --output markdown` | `rg -n "\b<symbol>\b"` **+ full read of the first 5 distinct files with hits** |
+| `explore` | `knot explore "<file>" --repo <r> --output markdown` | full read of the file |
+
+The baseline is deliberately **generous**, so the measured saving is a lower
+bound:
+
+- greps are restricted to the source files of the language (`-t java`, `-t ts`,
+  `-t rust`) — no changelogs, no generated docs, no `node_modules`;
+- for `discovery` the baseline is given *oracle file selection*: it reads only
+  the files that answer the question, with zero wasted reads;
+- for `callers` it reads at most 5 files, while a rigorous impact analysis would
+  need every file with a textual hit.
+
+Honest caveats: knot's cost scales with the **number of results**, not with repo
+size. The weakest row (`spring-ai` / `ToolCallingManager`, 43%) is a symbol with
+156 references — knot enumerates all of them with exact call sites, while the
+capped baseline reads only 5 files and still cannot tell a call from a comment.
+The `explore` rows for large classes are also the least favourable, because
+signatures plus docstrings are a large fraction of a well-documented file.
+
+Repositories measured (as indexed): `spring-ai` 2 406 files / 25 733 entities,
+`puppeteer` 1 832 files / 19 310 entities, `knot` 222 files / 4 000 entities.
+Raw measurements are stored in
+[`.perf_metrics/token_savings.json`](.perf_metrics/token_savings.json).
+
+```bash
+pip install tiktoken            # optional: falls back to a chars/4 estimate
+# edit the `root` paths in scripts/token_savings_tasks.json to match your checkouts
+python3 scripts/token_savings_benchmark.py \
+  --config scripts/token_savings_tasks.json \
+  --save-json .perf_metrics/token_savings.json
+```
+
+The task definitions live in
+[`scripts/token_savings_tasks.json`](scripts/token_savings_tasks.json) and the
+harness in
+[`scripts/token_savings_benchmark.py`](scripts/token_savings_benchmark.py);
+point them at any repository you have indexed to measure your own codebase.
+
+</details>
+
+---
+
 ## ✨ Key Features
 
 **🔍 Code Intelligence Tools**
@@ -54,6 +129,7 @@ This dual-database approach powers both:
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package-aware FQN resolution (e.g., `com.example.app.UserService`), class inheritance (`EXTENDS`), interface implementation (`IMPLEMENTS`), annotation tracking, and field-access method invocation resolution
 - **Kotlin**: Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar.
+- **C#**: Full C# support via `tree-sitter-c-sharp`. Extracts classes, interfaces, structs, records (both `record class` and `record struct`), enums, methods, constructors, properties, fields (with `const` detection), delegates, events, indexers, operators, local functions, and namespaces with `CSharp*` entity kinds. Namespace-qualified FQNs (`MyApp.Services.UserService.GetUserAsync`) work across both file-scoped (C# 10+) and block-form namespaces, including nested namespaces and nested types. The `base_list` heuristic splits `: Base, IFace` into `EXTENDS`/`IMPLEMENTS` using the `IPascalCase` convention (structs and interfaces are deterministic), generic arguments are stripped (`IRepository<User>` → `IRepository`), XML doc comments (`///`) become docstrings, and attributes (`[Obsolete]`) are captured as decorators. Calls through field-typed receivers resolve to the exact implementation method, and C# `virtual`/`override` plus interface implementation produce method-level `OVERRIDES` edges. **MSBuild/NuGet**: `.csproj` files are parsed for project identity and dependencies (Central Package Management via `Directory.Packages.props` is supported); C# repos get `build_system: "nuget"` in the Repository node instead of the prior `"none"`.
 - **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files
 - **JavaScript/Node.js**: Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`)
 - **Hybrid Web Ecosystem**: Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
@@ -63,7 +139,7 @@ This dual-database approach powers both:
 - **Rust**: Struct, enum, union, trait, function, method, module extraction with trait implementation tracking (IMPLEMENTS relationships) and macro invocation references. Methods are indexed with the qualified FQN `Type::method` (e.g., `KnotMcpHandler::new`, `WidgetA::new`, `Logger::new`) and qualified calls from top-level functions resolve to the right target by receiver. Braced import/use capture — `use foo::{Bar, Baz}` and `use foo::Bar as Baz` produce explicit REFERENCES edges for all imported names, including traits imported solely to bring methods into scope. All Rust entity FQNs are now anchored at the owning crate and module path (e.g. `knot::config::Config`, `knot::pipeline::parser::languages::rust::qualify_rust_fqns`), so two crates that declare a type with the same bare name no longer collide. Files outside `src/` (tests, benches, examples) receive a `__fixture::<path>::<Entity>` FQN prefix (e.g. `__fixture::tests::testing_files::sample::Config`), and files without a `Cargo.toml` ancestor receive `__loose::<path>::<Entity>`, preventing name collisions with real source entities. CONTAINS relationships use `enclosing_class_fqn` for exact disambiguation when multiple entities share the same class name. The on-disk index state file (`.knot/index_state.json`) carries a `version` field; opening a state file from an older version prints an error with instructions to run `knot-indexer --clean`.
  - **Python**: Full Python extraction with class, function, method support, constants, module-level imports, `ValueReference` tracking for keyword arguments, class inheritance (`EXTENDS`), decorator extraction (`@property`, `@staticmethod`, `@route(...)`, `@dataclass`), generic type hints (`List[str]`, `Optional[Dict]`, `*args`/`**kwargs`), Py2/Py3 exception syntax compatibility, and `self.method()` resolution with inherited method walking. Captures `class_definition`, `function_definition` (including async via optional `async` modifier), lambda assignments, and distinguishes methods from functions via parent context detection. **Class instantiation (`ClassName(...)`) is automatically redirected to `ClassName.__init__`** so `find_callers ClassName.__init__` lists every constructor call site (with fallback to inherited `__init__` via the extends chain); only class/struct kinds trigger the redirect — functions keep the legacy behavior.
 - **Groovy**: Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. Multi-line signatures (closure default params), assignment-vs-declaration disambiguation, innermost assignment for nested closures, UUID collision fix for duplicate method names, `find_callers` accurately tracks private methods including those in anonymous `new AnAction` closures. **Inheritance tracking:** emits `EXTENDS`/`IMPLEMENTS` reference intents for `class`/`interface`/`trait`/`enum` headers (single-line and multi-line) so `find_callers` surfaces real nextflow-style hierarchies — qualified parents (e.g. `extends nextflow.plugin.BasePlugin`) and generic-argument stripping (e.g. `extends AbstractRepo<Order, Long> → extends AbstractRepo`) are supported, and generic bounds (`class Box<T extends Comparable>`) are correctly **not** promoted to inheritance edges. **Property accessors:** bare property declarations (`Path baseDir`, `boolean cacheable`) are now indexed as `GroovyProperty`, and compiler-generated `getX`/`setX`/`isX` accessors are synthesised as first-class method entities so `OVERRIDES` edges link Groovy properties to interface getter declarations. Comment-stripping prevents Javadoc continuation lines (`* The pipeline script name`) from producing phantom entities or corrupting scope tracking.
-- **Build Systems**: Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), and `Jenkinsfile` pipeline (stages + steps) extraction.
+- **Build Systems**: Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), `Jenkinsfile` pipeline (stages + steps), Cargo `Cargo.toml` (deps + workspace members + features), and MSBuild `.csproj` / `Directory.Packages.props` extraction. MSBuild resolves project identity (`<PackageId>` → `<AssemblyName>` → file stem), emits a `BuildDependency` per `<PackageReference>` (attribute-form and version-less), and resolves Central Package Management versions from the nearest `Directory.Packages.props` ancestor. UTF-8 BOMs are tolerated defensively. Identity marker `identity: package_id` is carried in the signature when the project has an explicit `<PackageId>` so the cross-repo resolver prefers published packages over depth-tied unmarked candidates.
 - **Cargo.toml**: Rust package manager support with package metadata, features, workspace members, and multi-format dependency parsing (simple, table, git, path).
 - **Configuration Files**: YAML (.yml/.yaml), JSON (.json), and Java Properties (.properties) with leaf-key granularity. Special handling for package.json (npm dependencies as BuildDependency, scripts as ConfigProperty).
 - **Varnish Cache**: Hand-written parsers for `.vcl` (configuration), `.vtc` (test cases), and `.vcc` (VMOD C source). VCL extracts backends, probes, ACLs, subroutines (custom + built-in with `vcl_*` names, including aggregator entities for multi-part built-ins), `import` directives (with `as` aliases and `from` paths), `include` edges, `unused` declarations, VMOD instantiations, and `req.backend_hint` assignments. VTC extracts `varnishtest`/`vtest` cases, servers, clients, varnish instances, logexpect blocks, barriers, and `-vcl+backend` synthesised backends (with `is_test_context`). VCC extracts `$Module`, `$Function`, `$Object`, `$Method`, `$Event`, `$Restrict`, ENUMs, and default parameters. References: `Calls`, `Extends`, `Implements`, `References` (with intents `VclSubCall`, `VclBackendRef`, `VclProbeRef`, `VclAclRef`, `VclInclude`, `VclVmodImport`, `VclUnusedRef`, `ValueReference`); relationships: `UsesBackend`, `UsesProbe`, `UsesAcl`, `Includes`, `ImportsVmod`, `DeclaredUnused`. The Fastly VCL dialect is detected and skipped (returns empty entities).
@@ -87,10 +163,11 @@ This dual-database approach powers both:
 - **Real-time Watch Mode**: Automatically re-indexes changed files in seconds via `--watch`
 - **CPU Parallelism**: AST extraction via Rayon
 - **Scalable**: Configurable batch processing and constant memory footprint (~2GB) regardless of repository size
-- **Performance Benchmarking**: Three-level validation framework
+- **Performance Benchmarking**: Multi-level validation framework
   - *Unit benchmarks*: Criterion-based benchmarks for parse, embed, and graph write throughput (`benches/`)
   - *E2E benchmarks*: Full pipeline metrics capture with per-stage timing (`tests/benchmark_e2e.sh`)
   - *CI regression tracking*: Automated baseline comparison against tolerance thresholds (`scripts/compare_perf_metrics.sh`)
+  - *Token efficiency*: LLM token cost of knot answers vs reading source files (`scripts/token_savings_benchmark.py`) — see [Token Efficiency](#-token-efficiency--measured-not-claimed)
 
 ---
 
@@ -436,6 +513,9 @@ To ensure indexer stability, run the E2E integration test suite:
 # Run only Rust E2E tests
 ./tests/run_rust_e2e.sh
 
+# Run only C# E2E tests
+./tests/run_csharp_e2e.sh
+
 # Run only Varnish E2E tests
 ./tests/run_varnish_e2e.sh
 ```
@@ -479,13 +559,16 @@ echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entit
 
 # Find by type annotation (TypeScript)
 echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"(EventData"}}}' | knot-mcp
+
+# Find by C# interface method (surfaces implementations + call sites)
+echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entity_name":"FindByIdAsync"}}}' | knot-mcp
 ```
 
 **Use Cases:**
 - **Dead Code Detection**: Zero callers = unused code
 - **Impact Analysis**: "What breaks if I modify this?"
 - **Refactoring Safety**: Find all references before removing
-- **Override Discovery (JVM)**: For Java/Kotlin/Groovy methods, results include an
+- **Override Discovery (JVM + C#)**: For Java/Kotlin/Groovy/C# methods, results include an
   **Overridden by** group (implementations/overrides in subtypes) and an
   **Overrides** group (the supertype methods a method implements/overrides). These
   are backed by real `OVERRIDES` edges built at index time and resolved
@@ -592,13 +675,13 @@ Priority (highest to lowest): CLI flags > environment variables > `.env` file.
 
 ## 🎨 Custom Tree-sitter Queries
 
-The built-in extraction queries (`queries/java.scm`, `queries/typescript.scm`) can be overridden without recompiling:
+The built-in extraction queries (`queries/java.scm`, `queries/typescript.scm`, `queries/csharp.scm`) can be overridden without recompiling:
 
 ```bash
 KNOT_CUSTOM_QUERIES_PATH=/path/to/my/queries ./target/release/knot-indexer
 ```
 
-Place `java.scm` and/or `typescript.scm` in your custom directory. Missing files fall back to built-in defaults.
+Place `java.scm`, `typescript.scm`, and/or `csharp.scm` in your custom directory. Missing files fall back to built-in defaults.
 
 ---
 
@@ -696,6 +779,21 @@ cargo bench --bench channel_backpressure_bench  # Bounded channel overhead
 scripts/compare_perf_metrics.sh /tmp/perf_results .perf_metrics/baseline.json
 ```
 
+**Level 3 — Token Efficiency Benchmark:**
+```bash
+# Measures knot tool output vs grep + file reads on indexed repositories
+python3 scripts/token_savings_benchmark.py \
+  --config scripts/token_savings_tasks.json \
+  --save-json .perf_metrics/token_savings.json
+```
+
+Unlike levels 1 and 2 (which measure indexing throughput), this one measures the
+*consumer* side: how many LLM tokens an agent spends to answer a question with
+knot versus by reading source files. Requires `rg`, a built `knot` binary, the
+repositories in the config already indexed, and optionally `tiktoken` for exact
+token counts. See [Token Efficiency](#-token-efficiency--measured-not-claimed)
+for the published results.
+
 **Baseline files:** `.perf_metrics/baseline.json` stores the last known good metrics (committed, updated on main/master merges). Tolerance thresholds in `.perf_metrics/threshold_tolerances.json` control regression gates (±5% time, ±10% memory by default).
 
 **CI Integration:** The `test-performance` job in `.github/workflows/ci.yml` runs after all E2E correctness tests pass, comparing results against baseline and fails the build on regression.
@@ -716,7 +814,6 @@ For the full release history see [CHANGELOG.md](CHANGELOG.md).
 
 #### Long-Term Vision
 - [ ] Go support
-- [ ] C# support
 - [ ] IDE plugins (VS Code, IntelliJ, Vim)
 - [ ] Language Server Protocol (LSP) integration
 - [ ] Automated Code Review tool (MCP-based)
