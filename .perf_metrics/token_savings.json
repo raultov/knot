@@ -1,0 +1,128 @@
+{
+  "tokenizer": "cl100k_base",
+  "totals": {
+    "knot_tokens": 25698,
+    "baseline_tokens": 140763,
+    "reduction_pct": 81.74,
+    "ratio": 5.48
+  },
+  "results": [
+    {
+      "repo": "spring-ai",
+      "language": "Java",
+      "task_type": "discovery",
+      "question": "How does the chat client execute a request through the advisor chain?",
+      "knot_command": "search advisor chain executes chat client request --repo spring-ai --max-results 5 --output markdown",
+      "knot_tokens": 1092,
+      "baseline_description": "`rg -l AdvisorChain` + full read of 3 file(s)",
+      "baseline_tokens": 10168,
+      "baseline_files_read": 3,
+      "reduction_pct": 89.26,
+      "ratio": 9.31
+    },
+    {
+      "repo": "spring-ai",
+      "language": "Java",
+      "task_type": "callers",
+      "question": "Who uses ToolCallingManager? (impact analysis)",
+      "knot_command": "callers ToolCallingManager --repo spring-ai --output markdown",
+      "knot_tokens": 8808,
+      "baseline_description": "`rg -n '\\bToolCallingManager\\b'` + full read of 5 hit file(s)",
+      "baseline_tokens": 15554,
+      "baseline_files_read": 5,
+      "reduction_pct": 43.37,
+      "ratio": 1.77
+    },
+    {
+      "repo": "spring-ai",
+      "language": "Java",
+      "task_type": "explore",
+      "question": "What is the structure of DefaultChatClient.java?",
+      "knot_command": "explore spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/DefaultChatClient.java --repo spring-ai --output markdown",
+      "knot_tokens": 4865,
+      "baseline_description": "full read of `spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/DefaultChatClient.java`",
+      "baseline_tokens": 7838,
+      "baseline_files_read": 1,
+      "reduction_pct": 37.93,
+      "ratio": 1.61
+    },
+    {
+      "repo": "puppeteer",
+      "language": "TypeScript",
+      "task_type": "discovery",
+      "question": "How is a CDP session created and attached to a target?",
+      "knot_command": "search create CDP session attached to a target --repo puppeteer --max-results 5 --output markdown",
+      "knot_tokens": 609,
+      "baseline_description": "`rg -l CDPSession` + full read of 2 file(s)",
+      "baseline_tokens": 4149,
+      "baseline_files_read": 2,
+      "reduction_pct": 85.32,
+      "ratio": 6.81
+    },
+    {
+      "repo": "puppeteer",
+      "language": "TypeScript",
+      "task_type": "callers",
+      "question": "Who calls createCDPSession? (impact analysis)",
+      "knot_command": "callers createCDPSession --repo puppeteer --output markdown",
+      "knot_tokens": 1004,
+      "baseline_description": "`rg -n '\\bcreateCDPSession\\b'` + full read of 5 hit file(s)",
+      "baseline_tokens": 39878,
+      "baseline_files_read": 5,
+      "reduction_pct": 97.48,
+      "ratio": 39.72
+    },
+    {
+      "repo": "puppeteer",
+      "language": "TypeScript",
+      "task_type": "explore",
+      "question": "What is the structure of the Page API class?",
+      "knot_command": "explore packages/puppeteer-core/src/api/Page.ts --repo puppeteer --output markdown",
+      "knot_tokens": 7287,
+      "baseline_description": "full read of `packages/puppeteer-core/src/api/Page.ts`",
+      "baseline_tokens": 25300,
+      "baseline_files_read": 1,
+      "reduction_pct": 71.2,
+      "ratio": 3.47
+    },
+    {
+      "repo": "knot",
+      "language": "Rust",
+      "task_type": "discovery",
+      "question": "How are call reference intents resolved to target entities?",
+      "knot_command": "search resolve call reference intents to target entities --repo knot --max-results 5 --output markdown",
+      "knot_tokens": 594,
+      "baseline_description": "`rg -l ReferenceIntent` + full read of 2 file(s)",
+      "baseline_tokens": 14824,
+      "baseline_files_read": 2,
+      "reduction_pct": 95.99,
+      "ratio": 24.96
+    },
+    {
+      "repo": "knot",
+      "language": "Rust",
+      "task_type": "callers",
+      "question": "Who calls format_references_result? (impact analysis)",
+      "knot_command": "callers format_references_result --repo knot --output markdown",
+      "knot_tokens": 461,
+      "baseline_description": "`rg -n '\\bformat_references_result\\b'` + full read of 4 hit file(s)",
+      "baseline_tokens": 10949,
+      "baseline_files_read": 4,
+      "reduction_pct": 95.79,
+      "ratio": 23.75
+    },
+    {
+      "repo": "knot",
+      "language": "Rust",
+      "task_type": "explore",
+      "question": "What is the structure of the graph query module?",
+      "knot_command": "explore src/db/graph/query.rs --repo knot --output markdown",
+      "knot_tokens": 978,
+      "baseline_description": "full read of `src/db/graph/query.rs`",
+      "baseline_tokens": 12103,
+      "baseline_files_read": 1,
+      "reduction_pct": 91.92,
+      "ratio": 12.38
+    }
+  ]
+}

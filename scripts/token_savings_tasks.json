@@ -1,0 +1,131 @@
+{
+  "_comment": [
+    "Task definitions for scripts/token_savings_benchmark.py.",
+    "`root` must point at the local checkout of the repository that was indexed;",
+    "adjust the paths below to your own workspace before running the benchmark.",
+    "`answer_files` lists the files an agent must actually read to answer the",
+    "discovery question \u2014 the baseline is given perfect file selection on purpose,",
+    "so the measured saving is a lower bound.",
+    "`rg_types` restricts the baseline grep to the source files of the language, which is what a competent agent would do (no changelogs, no generated docs)."
+  ],
+  "tasks": [
+    {
+      "repo": "spring-ai",
+      "language": "Java",
+      "type": "discovery",
+      "root": "~/.knot/repos/spring-ai",
+      "question": "How does the chat client execute a request through the advisor chain?",
+      "query": "advisor chain executes chat client request",
+      "grep_keyword": "AdvisorChain",
+      "answer_files": [
+        "spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/advisor/api/AdvisorChain.java",
+        "spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/advisor/api/BaseAdvisor.java",
+        "spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/DefaultChatClient.java"
+      ],
+      "rg_types": [
+        "java"
+      ]
+    },
+    {
+      "repo": "spring-ai",
+      "language": "Java",
+      "type": "callers",
+      "root": "~/.knot/repos/spring-ai",
+      "question": "Who uses ToolCallingManager? (impact analysis)",
+      "symbol": "ToolCallingManager",
+      "rg_types": [
+        "java"
+      ]
+    },
+    {
+      "repo": "spring-ai",
+      "language": "Java",
+      "type": "explore",
+      "root": "~/.knot/repos/spring-ai",
+      "question": "What is the structure of DefaultChatClient.java?",
+      "file": "spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/DefaultChatClient.java",
+      "rg_types": [
+        "java"
+      ]
+    },
+    {
+      "repo": "puppeteer",
+      "language": "TypeScript",
+      "type": "discovery",
+      "root": "~/.knot/repos/puppeteer",
+      "question": "How is a CDP session created and attached to a target?",
+      "query": "create CDP session attached to a target",
+      "grep_keyword": "CDPSession",
+      "answer_files": [
+        "packages/puppeteer-core/src/cdp/CdpSession.ts",
+        "packages/puppeteer-core/src/cdp/Connection.ts"
+      ],
+      "rg_types": [
+        "ts",
+        "js"
+      ]
+    },
+    {
+      "repo": "puppeteer",
+      "language": "TypeScript",
+      "type": "callers",
+      "root": "~/.knot/repos/puppeteer",
+      "question": "Who calls createCDPSession? (impact analysis)",
+      "symbol": "createCDPSession",
+      "rg_types": [
+        "ts",
+        "js"
+      ]
+    },
+    {
+      "repo": "puppeteer",
+      "language": "TypeScript",
+      "type": "explore",
+      "root": "~/.knot/repos/puppeteer",
+      "question": "What is the structure of the Page API class?",
+      "file": "packages/puppeteer-core/src/api/Page.ts",
+      "rg_types": [
+        "ts",
+        "js"
+      ]
+    },
+    {
+      "repo": "knot",
+      "language": "Rust",
+      "type": "discovery",
+      "root": ".",
+      "question": "How are call reference intents resolved to target entities?",
+      "query": "resolve call reference intents to target entities",
+      "grep_keyword": "ReferenceIntent",
+      "answer_files": [
+        "src/pipeline/ingest/resolve/calls.rs",
+        "src/pipeline/ingest/resolve/mod.rs"
+      ],
+      "rg_types": [
+        "rust"
+      ]
+    },
+    {
+      "repo": "knot",
+      "language": "Rust",
+      "type": "callers",
+      "root": ".",
+      "question": "Who calls format_references_result? (impact analysis)",
+      "symbol": "format_references_result",
+      "rg_types": [
+        "rust"
+      ]
+    },
+    {
+      "repo": "knot",
+      "language": "Rust",
+      "type": "explore",
+      "root": ".",
+      "question": "What is the structure of the graph query module?",
+      "file": "src/db/graph/query.rs",
+      "rg_types": [
+        "rust"
+      ]
+    }
+  ]
+}
