@@ -6,6 +6,7 @@
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use serde_json::Value;
 
+use crate::cli_tools::resolution::ResolutionView;
 use crate::cli_tools::{json_entities_array, json_line_number, json_target_name};
 
 pub fn format_search_table(results: &Value) -> String {
@@ -72,54 +73,97 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
 
     let mut total_refs = 0;
 
-    let rel_types = vec![
-        ("calls", "Calls"),
-        ("extends", "Extends"),
-        ("implements", "Implements"),
-        ("references", "References"),
+    let rel_types = [
+        ("calls", "Calls", Color::Blue),
+        ("extends", "Extends", Color::Yellow),
+        ("implements", "Implements", Color::Cyan),
+        ("references", "References", Color::Magenta),
     ];
 
-    for (key, label) in rel_types {
-        if let Some(arr) = references.get(key).and_then(|v| v.as_array()) {
-            let label_color = match key {
-                "calls" => Color::Blue,
-                "extends" => Color::Yellow,
-                "implements" => Color::Cyan,
-                "references" => Color::Magenta,
-                _ => Color::White,
-            };
-            for entity in arr {
-                total_refs += 1;
-                // Prefer target_fqn when available (qualified identifiers
-                // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
-                let target = json_target_name(entity, entity_name);
-                let caller = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                let file = entity
-                    .get("file_path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
-                let line = json_line_number(entity);
+    for (key, label, label_color) in rel_types {
+        let Some(arr) = references.get(key).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for entity in arr {
+            total_refs += 1;
+            // Prefer target_fqn when available (qualified identifiers
+            // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
+            let target = json_target_name(entity, entity_name);
+            let caller = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
+            let file = entity
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-");
+            let line = json_line_number(entity);
 
-                table.add_row(vec![
-                    Cell::new(label).fg(label_color),
-                    Cell::new(target).fg(Color::Magenta),
-                    Cell::new(caller),
-                    Cell::new(file),
-                    Cell::new(line).set_alignment(CellAlignment::Right),
-                ]);
-            }
+            table.add_row(vec![
+                Cell::new(label).fg(label_color),
+                Cell::new(target).fg(Color::Magenta),
+                Cell::new(caller),
+                Cell::new(file),
+                Cell::new(line).set_alignment(CellAlignment::Right),
+            ]);
         }
     }
 
     if total_refs == 0 {
-        return format!(
+        let mut no_ref_msg = callers_resolution_detail(references);
+        no_ref_msg.push_str(&format!(
             "No references found for `{}`. This entity may be unused.\n",
             entity_name
-        );
+        ));
+        return no_ref_msg;
     }
 
-    let header = format!("References to `{}` ({} total)\n", entity_name, total_refs);
+    let header = callers_resolution_header(entity_name, references, total_refs);
     header + &table.to_string()
+}
+
+/// Verbose resolution block shown when no references were found: the target
+/// list is the only useful signal left, so it is spelled out in full.
+fn callers_resolution_detail(references: &Value) -> String {
+    let Some(view) = ResolutionView::from_references(references) else {
+        return String::new();
+    };
+
+    let mut out = format!("{}:\n", view.summary());
+    out.push_str(&view.target_bullets());
+    out.push('\n');
+
+    if view.is_fuzzy() {
+        out.push_str(&format!(
+            "WARNING: Fuzzy match — no entity matched `{}` exactly.\n\n",
+            view.query()
+        ));
+    }
+
+    out
+}
+
+/// One-line resolution header shown above the caller table.
+fn callers_resolution_header(entity_name: &str, references: &Value, total_refs: usize) -> String {
+    let Some(view) = ResolutionView::from_references(references) else {
+        return format!("References to `{}` ({} total)\n", entity_name, total_refs);
+    };
+
+    let mut out = format!("{} ({} references total)\n", view.summary(), total_refs);
+
+    if view.is_fuzzy() {
+        out.push_str(&format!(
+            "WARNING: Fuzzy match — no entity matched `{}` exactly.\n",
+            view.query()
+        ));
+    }
+
+    if view.is_truncated() {
+        out.push_str(&format!(
+            "Truncated — {} targets matched; showing first {} by FQN.\n",
+            view.total_targets(),
+            view.count()
+        ));
+    }
+
+    out
 }
 
 pub fn format_explore_table(file_path: &str, result: &Value) -> String {

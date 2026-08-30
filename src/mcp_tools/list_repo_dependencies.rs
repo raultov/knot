@@ -39,7 +39,8 @@
 //! - `reverse` toggles between forward and reverse dependency lookup.
 //!
 //! **Supported Build Systems:**
-//! Maven (pom.xml), Gradle (build.gradle), Cargo (Cargo.toml), npm (package.json).
+//! Maven (pom.xml), Gradle (build.gradle), Cargo (Cargo.toml), npm (package.json),
+//! NuGet (`.csproj` + `Directory.Packages.props` for Central Package Management).
 
 use rust_mcp_sdk::schema::*;
 use serde_json::json;
@@ -85,17 +86,17 @@ impl ListRepoDependenciesTool {
 
         Tool {
             name: "list_repo_dependencies".to_string(),
-            description: Some(
+description: Some(
                 "Read-only cross-repository dependency graph lookup. \
-                 Shows which repositories depend on each other via build system declarations (Maven, Gradle, Cargo, npm). \
+                 Shows which repositories depend on each other via build system declarations (Maven, Gradle, Cargo, npm, NuGet). \
                  Answers 'which repos does this repo depend on?' and 'which repos depend on this repo?'. \
                  \n\nUsage: Use BEFORE cross-repo analysis to discover which other indexed repos are available for call tracing. \
-                 Use reverse mode for impact analysis before breaking changes in shared libraries. \
+                 Use reverse mode for impact analysis before making breaking changes in shared libraries. \
                  \n\nBehaviour & Return: Read-only graph traversal with no side effects. \
                  Returns a JSON array of repository names. Empty results mean no DEPENDS_ON relationships exist for that repo. \
                  \n\nParameter guidance: 'repo_name' is required and must match the name used during indexing. \
                  'max_depth' defaults to 3 (1 = direct only). 'reverse' toggles between forward and reverse dependency lookup. \
-                 \n\nSupports all build systems indexed by knot: Maven, Gradle, Cargo, npm."
+                 \n\nSupports all build systems indexed by knot: Maven, Gradle, Cargo, npm, NuGet (`.csproj` + Central Package Management via `Directory.Packages.props`). C# repos that previously reported `build_system: \"none\"` now report `\"nuget\"` on re-index; `knot-indexer --clean` is recommended for immediate effect."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(

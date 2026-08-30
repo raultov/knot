@@ -51,7 +51,7 @@ impl ExploreFileTool {
                  \n\nBehaviour & Return: Read-only operation. Returns a Markdown-formatted outline of the file's entities, grouped by type (Classes, Methods, Interfaces), including line numbers for direct editor navigation. No side effects. \
                  \n\nPath handling: file_path should be a repo-relative path (e.g. 'src/services/user.ts'). Absolute paths under your local checkout are also accepted; the tool strips the known local root automatically. The returned file_path is normalized to the same repo-relative form regardless of how it was queried. If the query is ambiguous across multiple repositories, the answer includes an 'ambiguous_path_candidates' list — retry with a longer path or pass repo_name. \
                  \n\nParameter guidance: 'file_path' must be a relative or absolute path to a valid source file. Include 'repo_name' if the file path might be ambiguous across multiple indexed repositories. \
-                 \n\nSupports Java, Kotlin, and TypeScript codebases."
+                 \n\nSupports Java, Kotlin, C#, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(

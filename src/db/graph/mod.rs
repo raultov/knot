@@ -15,6 +15,11 @@ mod query_subgraph;
 mod upsert;
 mod utils;
 
+// Public re-exports so `crate::db::graph::MatchTier` / `RootCandidate` /
+// `rank_root_candidates` / `target_resolution_tiers` are addressable from
+// the models and other modules.
+pub use query::{MatchTier, RootCandidate, rank_root_candidates, target_resolution_tiers};
+
 use neo4rs::Graph;
 
 /// Thin wrapper around the neo4rs async connection pool.

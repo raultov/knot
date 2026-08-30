@@ -15,5 +15,6 @@ pub use cli_args::{Cli, Commands};
 pub use entity::{EmbeddedEntity, EntityKind, NAMESPACE_KNOT, ParsedEntity, ResolutionEntity};
 pub use relationship::{CallIntent, ReferenceIntent, RelationshipType};
 pub use subgraph::{
-    SubgraphDirection, SubgraphEdge, SubgraphNode, SubgraphQueryOptions, SubgraphResult,
+    RootCandidateLite, RootResolution, SubgraphDirection, SubgraphEdge, SubgraphNode,
+    SubgraphQueryOptions, SubgraphResult,
 };

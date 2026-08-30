@@ -37,6 +37,10 @@ fn index_statements() -> &'static [&'static str] {
          FOR (r:Repository) REQUIRE r.name IS UNIQUE",
         "CREATE INDEX repo_artifact IF NOT EXISTS \
          FOR (r:Repository) ON (r.group_id, r.artifact_id)",
+        "CREATE TEXT INDEX entity_name_text IF NOT EXISTS \
+         FOR (e:Entity) ON (e.name)",
+        "CREATE TEXT INDEX entity_fqn_text IF NOT EXISTS \
+         FOR (e:Entity) ON (e.fqn)",
     ]
 }
 
@@ -106,6 +110,8 @@ mod tests {
             "entity_file_path",
             "repo_name_unique",
             "repo_artifact",
+            "entity_name_text",
+            "entity_fqn_text",
         ] {
             assert!(
                 all.contains(name),

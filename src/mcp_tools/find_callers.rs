@@ -51,13 +51,15 @@ impl FindCallersTool {
                 "Read-only reverse dependency lookup. Use this to find all code that references, calls, extends, or implements a specific entity. \
                  Answers 'who uses this code?' by querying the graph database. Differs from search tools by providing exact dependency tracking. \
                  \n\nUsage: Use for impact analysis before refactoring or to detect dead code. Do NOT use this for semantic feature discovery—use 'search_hybrid_context' instead. \
-                 CRITICAL: For common method names (e.g., 'accept', 'process'), you MUST include a signature fragment (e.g., 'accept(List') to prevent thousands of irrelevant results. \
+                 \n\nMatching is precedence-based: exact FQN (containing '.' or '::') → FQN suffix (`Type.member`) → exact name → signature prefix (`accept(List`) → fuzzy substring. \
+                 The first tier that matches wins, so an exact name never returns fuzzy noise. Pass a qualified name (`Namespace.Type.Member`) to disambiguate homonyms. \
+                 Responses state which tier matched and flag fuzzy results explicitly. \
                  \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References, Overridden by, Overrides) with exact file paths and line numbers. \
-                 For JVM code (Java/Kotlin/Groovy), 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
+                 For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
                  When multiple entities with the same name exist (e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references. \
                  Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
                  \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
-                 \n\nSupports Java, Kotlin, Rust, and TypeScript codebases."
+                 \n\nSupports Java, Kotlin, C#, Rust, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(
@@ -139,5 +141,13 @@ mod tests {
         let props = schema.properties.unwrap();
         assert!(props.contains_key("entity_name"));
         assert!(props.contains_key("repo_name"));
+    }
+
+    #[test]
+    fn test_find_callers_description_documents_tier_ladder() {
+        let tool = FindCallersTool::tool();
+        let desc = tool.description.unwrap();
+        assert!(desc.contains("Matching is precedence-based: exact FQN"));
+        assert!(!desc.contains("CRITICAL: For common method names"));
     }
 }

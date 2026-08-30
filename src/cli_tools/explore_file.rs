@@ -197,6 +197,50 @@ const KIND_BUCKETS: &[KindBucket] = &[
         kinds: &["kotlin_property"],
     },
     KindBucket {
+        header: "Classes (C#)",
+        kinds: &["csharp_class"],
+    },
+    KindBucket {
+        header: "Interfaces (C#)",
+        kinds: &["csharp_interface"],
+    },
+    KindBucket {
+        header: "Structs (C#)",
+        kinds: &["csharp_struct"],
+    },
+    KindBucket {
+        header: "Records (C#)",
+        kinds: &["csharp_record"],
+    },
+    KindBucket {
+        header: "Enums (C#)",
+        kinds: &["csharp_enum"],
+    },
+    KindBucket {
+        header: "Methods (C#)",
+        kinds: &[
+            "csharp_method",
+            "csharp_constructor",
+            "csharp_local_function",
+        ],
+    },
+    KindBucket {
+        header: "Properties & Fields (C#)",
+        kinds: &["csharp_property", "csharp_field", "csharp_constant"],
+    },
+    KindBucket {
+        header: "Delegates & Events (C#)",
+        kinds: &["csharp_delegate", "csharp_event"],
+    },
+    KindBucket {
+        header: "Operators & Indexers (C#)",
+        kinds: &["csharp_operator", "csharp_indexer"],
+    },
+    KindBucket {
+        header: "Namespaces (C#)",
+        kinds: &["csharp_namespace"],
+    },
+    KindBucket {
         header: "Python Classes",
         kinds: &["python_class"],
     },

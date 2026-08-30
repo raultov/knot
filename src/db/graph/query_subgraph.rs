@@ -3,9 +3,16 @@ use neo4rs::query;
 use std::collections::HashMap;
 
 use super::GraphDb;
+use super::query::{RootCandidate, rank_root_candidates, target_resolution_tiers};
 use crate::models::{
-    SubgraphDirection, SubgraphEdge, SubgraphNode, SubgraphQueryOptions, SubgraphResult,
+    RootCandidateLite, RootResolution, SubgraphDirection, SubgraphEdge, SubgraphNode,
+    SubgraphQueryOptions, SubgraphResult,
 };
+
+/// Maximum number of candidates surfaced in the `root_resolution.candidates`
+/// disclosure payload. Keeps the JSON response bounded — the ranking total
+/// is reported separately via `total_candidates`.
+const ROOT_RESOLUTION_CANDIDATES_CAP: usize = 10;
 
 /// Extension trait for subgraph traversal operations.
 #[expect(
@@ -57,63 +64,163 @@ impl SubgraphQueryExt for GraphDb {
         let depth = options.depth.clamp(1, 5);
 
         // --- 1. Find the root entity ---
-        let (root_q, root_match_clause) = if let Some(uuid) = options.entity_uuid {
-            let q = query(
-                "MATCH (root:Entity {uuid: $uuid, repo_name: $repo_name})
-                 RETURN root.uuid, root.name, root.kind, root.fqn,
-                        root.signature, root.docstring, root.file_path, root.start_line
-                 LIMIT 1",
-            )
-            .param("uuid", uuid)
-            .param("repo_name", options.repo_name);
-            (q, "uuid: $uuid".to_string())
-        } else {
-            let q = query(
-                "MATCH (root:Entity {name: $name, repo_name: $repo_name})
-                 RETURN root.uuid, root.name, root.kind, root.fqn,
-                        root.signature, root.docstring, root.file_path, root.start_line
-                 LIMIT 1",
-            )
-            .param("name", options.entity_name)
-            .param("repo_name", options.repo_name);
-            (q, "name: $name".to_string())
-        };
+        //
+        // Two paths:
+        // - `entity_uuid` set → deterministic UUID lookup (no ladder).
+        // - `entity_name` only → walk the resolution ladder
+        //   (`target_resolution_tiers`), apply `rank_root_candidates` to the
+        //   winning tier, anchor the traversal on the chosen UUID. Disclosure
+        //   (`root_resolution`) is filled when the name path resolves.
+        let mut root_node: Option<SubgraphNode> = None;
+        let mut root_resolution: Option<RootResolution> = None;
 
-        let mut rows = self
-            .graph
-            .execute(root_q)
-            .await
-            .context("Failed to query root entity")?;
-
-        let root_node = if let Ok(Some(row)) = rows.next().await {
-            SubgraphNode {
-                uuid: row
-                    .get::<String>("root.uuid")
-                    .context("root.uuid is required")?,
-                name: row
-                    .get::<String>("root.name")
-                    .context("root.name is required")?,
-                kind: row.get::<String>("root.kind").ok(),
-                fqn: row.get::<String>("root.fqn").ok(),
-                signature: row.get::<String>("root.signature").ok(),
-                docstring: row.get::<String>("root.docstring").ok(),
-                file_path: row.get::<String>("root.file_path").ok(),
-                start_line: row.get::<i64>("root.start_line").ok(),
+        if let Some(uuid) = options.entity_uuid {
+            let mut rows = self
+                .graph
+                .execute(
+                    query(
+                        "MATCH (root:Entity {uuid: $uuid, repo_name: $repo_name})
+                         RETURN root.uuid, root.name, root.kind, root.fqn,
+                                root.signature, root.docstring, root.file_path, root.start_line
+                         LIMIT 1",
+                    )
+                    .param("uuid", uuid)
+                    .param("repo_name", options.repo_name),
+                )
+                .await
+                .context("Failed to query root entity by uuid")?;
+            if let Ok(Some(row)) = rows.next().await {
+                root_node = Some(SubgraphNode {
+                    uuid: row
+                        .get::<String>("root.uuid")
+                        .context("root.uuid is required")?,
+                    name: row
+                        .get::<String>("root.name")
+                        .context("root.name is required")?,
+                    kind: row.get::<String>("root.kind").ok(),
+                    fqn: row.get::<String>("root.fqn").ok(),
+                    signature: row.get::<String>("root.signature").ok(),
+                    docstring: row.get::<String>("root.docstring").ok(),
+                    file_path: row.get::<String>("root.file_path").ok(),
+                    start_line: row.get::<i64>("root.start_line").ok(),
+                });
             }
         } else {
-            // Root not found — return empty result
-            return Ok(SubgraphResult {
-                root_id: None,
-                nodes: vec![],
-                edges: vec![],
-                truncated: false,
-                total_nodes_found: 0,
-            });
+            // Name resolution: walk the ladder, rank, build disclosure.
+            match self
+                .resolve_subgraph_root(options.entity_name, options.repo_name)
+                .await
+                .context("Failed to resolve subgraph root by name")?
+            {
+                Some((winner, tier, total_candidates)) => {
+                    // Re-query all candidates in the winning tier so the
+                    // disclosure can carry them (ranked). Use the same tier
+                    // predicates via `target_resolution_tiers` to find the
+                    // matching tier string.
+                    let (_, predicate) = target_resolution_tiers(options.entity_name)
+                        .into_iter()
+                        .find(|(t, _)| *t == tier)
+                        .unwrap_or((tier, "target.name = $name"));
+                    let disclosure_query = format!(
+                        "MATCH (target:Entity)
+                         WHERE target.repo_name = $repo_name AND ({predicate})
+                         RETURN target.uuid, target.name, target.fqn, target.kind,
+                                target.signature, target.docstring, target.file_path, target.start_line
+                         ORDER BY target.fqn
+                         LIMIT 25"
+                    );
+                    let mut rows = self
+                        .graph
+                        .execute(
+                            query(&disclosure_query)
+                                .param("name", options.entity_name)
+                                .param("repo_name", options.repo_name),
+                        )
+                        .await
+                        .context("Failed to query candidates for disclosure")?;
+                    let mut candidates = Vec::new();
+                    while let Ok(Some(row)) = rows.next().await {
+                        let uuid = row.get::<String>("target.uuid").unwrap_or_default();
+                        let nm = row.get::<String>("target.name").unwrap_or_default();
+                        let fqn = row.get::<String>("target.fqn").ok();
+                        let kind = row.get::<String>("target.kind").ok();
+                        let signature = row.get::<String>("target.signature").ok();
+                        let docstring = row.get::<String>("target.docstring").ok();
+                        let file_path = row.get::<String>("target.file_path").ok();
+                        let start_line = row.get::<i64>("target.start_line").ok();
+                        candidates.push(RootCandidate {
+                            uuid,
+                            name: nm,
+                            fqn,
+                            kind,
+                            signature,
+                            docstring,
+                            file_path,
+                            start_line,
+                        });
+                    }
+                    let ranked = rank_root_candidates(candidates);
+                    let disclosure_candidates: Vec<RootCandidateLite> = ranked
+                        .iter()
+                        .take(ROOT_RESOLUTION_CANDIDATES_CAP)
+                        .cloned()
+                        .map(RootCandidateLite::from)
+                        .collect();
+                    root_node = Some(SubgraphNode {
+                        uuid: winner.uuid.clone(),
+                        name: winner.name.clone(),
+                        kind: winner.kind.clone(),
+                        fqn: winner.fqn.clone(),
+                        signature: winner.signature.clone(),
+                        docstring: winner.docstring.clone(),
+                        file_path: winner.file_path.clone(),
+                        start_line: winner.start_line,
+                    });
+                    root_resolution = Some(RootResolution {
+                        query: options.entity_name.to_string(),
+                        tier,
+                        total_candidates,
+                        chosen: RootCandidateLite::from(winner),
+                        candidates: disclosure_candidates,
+                    });
+                }
+                None => {
+                    // Root not found — return empty result
+                    return Ok(SubgraphResult {
+                        root_id: None,
+                        nodes: vec![],
+                        edges: vec![],
+                        truncated: false,
+                        total_nodes_found: 0,
+                        root_resolution: None,
+                    });
+                }
+            }
+        }
+
+        let root_node = match root_node {
+            Some(n) => n,
+            None => {
+                // entity_uuid branch yielded no row.
+                return Ok(SubgraphResult {
+                    root_id: None,
+                    nodes: vec![],
+                    edges: vec![],
+                    truncated: false,
+                    total_nodes_found: 0,
+                    root_resolution: None,
+                });
+            }
         };
 
         let root_uuid = root_node.uuid.clone();
 
         // --- 2. Collect nearby nodes ---
+        //
+        // Traversal is anchored on the resolved UUID only — never on the bare
+        // name. This fixes the homonym-union defect (the prior implementation
+        // re-bound every homonym by name, returning the union of their
+        // neighbourhoods under a single `root_id`).
         let mut all_nodes: HashMap<String, SubgraphNode> = HashMap::new();
         all_nodes.insert(root_uuid.clone(), root_node);
 
@@ -144,24 +251,17 @@ impl SubgraphQueryExt for GraphDb {
         };
 
         let cypher = format!(
-            "MATCH (root:Entity {{{root_match}, repo_name: $repo_name}}){arrow}(related:Entity)
+            "MATCH (root:Entity {{uuid: $root_uuid, repo_name: $repo_name}}){arrow}(related:Entity)
              WHERE related.repo_name = $repo_name{kind_filter}
              RETURN DISTINCT related.uuid, related.name, related.kind, related.fqn,
                     related.signature, related.docstring, related.file_path, related.start_line",
-            root_match = root_match_clause,
             arrow = direction_arrow,
             kind_filter = kind_filter,
         );
 
-        let traversal_q = if let Some(uuid) = options.entity_uuid {
-            query(&cypher)
-                .param("uuid", uuid)
-                .param("repo_name", options.repo_name)
-        } else {
-            query(&cypher)
-                .param("name", options.entity_name)
-                .param("repo_name", options.repo_name)
-        };
+        let traversal_q = query(&cypher)
+            .param("root_uuid", root_uuid.clone())
+            .param("repo_name", options.repo_name);
         let mut rows = self
             .graph
             .execute(traversal_q)
@@ -189,6 +289,9 @@ impl SubgraphQueryExt for GraphDb {
         let truncated = total_nodes_found > options.max_nodes;
 
         let mut nodes: Vec<SubgraphNode> = all_nodes.into_values().collect();
+        // Deterministic truncation: sort by uuid before truncating so the
+        // retained subset is stable across calls.
+        nodes.sort_by(|a, b| a.uuid.cmp(&b.uuid));
         if truncated && nodes.len() > options.max_nodes {
             nodes.truncate(options.max_nodes);
         }
@@ -285,6 +388,7 @@ impl SubgraphQueryExt for GraphDb {
             edges,
             truncated,
             total_nodes_found,
+            root_resolution,
         })
     }
 }

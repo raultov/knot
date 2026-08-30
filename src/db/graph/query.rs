@@ -3,6 +3,426 @@ use neo4rs::query;
 
 use super::GraphDb;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchTier {
+    ExactFqn,
+    FqnSuffix,
+    ExactName,
+    SignaturePrefix,
+    Fuzzy,
+}
+
+/// Lightweight projection of an Entity used as a root candidate.
+///
+/// Distinct from [`TargetRow`] (which lacks `signature`/`docstring`) because
+/// the subgraph root is rendered in the response and surfaced through the
+/// `root_resolution` disclosure — so the fields the consumer expects to see
+/// must be present on the candidate row.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RootCandidate {
+    pub uuid: String,
+    pub name: String,
+    pub fqn: Option<String>,
+    pub kind: Option<String>,
+    pub signature: Option<String>,
+    pub docstring: Option<String>,
+    pub file_path: Option<String>,
+    pub start_line: Option<i64>,
+}
+
+impl MatchTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ExactFqn => "exact_fqn",
+            Self::FqnSuffix => "fqn_suffix",
+            Self::ExactName => "exact_name",
+            Self::SignaturePrefix => "signature_prefix",
+            Self::Fuzzy => "fuzzy",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TargetRow {
+    pub uuid: String,
+    pub name: String,
+    pub fqn: String,
+    pub kind: String,
+    pub file_path: String,
+    pub start_line: i64,
+}
+
+/// Minimum length of the query string for Fuzzy match to be enabled.
+/// This prevents very short queries from matching almost everything.
+pub const MIN_FUZZY_LEN: usize = 4;
+
+/// Maximum number of targets to return before truncating.
+/// Keeps the performance reasonable and prevents huge outputs.
+pub const MAX_TARGETS: usize = 25;
+
+pub fn target_resolution_tiers(name: &str) -> Vec<(MatchTier, &'static str)> {
+    let mut tiers = Vec::new();
+
+    // A bare name equal to a bare FQN is indistinguishable from a name match;
+    // gating on separators keeps intent explicit and lets name homonyms
+    // (class vs module-level function) surface via ExactName.
+    // This mirrors the FqnSuffix gating.
+    if name.contains('.') || name.contains("::") {
+        tiers.push((MatchTier::ExactFqn, "target.fqn = $name"));
+        tiers.push((
+            MatchTier::FqnSuffix,
+            "target.fqn ENDS WITH '.' + $name OR target.fqn ENDS WITH '::' + $name",
+        ));
+    }
+
+    tiers.push((MatchTier::ExactName, "target.name = $name"));
+
+    if name.contains('(') {
+        tiers.push((
+            MatchTier::SignaturePrefix,
+            "(target.name + COALESCE(target.signature, '')) STARTS WITH $name",
+        ));
+    }
+
+    if name.len() >= MIN_FUZZY_LEN {
+        tiers.push((
+            MatchTier::Fuzzy,
+            "target.fqn CONTAINS $name OR (target.name + COALESCE(target.signature, '')) CONTAINS $name",
+        ));
+    }
+
+    tiers
+}
+
+/// Root-preference rank for an entity kind (wire format, i.e. the snake_case
+/// string stored in Neo4j — `SubgraphNode.kind` is read straight from the
+/// `root.kind` property, and `EntityKind`'s wire form is its `Display` impl,
+/// `src/models/entity.rs:148-265`). Lower ranks win.
+///
+/// Seed list lifted from `is_type_like` (`non_calls.rs:10-47`) minus the
+/// namespaces: a `csharp_namespace` named like a type must not outrank the
+/// type. Namespaces are containers, ranked below callables.
+pub fn root_kind_rank(kind: Option<&str>) -> u8 {
+    let Some(kind) = kind else {
+        return 4;
+    };
+    match kind {
+        // --- rank 0: type declarations --------------------------------------
+        // `class` / `interface` / `enum` (generic, language-agnostic Display forms)
+        "class" | "interface" | "enum"
+        // Kotlin
+        | "kotlin_class" | "kotlin_interface" | "kotlin_object"
+        | "kotlin_companion_object" | "kotlin_enum"
+        // Rust
+        | "rust_struct" | "rust_enum" | "rust_union" | "rust_trait"
+        | "rust_type_alias"
+        // Python
+        | "python_class"
+        // C / C++
+        | "c_struct" | "cpp_class"
+        // Groovy
+        | "groovy_class" | "groovy_interface" | "groovy_trait" | "groovy_enum"
+        // C#
+        | "csharp_class" | "csharp_interface" | "csharp_struct" | "csharp_record"
+        | "csharp_enum" | "csharp_delegate" => 0,
+
+        // --- rank 1: callables -----------------------------------------------
+        "method" | "function"
+        | "kotlin_function" | "kotlin_method"
+        | "rust_function" | "rust_method" | "rust_macro_def"
+        | "rust_impl"
+        | "python_function" | "python_method"
+        | "c_function" | "cpp_method"
+        | "csharp_method" | "csharp_constructor" | "csharp_local_function"
+        | "csharp_operator" | "csharp_indexer"
+        | "groovy_method" | "groovy_function"
+        | "macro_definition"
+        | "scss_function" | "scss_mixin"
+        | "vcl_subroutine" | "vcl_builtin_sub"
+        | "vcc_function" | "vcc_method" => 1,
+
+        // --- rank 2: members / data ------------------------------------------
+        "constant"
+        | "kotlin_property"
+        | "rust_constant" | "rust_static"
+        | "python_constant"
+        | "csharp_property" | "csharp_field" | "csharp_constant" | "csharp_event"
+        | "groovy_property"
+        | "config_property"
+        | "helm_value"
+        | "css_variable"
+        | "scss_variable" => 2,
+
+        // --- rank 3: containers ----------------------------------------------
+        "rust_module" | "python_module"
+        | "cpp_namespace" | "csharp_namespace"
+        | "markdown_document" | "markdown_section" => 3,
+
+        // --- rank 4: everything else (build_, k8s_, html_, vtc_, project_identity, …)
+        _ => 4,
+    }
+}
+
+/// Order root candidates by `(root_kind_rank, file_path, start_line, uuid)`.
+///
+/// The trailing `(file_path, start_line, uuid)` tail is a total order —
+/// required because neither `name` nor `fqn` is unique (`<module>` entities
+/// share both; partial classes share both; etc.). Mirrors the
+/// `m.fqn, m.uuid` tail of `find_entities_by_name_prefix`
+/// (`query.rs:529-559`).
+///
+/// `Option` fields default to a deterministic empty/`0` value so the sort
+/// is total even when a row misses any of them.
+pub fn rank_root_candidates(mut candidates: Vec<RootCandidate>) -> Vec<RootCandidate> {
+    candidates.sort_by(|a, b| {
+        let ra = root_kind_rank(a.kind.as_deref());
+        let rb = root_kind_rank(b.kind.as_deref());
+        ra.cmp(&rb)
+            .then_with(|| a.file_path.cmp(&b.file_path))
+            .then_with(|| a.start_line.cmp(&b.start_line))
+            .then_with(|| a.uuid.cmp(&b.uuid))
+    });
+    candidates
+}
+
+pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "WHERE target.repo_name = $repo_name AND target.uuid IN $target_uuids"
+    } else {
+        "WHERE target.uuid IN $target_uuids"
+    };
+
+    format!(
+        "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
+         {repo_filter}
+         RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                target.name AS target_name, target.fqn AS target_fqn,
+                target.file_path AS target_file_path,
+                target.start_line AS target_start_line, target.signature AS target_signature
+         ORDER BY target.fqn, entity.file_path, entity.start_line"
+    )
+}
+
+/// Cypher for the `overridden_by` bucket: implementations/overrides declared
+/// in subtypes of the resolved targets.
+pub fn overridden_by_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "WHERE target.repo_name = $repo_name AND target.uuid IN $target_uuids"
+    } else {
+        "WHERE target.uuid IN $target_uuids"
+    };
+
+    format!(
+        "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
+         {repo_filter}
+           AND entity.uuid <> target.uuid
+         RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                target.name AS target_name, target.fqn AS target_fqn,
+                target.file_path AS target_file_path,
+                target.start_line AS target_start_line, target.signature AS target_signature
+         ORDER BY target.fqn, entity.file_path, entity.start_line"
+    )
+}
+
+/// Cypher for the `overrides` bucket: the supertype methods the resolved
+/// targets implement or override. The projection is mirrored (target ↔ entity)
+/// so both buckets share `parse_reference_row`.
+pub fn overrides_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "WHERE entity.repo_name = $repo_name AND entity.uuid IN $target_uuids"
+    } else {
+        "WHERE entity.uuid IN $target_uuids"
+    };
+
+    format!(
+        "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
+         {repo_filter}
+           AND entity.uuid <> target.uuid
+         RETURN DISTINCT target.name AS `entity.name`, target.kind AS `entity.kind`,
+                target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
+                target.signature AS `entity.signature`,
+                entity.name AS target_name, entity.fqn AS target_fqn,
+                entity.file_path AS target_file_path,
+                entity.start_line AS target_start_line, entity.signature AS target_signature
+         ORDER BY entity.file_path, entity.start_line"
+    )
+}
+
+impl GraphDb {
+    async fn resolve_reference_targets(
+        &self,
+        name: &str,
+        repo_name: Option<&str>,
+    ) -> Result<(Vec<TargetRow>, MatchTier, bool)> {
+        let tiers = target_resolution_tiers(name);
+
+        for (tier, predicate) in tiers {
+            let query_str = if repo_name.is_some() {
+                format!(
+                    "MATCH (target:Entity)
+                     WHERE target.repo_name = $repo_name AND ({predicate})
+                     RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path, target.start_line
+                     ORDER BY target.fqn"
+                )
+            } else {
+                format!(
+                    "MATCH (target:Entity)
+                     WHERE {predicate}
+                     RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path, target.start_line
+                     ORDER BY target.fqn"
+                )
+            };
+
+            let mut q = query(&query_str).param("name", name);
+            if let Some(repo) = repo_name {
+                q = q.param("repo_name", repo);
+            }
+
+            let mut rows = self.graph.execute(q).await.context(format!(
+                "Failed to resolve targets for tier {}",
+                tier.as_str()
+            ))?;
+
+            let mut targets = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                let uuid = row.get::<String>("target.uuid").unwrap_or_default();
+                let name = row.get::<String>("target.name").unwrap_or_default();
+                let fqn = row.get::<String>("target.fqn").unwrap_or_default();
+                let kind = row.get::<String>("target.kind").unwrap_or_default();
+                let file_path = row.get::<String>("target.file_path").unwrap_or_default();
+                let start_line = row.get::<i64>("target.start_line").unwrap_or(0);
+
+                targets.push(TargetRow {
+                    uuid,
+                    name,
+                    fqn,
+                    kind,
+                    file_path,
+                    start_line,
+                });
+            }
+
+            if !targets.is_empty() {
+                let truncated = targets.len() > MAX_TARGETS;
+                if truncated {
+                    targets.truncate(MAX_TARGETS);
+                }
+                return Ok((targets, tier, truncated));
+            }
+        }
+
+        let default_tier = if name.len() >= MIN_FUZZY_LEN {
+            MatchTier::Fuzzy
+        } else {
+            MatchTier::ExactName
+        };
+        Ok((Vec::new(), default_tier, false))
+    }
+
+    /// Resolve a user-supplied entity name to exactly one root candidate,
+    /// walking the same tier ladder as `resolve_reference_targets` with early
+    /// stop, then applying `rank_root_candidates` inside the winning tier.
+    ///
+    /// Returns `(winner, tier, total_candidates)` — `Some(...)` only when the
+    /// ladder produced at least one hit. `total_candidates` is the **un-truncated**
+    /// tier count (the ladder queries `LIMIT 25` for ranking fairness; the
+    /// caller may surface this in the disclosure).
+    pub(crate) async fn resolve_subgraph_root(
+        &self,
+        name: &str,
+        repo_name: &str,
+    ) -> Result<Option<(RootCandidate, MatchTier, usize)>> {
+        let tiers = target_resolution_tiers(name);
+
+        for (tier, predicate) in tiers {
+            // Build a query per tier. The predicates are local-name aware
+            // (e.g. `target.fqn = $name`) — they are reused verbatim from
+            // `target_resolution_tiers(name)`.
+            let query_str = format!(
+                "MATCH (target:Entity)
+                 WHERE target.repo_name = $repo_name AND ({predicate})
+                 RETURN target.uuid, target.name, target.fqn, target.kind,
+                        target.signature, target.docstring, target.file_path, target.start_line
+                 ORDER BY target.fqn
+                 LIMIT 25"
+            );
+
+            let q = query(&query_str)
+                .param("name", name)
+                .param("repo_name", repo_name);
+
+            let mut rows = self.graph.execute(q).await.context(format!(
+                "Failed to resolve subgraph root for tier {}",
+                tier.as_str()
+            ))?;
+
+            let mut candidates = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                let uuid = row.get::<String>("target.uuid").unwrap_or_default();
+                let nm = row.get::<String>("target.name").unwrap_or_default();
+                let fqn = row.get::<String>("target.fqn").ok();
+                let kind = row.get::<String>("target.kind").ok();
+                let signature = row.get::<String>("target.signature").ok();
+                let docstring = row.get::<String>("target.docstring").ok();
+                let file_path = row.get::<String>("target.file_path").ok();
+                let start_line = row.get::<i64>("target.start_line").ok();
+
+                candidates.push(RootCandidate {
+                    uuid,
+                    name: nm,
+                    fqn,
+                    kind,
+                    signature,
+                    docstring,
+                    file_path,
+                    start_line,
+                });
+            }
+
+            if !candidates.is_empty() {
+                let total = candidates.len();
+                let ranked = rank_root_candidates(candidates);
+                // Safe: ranked is non-empty (we just confirmed candidates
+                // is non-empty before ranking).
+                let winner = ranked.into_iter().next().expect("ranked non-empty");
+                return Ok(Some((winner, tier, total)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Run one reference query and collect its rows.
+    ///
+    /// `label` only feeds the error context so a failure names the bucket that
+    /// broke.
+    async fn collect_reference_rows(
+        &self,
+        query_str: &str,
+        target_uuids: &[String],
+        repo_name: Option<&str>,
+        label: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut q = query(query_str).param("target_uuids", target_uuids.to_vec());
+        if let Some(repo) = repo_name {
+            q = q.param("repo_name", repo);
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context(format!("Failed to query Neo4j for {label} relationships"))?;
+
+        let mut collected = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            collected.push(parse_reference_row(row));
+        }
+        Ok(collected)
+    }
+}
+
 /// Extension trait for query and read operations.
 #[expect(
     async_fn_in_trait,
@@ -124,11 +544,6 @@ impl QueryExt for GraphDb {
 
     /// Find all entities that reference a given entity via any relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
     /// Returns results grouped by relationship type.
-    #[expect(clippy::too_many_lines, reason = "Query generation logic is complex")]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Query generation logic is complex"
-    )]
     async fn find_references(
         &self,
         entity_name: &str,
@@ -143,8 +558,28 @@ impl QueryExt for GraphDb {
             "overrides": []
         });
 
-        // Query for each relationship type
-        let rel_types = vec![
+        // Stage 1: Resolve targets
+        let (targets, tier, truncated) = self
+            .resolve_reference_targets(entity_name, repo_name)
+            .await?;
+
+        // Add the resolution info
+        results["resolution"] = serde_json::json!({
+            "query": entity_name,
+            "tier": tier,
+            "fuzzy": matches!(tier, MatchTier::Fuzzy),
+            "truncated": truncated,
+            "targets": targets
+        });
+
+        if targets.is_empty() {
+            return Ok(results);
+        }
+
+        let target_uuids: Vec<String> = targets.iter().map(|t| t.uuid.clone()).collect();
+
+        // Stage 2: Query relationships
+        let rel_types = [
             ("CALLS", "calls"),
             ("EXTENDS", "extends"),
             ("IMPLEMENTS", "implements"),
@@ -152,145 +587,25 @@ impl QueryExt for GraphDb {
         ];
 
         for (rel_label, result_key) in rel_types {
-            let query_str = if repo_name.is_some() {
-                format!(
-                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
-                     WHERE target.repo_name = $repo_name
-                       AND (target.name = $name
-                        OR target.fqn = $name
-                        OR target.fqn CONTAINS $name
-                        OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
-                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
-                            target.name as target_name, target.fqn as target_fqn,
-                            target.file_path as target_file_path,
-                            target.start_line as target_start_line, target.signature as target_signature"
-                )
-            } else {
-                format!(
-                    "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
-                     WHERE target.name = $name
-                        OR target.fqn = $name
-                        OR target.fqn CONTAINS $name
-                        OR (target.name + COALESCE(target.signature, '')) CONTAINS $name
-                     RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
-                            target.name as target_name, target.fqn as target_fqn,
-                            target.file_path as target_file_path,
-                            target.start_line as target_start_line, target.signature as target_signature"
-                )
-            };
-
-            let mut q = query(&query_str).param("name", entity_name);
-            if let Some(repo) = repo_name {
-                q = q.param("repo_name", repo);
-            }
-
-            let mut rows = self.graph.execute(q).await.context(format!(
-                "Failed to query Neo4j for {rel_label} relationships"
-            ))?;
-
-            let mut type_results = Vec::new();
-            while let Ok(Some(row)) = rows.next().await {
-                type_results.push(parse_reference_row(row));
-            }
-
+            let query_str = relationship_query(rel_label, repo_name.is_some());
+            let rows = self
+                .collect_reference_rows(&query_str, &target_uuids, repo_name, rel_label)
+                .await?;
             if let Some(arr) = results.get_mut(result_key) {
-                *arr = serde_json::json!(type_results);
+                *arr = serde_json::json!(rows);
             }
         }
 
-        // --- OVERRIDES buckets (JVM method-level, variable-length traversal) ---
-        //
-        // `OVERRIDES` edges point subtype.method -> supertype.method. Two
-        // directed buckets are needed because both endpoints share the method
-        // name; an undirected match would mix ancestors and descendants and
-        // return the queried node itself.
-        //
-        // - "overridden_by": incoming edges -> implementations/descendants of
-        //   the queried (declared) method.
-        // - "overrides": outgoing edges -> declarations/ancestors the queried
-        //   (implementing) method overrides.
-        //
-        // `*1..` gives transitive visibility; DISTINCT dedups diamond paths and
-        // `entity.uuid <> target.uuid` guards pathological cyclic edges. All
-        // `OVERRIDES` edges are intra-repo, so scoping the matched endpoint by
-        // repo_name is sufficient.
-        let overridden_by_query = if repo_name.is_some() {
-            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
-             WHERE target.repo_name = $repo_name
-               AND (target.name = $name
-                OR target.fqn = $name
-                OR target.fqn CONTAINS $name
-                OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
-               AND entity.uuid <> target.uuid
-             RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
-                    target.name AS target_name, target.fqn AS target_fqn,
-                    target.file_path AS target_file_path,
-                    target.start_line AS target_start_line, target.signature AS target_signature"
-        } else {
-            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
-             WHERE (target.name = $name
-                OR target.fqn = $name
-                OR target.fqn CONTAINS $name
-                OR (target.name + COALESCE(target.signature, '')) CONTAINS $name)
-               AND entity.uuid <> target.uuid
-             RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
-                    target.name AS target_name, target.fqn AS target_fqn,
-                    target.file_path AS target_file_path,
-                    target.start_line AS target_start_line, target.signature AS target_signature"
-        };
-
-        // In the "overrides" bucket the found endpoint (the declaration) is
-        // projected into the `entity.*` slots so downstream formatting is
-        // unchanged; the queried method fills the `target_*` slots.
-        let overrides_query = if repo_name.is_some() {
-            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
-             WHERE entity.repo_name = $repo_name
-               AND (entity.name = $name
-                OR entity.fqn = $name
-                OR entity.fqn CONTAINS $name
-                OR (entity.name + COALESCE(entity.signature, '')) CONTAINS $name)
-               AND entity.uuid <> target.uuid
-             RETURN DISTINCT target.name AS `entity.name`, target.kind AS `entity.kind`,
-                    target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
-                    target.signature AS `entity.signature`,
-                    entity.name AS target_name, entity.fqn AS target_fqn,
-                    entity.file_path AS target_file_path,
-                    entity.start_line AS target_start_line, entity.signature AS target_signature"
-        } else {
-            "MATCH (entity:Entity)-[:OVERRIDES*1..]->(target:Entity)
-             WHERE (entity.name = $name
-                OR entity.fqn = $name
-                OR entity.fqn CONTAINS $name
-                OR (entity.name + COALESCE(entity.signature, '')) CONTAINS $name)
-               AND entity.uuid <> target.uuid
-             RETURN DISTINCT target.name AS `entity.name`, target.kind AS `entity.kind`,
-                    target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
-                    target.signature AS `entity.signature`,
-                    entity.name AS target_name, entity.fqn AS target_fqn,
-                    entity.file_path AS target_file_path,
-                    entity.start_line AS target_start_line, entity.signature AS target_signature"
-        };
-
+        // Stage 3: OVERRIDES buckets
         for (result_key, query_str) in [
-            ("overridden_by", overridden_by_query),
-            ("overrides", overrides_query),
+            ("overridden_by", overridden_by_query(repo_name.is_some())),
+            ("overrides", overrides_query(repo_name.is_some())),
         ] {
-            let mut q = query(query_str).param("name", entity_name);
-            if let Some(repo) = repo_name {
-                q = q.param("repo_name", repo);
-            }
-
-            let mut rows = self.graph.execute(q).await.context(format!(
-                "Failed to query Neo4j for {result_key} relationships"
-            ))?;
-
-            let mut type_results = Vec::new();
-            while let Ok(Some(row)) = rows.next().await {
-                type_results.push(parse_reference_row(row));
-            }
-
+            let rows = self
+                .collect_reference_rows(&query_str, &target_uuids, repo_name, result_key)
+                .await?;
             if let Some(arr) = results.get_mut(result_key) {
-                *arr = serde_json::json!(type_results);
+                *arr = serde_json::json!(rows);
             }
         }
 
@@ -695,5 +1010,384 @@ mod tests {
             .get_file_entities("/test/path/File.java", Some("test-repo"))
             .await;
         assert!(result.is_ok());
+    }
+
+    use super::{
+        MatchTier, RootCandidate, rank_root_candidates, relationship_query, root_kind_rank,
+        target_resolution_tiers,
+    };
+
+    #[test]
+    fn test_tier_ladder_order_for_plain_name() {
+        // A plain name skips FqnSuffix and ExactFqn: every FQN ends with `.<name>`, so the
+        // suffix tier would shadow the more precise ExactName tier, and bare name FQN matching is indistinguishable from exact name.
+        // "Offline" has len 7, so it gets Fuzzy tier, but no signature prefix because no '('
+        let tiers = target_resolution_tiers("Offline");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped, vec![MatchTier::ExactName, MatchTier::Fuzzy]);
+
+        // "Off" has len 3, so it does not get Fuzzy
+        let tiers = target_resolution_tiers("Off");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped, vec![MatchTier::ExactName]);
+    }
+
+    #[test]
+    fn test_tier_ladder_includes_fqn_suffix_for_qualified_name() {
+        for name in ["GestureOwner.Off", "Config::load"] {
+            let tiers = target_resolution_tiers(name);
+            let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+            assert_eq!(
+                mapped,
+                vec![
+                    MatchTier::ExactFqn,
+                    MatchTier::FqnSuffix,
+                    MatchTier::ExactName,
+                    MatchTier::Fuzzy
+                ],
+                "unexpected ladder for `{name}`"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tier_ladder_includes_signature_prefix_when_parenthesised() {
+        let tiers = target_resolution_tiers("accept(List");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            mapped,
+            vec![
+                MatchTier::ExactName,
+                MatchTier::SignaturePrefix,
+                MatchTier::Fuzzy
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tier_ladder_omits_fuzzy_for_short_names() {
+        let tiers = target_resolution_tiers("Id");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped, vec![MatchTier::ExactName]);
+    }
+
+    #[test]
+    fn test_dotted_query_starts_with_exact_fqn() {
+        let tiers = target_resolution_tiers("Foo.bar");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped[0], MatchTier::ExactFqn);
+
+        let tiers = target_resolution_tiers("Foo::bar");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped[0], MatchTier::ExactFqn);
+    }
+
+    #[test]
+    fn test_fqn_suffix_predicate_is_separator_anchored() {
+        let tiers = target_resolution_tiers("GestureOwner.Off");
+        let fqn_suffix_pred = tiers
+            .iter()
+            .find(|(t, _)| *t == MatchTier::FqnSuffix)
+            .unwrap()
+            .1;
+        assert!(fqn_suffix_pred.contains("ENDS WITH '.' + $name"));
+        assert!(fqn_suffix_pred.contains("ENDS WITH '::' + $name"));
+        assert!(!fqn_suffix_pred.contains("CONTAINS"));
+    }
+
+    #[test]
+    fn test_signature_predicate_is_prefix_anchored() {
+        let tiers = target_resolution_tiers("accept(List");
+        let sig_pred = tiers
+            .iter()
+            .find(|(t, _)| *t == MatchTier::SignaturePrefix)
+            .unwrap()
+            .1;
+        assert!(sig_pred.contains("STARTS WITH $name"));
+        assert!(!sig_pred.contains("CONTAINS"));
+    }
+
+    #[test]
+    fn test_relationship_query_matches_on_uuid_set() {
+        let query_str = relationship_query("CALLS", false);
+        assert!(query_str.contains("target.uuid IN $target_uuids"));
+        assert!(query_str.contains("ORDER BY target.fqn"));
+        assert!(!query_str.contains("$name"));
+    }
+
+    #[test]
+    fn test_relationship_query_repo_scoped_variant() {
+        let query_str = relationship_query("CALLS", true);
+        assert!(query_str.contains("target.repo_name = $repo_name"));
+        assert!(query_str.contains("target.uuid IN $target_uuids"));
+    }
+
+    // ---- §5.1 root_kind_rank ----
+
+    #[test]
+    fn test_root_kind_rank_prefers_type_declarations_over_callables() {
+        // `csharp_class` (rank 0) beats `csharp_constructor` (rank 1).
+        assert!(root_kind_rank(Some("csharp_class")) < root_kind_rank(Some("csharp_constructor")));
+        // And the plain generic forms too.
+        assert!(root_kind_rank(Some("class")) < root_kind_rank(Some("method")));
+        assert!(root_kind_rank(Some("class")) < root_kind_rank(Some("function")));
+    }
+
+    #[test]
+    fn test_root_kind_rank_containers_rank_below_types() {
+        // Namespaces are containers, not type declarations.
+        assert!(root_kind_rank(Some("csharp_class")) < root_kind_rank(Some("csharp_namespace")));
+        assert!(root_kind_rank(Some("rust_struct")) < root_kind_rank(Some("rust_module")));
+        assert!(root_kind_rank(Some("python_class")) < root_kind_rank(Some("python_module")));
+        assert!(root_kind_rank(Some("cpp_class")) < root_kind_rank(Some("cpp_namespace")));
+    }
+
+    #[test]
+    fn test_root_kind_rank_handles_missing_kind() {
+        assert_eq!(root_kind_rank(None), 4);
+    }
+
+    #[test]
+    fn test_root_kind_rank_is_total_over_known_kinds() {
+        // Iterate every variant of EntityKind via its Display impl. None
+        // should panic and every result must be <= 4.
+        use crate::models::EntityKind;
+        let kinds = [
+            EntityKind::Class,
+            EntityKind::Interface,
+            EntityKind::Method,
+            EntityKind::Function,
+            EntityKind::Constant,
+            EntityKind::Enum,
+            EntityKind::KotlinClass,
+            EntityKind::KotlinInterface,
+            EntityKind::KotlinObject,
+            EntityKind::KotlinCompanionObject,
+            EntityKind::KotlinFunction,
+            EntityKind::KotlinMethod,
+            EntityKind::KotlinProperty,
+            EntityKind::KotlinEnum,
+            EntityKind::RustStruct,
+            EntityKind::RustEnum,
+            EntityKind::RustUnion,
+            EntityKind::RustTrait,
+            EntityKind::RustImpl,
+            EntityKind::RustFunction,
+            EntityKind::RustMethod,
+            EntityKind::RustMacroDef,
+            EntityKind::RustTypeAlias,
+            EntityKind::RustConstant,
+            EntityKind::RustStatic,
+            EntityKind::RustModule,
+            EntityKind::PythonClass,
+            EntityKind::PythonFunction,
+            EntityKind::PythonMethod,
+            EntityKind::PythonModule,
+            EntityKind::PythonConstant,
+            EntityKind::CStruct,
+            EntityKind::CFunction,
+            EntityKind::CppClass,
+            EntityKind::CppMethod,
+            EntityKind::CppNamespace,
+            EntityKind::MacroDefinition,
+            EntityKind::CSharpClass,
+            EntityKind::CSharpInterface,
+            EntityKind::CSharpStruct,
+            EntityKind::CSharpRecord,
+            EntityKind::CSharpEnum,
+            EntityKind::CSharpMethod,
+            EntityKind::CSharpConstructor,
+            EntityKind::CSharpProperty,
+            EntityKind::CSharpField,
+            EntityKind::CSharpConstant,
+            EntityKind::CSharpDelegate,
+            EntityKind::CSharpEvent,
+            EntityKind::CSharpIndexer,
+            EntityKind::CSharpOperator,
+            EntityKind::CSharpNamespace,
+            EntityKind::CSharpLocalFunction,
+            EntityKind::GroovyClass,
+            EntityKind::GroovyInterface,
+            EntityKind::GroovyTrait,
+            EntityKind::GroovyMethod,
+            EntityKind::GroovyFunction,
+            EntityKind::GroovyEnum,
+            EntityKind::GroovyProperty,
+            EntityKind::BuildDependency,
+            EntityKind::BuildPlugin,
+            EntityKind::ProjectIdentity,
+            EntityKind::MarkdownDocument,
+            EntityKind::MarkdownSection,
+            EntityKind::ConfigProperty,
+        ];
+        for k in kinds {
+            let s = k.to_string();
+            let rank = root_kind_rank(Some(&s));
+            assert!(rank <= 4, "rank for {s} should be <= 4, got {rank}");
+        }
+    }
+
+    // ---- §5.2 rank_root_candidates ----
+
+    #[test]
+    fn test_rank_root_candidates_prefers_type_over_homonym() {
+        // Mirrors the UserService.cs fixture: `csharp_class` at line 12 and
+        // `csharp_constructor` at line 18 share the name `UserService`.
+        let candidates = vec![
+            RootCandidate {
+                uuid: "uuid-constructor".to_string(),
+                name: "UserService".to_string(),
+                fqn: Some("CodeMap.Services.UserService.UserService".to_string()),
+                kind: Some("csharp_constructor".to_string()),
+                signature: None,
+                docstring: None,
+                file_path: Some("Services/UserService.cs".to_string()),
+                start_line: Some(18),
+            },
+            RootCandidate {
+                uuid: "uuid-class".to_string(),
+                name: "UserService".to_string(),
+                fqn: Some("CodeMap.Services.UserService".to_string()),
+                kind: Some("csharp_class".to_string()),
+                signature: None,
+                docstring: None,
+                file_path: Some("Services/UserService.cs".to_string()),
+                start_line: Some(12),
+            },
+        ];
+        let ranked = rank_root_candidates(candidates);
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].kind.as_deref(), Some("csharp_class"));
+        assert_eq!(ranked[1].kind.as_deref(), Some("csharp_constructor"));
+    }
+
+    #[test]
+    fn test_rank_root_candidates_tie_breaks_by_file_then_line_then_uuid() {
+        // Two classes with the same name and kind: file_path breaks the tie.
+        let a = RootCandidate {
+            uuid: "uuid-a".to_string(),
+            name: "Config".to_string(),
+            fqn: Some("a.Config".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("src/z/config.cs".to_string()),
+            start_line: Some(10),
+        };
+        let b = RootCandidate {
+            uuid: "uuid-b".to_string(),
+            name: "Config".to_string(),
+            fqn: Some("a.Config".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("src/a/config.cs".to_string()),
+            start_line: Some(50),
+        };
+        let ranked = rank_root_candidates(vec![a, b]);
+        assert_eq!(ranked[0].file_path.as_deref(), Some("src/a/config.cs"));
+        assert_eq!(ranked[1].file_path.as_deref(), Some("src/z/config.cs"));
+
+        // Now same path, different lines: lower line wins.
+        let c = RootCandidate {
+            uuid: "uuid-c".to_string(),
+            name: "Config".to_string(),
+            fqn: Some("a.Config".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("src/a/config.cs".to_string()),
+            start_line: Some(100),
+        };
+        let d = RootCandidate {
+            uuid: "uuid-d".to_string(),
+            name: "Config".to_string(),
+            fqn: Some("a.Config".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("src/a/config.cs".to_string()),
+            start_line: Some(20),
+        };
+        let ranked = rank_root_candidates(vec![c, d]);
+        assert_eq!(ranked[0].start_line, Some(20));
+        assert_eq!(ranked[1].start_line, Some(100));
+
+        // Same path, same line, different uuid: lexicographic uuid wins.
+        let e = RootCandidate {
+            uuid: "uuid-zzz".to_string(),
+            name: "Config".to_string(),
+            fqn: Some("a.Config".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("src/a/config.cs".to_string()),
+            start_line: Some(20),
+        };
+        let f = RootCandidate {
+            uuid: "uuid-aaa".to_string(),
+            name: "Config".to_string(),
+            fqn: Some("a.Config".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("src/a/config.cs".to_string()),
+            start_line: Some(20),
+        };
+        let ranked = rank_root_candidates(vec![e, f]);
+        assert_eq!(ranked[0].uuid, "uuid-aaa");
+        assert_eq!(ranked[1].uuid, "uuid-zzz");
+    }
+
+    #[test]
+    fn test_rank_root_candidates_is_stable_for_equal_keys() {
+        // Equal (rank, file_path, start_line, uuid) must preserve input order
+        // (Vec::sort_by is stable).
+        let make = |uuid: &str| RootCandidate {
+            uuid: uuid.to_string(),
+            name: "Same".to_string(),
+            fqn: Some("x.Same".to_string()),
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("file.cs".to_string()),
+            start_line: Some(1),
+        };
+        let input = vec![make("uuid-1"), make("uuid-2"), make("uuid-3")];
+        let ranked = rank_root_candidates(input);
+        assert_eq!(
+            ranked.iter().map(|c| c.uuid.as_str()).collect::<Vec<_>>(),
+            vec!["uuid-1", "uuid-2", "uuid-3"],
+            "stable sort must preserve input order for equal keys"
+        );
+    }
+
+    #[test]
+    fn test_rank_root_candidates_handles_missing_fields() {
+        // Missing kind → rank 4 (treated as a tail catch-all).
+        // Missing file_path / start_line defaults to "" / 0.
+        let a = RootCandidate {
+            uuid: "uuid-no-kind".to_string(),
+            name: "M".to_string(),
+            fqn: None,
+            kind: None,
+            signature: None,
+            docstring: None,
+            file_path: Some("a/x.cs".to_string()),
+            start_line: Some(10),
+        };
+        let b = RootCandidate {
+            uuid: "uuid-class".to_string(),
+            name: "M".to_string(),
+            fqn: None,
+            kind: Some("csharp_class".to_string()),
+            signature: None,
+            docstring: None,
+            file_path: Some("a/x.cs".to_string()),
+            start_line: Some(10),
+        };
+        let ranked = rank_root_candidates(vec![a, b]);
+        assert_eq!(ranked[0].kind.as_deref(), Some("csharp_class"));
+        assert_eq!(ranked[1].kind, None);
     }
 }

@@ -69,7 +69,7 @@ impl SearchHybridContextTool {
                  Returns Markdown-formatted results with file paths, line numbers, code snippets, and cross-repository dependencies. No side effects. \
                  \n\nUsage: Use as your FIRST step when exploring unfamiliar code or discovering architectural patterns. Do NOT use this to find all usages of a specific function—use the 'find_callers' tool for that instead. \
                  \n\nParameter guidance: 'query' should be 2-5 words describing functionality. Increase 'max_results' to 10-20 for broad discovery, keep at 5 for focused search. Include 'repo_name' in your first query to avoid cross-repository pollution. \
-                 \n\nSupports Java, Kotlin, and TypeScript codebases."
+                 \n\nSupports Java, Kotlin, C#, and TypeScript codebases."
                     .to_string(),
             ),
             input_schema: ToolInputSchema::new(vec!["query".to_string()], Some(properties), None),

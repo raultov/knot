@@ -9,6 +9,7 @@ pub mod explore_file;
 pub mod find_callers;
 pub mod formatters;
 pub mod repos;
+pub(crate) mod resolution;
 pub mod search_hybrid_context;
 pub mod subgraph;
 

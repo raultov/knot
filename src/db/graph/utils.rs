@@ -66,6 +66,22 @@ pub(crate) fn kind_to_label(kind: &EntityKind) -> &'static str {
         EntityKind::CppMethod => "CppMethod",
         EntityKind::CppNamespace => "CppNamespace",
         EntityKind::MacroDefinition => "MacroDefinition",
+        EntityKind::CSharpClass => "CSharpClass",
+        EntityKind::CSharpInterface => "CSharpInterface",
+        EntityKind::CSharpStruct => "CSharpStruct",
+        EntityKind::CSharpRecord => "CSharpRecord",
+        EntityKind::CSharpEnum => "CSharpEnum",
+        EntityKind::CSharpMethod => "CSharpMethod",
+        EntityKind::CSharpConstructor => "CSharpConstructor",
+        EntityKind::CSharpProperty => "CSharpProperty",
+        EntityKind::CSharpField => "CSharpField",
+        EntityKind::CSharpConstant => "CSharpConstant",
+        EntityKind::CSharpDelegate => "CSharpDelegate",
+        EntityKind::CSharpEvent => "CSharpEvent",
+        EntityKind::CSharpIndexer => "CSharpIndexer",
+        EntityKind::CSharpOperator => "CSharpOperator",
+        EntityKind::CSharpNamespace => "CSharpNamespace",
+        EntityKind::CSharpLocalFunction => "CSharpLocalFunction",
         EntityKind::CargoPackage => "CargoPackage",
         EntityKind::CargoFeature => "CargoFeature",
         EntityKind::WorkspaceMember => "WorkspaceMember",
@@ -181,6 +197,31 @@ mod tests {
     #[test]
     fn test_kind_to_label_scss_function() {
         assert_eq!(kind_to_label(&EntityKind::ScssFunction), "ScssFunction");
+    }
+
+    #[test]
+    fn test_kind_to_label_csharp() {
+        let cases = [
+            (EntityKind::CSharpClass, "CSharpClass"),
+            (EntityKind::CSharpInterface, "CSharpInterface"),
+            (EntityKind::CSharpStruct, "CSharpStruct"),
+            (EntityKind::CSharpRecord, "CSharpRecord"),
+            (EntityKind::CSharpEnum, "CSharpEnum"),
+            (EntityKind::CSharpMethod, "CSharpMethod"),
+            (EntityKind::CSharpConstructor, "CSharpConstructor"),
+            (EntityKind::CSharpProperty, "CSharpProperty"),
+            (EntityKind::CSharpField, "CSharpField"),
+            (EntityKind::CSharpConstant, "CSharpConstant"),
+            (EntityKind::CSharpDelegate, "CSharpDelegate"),
+            (EntityKind::CSharpEvent, "CSharpEvent"),
+            (EntityKind::CSharpIndexer, "CSharpIndexer"),
+            (EntityKind::CSharpOperator, "CSharpOperator"),
+            (EntityKind::CSharpNamespace, "CSharpNamespace"),
+            (EntityKind::CSharpLocalFunction, "CSharpLocalFunction"),
+        ];
+        for (kind, label) in cases {
+            assert_eq!(kind_to_label(&kind), label);
+        }
     }
 
     #[test]
