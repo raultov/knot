@@ -373,6 +373,85 @@ else
     exit 1
 fi
 
+# ---- NuGet / MSBuild tests (v1.7.2 Part B) ----
+
+# Test 15: NuGet PackageReference with attribute-form version via search
+echo ""
+echo "Test 15: Searching for NuGet attribute-form dependency Tomlyn..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"Tomlyn\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "Tomlyn" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "Tomlyn" && echo "$CLI_RESPONSE" | grep -q "Tomlyn"; then
+    echo -e "${GREEN}✓ Found NuGet attribute-form dependency Tomlyn (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ NuGet attribute-form dependency Tomlyn not found${NC}"
+    exit 1
+fi
+
+# Test 16: CPM-resolved version-less dependency via search
+echo ""
+echo "Test 16: Searching for CPM-resolved dependency LibGit2Sharp..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"LibGit2Sharp\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "LibGit2Sharp" -r "$REPO_NAME" -m 10 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "LibGit2Sharp" && echo "$CLI_RESPONSE" | grep -q "LibGit2Sharp"; then
+    echo -e "${GREEN}✓ Found CPM-resolved dependency LibGit2Sharp (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ CPM-resolved dependency LibGit2Sharp not found${NC}"
+    exit 1
+fi
+
+# Test 17: explore_file on App.csproj lists dependencies
+echo ""
+echo "Test 17: Exploring App.csproj for NuGet dependencies..."
+CSPROJ_FILE="$TEST_FILES_DIR/App.csproj"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$CSPROJ_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$CSPROJ_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -qE "Tomlyn|Newtonsoft" && echo "$CLI_RESPONSE" | grep -qE "Tomlyn|Newtonsoft"; then
+    echo -e "${GREEN}✓ App.csproj dependencies found via explore (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ App.csproj dependencies not found via explore${NC}"
+    exit 1
+fi
+
+# Test 18: explore_file on ClassLib.csproj shows CPM-resolved version
+echo ""
+echo "Test 18: Exploring ClassLib.csproj (CPM-resolved version)..."
+CLASSLIB_FILE="$TEST_FILES_DIR/ClassLib.csproj"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$CLASSLIB_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- explore "$CLASSLIB_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+# CPM-resolved LibGit2Sharp@0.30.0 must appear.
+if echo "$MCP_RESPONSE" | grep -qE "0\.30\.0|nuget:LibGit2Sharp" && echo "$CLI_RESPONSE" | grep -qE "0\.30\.0|nuget:LibGit2Sharp"; then
+    echo -e "${GREEN}✓ ClassLib.csproj CPM-resolved version surfaced (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ ClassLib.csproj CPM-resolved version not surfaced${NC}"
+    exit 1
+fi
+
+# Test 19: Repository node has build_system = "nuget"
+echo ""
+echo "Test 19: Repository node build_system = nuget..."
+BUILD_SYSTEM=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${REPO_NAME}'}) RETURN r.build_system AS build_system" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$BUILD_SYSTEM" = "nuget" ]; then
+    echo -e "${GREEN}✓ Repository build_system = nuget (C# repos no longer report \"none\")${NC}"
+else
+    echo -e "${RED}✗ Repository build_system = '$BUILD_SYSTEM' (expected 'nuget')${NC}"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Build Systems E2E tests passed!${NC}"

@@ -376,7 +376,7 @@ MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 
-if echo "$MCP_RESPONSE" | grep -q "ts_imports_uses.ts"; then
+if echo "$MCP_RESPONSE" | grep -q "## Calls (" || echo "$MCP_RESPONSE" | grep -q "## References (" || echo "$MCP_RESPONSE" | grep -q "## Extends (" || echo "$MCP_RESPONSE" | grep -q "## Implements ("; then
     echo -e "${RED}✗ Alias TsImportBar should NOT have callers (alias should resolve to TsImportQux)${NC}"
     exit 1
 else

@@ -78,7 +78,7 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_LIB_DIR" "$TMP_CLIENT_DIR" "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR" "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR" 2>/dev/null || true
+    rm -rf "$TMP_LIB_DIR" "$TMP_CLIENT_DIR" "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR" "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR" "$TMP_NUGET_LIB_DIR" "$TMP_NUGET_CLIENT_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -675,6 +675,178 @@ fi
 rm -rf "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR"
 
 echo -e "${GREEN}✓ All Multi-ProjectIdentity tests passed${NC}"
+
+# Test 9: NuGet cross-repo dependency linking (v1.7.2 Part B)
+echo ""
+echo "Test 9: NuGet cross-repo dependency linking..."
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}knot Cross-Repo NuGet Dependency Linking E2E Test${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+NUGET_LIB_NAME="acme-auth-lib"
+NUGET_CLIENT_NAME="acme-client-app"
+
+TMP_NUGET_LIB_DIR="$SCRIPT_DIR/.e2e_cross_repo_nuget_lib"
+TMP_NUGET_CLIENT_DIR="$SCRIPT_DIR/.e2e_cross_repo_nuget_client"
+
+rm -rf "$TMP_NUGET_LIB_DIR" "$TMP_NUGET_CLIENT_DIR"
+mkdir -p "$TMP_NUGET_LIB_DIR"
+mkdir -p "$TMP_NUGET_CLIENT_DIR"
+
+# Library: <PackageId>Acme.Auth.Lib</PackageId><Version>1.0.0</Version>
+cat > "$TMP_NUGET_LIB_DIR/Acme.Auth.Lib.csproj" << 'XMLEOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <PackageId>Acme.Auth.Lib</PackageId>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>
+XMLEOF
+
+# Library source file
+cat > "$TMP_NUGET_LIB_DIR/AuthService.cs" << 'CSEOF'
+namespace Acme.Auth;
+
+public class AuthService
+{
+    public bool Login(string username, string password)
+    {
+        return !string.IsNullOrEmpty(username);
+    }
+}
+CSEOF
+
+# Client: <PackageReference Include="Acme.Auth.Lib" Version="1.0.0" />
+cat > "$TMP_NUGET_CLIENT_DIR/ClientApp.csproj" << 'XMLEOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Acme.Auth.Lib" Version="1.0.0" />
+  </ItemGroup>
+</Project>
+XMLEOF
+
+# Client source file
+cat > "$TMP_NUGET_CLIENT_DIR/Program.cs" << 'CSEOF'
+namespace Acme.Client;
+
+public class Program
+{
+    public static void Main()
+    {
+        System.Console.WriteLine("client");
+    }
+}
+CSEOF
+
+# Index library repo
+echo "Indexing NuGet library '${NUGET_LIB_NAME}'..."
+export KNOT_REPO_PATH="$TMP_NUGET_LIB_DIR"
+export KNOT_REPO_NAME="$NUGET_LIB_NAME"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
+
+echo -e "${GREEN}✓ NuGet library indexed${NC}"
+
+# Index client repo
+echo "Indexing NuGet client '${NUGET_CLIENT_NAME}'..."
+export KNOT_REPO_PATH="$TMP_NUGET_CLIENT_DIR"
+export KNOT_REPO_NAME="$NUGET_CLIENT_NAME"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
+
+echo -e "${GREEN}✓ NuGet client indexed${NC}"
+
+# Test 9a: Repository nodes carry build_system = "nuget" + correct artifact_id
+echo ""
+echo "Test 9a: Both repositories have build_system = 'nuget'..."
+LIB_BUILD_SYSTEM=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${NUGET_LIB_NAME}'}) RETURN r.build_system AS bs, r.artifact_id AS aid, r.version AS v" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if echo "$LIB_BUILD_SYSTEM" | grep -q "nuget"; then
+    echo -e "${GREEN}✓ Library Repository has build_system=nuget: $LIB_BUILD_SYSTEM${NC}"
+else
+    echo -e "${RED}✗ Library Repository missing nuget build_system: $LIB_BUILD_SYSTEM${NC}"
+    exit 1
+fi
+
+# Test 9b: knot deps forward lookup
+echo ""
+echo "Test 9b: 'knot deps ${NUGET_CLIENT_NAME}' reports the lib..."
+NUGET_DEPS_OUTPUT=$(cargo run --release --bin knot -- deps "$NUGET_CLIENT_NAME" --depth 1 2>/dev/null)
+if echo "$NUGET_DEPS_OUTPUT" | grep -q "$NUGET_LIB_NAME"; then
+    echo -e "${GREEN}✓ Forward lookup: ${NUGET_CLIENT_NAME} depends on ${NUGET_LIB_NAME}${NC}"
+else
+    echo -e "${RED}✗ Forward lookup failed. Output:${NC}"
+    echo "$NUGET_DEPS_OUTPUT"
+    exit 1
+fi
+
+# Test 9c: knot deps --reverse
+echo ""
+echo "Test 9c: 'knot deps --reverse ${NUGET_LIB_NAME}' reports the client..."
+NUGET_REV_OUTPUT=$(cargo run --release --bin knot -- deps "$NUGET_LIB_NAME" --reverse 2>/dev/null)
+if echo "$NUGET_REV_OUTPUT" | grep -q "$NUGET_CLIENT_NAME"; then
+    echo -e "${GREEN}✓ Reverse lookup: ${NUGET_LIB_NAME} has dependent ${NUGET_CLIENT_NAME}${NC}"
+else
+    echo -e "${RED}✗ Reverse lookup failed. Output:${NC}"
+    echo "$NUGET_REV_OUTPUT"
+    exit 1
+fi
+
+# Test 9d: MCP list_repo_dependencies
+echo ""
+echo "Test 9d: MCP list_repo_dependencies for NuGet..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"list_repo_dependencies\",\"arguments\":{\"repo_name\":\"$NUGET_CLIENT_NAME\"}}}"
+MCP_NUGET_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_NUGET_CLIENT_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_NUGET_RESPONSE" | grep -q "$NUGET_LIB_NAME"; then
+    echo -e "${GREEN}✓ MCP list_repo_dependencies returns ${NUGET_LIB_NAME} as NuGet dependency${NC}"
+else
+    echo -e "${RED}✗ MCP list_repo_dependencies failed for NuGet. Response:${NC}"
+    echo "$MCP_NUGET_RESPONSE"
+    exit 1
+fi
+
+# Test 9e: DEPENDS_ON edge via direct cypher-shell query
+echo ""
+echo "Test 9e: DEPENDS_ON edge from client to lib via cypher-shell..."
+NUGET_DEPS_EDGE=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (from:Repository {name: '${NUGET_CLIENT_NAME}'})-[d:DEPENDS_ON]->(to:Repository {name: '${NUGET_LIB_NAME}'}) RETURN count(d) AS cnt" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$NUGET_DEPS_EDGE" -ge 1 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ DEPENDS_ON edge exists: ${NUGET_CLIENT_NAME} -> ${NUGET_LIB_NAME}${NC}"
+else
+    echo -e "${RED}✗ No DEPENDS_ON edge from ${NUGET_CLIENT_NAME} to ${NUGET_LIB_NAME}${NC}"
+    exit 1
+fi
+
+# Test 9f: artifact_id is "Acme.Auth.Lib" (the PackageId, not the file stem)
+echo ""
+echo "Test 9f: Library artifact_id is Acme.Auth.Lib (PackageId wins)..."
+LIB_ARTIFACT_ID=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${NUGET_LIB_NAME}'}) RETURN r.artifact_id AS artifact_id" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$LIB_ARTIFACT_ID" = "Acme.Auth.Lib" ]; then
+    echo -e "${GREEN}✓ Library artifact_id = Acme.Auth.Lib (PackageId marker wins over file stem)${NC}"
+else
+    echo -e "${RED}✗ Library artifact_id = '$LIB_ARTIFACT_ID' (expected 'Acme.Auth.Lib')${NC}"
+    exit 1
+fi
+
+# Clean up
+rm -rf "$TMP_NUGET_LIB_DIR" "$TMP_NUGET_CLIENT_DIR"
+
+echo -e "${GREEN}✓ All NuGet cross-repo dependency tests passed${NC}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
