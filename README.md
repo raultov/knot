@@ -750,6 +750,14 @@ This ensures that when you ask an AI agent to analyze, refactor, or understand y
 
 ---
 
+## 📚 Guides
+
+- **[Organisation scanning (A–Z)](docs/ORG-SCANNING.md)** — clone an org, batch-index, query via CLI/MCP
+- **[Business opportunities from code](docs/BUSINESS-OPPORTUNITIES.md)** — portfolio patterns, GenAI synthesis via MCP, and opportunity workflows
+- **Batch scripts:** `scripts/clone-workspace.sh`, `scripts/index-workspace.sh`, `scripts/remove-workspace.sh`
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please ensure:
