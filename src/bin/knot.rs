@@ -121,6 +121,16 @@ async fn main() -> anyhow::Result<()> {
             let formatted = cli_tools::format_repos_output(&json_result, output);
             utils::print_with_pager(&formatted);
         }
+
+        Commands::Portfolio {
+            filter,
+            depth,
+            output,
+        } => {
+            let json_result = cli_tools::run_portfolio(filter.as_deref(), depth, &graph_db).await?;
+            let formatted = cli_tools::format_portfolio_output(&json_result, output);
+            utils::print_with_pager(&formatted);
+        }
     }
 
     Ok(())

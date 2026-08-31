@@ -91,6 +91,21 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
     },
+
+    /// Portfolio report: repo inventory, dependency correlations, and recommendations
+    Portfolio {
+        /// Filter repositories by name (case-insensitive substring match)
+        #[arg(short, long)]
+        filter: Option<String>,
+
+        /// Maximum depth for transitive dependencies (default: 2)
+        #[arg(short, long, default_value = "2")]
+        depth: u32,
+
+        /// Output format (default: markdown)
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Markdown)]
+        output: OutputFormat,
+    },
 }
 
 #[cfg(test)]

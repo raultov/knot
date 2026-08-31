@@ -150,7 +150,24 @@ The model should return something you can paste into Confluence, Notion, or a sp
 - **SPOF:** lib-common has 8 reverse dependents → **Invest** in versioning and SLA
 ```
 
-### CLI-only alternative (no MCP)
+### Built-in portfolio report
+
+Knot ships **`knot portfolio`** — a graph-based report (no LLM required) that produces:
+
+- **Asset list** — every indexed repo with language, build system, entity counts
+- **Dependencies** — `depends_on` and `depended_on_by` per repo
+- **Recommendations** — rule-based actions: `register`, `retire`, `invest`, `harden`, `consolidate`
+- **Correlations** — platform hubs (high fan-in) and isolated repos
+
+```bash
+knot portfolio                          # markdown table (default)
+knot portfolio --output json            # feed to GenAI or CMDB
+knot portfolio --filter auth --depth 3
+```
+
+Pair with **knot-mcp + GenAI** for narrative summaries per repo (`search_hybrid_context` on top of the JSON export).
+
+### CLI-only GenAI handoff
 
 Export facts, then feed JSON to any LLM:
 
@@ -174,9 +191,7 @@ Attach `inventory.json` and selected `deps-*.json` / `summary-*.md` files to the
 | Model invents dependencies | Require citations from `list_repo_dependencies` JSON |
 | Huge org (50+ repos) | Batch by language or folder; merge reports |
 
-### Contribution opportunity
-
-A future Knot feature could ship a **`knot portfolio-report`** command that runs the tool loop server-side and emits markdown/JSON without an external LLM. Until then, **knot-mcp + GenAI** is the intended synthesis path.
+Use **`knot portfolio --output json`** as the grounded baseline before asking an LLM to elaborate per-repo narratives.
 
 ---
 
@@ -209,7 +224,7 @@ Clone org repos  →  knot-indexer (all)  →  Analyst queries  →  Opportunity
 
 ```bash
 ./scripts/index-workspace.sh ~/code/my-org
-knot repos --output json > inventory.json
+knot portfolio --output json > portfolio.json
 ```
 
 Capture per repo: name, language, build system, file count, entity count.
@@ -358,13 +373,12 @@ Features that would strengthen the business-value story (not all implemented tod
 | Gap | User impact | Possible Knot contribution |
 |-----|-------------|---------------------------|
 | No Git host API | Manual clone step | Org scanner CLI (`gh` integration) |
-| No bulk JSON export | Hard to feed CMDB | `knot export-inventory` command |
+| No bulk JSON export | Hard to feed CMDB | `knot portfolio --output json` |
 | No `externalId` on entities | Re-sync drift | Stable repo URL in Repository node |
 | No scheduled re-index | Stale portfolio | Cron / watch mode docs + server |
 | Config files off by default | Missing K8s link | Document `--include-config-files` in onboarding |
-| No built-in portfolio report | Manual MCP + prompt | `knot portfolio-report` CLI (tool loop + template) |
 
-If you are contributing to Knot, see [ORG-SCANNING.md](ORG-SCANNING.md) for dev setup and [README](../README.md) for architecture. For GenAI-driven portfolio synthesis, see [GenAI portfolio synthesis layer](#genai-portfolio-synthesis-layer).
+If you are contributing to Knot, see [ORG-SCANNING.md](ORG-SCANNING.md) for dev setup and [README](../README.md) for architecture.
 
 ---
 
@@ -372,10 +386,11 @@ If you are contributing to Knot, see [ORG-SCANNING.md](ORG-SCANNING.md) for dev 
 
 ```bash
 knot repos                              # inventory
+knot portfolio [--output json]          # portfolio + recommendations + correlations
 knot search "<domain>" --repo <name>    # understand purpose
 knot callers "<Symbol>" --repo <name>   # criticality / impact
 knot deps <name> [--reverse]            # coupling
 knot explore "<path>" --repo <name>     # file anatomy
 ```
 
-**GenAI (MCP):** `list_repositories` → per-repo `search_hybrid_context` + `list_repo_dependencies` → portfolio table + correlation narrative. See [GenAI portfolio synthesis layer](#genai-portfolio-synthesis-layer).
+**GenAI (MCP):** `list_repositories` + `knot portfolio --output json` + per-repo `search_hybrid_context` for narratives.

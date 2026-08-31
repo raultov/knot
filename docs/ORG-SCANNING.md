@@ -190,6 +190,17 @@ auth-service  cargo         rust         186    3,891
 
 JSON: `knot repos --output json`
 
+### `knot portfolio`
+
+Org-wide portfolio report: inventory, per-repo dependencies, rule-based recommendations (`register`, `retire`, `invest`, `harden`, `consolidate`), and correlation patterns (platform hubs, isolated repos).
+
+```bash
+knot portfolio                    # markdown (default)
+knot portfolio --output json      # for CMDB or GenAI handoff
+```
+
+See [BUSINESS-OPPORTUNITIES.md](BUSINESS-OPPORTUNITIES.md).
+
 ### `knot search "<query>"`
 
 Semantic + structural search. Returns entities with signatures, file paths, line numbers, docstrings, and dependency hints.
