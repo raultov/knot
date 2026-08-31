@@ -17,8 +17,8 @@ use crate::db::{
 };
 use crate::mcp_tools::{
     explore_file::ExploreFileTool, find_callers::FindCallersTool,
-    list_repo_dependencies::ListRepoDependenciesTool, list_repositories::ListRepositoriesTool,
-    search_hybrid_context::SearchHybridContextTool,
+    list_portfolio::ListPortfolioTool, list_repo_dependencies::ListRepoDependenciesTool,
+    list_repositories::ListRepositoriesTool, search_hybrid_context::SearchHybridContextTool,
 };
 use crate::pipeline::embed::Embedder;
 
@@ -90,6 +90,7 @@ impl ServerHandler for KnotMcpHandler {
                 ExploreFileTool::tool(),
                 ListRepoDependenciesTool::tool(),
                 ListRepositoriesTool::tool(),
+                ListPortfolioTool::tool(),
             ],
             meta: None,
             next_cursor: None,
@@ -116,6 +117,7 @@ impl ServerHandler for KnotMcpHandler {
             "explore_file" => ExploreFileTool::handle(params, self).await,
             "list_repo_dependencies" => ListRepoDependenciesTool::handle(params, self).await,
             "list_repositories" => ListRepositoriesTool::handle(params, self).await,
+            "list_portfolio" => ListPortfolioTool::handle(params, self).await,
             _ => Err(CallToolError::unknown_tool(params.name)),
         }
     }
@@ -145,7 +147,8 @@ pub fn build_server_details() -> InitializeResult {
              1. search_hybrid_context — find entities by semantic meaning with dependencies\n\
              2. find_callers — reverse dependency lookup (impact analysis)\n\
              3. explore_file — inspect file structure and entity declarations\n\
-             4. list_repositories — list all indexed repositories with optional name filtering"
+             4. list_repositories — list all indexed repositories with optional name filtering\n\
+             5. list_portfolio — workspace portfolio: state, correlations, signals, Gemini recommendations"
                 .into(),
         ),
         meta: None,
@@ -217,6 +220,7 @@ mod tests {
         assert!(instructions.contains("find_callers"));
         assert!(instructions.contains("explore_file"));
         assert!(instructions.contains("list_repositories"));
+        assert!(instructions.contains("list_portfolio"));
     }
 
     #[test]

@@ -2078,6 +2078,7 @@ dependencies = [
  "ort",
  "qdrant-client",
  "rayon",
+ "reqwest",
  "roxmltree",
  "rust-mcp-sdk",
  "serde",

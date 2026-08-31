@@ -12,6 +12,7 @@ use knot::{
     db::{graph::ConnectExt, vector::VectorConnectExt},
     models::{Cli, Commands},
     pipeline::embed::Embedder,
+    portfolio,
     utils,
 };
 
@@ -120,6 +121,40 @@ async fn main() -> anyhow::Result<()> {
             let json_result = cli_tools::run_list_repos(filter.as_deref(), &graph_db).await?;
             let formatted = cli_tools::format_repos_output(&json_result, output);
             utils::print_with_pager(&formatted);
+        }
+
+        Commands::Portfolio {
+            filter,
+            no_ai,
+            exclude,
+            output_file,
+            horizon,
+            team_size,
+            focus,
+            output,
+        } => {
+            let options = portfolio::portfolio_options_from_env(portfolio::PortfolioOptions {
+                filter,
+                exclude,
+                skip_ai: no_ai,
+                horizon,
+                team_size,
+                focus,
+                ..Default::default()
+            });
+            let report = cli_tools::run_portfolio(options, &graph_db).await?;
+            let formatted = cli_tools::format_portfolio_report_output(&report, output);
+            if let Some(path) = output_file {
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                }
+                std::fs::write(&path, &formatted)?;
+                println!("Portfolio report saved to {}", path.display());
+            } else {
+                utils::print_with_pager(&formatted);
+            }
         }
     }
 

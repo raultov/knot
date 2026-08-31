@@ -125,6 +125,7 @@ point them at any repository you have indexed to measure your own codebase.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
 - **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Supports optional case-insensitive name filtering via `--filter` (CLI) or `filter` parameter (MCP). Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
+- **`list_portfolio`** / **`knot portfolio`**: Workspace portfolio across all indexed repos — entity weights, hub/leaf roles, `DEPENDS_ON` and cross-repo `CALLS` correlations, risk signals, and Gemini-generated recommendations when `KNOT_GEMINI_API_KEY` is configured.
 
 **🏗️ Multi-Language Support**
 - **Java**: Full AST extraction with package-aware FQN resolution (e.g., `com.example.app.UserService`), class inheritance (`EXTENDS`), interface implementation (`IMPLEMENTS`), annotation tracking, and field-access method invocation resolution
@@ -373,6 +374,16 @@ knot repos --output json            # Machine-readable list
 knot repos --output markdown        # GFM table for chat UIs
 ```
 Show the status of every repository currently indexed in the graph database — useful for orientation, sanity-checking that an indexing run completed, and discovering which languages and build systems are present across the workspace. Use `--filter` to quickly locate a specific repository when working with multiple indexed codebases.
+
+#### `knot portfolio` — Multi-Repo Asset Management
+
+```bash
+knot portfolio                          # Markdown report + Gemini recommendations
+knot portfolio --filter synth           # Filter repos by name
+knot portfolio --no-ai --output json    # Structured data only (no API call)
+```
+
+Treats all indexed repositories as a **portfolio**: current state (entity weights, hub/leaf/isolated roles), structural correlations (`DEPENDS_ON`), runtime coupling (cross-repo `CALLS`), risk signals, and optional **Gemini** recommendations when `KNOT_GEMINI_API_KEY` is set in `~/.config/knot/.env`. MCP equivalent: `list_portfolio`. See [docs/agent-skills/portfolio.md](docs/agent-skills/portfolio.md).
 
 **For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 

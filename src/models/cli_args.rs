@@ -91,6 +91,41 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
     },
+
+    /// Portfolio view across all indexed repos — state, correlations, Gemini recommendations
+    Portfolio {
+        /// Filter repositories by name (case-insensitive substring match)
+        #[arg(short, long)]
+        filter: Option<String>,
+
+        /// Skip Gemini API call; return structured data only
+        #[arg(long)]
+        no_ai: bool,
+
+        /// Additional repos to exclude (prowler is excluded by default)
+        #[arg(long = "exclude", action = clap::ArgAction::Append)]
+        exclude: Vec<String>,
+
+        /// Write report to this file instead of the pager (e.g. portfolio-report.md)
+        #[arg(long = "output-file")]
+        output_file: Option<std::path::PathBuf>,
+
+        /// Forecast horizon for strategic advisor (default: 18m; env: KNOT_PORTFOLIO_HORIZON)
+        #[arg(long, default_value = "18m")]
+        horizon: String,
+
+        /// Engineering team size hint for resource planning (env: KNOT_PORTFOLIO_TEAM_SIZE)
+        #[arg(long = "team-size")]
+        team_size: Option<u32>,
+
+        /// Strategic focus hint for the advisor (env: KNOT_PORTFOLIO_FOCUS)
+        #[arg(long)]
+        focus: Option<String>,
+
+        /// Output format (default: markdown)
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Markdown)]
+        output: OutputFormat,
+    },
 }
 
 #[cfg(test)]

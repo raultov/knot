@@ -9,4 +9,5 @@ pub mod mcp_handler;
 pub mod mcp_tools;
 pub mod models;
 pub mod pipeline;
+pub mod portfolio;
 pub mod utils;

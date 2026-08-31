@@ -169,7 +169,7 @@ impl RepoQueryExt for GraphDb {
 ///
 /// Returns an empty string when the slice is empty, so callers can safely use
 /// the result as a display value without further null handling.
-fn most_common_language(languages: &[String]) -> String {
+pub(crate) fn most_common_language(languages: &[String]) -> String {
     if languages.is_empty() {
         return String::new();
     }

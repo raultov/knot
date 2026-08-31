@@ -10,6 +10,7 @@
 mod connection;
 mod delete;
 mod query;
+mod query_portfolio;
 mod query_repo;
 mod query_subgraph;
 mod upsert;
@@ -31,6 +32,7 @@ pub struct GraphDb {
 pub use connection::ConnectExt;
 pub use delete::DeleteExt;
 pub use query::QueryExt;
+pub use query_portfolio::PortfolioQueryExt;
 pub use query_repo::RepoQueryExt;
 pub use query_subgraph::SubgraphQueryExt;
 pub use upsert::UpsertExt;

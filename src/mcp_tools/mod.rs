@@ -2,6 +2,7 @@
 
 pub mod explore_file;
 pub mod find_callers;
+pub mod list_portfolio;
 pub mod list_repo_dependencies;
 pub mod list_repositories;
 pub mod search_hybrid_context;
@@ -10,8 +11,8 @@ pub mod search_hybrid_context;
 mod tests {
     use crate::mcp_tools::{
         explore_file::ExploreFileTool, find_callers::FindCallersTool,
-        list_repo_dependencies::ListRepoDependenciesTool, list_repositories::ListRepositoriesTool,
-        search_hybrid_context::SearchHybridContextTool,
+        list_portfolio::ListPortfolioTool, list_repo_dependencies::ListRepoDependenciesTool,
+        list_repositories::ListRepositoriesTool, search_hybrid_context::SearchHybridContextTool,
     };
 
     #[test]
@@ -21,12 +22,14 @@ mod tests {
         let search = SearchHybridContextTool::tool();
         let deps = ListRepoDependenciesTool::tool();
         let repos = ListRepositoriesTool::tool();
+        let portfolio = ListPortfolioTool::tool();
 
         assert_eq!(explore.name, "explore_file");
         assert_eq!(find_callers.name, "find_callers");
         assert_eq!(search.name, "search_hybrid_context");
         assert_eq!(deps.name, "list_repo_dependencies");
         assert_eq!(repos.name, "list_repositories");
+        assert_eq!(portfolio.name, "list_portfolio");
     }
 
     #[test]
@@ -36,18 +39,21 @@ mod tests {
         let search = SearchHybridContextTool::tool();
         let deps = ListRepoDependenciesTool::tool();
         let repos = ListRepositoriesTool::tool();
+        let portfolio = ListPortfolioTool::tool();
 
         assert!(explore.description.is_some());
         assert!(find_callers.description.is_some());
         assert!(search.description.is_some());
         assert!(deps.description.is_some());
         assert!(repos.description.is_some());
+        assert!(portfolio.description.is_some());
 
         assert!(!explore.description.unwrap().is_empty());
         assert!(!find_callers.description.unwrap().is_empty());
         assert!(!search.description.unwrap().is_empty());
         assert!(!deps.description.unwrap().is_empty());
         assert!(!repos.description.unwrap().is_empty());
+        assert!(!portfolio.description.unwrap().is_empty());
     }
 
     #[test]
@@ -57,13 +63,15 @@ mod tests {
         let search = SearchHybridContextTool::tool();
         let deps = ListRepoDependenciesTool::tool();
         let repos = ListRepositoriesTool::tool();
+        let portfolio = ListPortfolioTool::tool();
 
-        // All tools must have required parameters (except list_repositories which has optional filter)
+        // All tools must have required parameters (except list_repositories/list_portfolio)
         assert!(!explore.input_schema.required.is_empty());
         assert!(!find_callers.input_schema.required.is_empty());
         assert!(!search.input_schema.required.is_empty());
         assert!(!deps.input_schema.required.is_empty());
         assert!(repos.input_schema.required.is_empty());
+        assert!(portfolio.input_schema.required.is_empty());
 
         // All tools must have properties defined
         assert!(explore.input_schema.properties.is_some());
@@ -71,6 +79,7 @@ mod tests {
         assert!(search.input_schema.properties.is_some());
         assert!(deps.input_schema.properties.is_some());
         assert!(repos.input_schema.properties.is_some());
+        assert!(portfolio.input_schema.properties.is_some());
     }
 
     #[test]
