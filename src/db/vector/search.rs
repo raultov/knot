@@ -4,6 +4,40 @@ use qdrant_client::qdrant::{SearchPoints, WithPayloadSelector};
 
 use super::{VectorDb, utils};
 
+/// Build the Qdrant payload filter for a repo scope.
+/// Empty slice → `None` (unfiltered). 1 name → `MatchValue::Keyword`.
+/// N names → `MatchValue::Keywords(RepeatedStrings)` ("value in set" OR semantics).
+pub(crate) fn build_repo_filter(repo_names: &[String]) -> Option<qdrant_client::qdrant::Filter> {
+    if repo_names.is_empty() {
+        return None;
+    }
+
+    let match_value = if repo_names.len() == 1 {
+        qdrant_client::qdrant::r#match::MatchValue::Keyword(repo_names[0].clone())
+    } else {
+        qdrant_client::qdrant::r#match::MatchValue::Keywords(
+            qdrant_client::qdrant::RepeatedStrings {
+                strings: repo_names.to_vec(),
+            },
+        )
+    };
+
+    Some(qdrant_client::qdrant::Filter {
+        must: vec![qdrant_client::qdrant::Condition {
+            condition_one_of: Some(qdrant_client::qdrant::condition::ConditionOneOf::Field(
+                qdrant_client::qdrant::FieldCondition {
+                    key: "repo_name".to_string(),
+                    r#match: Some(qdrant_client::qdrant::Match {
+                        match_value: Some(match_value),
+                    }),
+                    ..Default::default()
+                },
+            )),
+        }],
+        ..Default::default()
+    })
+}
+
 /// Extension trait for query and search operations.
 #[expect(
     async_fn_in_trait,
@@ -14,7 +48,7 @@ pub trait VectorSearchExt {
         &self,
         vector: &[f32],
         limit: usize,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<Vec<serde_json::Value>>;
 }
 
@@ -26,25 +60,9 @@ impl VectorSearchExt for VectorDb {
         &self,
         vector: &[f32],
         limit: usize,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<Vec<serde_json::Value>> {
-        // Build search request with optional repo_name filter
-        let filter = repo_name.map(|repo| qdrant_client::qdrant::Filter {
-            must: vec![qdrant_client::qdrant::Condition {
-                condition_one_of: Some(qdrant_client::qdrant::condition::ConditionOneOf::Field(
-                    qdrant_client::qdrant::FieldCondition {
-                        key: "repo_name".to_string(),
-                        r#match: Some(qdrant_client::qdrant::Match {
-                            match_value: Some(qdrant_client::qdrant::r#match::MatchValue::Keyword(
-                                repo.to_string(),
-                            )),
-                        }),
-                        ..Default::default()
-                    },
-                )),
-            }],
-            ..Default::default()
-        });
+        let filter = build_repo_filter(repo_names);
 
         let search_request = SearchPoints {
             collection_name: self.collection.clone(),
@@ -99,7 +117,7 @@ mod tests {
 
         let query_vector = vec![0.5; 384];
 
-        let result = vector_db.search(&query_vector, 10, None).await;
+        let result = vector_db.search(&query_vector, 10, &[]).await;
         assert!(result.is_ok());
         let results = result.unwrap();
         assert!(results.is_empty() || !results.is_empty()); // Collection might be empty
@@ -118,7 +136,9 @@ mod tests {
 
         let query_vector = vec![0.5; 384];
 
-        let result = vector_db.search(&query_vector, 10, Some("test-repo")).await;
+        let result = vector_db
+            .search(&query_vector, 10, &["test-repo".to_string()])
+            .await;
         assert!(result.is_ok());
         let results = result.unwrap();
         assert!(results.is_empty() || !results.is_empty()); // Collection might be empty
@@ -134,7 +154,7 @@ mod tests {
 
         let query_vector = vec![0.5; 384];
 
-        let result = vector_db.search(&query_vector, 0, None).await;
+        let result = vector_db.search(&query_vector, 0, &[]).await;
         assert!(result.is_ok());
     }
 
@@ -148,7 +168,72 @@ mod tests {
 
         let query_vector = vec![0.5; 384];
 
-        let result = vector_db.search(&query_vector, 1000, None).await;
+        let result = vector_db.search(&query_vector, 1000, &[]).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn build_repo_filter_empty_is_none() {
+        assert!(build_repo_filter(&[]).is_none());
+    }
+
+    #[test]
+    fn build_repo_filter_single_keyword() {
+        let names = vec!["a".to_string()];
+        let filter = build_repo_filter(&names).expect("filter should be Some");
+        assert_eq!(filter.must.len(), 1);
+        let cond = &filter.must[0];
+        match &cond.condition_one_of {
+            Some(qdrant_client::qdrant::condition::ConditionOneOf::Field(field_cond)) => {
+                assert_eq!(field_cond.key, "repo_name");
+                match &field_cond.r#match.as_ref().unwrap().match_value {
+                    Some(qdrant_client::qdrant::r#match::MatchValue::Keyword(k)) => {
+                        assert_eq!(k, "a");
+                    }
+                    _ => panic!("Expected Keyword match value"),
+                }
+            }
+            _ => panic!("Expected Field condition"),
+        }
+    }
+
+    #[test]
+    fn build_repo_filter_multi_keywords() {
+        let names = vec!["a".to_string(), "b".to_string()];
+        let filter = build_repo_filter(&names).expect("filter should be Some");
+        assert_eq!(filter.must.len(), 1);
+        let cond = &filter.must[0];
+        match &cond.condition_one_of {
+            Some(qdrant_client::qdrant::condition::ConditionOneOf::Field(field_cond)) => {
+                assert_eq!(field_cond.key, "repo_name");
+                match &field_cond.r#match.as_ref().unwrap().match_value {
+                    Some(qdrant_client::qdrant::r#match::MatchValue::Keywords(kw)) => {
+                        assert_eq!(kw.strings, vec!["a", "b"]);
+                    }
+                    _ => panic!("Expected Keywords match value"),
+                }
+            }
+            _ => panic!("Expected Field condition"),
+        }
+    }
+
+    #[test]
+    fn build_repo_filter_preserves_order() {
+        let names = vec!["b".to_string(), "a".to_string()];
+        let filter = build_repo_filter(&names).expect("filter should be Some");
+        let cond = &filter.must[0];
+        if let Some(qdrant_client::qdrant::condition::ConditionOneOf::Field(field_cond)) =
+            &cond.condition_one_of
+        {
+            if let Some(qdrant_client::qdrant::r#match::MatchValue::Keywords(kw)) =
+                &field_cond.r#match.as_ref().unwrap().match_value
+            {
+                assert_eq!(kw.strings, vec!["b", "a"]);
+            } else {
+                panic!("Expected Keywords match value");
+            }
+        } else {
+            panic!("Expected Field condition");
+        }
     }
 }
