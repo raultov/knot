@@ -50,10 +50,7 @@ async fn main() -> anyhow::Result<()> {
             repo,
             output,
         } => {
-            let target_repo = repo
-                .as_deref()
-                .map(RepoScope::parse)
-                .unwrap_or_else(|| RepoScope::One(cfg.repo_name.clone()));
+            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
             let json_result = cli_tools::run_search_hybrid_context(
                 &query,
                 max_results,
@@ -74,10 +71,7 @@ async fn main() -> anyhow::Result<()> {
             repo,
             output,
         } => {
-            let target_repo = repo
-                .as_deref()
-                .map(RepoScope::parse)
-                .unwrap_or_else(|| RepoScope::One(cfg.repo_name.clone()));
+            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
             let json_result =
                 cli_tools::run_find_callers(&entity_name, &target_repo, &graph_db).await?;
             let formatted = utils::format_callers_output(&entity_name, json_result, output);
@@ -89,10 +83,7 @@ async fn main() -> anyhow::Result<()> {
             repo,
             output,
         } => {
-            let target_repo = repo
-                .as_deref()
-                .map(RepoScope::parse)
-                .unwrap_or_else(|| RepoScope::One(cfg.repo_name.clone()));
+            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
             let (fp, json_result) =
                 cli_tools::run_explore_file(&file_path, &target_repo, &graph_db).await?;
             let formatted = utils::format_explore_output(&fp, json_result, output);
@@ -133,4 +124,41 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Build a [`RepoScope`] from the parsed `--repo` flag and the configured default.
+///
+/// When the flag is present, [`RepoScope::parse`] owns splitting on `,` and the
+/// `all`/`*` sentinel (single spelling for "every indexed repository"). When the
+/// flag is absent, the working-directory default from `cfg.repo_name` is used so
+/// existing CLI invocations keep their current behavior.
+fn build_repo_scope(repo: Option<&str>, default: &str) -> RepoScope {
+    repo.map(RepoScope::parse)
+        .unwrap_or_else(|| RepoScope::One(default.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repo_flag_builds_scope_list() {
+        let scope = build_repo_scope(Some("a,b"), "default-repo");
+        assert_eq!(
+            scope,
+            RepoScope::Many(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn repo_flag_builds_scope_all() {
+        let scope = build_repo_scope(Some("all"), "default-repo");
+        assert_eq!(scope, RepoScope::All);
+    }
+
+    #[test]
+    fn repo_flag_absent_uses_config_default() {
+        let scope = build_repo_scope(None, "default-repo");
+        assert_eq!(scope, RepoScope::One("default-repo".to_string()));
+    }
 }

@@ -26,7 +26,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "5")]
         max_results: usize,
 
-        /// Repository name to filter results
+        /// Repository scope: one name, comma-separated list, or 'all'/'*'
         #[arg(short, long)]
         repo: Option<String>,
 
@@ -40,7 +40,7 @@ pub enum Commands {
         /// Entity name to find references for
         entity_name: String,
 
-        /// Repository name to filter results
+        /// Repository scope: one name, comma-separated list, or 'all'/'*'
         #[arg(short, long)]
         repo: Option<String>,
 
@@ -54,7 +54,7 @@ pub enum Commands {
         /// Path to the source file
         file_path: String,
 
-        /// Repository name to filter results
+        /// Repository scope: one name, comma-separated list, or 'all'/'*'
         #[arg(short, long)]
         repo: Option<String>,
 
@@ -130,6 +130,30 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parser_search_with_repo_list() {
+        let args = vec!["knot", "search", "test", "--repo", "a,b"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Search { repo, .. } => {
+                assert_eq!(repo, Some("a,b".to_string()));
+            }
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_search_with_repo_all() {
+        let args = vec!["knot", "search", "test", "--repo", "all"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Search { repo, .. } => {
+                assert_eq!(repo, Some("all".to_string()));
+            }
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parser_search_with_output_format() {
         let args = vec!["knot", "search", "test", "--output", "json"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
@@ -178,6 +202,18 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parser_callers_with_repo_list() {
+        let args = vec!["knot", "callers", "MyClass", "--repo", "a,b"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Callers { repo, .. } => {
+                assert_eq!(repo, Some("a,b".to_string()));
+            }
+            _ => panic!("Expected Callers command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parser_callers_with_output_format() {
         let args = vec!["knot", "callers", "MyClass", "--output", "markdown"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
@@ -208,6 +244,18 @@ mod tests {
         match cli.command {
             Commands::Explore { repo, .. } => {
                 assert_eq!(repo, Some("my-repo".to_string()));
+            }
+            _ => panic!("Expected Explore command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_explore_with_repo_list() {
+        let args = vec!["knot", "explore", "src/main.java", "--repo", "a,b"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Explore { repo, .. } => {
+                assert_eq!(repo, Some("a,b".to_string()));
             }
             _ => panic!("Expected Explore command"),
         }
