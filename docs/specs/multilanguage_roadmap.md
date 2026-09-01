@@ -1,32 +1,33 @@
 # Multi-Language Roadmap for Knot
 
-This document outlines the planned expansion of `knot` to support Python, C/C++, and Markdown documentation, building on the existing foundation for Java, TypeScript, JavaScript, Kotlin, Rust, HTML, CSS, and SCSS.
+This document tracks the language and capability expansion of `knot` beyond the original Java/TypeScript/JavaScript/Kotlin/Rust/HTML/CSS/SCSS foundation. Phases 8-16 are all delivered; the Current State section below reflects v1.8.0.
 
 ---
 
 ## Overview
 
-**Current State (v1.6.2):**
-- Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, C/C++, HTML, CSS, SCSS support
+**Current State (v1.8.0):**
+- Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, C/C++, C# (v1.7.0), HTML, CSS, SCSS support
+- C# (v1.7.0): 16 `CSharp*` entity kinds, namespace-qualified FQNs (`<namespace>.<Type>.<member>`), `OVERRIDES` linking beyond the JVM, XML doc comments, and attributes
 - Markdown (v1.4.9): `MarkdownDocument` (one per `.md`/`.markdown` file) and `MarkdownSection` (one per ATX heading H1–H6) with section bodies embedded for full semantic search over docs
-- Varnish Cache (v1.5.7): `.vcl` / `.vtc` / `.vcc` via a hand-written lexer (no tree-sitter grammar exists), 18 entity kinds and 6 dedicated relationship types (USES_BACKEND, USES_PROBE, USES_ACL, INCLUDES, IMPORTS_VMOD, DECLARED_UNUSED)
+- Varnish Cache (v1.5.7, include resolution v1.6.1): `.vcl` / `.vtc` / `.vcc` via a hand-written lexer (no tree-sitter grammar exists), 18 entity kinds and 6 dedicated relationship types (USES_BACKEND, USES_PROBE, USES_ACL, INCLUDES, IMPORTS_VMOD, DECLARED_UNUSED)
 - Typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES, CONTAINS, OVERRIDES, ValueReference)
-- Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml extraction
+- Build Systems: Maven (pom.xml), Gradle (build.gradle), Jenkinsfile, Cargo.toml, and MSBuild (v1.7.2: `.csproj` + `Directory.Packages.props` CPM → `build_system: "nuget"` with cross-repo DEPENDS_ON edges)
 - Configuration Files: YAML (.yml/.yaml), JSON (.json), Java Properties (.properties) with leaf-key granularity and package.json special handling
 - Kubernetes + Helm: K8s manifest parsing (Deployment, Service, ConfigMap, Secret, Ingress, Namespace) and Helm chart indexing (Chart.yaml, values.yaml, templates)
+- Repository Scope Selection (v1.8.0): `repo_name` (MCP) and `--repo` (CLI) accept a single repository, a comma-separated union list, or the `all` / `*` sentinel — identical semantics on both surfaces, with `(repo: …)` self-labeling on multi-repo results
 - Dual-database architecture (Qdrant + Neo4j)
-- Three MCP tools (search_hybrid_context, find_callers, explore_file) + list_repo_dependencies
-- Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges and retroactive linking
+- Five MCP tools (search_hybrid_context, find_callers, explore_file, list_repo_dependencies, list_repositories)
+- find_callers target resolution ladder (v1.7.1): exact FQN → FQN suffix → exact name → signature prefix → fuzzy, with exact hits suppressing fuzzy noise
+- Deterministic Subgraph Root Resolution (v1.7.2): `resolve_subgraph_root` with typed root-kind precedence; `get_entity_subgraph` anchors on the resolved UUID and discloses `root_resolution`
+- Cross-Repo Dependency Linking (v1.2.5) with auto-discovered DEPENDS_ON edges (Maven/Gradle/Cargo/npm/NuGet) and retroactive linking
 - Entity Subgraph Traversal (v1.3.2) + Kind-Aware Filtering (v1.3.7) + Connectivity Fix (v1.3.8)
 - Standalone CLI Tool (`knot`) with full MCP parity
 - Colorized table output, interactive pager, configurable output formats (table/json/markdown)
 - Custom CA certificates support for corporate network downloads
 - O(N) nested macro traversal optimization for large Rust codebases
 - Consolidated `.knot/` directory: fastembed model cache now stored in `.knot/fastembed_cache/` (configurable via `KNOT_FASTEMBED_CACHE_DIR`)
-- 565+ unit tests | 100+ E2E tests across all languages
-- Fix Indexer Ambiguity & Context Deduplication (v1.3.4)
-- Kind-Aware Subgraph Traversal (v1.3.8): `get_entity_subgraph` now maintains connectivity when filtering by kind via synthetic roll-up edges and fixed edge extraction bug.
-- Markdown Documentation Indexing (v1.4.9): hierarchical FQNs (`README.md::Setup > Installation > Linux`), body searchability, special-character heading handling.
+- 1239 unit tests | 100+ E2E assertions across 21 suites (`tests/run_all_e2e_fast.sh`)
 
 ---
 
@@ -259,10 +260,10 @@ Enable `knot` to index C#/.NET codebases with the same fidelity already provided
 - [x] **`OVERRIDES` extended beyond the JVM** — `resolve/overrides.rs` gained `.cs` and the C# kinds; its `JVM_*` vocabulary was renamed to `OVERRIDE_CAPABLE_*` so the module stops misdescribing its own scope
 - [x] XML doc comments (`/// <summary>`) — no new code needed; `strip_comment_markers` already handles `///`
 - [x] 42 unit tests + `tests/run_csharp_e2e.sh` (registered as the 20th suite) with dual MCP + CLI validation across 7 fixtures
-- [x] `CURRENT_STATE_VERSION` deliberately **not** bumped — C# changes no existing FQN shape, so no user is forced into a full re-index
+- [x] `CURRENT_STATE_VERSION` deliberately **not** bumped — C# adds new kinds without changing existing FQN shapes, so no one is forced into a full re-index
 
 ### Out of Scope (follow-up issues)
-- `.csproj` / `.sln` / NuGet cross-repo linking — requires suffix-based discovery, since `BUILD_SYSTEM_NAMES` matches filenames exactly and `.csproj` names are project-specific
+- ~~`.csproj` / NuGet cross-repo linking~~ — ✅ delivered in v1.7.2 (extension-based discovery, `Directory.Packages.props` Central Package Management, `build_system: "nuget"`, cross-repo `DEPENDS_ON` edges); `.sln` solution-level identity remains open
 - `partial class` / `partial method` unification across files
 - Resolution-time EXTENDS/IMPLEMENTS correction (replacing the naming heuristic)
 - Generic constraints (`where T : IComparable<T>`) as `GENERIC_BOUND` edges
@@ -277,7 +278,7 @@ Enable `knot` to target multiple repositories in a single query across `search_h
 **Closes** [issue #19](https://github.com/anomalyco/knot/issues/19).
 
 ### Delivered
-- [x] **Repository Scope Model**: Added `RepoScope` enum (`All`, `List(Vec<String>)`) to parse single repo names, comma-separated lists (`"repo-a,repo-b"`), sentinels (`all`, `*`), and JSON string arrays in MCP `repo_name`.
+- [x] **Repository Scope Model**: Added `RepoScope` enum (`All`, `One(String)`, `Many(Vec<String>)`) to parse single repo names, comma-separated lists (`"repo-a,repo-b"`), sentinels (`all`, `*`), and JSON string arrays in MCP `repo_name`.
 - [x] **Unified Tool Parsing**: MCP tools (`search_hybrid_context`, `find_callers`, `explore_file`) and CLI flags (`--repo/-r`) support multi-repo union scope filtering across vector (Qdrant) and graph (Neo4j) queries.
 - [x] **Sentinel Priority & Sanitization**: Sentinels (`all`/`*`) override individual tokens in the same scope specification; whitespace trimmed, empty tokens dropped, case-insensitive matching for sentinels, duplicates collapsed. Unknown repo names yield silent no-rows without errors.
 - [x] **Global Result Limit Handling**: `max_results` applied globally across the scope union.
@@ -322,6 +323,29 @@ Enable `knot` to target multiple repositories in a single query across `search_h
 - ✅ **Docs**: Updated `README.md`, `.prompt`, `.knot-agent.md`, `src/mcp_handler.rs`, and roadmap specs.
 - ✅ Credit: closes #19.
 
+### v1.7.2 - Deterministic Subgraph Root Resolution & MSBuild/NuGet Build-System Support
+- ✅ **Feat(query)**: `resolve_subgraph_root` with `root_kind_rank` precedence — `get_entity_subgraph` anchors on the resolved UUID (eliminating homonym-union results) and discloses `root_resolution` (tier, candidates).
+- ✅ **Feat(parser)**: MSBuild `.csproj` + `Directory.Packages.props` as a first-class build system — `build_system: "nuget"`, Central Package Management version resolution, NuGet `DEPENDS_ON` cross-repo edges.
+
+### v1.7.1 - find_callers Target Resolution & Substring Noise Reduction
+- ✅ **Feat(query)**: Two-stage resolution ladder (exact FQN → FQN suffix → exact name → signature prefix → fuzzy substring); exact hits now suppress fuzzy noise.
+- ✅ **Feat(db)**: Neo4j `entity_name_text` / `entity_fqn_text` TEXT indexes; resolution metadata surfaced in CLI and markdown formatters.
+
+### v1.7.0 - C# Language Support
+- ✅ **Feat(parser)**: Full C# extraction (16 `CSharp*` entity kinds), namespace-qualified FQNs, `base_list` disambiguation heuristic, `OVERRIDES` beyond the JVM, XML doc comments, and attributes. 42 unit tests + 20th E2E suite. Closes #5.
+
+### v1.6.2 - Accurate Indexing Progress
+- ✅ **Fix(progress)**: Weighted progress bands across the whole pipeline (parse → embed/ingest → resolve); `IndexingProgress.total_entities`; `ParseCallbacks` replaces `FileParsedCallback`.
+
+### v1.6.1 - Varnish VCL Include Resolution
+- ✅ **Fix(varnish)**: Absolute-path `include` directives resolve via a three-strategy fallback (repo-root, relative, filename fuzzy match) to build `INCLUDES` relationships.
+
+### v1.6.0 - Unsafe Elimination & Code Quality Enforcement
+- ✅ **Refactor(unsafe)**: 17 of 18 `unsafe` blocks eliminated; `unsafe_code = "deny"` at crate level; all bare `#[allow(...)]` converted to `#[expect(..., reason = "...")]`; clippy readability lints (`too_many_lines`, `cognitive_complexity`, ...) wired in `clippy.toml`.
+
+### v1.5.7 - Varnish Cache Language Support
+- ✅ **Feat(parser)**: `.vcl` / `.vtc` / `.vcc` support via a hand-written lexer (no tree-sitter grammar exists) — 18 entity kinds, 6 relationship types, built-in sub aggregation; 19th E2E suite.
+
 ### v1.4.9 - Markdown Documentation Indexing
 - ✅ **Feat(parser)**: Added Markdown support (`.md`/`.markdown`) with `MarkdownDocument` (one per file) and `MarkdownSection` (one per ATX heading H1–H6).
 - ✅ **Feat(parser)**: Section bodies — paragraphs, fenced code blocks, lists, tables — captured into `embed_text` for full semantic search over documentation content, not just heading titles.
@@ -336,7 +360,7 @@ Enable `knot` to target multiple repositories in a single query across `search_h
 - ✅ Credit: @sdi2200246 (PR #17, closes #8).
 
 ### v1.3.8 - Subgraph Connectivity & Edge Extraction Fix
-- ✅ **Fixed Subgraph Disconnection**: Injected `CONTAINS` into traversal relationships to discovery class-to-class paths.
+- ✅ **Fixed Subgraph Disconnection**: Injects `CONTAINS` relationships into traversal paths when kind-filtering is active, keeping class-to-class paths discoverable.
 - ✅ **UUID List Binding Fix**: Replaced `$uuids` parameter with string literal interpolation to fix missing edges.
 - ✅ **Constrained Relationship Result**: Constrained direct edges to requested types.
 - ✅ **565 unit tests** passing | 12/12 E2E suites passing.
