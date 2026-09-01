@@ -276,8 +276,6 @@ Enable `knot` to target multiple repositories in a single query across `search_h
 
 **Closes** [issue #19](https://github.com/anomalyco/knot/issues/19).
 
-**Full plan:** [`docs/specs/repo_scope_selection_plan.md`](repo_scope_selection_plan.md).
-
 ### Delivered
 - [x] **Repository Scope Model**: Added `RepoScope` enum (`All`, `List(Vec<String>)`) to parse single repo names, comma-separated lists (`"repo-a,repo-b"`), sentinels (`all`, `*`), and JSON string arrays in MCP `repo_name`.
 - [x] **Unified Tool Parsing**: MCP tools (`search_hybrid_context`, `find_callers`, `explore_file`) and CLI flags (`--repo/-r`) support multi-repo union scope filtering across vector (Qdrant) and graph (Neo4j) queries.

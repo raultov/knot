@@ -10,8 +10,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 Closes [#19 — Add new search across all repos option](https://github.com/raultov/knot/issues/19).
 `repo_name` (MCP) and `--repo` (CLI) now accept a single repository
 (unchanged), a comma-separated union list, or the sentinel `all`
-(case-insensitive) / `*` — identical semantics on both surfaces. Plan:
-`docs/specs/repo_scope_selection_plan.md`.
+(case-insensitive) / `*` — identical semantics on both surfaces.
 
 - **Feat(models)**: New `RepoScope` enum (`All` / `One` / `Many`) with
   `parse` / `parse_optional` / `from_json` / `filter_names` /
