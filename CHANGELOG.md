@@ -4,6 +4,60 @@ All notable changes to **knot** are documented here, ordered from most recent to
 For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
+
+## v1.8.0 — Repository Scope Selection (`all` / Multi-Repo Filtering)
+
+Closes [#19 — Add new search across all repos option](https://github.com/raultov/knot/issues/19).
+`repo_name` (MCP) and `--repo` (CLI) now accept a single repository
+(unchanged), a comma-separated union list, or the sentinel `all`
+(case-insensitive) / `*` — identical semantics on both surfaces. Plan:
+`docs/specs/repo_scope_selection_plan.md`.
+
+- **Feat(models)**: New `RepoScope` enum (`All` / `One` / `Many`) with
+  `parse` / `parse_optional` / `from_json` / `filter_names` /
+  `is_unfiltered`. Normative rules: trim, split on `,`, drop empty
+  tokens, dedupe preserving first-occurrence order; the sentinel wins
+  over any other token in the same list; repo names stay case-sensitive;
+  unknown names are silent no-rows. MCP additionally accepts a JSON
+  string array (`"repo_name": ["a", "b"]`).
+- **Feat(db)**: Qdrant multi-value filter — new pure `build_repo_filter`
+  helper emits `MatchValue::Keyword` for one repo and
+  `MatchValue::Keywords` for N, staying on the existing `repo_name`
+  Keyword payload index; an empty scope means no filter.
+- **Refactor(db)**: Neo4j predicates unified on `x.repo_name IN
+  $repo_names` with `Vec<String>` list parameters; ~10 duplicated
+  per-scope query branches in `query.rs` collapsed; `QueryExt` (7
+  methods) and `VectorSearchExt::search` now take `repo_names: &[String]`
+  (empty = unfiltered). `IN` with one element is plan-equivalent to `=`,
+  so single-repo queries do not regress.
+- **Feat(mcp)**: New `repo_scope_from_args` helper; `search_hybrid_context`,
+  `find_callers`, and `explore_file` accept single / comma-list / `all` /
+  `*` / JSON array, and their schema descriptions teach the syntax.
+  `list_repo_dependencies`, `list_repositories`, and subgraph traversal
+  are unchanged (single-repo contract).
+- **Feat(cli)**: `knot search/callers/explore --repo` accepts lists and
+  the sentinel via the tested `build_repo_scope` helper; an absent flag
+  keeps the auto-detected repo default.
+- **Feat(ui)**: Every search row is annotated with `(repo: <name>)` in
+  the CLI table and MCP Markdown output, so multi-repo results are
+  self-labeling.
+- **Fix(explore)**: `explore_file` now surfaces `ambiguous_path_candidates`
+  whenever ≥ 2 repositories match the same relative path (not only on an
+  empty match), renders them in CLI/Markdown output, and the suffix
+  fallback query matches repo-relative paths.
+- **Test(e2e)**: New BDD suite `tests/run_repo_scope_e2e.sh` (27
+  assertions: sentinel, lists, whitespace/unknown/duplicates,
+  find_callers, explore_file ambiguity, JSON array, CLI parity, output
+  labeling) registered as the 21st suite; observed red before
+  implementation (17 red / 10 regression guards green).
+- **Docs**: README, `.prompt`, `.knot-agent.md`, MCP server instructions,
+  and the roadmap updated with the scope syntax and the global
+  `max_results` caveat for multi-repo scopes.
+- **cargo fmt** clean | **cargo clippy --all-targets --all-features -D warnings** clean
+- ✅ 1232 unit tests passing | **21/21 E2E suites** passing | repo-scope suite 27/27
+
+---
+
 ## v1.7.2 — Deterministic Subgraph Root Resolution & MSBuild/NuGet Build-System Support
 
 Part A: deterministic subgraph root resolution (the `get_entity_subgraph`
