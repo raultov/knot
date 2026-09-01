@@ -38,6 +38,7 @@ cargo test
 ./tests/run_config_e2e.sh            # YAML/JSON/.properties config
 ./tests/run_k8s_helm_e2e.sh          # Kubernetes + Helm
 ./tests/run_cross_repo_dep_e2e.sh    # Cross-repo dependency linking
+./tests/run_repo_scope_e2e.sh        # Repository scope selection (all / multi-repo)
 ```
 
 **Code quality:**

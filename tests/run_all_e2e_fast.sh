@@ -53,6 +53,7 @@ SUITES=(
     "run_k8s_helm_e2e.sh"
     "run_groovy_e2e.sh"
     "run_cross_repo_dep_e2e.sh"
+    "run_repo_scope_e2e.sh"
     "run_cross_lang_ref_e2e.sh"
     "run_cpp_e2e.sh"
     "run_markdown_e2e.sh"
