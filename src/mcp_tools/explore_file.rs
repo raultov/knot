@@ -16,7 +16,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
-use crate::models::RepoScope;
+use crate::mcp_tools::repo_scope_from_args;
 
 pub struct ExploreFileTool;
 
@@ -36,7 +36,7 @@ impl ExploreFileTool {
             "repo_name".to_string(),
             serde_json::from_value(json!({
                 "type": "string",
-                "description": "Optional but HIGHLY RECOMMENDED: repository name to filter results to a specific codebase (e.g., 'my-java-repo'). If you know the repository you are working on, include this in your FIRST query to avoid mixed results from other indexed projects. Omit only to search across all repositories.",
+                "description": "Optional but HIGHLY RECOMMENDED: repository scope. Accepts a single repository name (`'my-repo'`), a comma-separated list (`'repo-a,repo-b'`), or `'all'` (or `'*'`) to query every indexed repository. If you know the repository you are working on, include it in your FIRST query to avoid mixed results from other indexed projects. Omit to search across all repositories.",
                 "minLength": 1,
                 "maxLength": 255
             }))
@@ -86,7 +86,7 @@ impl ExploreFileTool {
                 CallToolError::from_message("Missing 'file_path' parameter".to_string())
             })?;
 
-        let repo = RepoScope::from_json(args.get("repo_name"));
+        let repo = repo_scope_from_args(&args);
 
         // Check if in offline mode
         if handler.graph_db.is_none() {
@@ -135,5 +135,18 @@ mod tests {
         let props = schema.properties.unwrap();
         assert!(props.contains_key("file_path"));
         assert!(props.contains_key("repo_name"));
+    }
+
+    #[test]
+    fn test_explore_file_schema_repo_name_documents_scope() {
+        let tool = ExploreFileTool::tool();
+        let props = tool.input_schema.properties.unwrap();
+        let repo_prop = props.get("repo_name").unwrap();
+        let desc = repo_prop.get("description").unwrap().as_str().unwrap();
+
+        assert_eq!(
+            desc,
+            "Optional but HIGHLY RECOMMENDED: repository scope. Accepts a single repository name (`'my-repo'`), a comma-separated list (`'repo-a,repo-b'`), or `'all'` (or `'*'`) to query every indexed repository. If you know the repository you are working on, include it in your FIRST query to avoid mixed results from other indexed projects. Omit to search across all repositories."
+        );
     }
 }

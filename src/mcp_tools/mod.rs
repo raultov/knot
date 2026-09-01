@@ -6,13 +6,90 @@ pub mod list_repo_dependencies;
 pub mod list_repositories;
 pub mod search_hybrid_context;
 
+use crate::models::RepoScope;
+
+/// Extract the repository scope from tool-call arguments.
+/// Accepts: absent/null → All · string (comma-separated, "all"/"*" sentinel) → parse
+/// · array of strings → joined then parsed.
+pub(crate) fn repo_scope_from_args(args: &serde_json::Map<String, serde_json::Value>) -> RepoScope {
+    RepoScope::from_json(args.get("repo_name"))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::mcp_tools::{
         explore_file::ExploreFileTool, find_callers::FindCallersTool,
         list_repo_dependencies::ListRepoDependenciesTool, list_repositories::ListRepositoriesTool,
         search_hybrid_context::SearchHybridContextTool,
     };
+
+    #[test]
+    fn repo_scope_from_args_absent_is_all() {
+        let args = serde_json::Map::new();
+        assert_eq!(repo_scope_from_args(&args), RepoScope::All);
+    }
+
+    #[test]
+    fn repo_scope_from_args_string_all() {
+        let mut args = serde_json::Map::new();
+        args.insert("repo_name".to_string(), serde_json::json!("all"));
+        assert_eq!(repo_scope_from_args(&args), RepoScope::All);
+    }
+
+    #[test]
+    fn repo_scope_from_args_string_list() {
+        let mut args = serde_json::Map::new();
+        args.insert("repo_name".to_string(), serde_json::json!("a,b"));
+        assert_eq!(
+            repo_scope_from_args(&args),
+            RepoScope::Many(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn repo_scope_from_args_array() {
+        let mut args = serde_json::Map::new();
+        args.insert("repo_name".to_string(), serde_json::json!(["a", "b"]));
+        assert_eq!(
+            repo_scope_from_args(&args),
+            RepoScope::Many(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn repo_scope_from_args_null_is_all() {
+        let mut args = serde_json::Map::new();
+        args.insert("repo_name".to_string(), serde_json::Value::Null);
+        assert_eq!(repo_scope_from_args(&args), RepoScope::All);
+    }
+
+    #[test]
+    fn test_scope_descriptions_mention_all_and_lists() {
+        let explore = ExploreFileTool::tool();
+        let find_callers = FindCallersTool::tool();
+        let search = SearchHybridContextTool::tool();
+
+        let tools = [explore, find_callers, search];
+        for tool in tools {
+            let props = tool.input_schema.properties.unwrap();
+            let repo_prop = props.get("repo_name").unwrap();
+            let desc = repo_prop.get("description").unwrap().as_str().unwrap();
+
+            assert!(
+                desc.contains("'all'"),
+                "tool {} repo_name description does not contain 'all': {}",
+                tool.name,
+                desc
+            );
+            assert!(
+                desc.contains("comma-separated"),
+                "tool {} repo_name description does not contain 'comma-separated': {}",
+                tool.name,
+                desc
+            );
+        }
+    }
 
     #[test]
     fn test_all_tools_have_valid_names() {
