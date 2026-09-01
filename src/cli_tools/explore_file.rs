@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use crate::db::graph::{GraphDb, QueryExt};
 
+use crate::models::RepoScope;
+
 use crate::cli_tools::json_entities_array;
 
 use crate::cli_tools::append_signature_if_present;
@@ -84,14 +86,14 @@ pub fn ends_with_suffix_query(suffix: &str) -> String {
 /// Main explore_file function called by both CLI and MCP.
 pub async fn run_explore_file(
     file_path: &str,
-    repo_name: Option<&str>,
+    repo: &RepoScope,
     graph_db: &Arc<GraphDb>,
 ) -> anyhow::Result<(String, serde_json::Value)> {
     let cwd = std::env::current_dir().ok();
     let repo_root = std::env::var("KNOT_REPO_PATH").ok().map(PathBuf::from);
     let normalized_path = resolve_explore_input(file_path, cwd.as_deref(), repo_root.as_deref());
 
-    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+    let repo_names = repo.filter_names();
 
     let entities = graph_db
         .get_file_entities(&normalized_path, &repo_names)
@@ -685,5 +687,17 @@ mod tests {
         // `foobar/baz.rs`.
         let fragment = ends_with_suffix_query("src/lib.rs");
         assert_eq!(fragment, "ENDS WITH '/src/lib.rs'");
+    }
+
+    // ---- Phase 4 compilation contract: RepoScope flows through ----
+
+    #[test]
+    fn test_repo_scope_all_filter_names_is_empty_for_unfiltered_passthrough() {
+        let scope = RepoScope::All;
+        assert!(scope.is_unfiltered());
+        assert!(
+            scope.filter_names().is_empty(),
+            "RepoScope::All must yield an empty filter list so the DB layer treats it as unfiltered"
+        );
     }
 }

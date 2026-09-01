@@ -10,7 +10,7 @@ use knot::{
     cli_tools,
     config::{Config, OutputFormat},
     db::{graph::ConnectExt, vector::VectorConnectExt},
-    models::{Cli, Commands},
+    models::{Cli, Commands, RepoScope},
     pipeline::embed::Embedder,
     utils,
 };
@@ -50,11 +50,14 @@ async fn main() -> anyhow::Result<()> {
             repo,
             output,
         } => {
-            let target_repo = repo.as_deref().unwrap_or(&cfg.repo_name);
+            let target_repo = repo
+                .as_deref()
+                .map(RepoScope::parse)
+                .unwrap_or_else(|| RepoScope::One(cfg.repo_name.clone()));
             let json_result = cli_tools::run_search_hybrid_context(
                 &query,
                 max_results,
-                Some(target_repo),
+                &target_repo,
                 &cli_tools::SearchContext {
                     vector_db: &vector_db,
                     graph_db: &graph_db,
@@ -71,9 +74,12 @@ async fn main() -> anyhow::Result<()> {
             repo,
             output,
         } => {
-            let target_repo = repo.as_deref().unwrap_or(&cfg.repo_name);
+            let target_repo = repo
+                .as_deref()
+                .map(RepoScope::parse)
+                .unwrap_or_else(|| RepoScope::One(cfg.repo_name.clone()));
             let json_result =
-                cli_tools::run_find_callers(&entity_name, Some(target_repo), &graph_db).await?;
+                cli_tools::run_find_callers(&entity_name, &target_repo, &graph_db).await?;
             let formatted = utils::format_callers_output(&entity_name, json_result, output);
             utils::print_with_pager(&formatted);
         }
@@ -83,9 +89,12 @@ async fn main() -> anyhow::Result<()> {
             repo,
             output,
         } => {
-            let target_repo = repo.as_deref().unwrap_or(&cfg.repo_name);
+            let target_repo = repo
+                .as_deref()
+                .map(RepoScope::parse)
+                .unwrap_or_else(|| RepoScope::One(cfg.repo_name.clone()));
             let (fp, json_result) =
-                cli_tools::run_explore_file(&file_path, Some(target_repo), &graph_db).await?;
+                cli_tools::run_explore_file(&file_path, &target_repo, &graph_db).await?;
             let formatted = utils::format_explore_output(&fp, json_result, output);
             utils::print_with_pager(&formatted);
         }

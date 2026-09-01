@@ -13,6 +13,7 @@ use crate::db::{
     graph::{GraphDb, QueryExt},
     vector::{VectorDb, VectorSearchExt},
 };
+use crate::models::RepoScope;
 use crate::pipeline::embed::Embedder;
 
 /// Bundled database and embedder dependencies for [`run_search_hybrid_context`].
@@ -31,7 +32,7 @@ pub struct SearchContext<'a> {
 pub async fn run_search_hybrid_context(
     query: &str,
     max_results: usize,
-    repo_name: Option<&str>,
+    repo: &RepoScope,
     ctx: &SearchContext<'_>,
 ) -> anyhow::Result<serde_json::Value> {
     let vector = ctx
@@ -41,7 +42,7 @@ pub async fn run_search_hybrid_context(
         .embed_query(query)
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
 
-    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+    let repo_names = repo.filter_names();
 
     let search_results = ctx
         .vector_db
@@ -100,10 +101,9 @@ pub async fn run_search_hybrid_context(
         .get_entities_with_dependencies(&uuids, &repo_names)
         .await?;
 
-    let enriched_context =
-        enrich_with_relationships(&context, &entity_names, ctx.graph_db, repo_name)
-            .await
-            .unwrap_or(context);
+    let enriched_context = enrich_with_relationships(&context, &entity_names, ctx.graph_db, repo)
+        .await
+        .unwrap_or(context);
 
     Ok(enriched_context)
 }
@@ -113,10 +113,10 @@ async fn enrich_with_relationships(
     context: &serde_json::Value,
     _entity_names: &[String],
     graph_db: &Arc<GraphDb>,
-    repo_name: Option<&str>,
+    repo: &RepoScope,
 ) -> anyhow::Result<serde_json::Value> {
     let mut enriched = context.clone();
-    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+    let repo_names = repo.filter_names();
 
     if let Some(entities) = enriched.as_array_mut() {
         for entity in entities.iter_mut() {
@@ -288,6 +288,18 @@ mod tests {
         assert_eq!(
             entity.get("subclasses"),
             Some(&json!(vec!["Child1", "Child2"]))
+        );
+    }
+
+    // ---- Phase 4 compilation contract: RepoScope flows through ----
+
+    #[test]
+    fn test_repo_scope_all_filter_names_is_empty_for_unfiltered_passthrough() {
+        let scope = RepoScope::All;
+        assert!(scope.is_unfiltered());
+        assert!(
+            scope.filter_names().is_empty(),
+            "RepoScope::All must yield an empty filter list so the DB layer treats it as unfiltered"
         );
     }
 }

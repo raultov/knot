@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use crate::db::graph::{GraphDb, QueryExt};
 
+use crate::models::RepoScope;
+
 use crate::cli_tools::json_target_name;
 
 use crate::cli_tools::append_signature_if_present;
@@ -16,10 +18,10 @@ use crate::cli_tools::resolution::ResolutionView;
 /// Main find_callers function called by both CLI and MCP
 pub async fn run_find_callers(
     entity_name: &str,
-    repo_name: Option<&str>,
+    repo: &RepoScope,
     graph_db: &Arc<GraphDb>,
 ) -> anyhow::Result<serde_json::Value> {
-    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+    let repo_names = repo.filter_names();
     let references = graph_db.find_references(entity_name, &repo_names).await?;
     Ok(references)
 }
@@ -533,5 +535,17 @@ mod tests {
                         ## Calls (function/method invocations) (1)\n\n\
                         - **`caller1`** (method) at `file1.java:10`\n\n";
         assert_eq!(formatted, expected);
+    }
+
+    // ---- Phase 4 compilation contract: RepoScope flows through ----
+
+    #[test]
+    fn test_repo_scope_all_filter_names_is_empty_for_unfiltered_passthrough() {
+        let scope = RepoScope::All;
+        assert!(scope.is_unfiltered());
+        assert!(
+            scope.filter_names().is_empty(),
+            "RepoScope::All must yield an empty filter list so the DB layer treats it as unfiltered"
+        );
     }
 }

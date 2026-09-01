@@ -21,6 +21,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
+use crate::models::RepoScope;
 
 pub struct SearchHybridContextTool;
 
@@ -102,7 +103,7 @@ impl SearchHybridContextTool {
             .and_then(|v| v.as_i64())
             .unwrap_or(5) as usize;
 
-        let repo_name = args.get("repo_name").and_then(|v| v.as_str());
+        let repo = RepoScope::from_json(args.get("repo_name"));
 
         // Check if in offline mode
         if let (None, None, None) = (&handler.vector_db, &handler.graph_db, &handler.embedder) {
@@ -129,7 +130,7 @@ impl SearchHybridContextTool {
         let json_result = cli_tools::run_search_hybrid_context(
             query,
             max_results,
-            repo_name,
+            &repo,
             &cli_tools::SearchContext {
                 vector_db,
                 graph_db,

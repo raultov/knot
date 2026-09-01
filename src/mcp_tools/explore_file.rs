@@ -16,6 +16,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
+use crate::models::RepoScope;
 
 pub struct ExploreFileTool;
 
@@ -85,7 +86,7 @@ impl ExploreFileTool {
                 CallToolError::from_message("Missing 'file_path' parameter".to_string())
             })?;
 
-        let repo_name = args.get("repo_name").and_then(|v| v.as_str());
+        let repo = RepoScope::from_json(args.get("repo_name"));
 
         // Check if in offline mode
         if handler.graph_db.is_none() {
@@ -101,7 +102,7 @@ impl ExploreFileTool {
             .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let (fp, json_result) = cli_tools::run_explore_file(file_path, repo_name, graph_db)
+        let (fp, json_result) = cli_tools::run_explore_file(file_path, &repo, graph_db)
             .await
             .map_err(|e| CallToolError::from_message(format!("Explore file failed: {}", e)))?;
 

@@ -18,6 +18,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
+use crate::models::RepoScope;
 
 pub struct FindCallersTool;
 
@@ -93,7 +94,7 @@ impl FindCallersTool {
                 CallToolError::from_message("Missing 'entity_name' parameter".to_string())
             })?;
 
-        let repo_name = args.get("repo_name").and_then(|v| v.as_str());
+        let repo = RepoScope::from_json(args.get("repo_name"));
 
         // Check if in offline mode
         if handler.graph_db.is_none() {
@@ -109,7 +110,7 @@ impl FindCallersTool {
             .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let json_result = cli_tools::run_find_callers(entity_name, repo_name, graph_db)
+        let json_result = cli_tools::run_find_callers(entity_name, &repo, graph_db)
             .await
             .map_err(|e| CallToolError::from_message(format!("Find callers failed: {}", e)))?;
 
