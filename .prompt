@@ -45,7 +45,8 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 **Path handling:** `explore_file` accepts repo-relative paths (preferred, e.g. `src/pipeline/embed.rs`)
 or absolute local paths (e.g. `/home/you/work/myrepo/src/lib.rs`). The tool strips the known
 local root automatically. If you see `ambiguous_path_candidates` in the response, retry
-with a more specific path or pass `repo_name`.
+with a more specific path or pass `repo_name` (accepts single name, comma-separated list `"repo-a,repo-b"`,
+sentinel `all` or `*`, or JSON array `["repo-a", "repo-b"]`).
 
 ## Why This Matters
 
@@ -80,7 +81,7 @@ Exceptions (where shell tools are acceptable):
 ## Integration Notes
 
 - The `knot` MCP server requires Qdrant and Neo4j running (default: `localhost:6334` and `bolt://localhost:7687`)
-- All tools support optional `repo_name` parameter for multi-repository filtering
+- All tools support optional `repo_name` parameter for multi-repository scope (accepts a single name, comma-separated list `"repo-a,repo-b"`, sentinel `all`/`*`, or JSON string array `["repo-a", "repo-b"]`). Multi-repo scope applies a global `max_results` limit across the union — increase `max_results` when searching across multiple repositories.
 - Results include full context (signatures, docstrings, file locations, call chains)
 - **Returned file paths are repo-relative** (e.g. `src/pipeline/embed.rs`). The owning repository
   is printed next to each path as `(repo: name)`. To open a file in your editor, resolve the

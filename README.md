@@ -343,12 +343,15 @@ The **knot CLI** provides the same capabilities as the MCP server via command-li
 #### `knot search` — Semantic Code Search
 ```bash
 knot search "user authentication" --max-results 10 --repo my-app
+knot search "user authentication" --max-results 20 --repo "app-a,app-b"  # Union across repos
+knot search "user authentication" --max-results 20 --repo all              # All indexed repos ('all' or '*')
 ```
 Find code entities by meaning, class names, docstrings, or comments.
 
 #### `knot callers` — Reverse Dependency Lookup
 ```bash
 knot callers "LoginService" --repo my-app
+knot callers "LoginService" --repo "auth-service,billing-service"
 ```
 Find all code that references a specific entity (dead code detection, impact analysis, call chains). When multiple entities share the same name in different files, results are automatically grouped by target with file locations and signatures.
 
@@ -373,6 +376,14 @@ knot repos --output json            # Machine-readable list
 knot repos --output markdown        # GFM table for chat UIs
 ```
 Show the status of every repository currently indexed in the graph database — useful for orientation, sanity-checking that an indexing run completed, and discovering which languages and build systems are present across the workspace. Use `--filter` to quickly locate a specific repository when working with multiple indexed codebases.
+
+**Repository Scope Selection:**
+Both the CLI `--repo/-r` flag and MCP `repo_name` parameter support:
+- Single repository name: `--repo my-app`
+- Comma-separated list: `--repo "repo-a,repo-b"` (MCP also accepts `["repo-a", "repo-b"]`)
+- Sentinel: `--repo all` or `--repo "*"` (searches every indexed repository)
+
+*Note:* Multi-repo scope applies a global `max_results` limit across the union. Increase `--max-results` when searching across multiple repositories.
 
 **For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 

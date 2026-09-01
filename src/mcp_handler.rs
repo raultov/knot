@@ -145,7 +145,8 @@ pub fn build_server_details() -> InitializeResult {
              1. search_hybrid_context — find entities by semantic meaning with dependencies\n\
              2. find_callers — reverse dependency lookup (impact analysis)\n\
              3. explore_file — inspect file structure and entity declarations\n\
-             4. list_repositories — list all indexed repositories with optional name filtering"
+             4. list_repositories — list all indexed repositories with optional name filtering\n\
+             Repository Scope: repo_name supports a single repo name, comma-separated list ('repo-a,repo-b'), sentinel 'all'/'*', or JSON string array."
                 .into(),
         ),
         meta: None,

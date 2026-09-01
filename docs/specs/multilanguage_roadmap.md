@@ -269,6 +269,24 @@ Enable `knot` to index C#/.NET codebases with the same fidelity already provided
 
 ---
 
+## Phase 16: Repository Scope Selection (v1.8.0 — ✅ Completed)
+
+### Objective
+Enable `knot` to target multiple repositories in a single query across `search_hybrid_context`, `find_callers`, and `explore_file` MCP tools and CLI commands (`knot search`, `knot callers`, `knot explore`), allowing agents and users to specify a single repository, a union of repositories, or target all indexed repositories.
+
+**Closes** [issue #19](https://github.com/anomalyco/knot/issues/19).
+
+**Full plan:** [`docs/specs/repo_scope_selection_plan.md`](repo_scope_selection_plan.md).
+
+### Delivered
+- [x] **Repository Scope Model**: Added `RepoScope` enum (`All`, `List(Vec<String>)`) to parse single repo names, comma-separated lists (`"repo-a,repo-b"`), sentinels (`all`, `*`), and JSON string arrays in MCP `repo_name`.
+- [x] **Unified Tool Parsing**: MCP tools (`search_hybrid_context`, `find_callers`, `explore_file`) and CLI flags (`--repo/-r`) support multi-repo union scope filtering across vector (Qdrant) and graph (Neo4j) queries.
+- [x] **Sentinel Priority & Sanitization**: Sentinels (`all`/`*`) override individual tokens in the same scope specification; whitespace trimmed, empty tokens dropped, case-insensitive matching for sentinels, duplicates collapsed. Unknown repo names yield silent no-rows without errors.
+- [x] **Global Result Limit Handling**: `max_results` applied globally across the scope union.
+- [x] **E2E Validation**: Added `tests/run_repo_scope_e2e.sh` registered as the 21st suite in `tests/run_all_e2e_fast.sh`.
+
+---
+
 ## Implementation Priority & Timeline
 
 | Phase | Complexity | Status |
@@ -284,6 +302,7 @@ Enable `knot` to index C#/.NET codebases with the same fidelity already provided
 | Phase 13: Markdown Documentation Indexing | Low | ✅ Completed (v1.4.9) |
 | Phase 14: Varnish Cache (VCL/VTC/VCC) | High | ✅ Completed (v1.5.7, include resolution v1.6.1) |
 | Phase 15: C# Support | High | ✅ Completed (v1.7.0) |
+| Phase 16: Repository Scope Selection | Medium | ✅ Completed (v1.8.0) |
 
 ---
 
@@ -296,6 +315,14 @@ Enable `knot` to index C#/.NET codebases with the same fidelity already provided
 ---
 
 ## Changelog
+
+### v1.8.0 - Repository Scope Selection
+- ✅ **Feat(scope)**: Multi-repository scope selection for `search_hybrid_context`, `find_callers`, `explore_file` and CLI commands `--repo/-r`.
+- ✅ **Feat(scope)**: Supports single repository name, comma-separated list (`"repo-a,repo-b"`), sentinel `all` or `*` (targets every indexed repository), and JSON string array (`["repo-a", "repo-b"]` in MCP).
+- ✅ **Feat(scope)**: Sentinel priority (`all`/`*` overrides list tokens), whitespace trimming, case-insensitive sentinel matching, and silent empty results for non-existent repositories.
+- ✅ **Test(e2e)**: New `tests/run_repo_scope_e2e.sh` (21st test suite in `tests/run_all_e2e_fast.sh`).
+- ✅ **Docs**: Updated `README.md`, `.prompt`, `.knot-agent.md`, `src/mcp_handler.rs`, and roadmap specs.
+- ✅ Credit: closes #19.
 
 ### v1.4.9 - Markdown Documentation Indexing
 - ✅ **Feat(parser)**: Added Markdown support (`.md`/`.markdown`) with `MarkdownDocument` (one per file) and `MarkdownSection` (one per ATX heading H1–H6).
