@@ -108,13 +108,30 @@ impl ExploreFileTool {
 
         let formatted = cli_tools::format_file_entities(&fp, &json_result);
 
+        // Surface `ambiguous_path_candidates` as structured content so MCP
+        // clients (and the BDD grep assertions) can detect the
+        // disambiguation hint without parsing the formatted Markdown.
+        let structured_content = json_result
+            .as_object()
+            .and_then(|obj| obj.get("ambiguous_path_candidates"))
+            .and_then(|v| v.as_array())
+            .filter(|arr| !arr.is_empty())
+            .map(|arr| {
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "ambiguous_path_candidates".to_string(),
+                    serde_json::Value::Array(arr.clone()),
+                );
+                map
+            });
+
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(
                 formatted, None, None,
             ))],
             is_error: None,
             meta: None,
-            structured_content: None,
+            structured_content,
         })
     }
 }

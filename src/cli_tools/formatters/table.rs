@@ -40,9 +40,14 @@ pub fn format_search_table(results: &Value) -> String {
                 _ => Color::White,
             };
 
+            let name_cell = match entity.get("repo_name").and_then(|v| v.as_str()) {
+                Some(repo) => Cell::new(format!("{name} (repo: {repo})")),
+                None => Cell::new(name),
+            };
+
             table.add_row(vec![
                 Cell::new(kind).fg(kind_color),
-                Cell::new(name),
+                name_cell,
                 Cell::new(file),
                 Cell::new(line).set_alignment(CellAlignment::Right),
             ]);

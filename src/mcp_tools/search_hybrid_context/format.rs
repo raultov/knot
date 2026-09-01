@@ -27,10 +27,15 @@ pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
     let mut output = String::new();
 
     if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
+        let repo_suffix = entity
+            .get("repo_name")
+            .and_then(|v| v.as_str())
+            .map(|r| format!(" (repo: {r})"))
+            .unwrap_or_default();
         if let Some(kind) = entity.get("kind").and_then(|v| v.as_str()) {
-            output.push_str(&format!("## `{}` ({}) \n\n", name, kind));
+            output.push_str(&format!("## `{}` ({}){}\n\n", name, kind, repo_suffix));
         } else {
-            output.push_str(&format!("## `{}`\n\n", name));
+            output.push_str(&format!("## `{}`{}\n\n", name, repo_suffix));
         }
     }
 

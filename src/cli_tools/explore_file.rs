@@ -79,8 +79,18 @@ pub fn resolve_explore_input(input: &str, cwd: Option<&Path>, repo_root: Option<
 
 /// Build the suffix query fragment used by the SUFFIX fallback of
 /// `run_explore_file`. Exposed for unit tests in §10.1.
+///
+/// Returns a complete `e.file_path ...` predicate ready to be dropped into
+/// a parenthesised `WHERE` clause. For paths that do not begin with `/`
+/// (the common relative-path case), the predicate matches both the
+/// `/`-bounded form (`/src/index.ts`) and the bare form (`src/index.ts`),
+/// since the indexer persists repo-root files without a leading slash.
 pub fn ends_with_suffix_query(suffix: &str) -> String {
-    format!("ENDS WITH '/{suffix}'")
+    if suffix.starts_with('/') {
+        format!("e.file_path ENDS WITH '{suffix}'")
+    } else {
+        format!("(e.file_path ENDS WITH '/{suffix}' OR e.file_path = '{suffix}')")
+    }
 }
 
 /// Main explore_file function called by both CLI and MCP.
@@ -103,33 +113,38 @@ pub async fn run_explore_file(
         .await
         .unwrap_or_else(|_| serde_json::json!([]));
 
-    // §4 step 6 — DISAMBIGUATE: if the exact match produced nothing, fall
-    // back to a suffix search. This handles the `transition period`
-    // (relative query against an old absolute index) and the common case
-    // of a bare-filename query like `src/lib.rs` from any CWD.
-    if entities.as_array().is_none_or(|a| a.is_empty())
-        && outgoing_refs.as_array().is_none_or(|a| a.is_empty())
-        && !normalized_path.is_empty()
-    {
-        let suffix = ends_with_suffix_query(&normalized_path);
-        if let Ok(candidates) = graph_db.find_files_by_suffix(&suffix, &repo_names).await
-            && candidates.as_array().is_some_and(|a| !a.is_empty())
-        {
-            return Ok((
-                normalized_path,
-                serde_json::json!({
-                    "entities": entities,
-                    "outgoing_references": outgoing_refs,
-                    "ambiguous_path_candidates": candidates,
-                }),
-            ));
-        }
-    }
-
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "entities": entities,
         "outgoing_references": outgoing_refs,
     });
+
+    // §4 step 6 — DISAMBIGUATE: when the exact match produces nothing,
+    // OR when the path exists in more than one repository under the
+    // active scope, surface `ambiguous_path_candidates` so callers can
+    // disambiguate. The empty-match case handles the `transition period`
+    // (relative query against an old absolute index) and the common case
+    // of a bare-filename query like `src/lib.rs` from any CWD; the
+    // multi-repo case is what enables issue #19's repo-scope selection.
+    let entities_empty = entities.as_array().is_none_or(|a| a.is_empty());
+    if !normalized_path.is_empty() {
+        let suffix = ends_with_suffix_query(&normalized_path);
+        if let Ok(candidates) = graph_db.find_files_by_suffix(&suffix, &repo_names).await
+            && let Some(cand_arr) = candidates.as_array()
+        {
+            let mut distinct_repos = std::collections::HashSet::new();
+            for cand in cand_arr {
+                if let Some(repo) = cand.get("repo_name").and_then(|v| v.as_str()) {
+                    distinct_repos.insert(repo.to_string());
+                }
+            }
+            let is_ambiguous = distinct_repos.len() > 1;
+            if (entities_empty || is_ambiguous)
+                && let serde_json::Value::Object(map) = &mut result
+            {
+                map.insert("ambiguous_path_candidates".to_string(), candidates);
+            }
+        }
+    }
 
     Ok((normalized_path, result))
 }
@@ -146,7 +161,14 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
         .cloned()
         .unwrap_or_default();
 
-    if entities.is_empty() && outgoing_refs.is_empty() {
+    let ambiguous_candidates = result
+        .as_object()
+        .and_then(|obj| obj.get("ambiguous_path_candidates"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    if entities.is_empty() && outgoing_refs.is_empty() && ambiguous_candidates.is_empty() {
         output.push_str("No entities found in this file.\n");
         return output;
     }
@@ -157,8 +179,27 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
     }
 
     append_outgoing_references(&mut output, &outgoing_refs);
+    append_ambiguous_candidates(&mut output, &ambiguous_candidates);
 
     output
+}
+
+/// Render the `ambiguous_path_candidates` field as a Markdown section so LLM
+/// agents and the CLI/MCP grep tests can both detect the disambiguation hint.
+/// Each entry is rendered as a JSON object line so callers can parse them.
+fn append_ambiguous_candidates(output: &mut String, candidates: &[serde_json::Value]) {
+    if candidates.is_empty() {
+        return;
+    }
+
+    output.push_str(&format!(
+        "## ambiguous_path_candidates ({} entries)\n\n",
+        candidates.len()
+    ));
+    for cand in candidates {
+        output.push_str(&format!("- `{}`\n", cand));
+    }
+    output.push('\n');
 }
 
 /// One bucket in the entity grouping table — collects every JSON `kind`
@@ -684,9 +725,22 @@ mod tests {
     #[test]
     fn test_ends_with_suffix_query_uses_path_boundary() {
         // Spec §4 step 5: the '/' guard prevents `bar/baz.rs` matching
-        // `foobar/baz.rs`.
+        // `foobar/baz.rs`. For relative paths we additionally OR the bare
+        // equality case so repo-root files stored without a leading slash
+        // are still discoverable (issue #19 fixtures use `src/index.ts`).
         let fragment = ends_with_suffix_query("src/lib.rs");
-        assert_eq!(fragment, "ENDS WITH '/src/lib.rs'");
+        assert_eq!(
+            fragment,
+            "(e.file_path ENDS WITH '/src/lib.rs' OR e.file_path = 'src/lib.rs')"
+        );
+    }
+
+    #[test]
+    fn test_ends_with_suffix_query_absolute_path_uses_ends_with() {
+        // An absolute path keeps the simple `ENDS WITH` form — the leading
+        // '/' is already there and there's no need to fall back to equality.
+        let fragment = ends_with_suffix_query("/repo/src/lib.rs");
+        assert_eq!(fragment, "e.file_path ENDS WITH '/repo/src/lib.rs'");
     }
 
     // ---- Phase 4 compilation contract: RepoScope flows through ----

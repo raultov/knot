@@ -331,14 +331,14 @@ pub fn find_files_by_suffix_query(suffix_fragment: &str, repo_names: &[String]) 
     if !repo_names.is_empty() {
         format!(
             "MATCH (e:Entity) \
-             WHERE e.file_path {suffix_fragment} AND e.repo_name IN $repo_names \
+             WHERE ({suffix_fragment}) AND e.repo_name IN $repo_names \
              RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
              ORDER BY e.file_path LIMIT 50"
         )
     } else {
         format!(
             "MATCH (e:Entity) \
-             WHERE e.file_path {suffix_fragment} \
+             WHERE ({suffix_fragment}) \
              RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
              ORDER BY e.file_path LIMIT 50"
         )
@@ -586,8 +586,9 @@ impl QueryExt for GraphDb {
         let query_str = format!(
             "MATCH (m:Entity) WHERE m.uuid = $uuid{repo_clause}
              OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-             RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path, 
-                    m.start_line, collect(dep.name) as dependencies"
+             RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path,
+                    m.start_line, m.repo_name AS repo_name,
+                    collect(dep.name) as dependencies"
         );
 
         for uuid in uuids {
@@ -610,6 +611,7 @@ impl QueryExt for GraphDb {
                 let docstring = row_data.get::<String>("m.docstring").ok();
                 let file_path = row_data.get::<String>("m.file_path").ok();
                 let start_line = row_data.get::<i64>("m.start_line").ok();
+                let repo_name = row_data.get::<String>("repo_name").ok();
                 let dependencies = row_data
                     .get::<Vec<String>>("dependencies")
                     .unwrap_or_default();
@@ -623,6 +625,7 @@ impl QueryExt for GraphDb {
                     "docstring": docstring,
                     "file_path": file_path,
                     "start_line": start_line,
+                    "repo_name": repo_name,
                     "dependencies": dependencies,
                 });
 
@@ -796,7 +799,8 @@ impl QueryExt for GraphDb {
              WHERE toLower(m.name) STARTS WITH toLower($prefix){repo_clause}
              OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
              RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
-                    m.file_path, m.start_line, collect(dep.name) as dependencies
+                    m.file_path, m.start_line, m.repo_name AS repo_name,
+                    collect(dep.name) as dependencies
              ORDER BY CASE WHEN toLower(m.name) = toLower($prefix) THEN 0 ELSE 1 END,
                       size(m.name),
                       m.fqn,
@@ -828,6 +832,7 @@ impl QueryExt for GraphDb {
                 "docstring": row.get::<String>("m.docstring").ok(),
                 "file_path": row.get::<String>("m.file_path").ok(),
                 "start_line": row.get::<i64>("m.start_line").ok(),
+                "repo_name": row.get::<String>("repo_name").ok(),
                 "dependencies": row.get::<Vec<String>>("dependencies").unwrap_or_default(),
             });
             results.push(entity_json);
