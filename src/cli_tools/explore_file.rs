@@ -91,11 +91,13 @@ pub async fn run_explore_file(
     let repo_root = std::env::var("KNOT_REPO_PATH").ok().map(PathBuf::from);
     let normalized_path = resolve_explore_input(file_path, cwd.as_deref(), repo_root.as_deref());
 
+    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+
     let entities = graph_db
-        .get_file_entities(&normalized_path, repo_name)
+        .get_file_entities(&normalized_path, &repo_names)
         .await?;
     let outgoing_refs = graph_db
-        .get_file_outgoing_references(&normalized_path, repo_name)
+        .get_file_outgoing_references(&normalized_path, &repo_names)
         .await
         .unwrap_or_else(|_| serde_json::json!([]));
 
@@ -108,7 +110,7 @@ pub async fn run_explore_file(
         && !normalized_path.is_empty()
     {
         let suffix = ends_with_suffix_query(&normalized_path);
-        if let Ok(candidates) = graph_db.find_files_by_suffix(&suffix, repo_name).await
+        if let Ok(candidates) = graph_db.find_files_by_suffix(&suffix, &repo_names).await
             && candidates.as_array().is_some_and(|a| !a.is_empty())
         {
             return Ok((

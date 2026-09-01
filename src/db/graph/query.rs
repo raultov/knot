@@ -188,7 +188,7 @@ pub fn rank_root_candidates(mut candidates: Vec<RootCandidate>) -> Vec<RootCandi
 
 pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
     let repo_filter = if repo_scoped {
-        "WHERE target.repo_name = $repo_name AND target.uuid IN $target_uuids"
+        "WHERE target.repo_name IN $repo_names AND target.uuid IN $target_uuids"
     } else {
         "WHERE target.uuid IN $target_uuids"
     };
@@ -208,7 +208,7 @@ pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
 /// in subtypes of the resolved targets.
 pub fn overridden_by_query(repo_scoped: bool) -> String {
     let repo_filter = if repo_scoped {
-        "WHERE target.repo_name = $repo_name AND target.uuid IN $target_uuids"
+        "WHERE target.repo_name IN $repo_names AND target.uuid IN $target_uuids"
     } else {
         "WHERE target.uuid IN $target_uuids"
     };
@@ -230,7 +230,7 @@ pub fn overridden_by_query(repo_scoped: bool) -> String {
 /// so both buckets share `parse_reference_row`.
 pub fn overrides_query(repo_scoped: bool) -> String {
     let repo_filter = if repo_scoped {
-        "WHERE entity.repo_name = $repo_name AND entity.uuid IN $target_uuids"
+        "WHERE entity.repo_name IN $repo_names AND entity.uuid IN $target_uuids"
     } else {
         "WHERE entity.uuid IN $target_uuids"
     };
@@ -249,34 +249,127 @@ pub fn overrides_query(repo_scoped: bool) -> String {
     )
 }
 
+pub fn find_callers_query(repo_names: &[String]) -> String {
+    if !repo_names.is_empty() {
+        "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
+         WHERE callee.repo_name IN $repo_names
+           AND (callee.name = $name 
+            OR callee.fqn = $name)
+         RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
+            .to_string()
+    } else {
+        "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
+         WHERE callee.name = $name 
+            OR callee.fqn = $name
+         RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
+            .to_string()
+    }
+}
+
+pub fn get_file_entities_query(repo_names: &[String]) -> String {
+    if repo_names.len() == 1 {
+        "MATCH (e:Entity {file_path: $file_path, repo_name: $repo_name})
+         RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
+         ORDER BY e.start_line"
+            .to_string()
+    } else if repo_names.len() > 1 {
+        "MATCH (e:Entity)
+         WHERE e.file_path = $file_path AND e.repo_name IN $repo_names
+         RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
+         ORDER BY e.start_line"
+            .to_string()
+    } else {
+        "MATCH (e:Entity {file_path: $file_path})
+         RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
+         ORDER BY e.start_line"
+            .to_string()
+    }
+}
+
+pub fn get_file_outgoing_references_query(repo_names: &[String]) -> String {
+    if repo_names.len() == 1 {
+        "MATCH (src:Entity {file_path: $file_path, repo_name: $repo_name})
+              -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+              (dst:Entity)
+         WHERE dst.file_path <> $file_path OR NOT dst.repo_name IN $repo_names
+         RETURN type(r) AS rel,
+                dst.name AS name,
+                dst.kind AS kind,
+                dst.file_path AS file_path,
+                dst.start_line AS line
+         ORDER BY rel, name"
+            .to_string()
+    } else if repo_names.len() > 1 {
+        "MATCH (src:Entity)
+              -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+              (dst:Entity)
+         WHERE src.file_path = $file_path AND src.repo_name IN $repo_names
+           AND (dst.file_path <> $file_path OR NOT dst.repo_name IN $repo_names)
+         RETURN type(r) AS rel,
+                dst.name AS name,
+                dst.kind AS kind,
+                dst.file_path AS file_path,
+                dst.start_line AS line
+         ORDER BY rel, name"
+            .to_string()
+    } else {
+        "MATCH (src:Entity {file_path: $file_path})
+              -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+              (dst:Entity)
+         WHERE dst.file_path <> $file_path
+         RETURN type(r) AS rel,
+                dst.name AS name,
+                dst.kind AS kind,
+                dst.file_path AS file_path,
+                dst.start_line AS line
+         ORDER BY rel, name"
+            .to_string()
+    }
+}
+
+pub fn find_files_by_suffix_query(suffix_fragment: &str, repo_names: &[String]) -> String {
+    if !repo_names.is_empty() {
+        format!(
+            "MATCH (e:Entity) \
+             WHERE e.file_path {suffix_fragment} AND e.repo_name IN $repo_names \
+             RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
+             ORDER BY e.file_path LIMIT 50"
+        )
+    } else {
+        format!(
+            "MATCH (e:Entity) \
+             WHERE e.file_path {suffix_fragment} \
+             RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
+             ORDER BY e.file_path LIMIT 50"
+        )
+    }
+}
+
 impl GraphDb {
     async fn resolve_reference_targets(
         &self,
         name: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<(Vec<TargetRow>, MatchTier, bool)> {
         let tiers = target_resolution_tiers(name);
 
+        let repo_clause = if !repo_names.is_empty() {
+            "target.repo_name IN $repo_names AND "
+        } else {
+            ""
+        };
+
         for (tier, predicate) in tiers {
-            let query_str = if repo_name.is_some() {
-                format!(
-                    "MATCH (target:Entity)
-                     WHERE target.repo_name = $repo_name AND ({predicate})
-                     RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path, target.start_line
-                     ORDER BY target.fqn"
-                )
-            } else {
-                format!(
-                    "MATCH (target:Entity)
-                     WHERE {predicate}
-                     RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path, target.start_line
-                     ORDER BY target.fqn"
-                )
-            };
+            let query_str = format!(
+                "MATCH (target:Entity)
+                 WHERE {repo_clause}({predicate})
+                 RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path, target.start_line
+                 ORDER BY target.fqn"
+            );
 
             let mut q = query(&query_str).param("name", name);
-            if let Some(repo) = repo_name {
-                q = q.param("repo_name", repo);
+            if !repo_names.is_empty() {
+                q = q.param("repo_names", repo_names.to_vec());
             }
 
             let mut rows = self.graph.execute(q).await.context(format!(
@@ -401,12 +494,12 @@ impl GraphDb {
         &self,
         query_str: &str,
         target_uuids: &[String],
-        repo_name: Option<&str>,
+        repo_names: &[String],
         label: &str,
     ) -> Result<Vec<serde_json::Value>> {
         let mut q = query(query_str).param("target_uuids", target_uuids.to_vec());
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
         }
 
         let mut rows = self
@@ -432,33 +525,33 @@ pub trait QueryExt {
     async fn get_entities_with_dependencies(
         &self,
         uuids: &[String],
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value>;
     async fn find_references(
         &self,
         entity_name: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value>;
     async fn find_callers(
         &self,
         entity_name: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value>;
     async fn get_file_entities(
         &self,
         file_path: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value>;
     async fn find_entities_by_name_prefix(
         &self,
         prefix: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
         limit: usize,
     ) -> Result<serde_json::Value>;
     async fn get_file_outgoing_references(
         &self,
         file_path: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value>;
     /// Suffix-based fallback used by `explore_file` (§4 of
     /// `docs/specs/relative_file_paths.md`). `suffix_fragment` is the
@@ -468,7 +561,7 @@ pub trait QueryExt {
     async fn find_files_by_suffix(
         &self,
         suffix_fragment: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value>;
 }
 
@@ -477,7 +570,7 @@ impl QueryExt for GraphDb {
     async fn get_entities_with_dependencies(
         &self,
         uuids: &[String],
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value> {
         if uuids.is_empty() {
             return Ok(serde_json::json!([]));
@@ -485,24 +578,22 @@ impl QueryExt for GraphDb {
 
         let mut results = Vec::new();
 
-        for uuid in uuids {
-            let query_str = if repo_name.is_some() {
-                "MATCH (m:Entity) WHERE m.uuid = $uuid AND m.repo_name = $repo_name
-                 OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-                 RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path, 
-                        m.start_line, collect(dep.name) as dependencies"
-                    .to_string()
-            } else {
-                "MATCH (m:Entity) WHERE m.uuid = $uuid
-                 OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-                 RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path, 
-                        m.start_line, collect(dep.name) as dependencies"
-                    .to_string()
-            };
+        let repo_clause = if !repo_names.is_empty() {
+            " AND m.repo_name IN $repo_names"
+        } else {
+            ""
+        };
+        let query_str = format!(
+            "MATCH (m:Entity) WHERE m.uuid = $uuid{repo_clause}
+             OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
+             RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path, 
+                    m.start_line, collect(dep.name) as dependencies"
+        );
 
+        for uuid in uuids {
             let mut q = query(&query_str).param("uuid", uuid.as_str());
-            if let Some(repo) = repo_name {
-                q = q.param("repo_name", repo);
+            if !repo_names.is_empty() {
+                q = q.param("repo_names", repo_names.to_vec());
             }
 
             let mut row = self
@@ -547,7 +638,7 @@ impl QueryExt for GraphDb {
     async fn find_references(
         &self,
         entity_name: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value> {
         let mut results = serde_json::json!({
             "calls": [],
@@ -560,7 +651,7 @@ impl QueryExt for GraphDb {
 
         // Stage 1: Resolve targets
         let (targets, tier, truncated) = self
-            .resolve_reference_targets(entity_name, repo_name)
+            .resolve_reference_targets(entity_name, repo_names)
             .await?;
 
         // Add the resolution info
@@ -587,9 +678,9 @@ impl QueryExt for GraphDb {
         ];
 
         for (rel_label, result_key) in rel_types {
-            let query_str = relationship_query(rel_label, repo_name.is_some());
+            let query_str = relationship_query(rel_label, !repo_names.is_empty());
             let rows = self
-                .collect_reference_rows(&query_str, &target_uuids, repo_name, rel_label)
+                .collect_reference_rows(&query_str, &target_uuids, repo_names, rel_label)
                 .await?;
             if let Some(arr) = results.get_mut(result_key) {
                 *arr = serde_json::json!(rows);
@@ -598,11 +689,11 @@ impl QueryExt for GraphDb {
 
         // Stage 3: OVERRIDES buckets
         for (result_key, query_str) in [
-            ("overridden_by", overridden_by_query(repo_name.is_some())),
-            ("overrides", overrides_query(repo_name.is_some())),
+            ("overridden_by", overridden_by_query(!repo_names.is_empty())),
+            ("overrides", overrides_query(!repo_names.is_empty())),
         ] {
             let rows = self
-                .collect_reference_rows(&query_str, &target_uuids, repo_name, result_key)
+                .collect_reference_rows(&query_str, &target_uuids, repo_names, result_key)
                 .await?;
             if let Some(arr) = results.get_mut(result_key) {
                 *arr = serde_json::json!(rows);
@@ -617,28 +708,15 @@ impl QueryExt for GraphDb {
     async fn find_callers(
         &self,
         entity_name: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value> {
         let mut results = Vec::new();
 
-        let query_str = if repo_name.is_some() {
-            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
-             WHERE callee.repo_name = $repo_name
-               AND (callee.name = $name 
-                OR callee.fqn = $name)
-             RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
-                .to_string()
-        } else {
-            "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
-             WHERE callee.name = $name 
-                OR callee.fqn = $name
-             RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
-                .to_string()
-        };
+        let query_str = find_callers_query(repo_names);
 
         let mut q = query(&query_str).param("name", entity_name);
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
         }
 
         let mut rows = self
@@ -665,25 +743,17 @@ impl QueryExt for GraphDb {
     async fn get_file_entities(
         &self,
         file_path: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value> {
         let mut results = Vec::new();
 
-        let query_str = if repo_name.is_some() {
-            "MATCH (e:Entity {file_path: $file_path, repo_name: $repo_name})
-             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
-             ORDER BY e.start_line"
-                .to_string()
-        } else {
-            "MATCH (e:Entity {file_path: $file_path})
-             RETURN e.name, e.kind, e.signature, e.docstring, e.start_line, e.decorators
-             ORDER BY e.start_line"
-                .to_string()
-        };
+        let query_str = get_file_entities_query(repo_names);
 
         let mut q = query(&query_str).param("file_path", file_path);
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
+        if repo_names.len() == 1 {
+            q = q.param("repo_name", repo_names[0].as_str());
+        } else if repo_names.len() > 1 {
+            q = q.param("repo_names", repo_names.to_vec());
         }
 
         let mut rows = self
@@ -712,24 +782,18 @@ impl QueryExt for GraphDb {
     async fn find_entities_by_name_prefix(
         &self,
         prefix: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
         limit: usize,
     ) -> Result<serde_json::Value> {
-        let query_str = if repo_name.is_some() {
-            "MATCH (m:Entity)
-             WHERE toLower(m.name) STARTS WITH toLower($prefix) AND m.repo_name = $repo_name
-             OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
-             RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
-                    m.file_path, m.start_line, collect(dep.name) as dependencies
-             ORDER BY CASE WHEN toLower(m.name) = toLower($prefix) THEN 0 ELSE 1 END,
-                      size(m.name),
-                      m.fqn,
-                      m.uuid
-             LIMIT $limit"
-                .to_string()
+        let repo_clause = if !repo_names.is_empty() {
+            " AND m.repo_name IN $repo_names"
         } else {
+            ""
+        };
+
+        let query_str = format!(
             "MATCH (m:Entity)
-             WHERE toLower(m.name) STARTS WITH toLower($prefix)
+             WHERE toLower(m.name) STARTS WITH toLower($prefix){repo_clause}
              OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
              RETURN m.uuid AS uuid, m.name, m.kind, m.fqn, m.signature, m.docstring,
                     m.file_path, m.start_line, collect(dep.name) as dependencies
@@ -738,14 +802,13 @@ impl QueryExt for GraphDb {
                       m.fqn,
                       m.uuid
              LIMIT $limit"
-                .to_string()
-        };
+        );
 
         let mut q = query(&query_str)
             .param("prefix", prefix)
             .param("limit", limit as i64);
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
         }
 
         let mut rows = self
@@ -776,39 +839,19 @@ impl QueryExt for GraphDb {
     async fn get_file_outgoing_references(
         &self,
         file_path: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value> {
         let mut results = Vec::new();
 
-        let query_str = if repo_name.is_some() {
-            "MATCH (src:Entity {file_path: $file_path, repo_name: $repo_name})
-                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
-                  (dst:Entity)
-             WHERE dst.file_path <> $file_path OR dst.repo_name <> $repo_name
-             RETURN type(r) AS rel,
-                    dst.name AS name,
-                    dst.kind AS kind,
-                    dst.file_path AS file_path,
-                    dst.start_line AS line
-             ORDER BY rel, name"
-                .to_string()
-        } else {
-            "MATCH (src:Entity {file_path: $file_path})
-                  -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
-                  (dst:Entity)
-             WHERE dst.file_path <> $file_path
-             RETURN type(r) AS rel,
-                    dst.name AS name,
-                    dst.kind AS kind,
-                    dst.file_path AS file_path,
-                    dst.start_line AS line
-             ORDER BY rel, name"
-                .to_string()
-        };
+        let query_str = get_file_outgoing_references_query(repo_names);
 
         let mut q = query(&query_str).param("file_path", file_path);
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
+        if repo_names.len() == 1 {
+            q = q
+                .param("repo_name", repo_names[0].as_str())
+                .param("repo_names", repo_names.to_vec());
+        } else if repo_names.len() > 1 {
+            q = q.param("repo_names", repo_names.to_vec());
         }
 
         let mut rows = self
@@ -834,31 +877,17 @@ impl QueryExt for GraphDb {
     async fn find_files_by_suffix(
         &self,
         suffix_fragment: &str,
-        repo_name: Option<&str>,
+        repo_names: &[String],
     ) -> Result<serde_json::Value> {
         // `suffix_fragment` is the post-`WHERE` text, e.g.
         // "ENDS WITH '/src/lib.rs'". We hardcode the rest of the WHERE so
         // callers cannot inject arbitrary Cypher; the fragment is built by
         // `ends_with_suffix_query` which only ever interpolates a string
         // literal, so SQL/Cypher injection is not possible here.
-        let query_str = if repo_name.is_some() {
-            format!(
-                "MATCH (e:Entity) \
-                 WHERE e.file_path {suffix_fragment} AND e.repo_name = $repo_name \
-                 RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
-                 ORDER BY e.file_path LIMIT 50"
-            )
-        } else {
-            format!(
-                "MATCH (e:Entity) \
-                 WHERE e.file_path {suffix_fragment} \
-                 RETURN DISTINCT e.file_path AS file_path, e.repo_name AS repo_name \
-                 ORDER BY e.file_path LIMIT 50"
-            )
-        };
+        let query_str = find_files_by_suffix_query(suffix_fragment, repo_names);
         let mut q = query(&query_str);
-        if let Some(repo) = repo_name {
-            q = q.param("repo_name", repo);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
         }
 
         let mut rows = self
@@ -906,7 +935,7 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let result = graph_db.get_entities_with_dependencies(&[], None).await;
+        let result = graph_db.get_entities_with_dependencies(&[], &[]).await;
         assert!(result.is_ok());
         let json = result.unwrap();
         assert!(json.is_array());
@@ -922,7 +951,7 @@ mod tests {
 
         let uuids = vec!["550e8400-e29b-41d4-a716-446655440000".to_string()];
         let result = graph_db
-            .get_entities_with_dependencies(&uuids, Some("test-repo"))
+            .get_entities_with_dependencies(&uuids, &["test-repo".to_string()])
             .await;
         // Should not fail even if UUID doesn't exist
         assert!(result.is_ok());
@@ -935,7 +964,7 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let result = graph_db.find_references("nonexistent_entity", None).await;
+        let result = graph_db.find_references("nonexistent_entity", &[]).await;
         assert!(result.is_ok());
         let json = result.unwrap();
         assert!(json.is_object());
@@ -953,7 +982,7 @@ mod tests {
             .expect("Failed to connect to Neo4j");
 
         let result = graph_db
-            .find_references("nonexistent_entity", Some("test-repo"))
+            .find_references("nonexistent_entity", &["test-repo".to_string()])
             .await;
         assert!(result.is_ok());
     }
@@ -965,7 +994,7 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let result = graph_db.find_callers("nonexistent_entity", None).await;
+        let result = graph_db.find_callers("nonexistent_entity", &[]).await;
         assert!(result.is_ok());
         let json = result.unwrap();
         assert!(json.is_array());
@@ -979,7 +1008,7 @@ mod tests {
             .expect("Failed to connect to Neo4j");
 
         let result = graph_db
-            .find_callers("nonexistent_entity", Some("test-repo"))
+            .find_callers("nonexistent_entity", &["test-repo".to_string()])
             .await;
         assert!(result.is_ok());
     }
@@ -992,7 +1021,7 @@ mod tests {
             .expect("Failed to connect to Neo4j");
 
         let result = graph_db
-            .get_file_entities("/test/path/File.java", None)
+            .get_file_entities("/test/path/File.java", &[])
             .await;
         assert!(result.is_ok());
         let json = result.unwrap();
@@ -1007,13 +1036,33 @@ mod tests {
             .expect("Failed to connect to Neo4j");
 
         let result = graph_db
-            .get_file_entities("/test/path/File.java", Some("test-repo"))
+            .get_file_entities("/test/path/File.java", &["test-repo".to_string()])
             .await;
         assert!(result.is_ok());
     }
 
+    #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
+    #[tokio::test]
+    async fn param_binding_uses_repo_names_list() {
+        let graph_db = GraphDb::connect("bolt://localhost:7687", "neo4j", "password")
+            .await
+            .expect("Failed to connect to Neo4j");
+
+        let rows = graph_db
+            .collect_reference_rows(
+                "MATCH (target:Entity) WHERE target.repo_name IN $repo_names RETURN target.name AS entity.name",
+                &["uuid-1".to_string()],
+                &["repo1".to_string(), "repo2".to_string()],
+                "test",
+            )
+            .await;
+        assert!(rows.is_ok());
+    }
+
     use super::{
-        MatchTier, RootCandidate, rank_root_candidates, relationship_query, root_kind_rank,
+        MatchTier, RootCandidate, find_callers_query, find_files_by_suffix_query,
+        get_file_entities_query, get_file_outgoing_references_query, overridden_by_query,
+        overrides_query, rank_root_candidates, relationship_query, root_kind_rank,
         target_resolution_tiers,
     };
 
@@ -1112,14 +1161,103 @@ mod tests {
         let query_str = relationship_query("CALLS", false);
         assert!(query_str.contains("target.uuid IN $target_uuids"));
         assert!(query_str.contains("ORDER BY target.fqn"));
-        assert!(!query_str.contains("$name"));
+        assert!(!query_str.contains("$repo_names"));
     }
 
     #[test]
     fn test_relationship_query_repo_scoped_variant() {
         let query_str = relationship_query("CALLS", true);
-        assert!(query_str.contains("target.repo_name = $repo_name"));
+        assert!(query_str.contains("target.repo_name IN $repo_names"));
         assert!(query_str.contains("target.uuid IN $target_uuids"));
+    }
+
+    #[test]
+    fn test_overridden_by_query_unscoped() {
+        let query_str = overridden_by_query(false);
+        assert!(query_str.contains("target.uuid IN $target_uuids"));
+        assert!(!query_str.contains("$repo_names"));
+    }
+
+    #[test]
+    fn test_overridden_by_query_repo_scoped() {
+        let query_str = overridden_by_query(true);
+        assert!(query_str.contains("target.repo_name IN $repo_names"));
+        assert!(query_str.contains("target.uuid IN $target_uuids"));
+    }
+
+    #[test]
+    fn test_overrides_query_unscoped() {
+        let query_str = overrides_query(false);
+        assert!(query_str.contains("entity.uuid IN $target_uuids"));
+        assert!(!query_str.contains("$repo_names"));
+    }
+
+    #[test]
+    fn test_overrides_query_repo_scoped() {
+        let query_str = overrides_query(true);
+        assert!(query_str.contains("entity.repo_name IN $repo_names"));
+        assert!(query_str.contains("entity.uuid IN $target_uuids"));
+    }
+
+    #[test]
+    fn test_find_callers_query_unscoped() {
+        let query_str = find_callers_query(&[]);
+        assert!(!query_str.contains("$repo_names"));
+    }
+
+    #[test]
+    fn test_find_callers_query_repo_scoped() {
+        let query_str = find_callers_query(&["a".to_string()]);
+        assert!(query_str.contains("callee.repo_name IN $repo_names"));
+    }
+
+    #[test]
+    fn test_get_file_entities_query_unscoped() {
+        let query_str = get_file_entities_query(&[]);
+        assert!(query_str.contains("MATCH (e:Entity {file_path: $file_path})"));
+        assert!(!query_str.contains("repo_name"));
+    }
+
+    #[test]
+    fn test_get_file_entities_query_single_repo() {
+        let query_str = get_file_entities_query(&["repo-a".to_string()]);
+        assert!(
+            query_str.contains("MATCH (e:Entity {file_path: $file_path, repo_name: $repo_name})")
+        );
+    }
+
+    #[test]
+    fn test_get_file_entities_query_multi_repo() {
+        let query_str = get_file_entities_query(&["repo-a".to_string(), "repo-b".to_string()]);
+        assert!(
+            query_str.contains("WHERE e.file_path = $file_path AND e.repo_name IN $repo_names")
+        );
+    }
+
+    #[test]
+    fn test_get_file_outgoing_references_query_unscoped() {
+        let query_str = get_file_outgoing_references_query(&[]);
+        assert!(query_str.contains("WHERE dst.file_path <> $file_path"));
+        assert!(!query_str.contains("$repo_names"));
+    }
+
+    #[test]
+    fn test_get_file_outgoing_references_query_repo_scoped() {
+        let query_str = get_file_outgoing_references_query(&["repo-a".to_string()]);
+        assert!(query_str.contains("NOT dst.repo_name IN $repo_names"));
+    }
+
+    #[test]
+    fn test_find_files_by_suffix_query_unscoped() {
+        let query_str = find_files_by_suffix_query("ENDS WITH '/Cargo.toml'", &[]);
+        assert!(!query_str.contains("$repo_names"));
+    }
+
+    #[test]
+    fn test_find_files_by_suffix_query_repo_scoped() {
+        let query_str =
+            find_files_by_suffix_query("ENDS WITH '/Cargo.toml'", &["repo-a".to_string()]);
+        assert!(query_str.contains("e.repo_name IN $repo_names"));
     }
 
     // ---- §5.1 root_kind_rank ----

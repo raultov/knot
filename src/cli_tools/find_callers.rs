@@ -19,7 +19,8 @@ pub async fn run_find_callers(
     repo_name: Option<&str>,
     graph_db: &Arc<GraphDb>,
 ) -> anyhow::Result<serde_json::Value> {
-    let references = graph_db.find_references(entity_name, repo_name).await?;
+    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+    let references = graph_db.find_references(entity_name, &repo_names).await?;
     Ok(references)
 }
 

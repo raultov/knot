@@ -41,15 +41,17 @@ pub async fn run_search_hybrid_context(
         .embed_query(query)
         .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))?;
 
+    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
+
     let search_results = ctx
         .vector_db
-        .search(&vector, max_results, repo_name)
+        .search(&vector, max_results, &repo_names)
         .await?;
 
     // Boost: prepend entities whose name matches the query as a case-insensitive prefix
     let prefix_results = ctx
         .graph_db
-        .find_entities_by_name_prefix(query, repo_name, max_results)
+        .find_entities_by_name_prefix(query, &repo_names, max_results)
         .await
         .unwrap_or_else(|_| json!([]));
 
@@ -95,7 +97,7 @@ pub async fn run_search_hybrid_context(
 
     let context = ctx
         .graph_db
-        .get_entities_with_dependencies(&uuids, repo_name)
+        .get_entities_with_dependencies(&uuids, &repo_names)
         .await?;
 
     let enriched_context =
@@ -114,11 +116,12 @@ async fn enrich_with_relationships(
     repo_name: Option<&str>,
 ) -> anyhow::Result<serde_json::Value> {
     let mut enriched = context.clone();
+    let repo_names = repo_name.map(|s| vec![s.to_string()]).unwrap_or_default();
 
     if let Some(entities) = enriched.as_array_mut() {
         for entity in entities.iter_mut() {
             if let Some(name) = entity.get("name").and_then(|v| v.as_str())
-                && let Ok(references) = graph_db.find_references(name, repo_name).await
+                && let Ok(references) = graph_db.find_references(name, &repo_names).await
             {
                 enrich_single_entity(entity, &references);
             }
