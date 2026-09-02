@@ -5,6 +5,42 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.8.1 — Reference Repo Attribution (`find_callers` rows carry their repository)
+
+Purely additive projection + rendering change: every row returned by
+`find_references` (MCP `find_callers` / CLI `knot callers`) now identifies the
+repository it belongs to. No schema, no API signature, no re-index.
+
+- **Feat(query)**: `relationship_query`, `overridden_by_query`, `overrides_query`
+  and the reference-target resolution ladder now project `repo_name`
+  (referencing entity) and `target_repo_name` (referenced entity);
+  `overrides_query` swaps the aliases to match its mirrored projection. The
+  deprecated `QueryExt::find_callers` path projects `caller.repo_name` too.
+  New pure `reference_target_query` helper extracted from
+  `resolve_reference_targets` for testability.
+- **Feat(models)**: `TargetRow.repo_name` — `resolution.targets[]` is now
+  self-labeling. `parse_reference_row` reads `repo_name` / `target_repo_name`
+  (`.ok()` → `null` when the node predates repo attribution), keeping the JSON
+  contract additive.
+- **Feat(ui)**: caller entries, target group headers, resolution bullets and
+  the CLI table render `(repo: <name>)` via the shared `format_file_line`
+  helper (no more inline path formatting in `format_reference_entry`); the
+  table labels the Target column only for genuine cross-repo references.
+  Unlike search in v1.8.0, the annotation is emitted whenever the field is a
+  non-empty string — single-repo callers output gains the label too
+  (intentional, consistent with search).
+- **Test(e2e)**: `run_repo_scope_e2e.sh` Group C extended with 6 attribution
+  assertions (MCP Markdown, CLI parity, JSON raw fields, resolution targets,
+  single-repo regression guard) — observed red before implementation
+  (6 red / 27 green).
+- **Docs**: README, `.prompt`, `.knot-agent.md`, callers skill
+  (`.knot-agent-skills/callers.md` + `knot-callers/` variant) and the
+  `find_callers` MCP tool description.
+- **cargo fmt** clean | **cargo clippy --all-targets --all-features -D warnings** clean
+- ✅ 1256 unit tests passing | **21/21 E2E suites** passing | repo-scope suite 33/33
+
+---
+
 ## v1.8.0 — Repository Scope Selection (`all` / Multi-Repo Filtering)
 
 Closes [#19 — Add new search across all repos option](https://github.com/raultov/knot/issues/19).
