@@ -51,6 +51,9 @@ pub struct TargetRow {
     pub kind: String,
     pub file_path: String,
     pub start_line: i64,
+    /// Repository the resolved target belongs to (`""` when the node predates
+    /// repo attribution). Makes `resolution.targets[]` self-labeling.
+    pub repo_name: String,
 }
 
 /// Minimum length of the query string for Fuzzy match to be enabled.
@@ -197,9 +200,11 @@ pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
         "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
          {repo_filter}
          RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                entity.repo_name AS repo_name,
                 target.name AS target_name, target.fqn AS target_fqn,
                 target.file_path AS target_file_path,
-                target.start_line AS target_start_line, target.signature AS target_signature
+                target.start_line AS target_start_line, target.signature AS target_signature,
+                target.repo_name AS target_repo_name
          ORDER BY target.fqn, entity.file_path, entity.start_line"
     )
 }
@@ -218,16 +223,20 @@ pub fn overridden_by_query(repo_scoped: bool) -> String {
          {repo_filter}
            AND entity.uuid <> target.uuid
          RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                entity.repo_name AS repo_name,
                 target.name AS target_name, target.fqn AS target_fqn,
                 target.file_path AS target_file_path,
-                target.start_line AS target_start_line, target.signature AS target_signature
+                target.start_line AS target_start_line, target.signature AS target_signature,
+                target.repo_name AS target_repo_name
          ORDER BY target.fqn, entity.file_path, entity.start_line"
     )
 }
 
 /// Cypher for the `overrides` bucket: the supertype methods the resolved
 /// targets implement or override. The projection is mirrored (target ↔ entity)
-/// so both buckets share `parse_reference_row`.
+/// so both buckets share `parse_reference_row` — including the repo aliases,
+/// which are swapped for the same reason (`target.repo_name` labels the row's
+/// *entity*, `entity.repo_name` labels the row's *target*).
 pub fn overrides_query(repo_scoped: bool) -> String {
     let repo_filter = if repo_scoped {
         "WHERE entity.repo_name IN $repo_names AND entity.uuid IN $target_uuids"
@@ -242,9 +251,11 @@ pub fn overrides_query(repo_scoped: bool) -> String {
          RETURN DISTINCT target.name AS `entity.name`, target.kind AS `entity.kind`,
                 target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
                 target.signature AS `entity.signature`,
+                target.repo_name AS repo_name,
                 entity.name AS target_name, entity.fqn AS target_fqn,
                 entity.file_path AS target_file_path,
-                entity.start_line AS target_start_line, entity.signature AS target_signature
+                entity.start_line AS target_start_line, entity.signature AS target_signature,
+                entity.repo_name AS target_repo_name
          ORDER BY entity.file_path, entity.start_line"
     )
 }
@@ -253,15 +264,17 @@ pub fn find_callers_query(repo_names: &[String]) -> String {
     if !repo_names.is_empty() {
         "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
          WHERE callee.repo_name IN $repo_names
-           AND (callee.name = $name 
+           AND (callee.name = $name
             OR callee.fqn = $name)
-         RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
+         RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature,
+                caller.repo_name AS repo_name"
             .to_string()
     } else {
         "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
-         WHERE callee.name = $name 
+         WHERE callee.name = $name
             OR callee.fqn = $name
-         RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature"
+         RETURN caller.name, caller.kind, caller.file_path, caller.start_line, caller.signature,
+                caller.repo_name AS repo_name"
             .to_string()
     }
 }
@@ -345,6 +358,26 @@ pub fn find_files_by_suffix_query(suffix_fragment: &str, repo_names: &[String]) 
     }
 }
 
+/// Cypher for one tier of the reference-target resolution ladder used by
+/// `resolve_reference_targets`. `predicate` is the post-`WHERE` match
+/// expression produced by `target_resolution_tiers` (e.g.
+/// `target.fqn = $name`); `repo_scoped` toggles the `repo_name IN` guard.
+pub fn reference_target_query(predicate: &str, repo_scoped: bool) -> String {
+    let repo_clause = if repo_scoped {
+        "target.repo_name IN $repo_names AND "
+    } else {
+        ""
+    };
+
+    format!(
+        "MATCH (target:Entity)
+         WHERE {repo_clause}({predicate})
+         RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path,
+                target.start_line, target.repo_name
+         ORDER BY target.fqn"
+    )
+}
+
 impl GraphDb {
     async fn resolve_reference_targets(
         &self,
@@ -353,22 +386,13 @@ impl GraphDb {
     ) -> Result<(Vec<TargetRow>, MatchTier, bool)> {
         let tiers = target_resolution_tiers(name);
 
-        let repo_clause = if !repo_names.is_empty() {
-            "target.repo_name IN $repo_names AND "
-        } else {
-            ""
-        };
+        let repo_scoped = !repo_names.is_empty();
 
         for (tier, predicate) in tiers {
-            let query_str = format!(
-                "MATCH (target:Entity)
-                 WHERE {repo_clause}({predicate})
-                 RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path, target.start_line
-                 ORDER BY target.fqn"
-            );
+            let query_str = reference_target_query(predicate, repo_scoped);
 
             let mut q = query(&query_str).param("name", name);
-            if !repo_names.is_empty() {
+            if repo_scoped {
                 q = q.param("repo_names", repo_names.to_vec());
             }
 
@@ -385,6 +409,7 @@ impl GraphDb {
                 let kind = row.get::<String>("target.kind").unwrap_or_default();
                 let file_path = row.get::<String>("target.file_path").unwrap_or_default();
                 let start_line = row.get::<i64>("target.start_line").unwrap_or(0);
+                let repo_name = row.get::<String>("target.repo_name").unwrap_or_default();
 
                 targets.push(TargetRow {
                     uuid,
@@ -393,6 +418,7 @@ impl GraphDb {
                     kind,
                     file_path,
                     start_line,
+                    repo_name,
                 });
             }
 
@@ -735,6 +761,7 @@ impl QueryExt for GraphDb {
                 "file_path": row.get::<String>("caller.file_path").ok(),
                 "start_line": row.get::<i64>("caller.start_line").ok(),
                 "signature": row.get::<String>("caller.signature").ok(),
+                "repo_name": row.get::<String>("repo_name").ok(),
             });
             results.push(caller_json);
         }
@@ -919,11 +946,13 @@ fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
         "file_path": row.get::<String>("entity.file_path").ok(),
         "start_line": row.get::<i64>("entity.start_line").ok(),
         "signature": row.get::<String>("entity.signature").ok(),
+        "repo_name": row.get::<String>("repo_name").ok(),
         "target_name": row.get::<String>("target_name").ok(),
         "target_fqn": row.get::<String>("target_fqn").ok(),
         "target_file_path": row.get::<String>("target_file_path").ok(),
         "target_start_line": row.get::<i64>("target_start_line").ok(),
         "target_signature": row.get::<String>("target_signature").ok(),
+        "target_repo_name": row.get::<String>("target_repo_name").ok(),
     })
 }
 
@@ -1065,10 +1094,10 @@ mod tests {
     }
 
     use super::{
-        MatchTier, RootCandidate, find_callers_query, find_files_by_suffix_query,
+        MatchTier, RootCandidate, TargetRow, find_callers_query, find_files_by_suffix_query,
         get_file_entities_query, get_file_outgoing_references_query, overridden_by_query,
-        overrides_query, rank_root_candidates, relationship_query, root_kind_rank,
-        target_resolution_tiers,
+        overrides_query, rank_root_candidates, reference_target_query, relationship_query,
+        root_kind_rank, target_resolution_tiers,
     };
 
     #[test]
@@ -1214,6 +1243,125 @@ mod tests {
     fn test_find_callers_query_repo_scoped() {
         let query_str = find_callers_query(&["a".to_string()]);
         assert!(query_str.contains("callee.repo_name IN $repo_names"));
+    }
+
+    // ---- §7.1 reference repo attribution (reference_repo_attribution_plan.md) ----
+
+    #[test]
+    fn reference_target_query_preserves_tier_projection() {
+        let scoped = reference_target_query("target.fqn = $name", true);
+        assert!(scoped.contains("MATCH (target:Entity)"));
+        assert!(scoped.contains("WHERE target.repo_name IN $repo_names AND (target.fqn = $name)"));
+        assert!(scoped.contains(
+            "RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path"
+        ));
+        assert!(scoped.contains("target.start_line, target.repo_name"));
+        assert!(scoped.contains("ORDER BY target.fqn"));
+
+        let unscoped = reference_target_query("target.fqn = $name", false);
+        assert!(unscoped.contains("WHERE (target.fqn = $name)"));
+        assert!(!unscoped.contains("$repo_names"));
+    }
+
+    #[test]
+    fn relationship_query_projects_both_repo_names() {
+        for repo_scoped in [false, true] {
+            let query_str = relationship_query("CALLS", repo_scoped);
+            assert!(
+                query_str.contains("entity.repo_name AS repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+            assert!(
+                query_str.contains("target.repo_name AS target_repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn overridden_by_query_projects_both_repo_names() {
+        for repo_scoped in [false, true] {
+            let query_str = overridden_by_query(repo_scoped);
+            assert!(
+                query_str.contains("entity.repo_name AS repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+            assert!(
+                query_str.contains("target.repo_name AS target_repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn overrides_query_projects_mirrored_repo_aliases() {
+        for repo_scoped in [false, true] {
+            let query_str = overrides_query(repo_scoped);
+            // Mirrored projection: the Cypher `target` node is the row's
+            // entity and the Cypher `entity` node is the row's target, so
+            // the aliases MUST be swapped. Getting this backwards is silent.
+            assert!(
+                query_str.contains("target.repo_name AS repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+            assert!(
+                query_str.contains("entity.repo_name AS target_repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+            assert!(
+                !query_str.contains("entity.repo_name AS repo_name"),
+                "unswapped alias leaked into the mirrored query: {query_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn reference_target_query_projects_repo_name() {
+        for repo_scoped in [false, true] {
+            let query_str = reference_target_query("target.name = $name", repo_scoped);
+            assert!(
+                query_str.contains("target.repo_name"),
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_callers_query_projects_caller_repo_name() {
+        let unscoped = find_callers_query(&[]);
+        assert!(unscoped.contains("caller.repo_name AS repo_name"));
+        let scoped = find_callers_query(&["a".to_string()]);
+        assert!(scoped.contains("caller.repo_name AS repo_name"));
+    }
+
+    #[test]
+    fn reference_queries_keep_existing_order_by() {
+        let rel = relationship_query("CALLS", true);
+        assert!(rel.contains("ORDER BY target.fqn, entity.file_path, entity.start_line"));
+        let overridden_by = overridden_by_query(true);
+        assert!(overridden_by.contains("ORDER BY target.fqn, entity.file_path, entity.start_line"));
+        let overrides = overrides_query(true);
+        assert!(overrides.contains("ORDER BY entity.file_path, entity.start_line"));
+        let tier = reference_target_query("target.name = $name", true);
+        assert!(tier.contains("ORDER BY target.fqn"));
+    }
+
+    #[test]
+    fn target_row_serializes_repo_name() {
+        let row = TargetRow {
+            uuid: "uuid-1".to_string(),
+            name: "work".to_string(),
+            fqn: "scope_alpha::src::shared_util::SharedUtil::work".to_string(),
+            kind: "method".to_string(),
+            file_path: "src/shared_util.ts".to_string(),
+            start_line: 3,
+            repo_name: "scope_alpha".to_string(),
+        };
+        let serialized = serde_json::to_string(&row).expect("serialize TargetRow");
+        assert!(serialized.contains("\"repo_name\":\"scope_alpha\""));
+        let deserialized: TargetRow =
+            serde_json::from_str(&serialized).expect("deserialize TargetRow");
+        assert_eq!(deserialized.repo_name, "scope_alpha");
     }
 
     #[test]
