@@ -103,7 +103,7 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
                 Some(repo) => format!("{caller_name} (repo: {repo})"),
                 None => caller_name.to_string(),
             };
-            // Rule R3 of `docs/specs/reference_repo_attribution_plan.md`: the
+            // Reference repo attribution (v1.8.1), rule R3: the
             // Target column repeats once per row, so it is labeled only for
             // genuine cross-repo references to avoid doubling the noise.
             let target_repo = entity

@@ -8,8 +8,7 @@
 # Group A — Sentinel:  all / ALL / * / omitted
 # Group B — List:      union / restriction / whitespace / unknown / duplicates
 # Group C — find_callers: all + list resolve both callers; single-repo guard
-#             + reference repo attribution C4-C8 (§5 of
-#             docs/specs/reference_repo_attribution_plan.md; C9 = C1-C3 guards)
+#             + reference repo attribution C4-C8 (v1.8.1; C9 = C1-C3 guards)
 # Group D — explore_file: ambiguity without scope; resolution with scope
 # Group E — JSON array form (MCP only)
 # Group F — CLI parity:  --repo list / all / single / default
@@ -392,7 +391,7 @@ else
     pass "C3. find_callers SharedUtil.work 'scope_alpha' excludes betaCaller (regression guard)"
 fi
 
-# ── Reference repo attribution (docs/specs/reference_repo_attribution_plan.md §5) ──
+# ── Reference repo attribution (v1.8.1) ──
 # C4: MCP find_callers with scope "all" labels each caller with its repo.
 if echo "$RESP_C_ALL" | grep -q "(repo: scope_alpha)" && echo "$RESP_C_ALL" | grep -q "(repo: scope_beta)"; then
     pass "C4. find_callers 'SharedUtil.work' 'all' labels callers (repo: scope_alpha) and (repo: scope_beta)"

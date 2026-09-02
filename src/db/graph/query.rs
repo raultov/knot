@@ -1245,7 +1245,7 @@ mod tests {
         assert!(query_str.contains("callee.repo_name IN $repo_names"));
     }
 
-    // ---- §7.1 reference repo attribution (reference_repo_attribution_plan.md) ----
+    // ---- reference repo attribution (v1.8.1) ----
 
     #[test]
     fn reference_target_query_preserves_tier_projection() {
