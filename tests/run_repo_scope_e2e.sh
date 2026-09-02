@@ -8,6 +8,8 @@
 # Group A — Sentinel:  all / ALL / * / omitted
 # Group B — List:      union / restriction / whitespace / unknown / duplicates
 # Group C — find_callers: all + list resolve both callers; single-repo guard
+#             + reference repo attribution C4-C8 (§5 of
+#             docs/specs/reference_repo_attribution_plan.md; C9 = C1-C3 guards)
 # Group D — explore_file: ambiguity without scope; resolution with scope
 # Group E — JSON array form (MCP only)
 # Group F — CLI parity:  --repo list / all / single / default
@@ -389,6 +391,60 @@ if echo "$RESP_C_ALPHA" | grep -q "betaCaller"; then
 else
     pass "C3. find_callers SharedUtil.work 'scope_alpha' excludes betaCaller (regression guard)"
 fi
+
+# ── Reference repo attribution (docs/specs/reference_repo_attribution_plan.md §5) ──
+# C4: MCP find_callers with scope "all" labels each caller with its repo.
+if echo "$RESP_C_ALL" | grep -q "(repo: scope_alpha)" && echo "$RESP_C_ALL" | grep -q "(repo: scope_beta)"; then
+    pass "C4. find_callers 'SharedUtil.work' 'all' labels callers (repo: scope_alpha) and (repo: scope_beta)"
+else
+    fail "C4. find_callers 'SharedUtil.work' 'all' missing per-repo labels (expected (repo: scope_alpha) and (repo: scope_beta))"
+fi
+
+# C5: CLI parity — knot callers "SharedUtil.work" --repo all labels both repos.
+CLI_C5=$(call_cli "$PROJECT_ROOT" callers "SharedUtil.work" --repo all)
+if echo "$CLI_C5" | grep -q "(repo: scope_alpha)" && echo "$CLI_C5" | grep -q "(repo: scope_beta)"; then
+    pass "C5. CLI callers --repo all labels both (repo: scope_alpha) and (repo: scope_beta)"
+else
+    fail "C5. CLI callers --repo all missing per-repo labels (expected both repos)"
+fi
+
+# C6: JSON output carries the raw fields — every row of every non-empty bucket
+# has a non-null "repo_name", and both repos appear as values.
+CLI_C6=$(call_cli "$PROJECT_ROOT" callers "SharedUtil.work" --repo all --output json)
+REPO_FIELDS=$(echo "$CLI_C6" | grep -c '"repo_name"' || true)
+NULL_REPOS=$(echo "$CLI_C6" | grep -c '"repo_name": null' || true)
+if [ "$REPO_FIELDS" -ge 2 ] && [ "$NULL_REPOS" -eq 0 ]; then
+    pass "C6. callers JSON carries non-null repo_name fields ($REPO_FIELDS fields, $NULL_REPOS nulls)"
+else
+    fail "C6. callers JSON attribution broken ($REPO_FIELDS repo_name fields, $NULL_REPOS nulls, expected >= 2 fields / 0 nulls)"
+fi
+if echo "$CLI_C6" | grep -q '"repo_name": "scope_alpha"' && echo "$CLI_C6" | grep -q '"repo_name": "scope_beta"'; then
+    pass "C6. callers JSON rows name both scope_alpha and scope_beta"
+else
+    fail "C6. callers JSON rows missing per-repo values (expected scope_alpha and scope_beta)"
+fi
+
+# C7: resolution targets are labeled — the resolution block lists 2 targets,
+# each bullet carrying a distinct (repo: ...) annotation.
+CLI_C7=$(call_cli "$PROJECT_ROOT" callers "SharedUtil.work" --repo all --output markdown)
+RES_BLOCK=$(echo "$CLI_C7" | sed -n '/^Resolved to/,/^## /p')
+if echo "$RES_BLOCK" | grep -q "Resolved to 2 targets" \
+   && echo "$RES_BLOCK" | grep -q "(repo: scope_alpha)" \
+   && echo "$RES_BLOCK" | grep -q "(repo: scope_beta)"; then
+    pass "C7. resolution block lists 2 targets labeled with distinct repos"
+else
+    fail "C7. resolution block missing labeled targets (expected 2 targets with distinct (repo: ...) annotations)"
+fi
+
+# C8 (regression guard): single-repo scope still labels, and only its own repo.
+if echo "$RESP_C_ALPHA" | grep -q "(repo: scope_alpha)" && ! echo "$RESP_C_ALPHA" | grep -q "(repo: scope_beta)"; then
+    pass "C8. find_callers 'scope_alpha' labels with scope_alpha only (regression guard)"
+else
+    fail "C8. find_callers 'scope_alpha' label guard failed (expected only (repo: scope_alpha), never scope_beta)"
+fi
+
+# C9 (regression guard): existing Group C row assertions (C1/C2/C3) remain
+# green — alphaCaller/betaCaller presence and single-repo exclusion above.
 
 echo ""
 echo -e "${BLUE}── Group D: explore_file ambiguity & resolution ──${NC}"
