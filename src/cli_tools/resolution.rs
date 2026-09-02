@@ -10,6 +10,8 @@
 
 use serde_json::Value;
 
+use crate::cli_tools::format_file_line;
+
 /// Borrowed view over the `resolution` object of a `find_references` result.
 pub(crate) struct ResolutionView<'a> {
     query: &'a str,
@@ -97,7 +99,7 @@ impl<'a> ResolutionView<'a> {
         )
     }
 
-    /// One `- \`fqn\` (kind) at \`file:line\`` bullet per resolved target.
+    /// One `- \`fqn\` (kind) at \`file:line\`  (repo: name)` bullet per resolved target.
     pub(crate) fn target_bullets(&self) -> String {
         let mut out = String::new();
         for target in self.targets {
@@ -111,9 +113,12 @@ impl<'a> ResolutionView<'a> {
                 .get("start_line")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
+            let repo = target.get("repo_name").and_then(Value::as_str);
             out.push_str(&format!(
-                "- `{}` ({}) at `{}:{}`\n",
-                fqn, kind, file_path, start_line
+                "- `{}` ({}) at {}\n",
+                fqn,
+                kind,
+                format_file_line(&format!("{}:{}", file_path, start_line), repo)
             ));
         }
         out
@@ -188,6 +193,48 @@ mod tests {
         assert_eq!(
             view.target_bullets(),
             "- `Ns.GestureOwner.Off` (csharp_record) at `src/GestureOwner.cs:15`\n"
+        );
+    }
+
+    #[test]
+    fn target_bullets_include_repo_annotation() {
+        let refs = json!({
+            "resolution": {
+                "tier": "exact_name",
+                "targets": [{
+                    "fqn": "Ns.GestureOwner.Off",
+                    "kind": "csharp_record",
+                    "file_path": "src/GestureOwner.cs",
+                    "start_line": 15,
+                    "repo_name": "scope_alpha"
+                }]
+            }
+        });
+        let view = ResolutionView::from_references(&refs).expect("resolution");
+        assert_eq!(
+            view.target_bullets(),
+            "- `Ns.GestureOwner.Off` (csharp_record) at `src/GestureOwner.cs:15`  (repo: scope_alpha)\n"
+        );
+    }
+
+    #[test]
+    fn target_bullets_omit_annotation_when_repo_empty() {
+        let refs = json!({
+            "resolution": {
+                "tier": "exact_name",
+                "targets": [{
+                    "fqn": "Ns.Off",
+                    "kind": "method",
+                    "file_path": "src/Off.cs",
+                    "start_line": 3,
+                    "repo_name": ""
+                }]
+            }
+        });
+        let view = ResolutionView::from_references(&refs).expect("resolution");
+        assert_eq!(
+            view.target_bullets(),
+            "- `Ns.Off` (method) at `src/Off.cs:3`\n"
         );
     }
 

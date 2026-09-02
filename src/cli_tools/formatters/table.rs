@@ -94,7 +94,28 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
             // Prefer target_fqn when available (qualified identifiers
             // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
             let target = json_target_name(entity, entity_name);
-            let caller = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
+            let caller_name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
+            let caller_repo = entity
+                .get("repo_name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let caller = match caller_repo {
+                Some(repo) => format!("{caller_name} (repo: {repo})"),
+                None => caller_name.to_string(),
+            };
+            // Rule R3 of `docs/specs/reference_repo_attribution_plan.md`: the
+            // Target column repeats once per row, so it is labeled only for
+            // genuine cross-repo references to avoid doubling the noise.
+            let target_repo = entity
+                .get("target_repo_name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let target_cell = match target_repo {
+                Some(target_repo) if Some(target_repo) != caller_repo => {
+                    format!("{target} (repo: {target_repo})")
+                }
+                _ => target,
+            };
             let file = entity
                 .get("file_path")
                 .and_then(|v| v.as_str())
@@ -103,7 +124,7 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
 
             table.add_row(vec![
                 Cell::new(label).fg(label_color),
-                Cell::new(target).fg(Color::Magenta),
+                Cell::new(target_cell).fg(Color::Magenta),
                 Cell::new(caller),
                 Cell::new(file),
                 Cell::new(line).set_alignment(CellAlignment::Right),
@@ -298,6 +319,65 @@ mod tests {
         assert!(output.contains("References to `MyEntity`"));
         assert!(output.contains("caller1"));
         assert!(output.contains("Calls"));
+    }
+
+    #[test]
+    fn callers_table_labels_caller_repo() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1", "kind": "method",
+                    "file_path": "file1.java", "start_line": 10,
+                    "repo_name": "alpha", "target_repo_name": "alpha"
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let output = format_callers_table("MyEntity", &references);
+        assert!(output.contains("caller1 (repo: alpha)"), "got {output}");
+    }
+
+    #[test]
+    fn callers_table_labels_target_repo_when_different() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1", "kind": "method",
+                    "file_path": "file1.java", "start_line": 10,
+                    "target_fqn": "beta::SharedUtil::work",
+                    "repo_name": "alpha", "target_repo_name": "beta"
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let output = format_callers_table("MyEntity", &references);
+        assert!(
+            output.contains("beta::SharedUtil::work (repo: beta)"),
+            "got {output}"
+        );
+    }
+
+    #[test]
+    fn callers_table_omits_target_label_when_same_repo() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1", "kind": "method",
+                    "file_path": "file1.java", "start_line": 10,
+                    "repo_name": "alpha", "target_repo_name": "alpha"
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let output = format_callers_table("MyEntity", &references);
+        // Rule R3: intra-repo reference — the Target cell stays bare.
+        assert!(!output.contains("MyEntity (repo:"), "got {output}");
     }
 
     #[test]

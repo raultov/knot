@@ -13,6 +13,7 @@ use crate::models::RepoScope;
 use crate::cli_tools::json_target_name;
 
 use crate::cli_tools::append_signature_if_present;
+use crate::cli_tools::format_file_line;
 use crate::cli_tools::resolution::ResolutionView;
 
 /// Main find_callers function called by both CLI and MCP
@@ -129,9 +130,13 @@ fn format_relationship_bucket(entity_name: &str, arr: &[serde_json::Value]) -> S
         // Prefer target_fqn when available — qualified identifiers
         // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
         let target_name = json_target_name(first_entity, entity_name);
+        let target_repo = first_entity
+            .get("target_repo_name")
+            .and_then(|v| v.as_str());
         output.push_str(&format!(
-            "### Target: `{}` at `{}`\n\n",
-            target_name, target_key
+            "### Target: `{}` at {}\n\n",
+            target_name,
+            format_file_line(&target_key, target_repo)
         ));
 
         if let Some(target_sig) = first_entity
@@ -173,12 +178,16 @@ pub fn format_reference_entry(entity: &serde_json::Value) -> String {
         }
     }
 
+    // Path rendering goes through the shared `format_file_line` helper so the
+    // `(repo: ...)` annotation is appended whenever the row carries a repo.
+    let repo = entity.get("repo_name").and_then(|v| v.as_str());
     if let Some(file_path) = entity.get("file_path").and_then(|v| v.as_str()) {
-        if let Some(start_line) = entity.get("start_line").and_then(|v| v.as_i64()) {
-            output.push_str(&format!(" at `{}:{}`", file_path, start_line));
-        } else {
-            output.push_str(&format!(" at `{}`", file_path));
-        }
+        let path = match entity.get("start_line").and_then(|v| v.as_i64()) {
+            Some(start_line) => format!("{}:{}", file_path, start_line),
+            None => file_path.to_string(),
+        };
+        output.push_str(" at ");
+        output.push_str(&format_file_line(&path, repo));
     }
 
     output.push('\n');
@@ -282,6 +291,76 @@ mod tests {
         let formatted = format_reference_entry(&entity);
         assert!(formatted.contains("UnknownEntity"));
         assert!(formatted.contains("src/Unknown.java:50"));
+    }
+
+    // ---- §7.2 reference repo attribution renderers ----
+
+    #[test]
+    fn format_reference_entry_appends_repo_annotation() {
+        let entity = json!({
+            "name": "caller1",
+            "kind": "method",
+            "file_path": "file1.java",
+            "start_line": 10,
+            "repo_name": "alpha"
+        });
+        let formatted = format_reference_entry(&entity);
+        assert!(formatted.contains("file1.java:10"), "got {formatted}");
+        assert!(formatted.contains("(repo: alpha)"), "got {formatted}");
+    }
+
+    #[test]
+    fn format_reference_entry_without_repo_omits_annotation() {
+        let entity = json!({
+            "name": "caller1",
+            "kind": "method",
+            "file_path": "file1.java",
+            "start_line": 10
+        });
+        let formatted = format_reference_entry(&entity);
+        assert!(!formatted.contains("(repo:"), "got {formatted}");
+    }
+
+    #[test]
+    fn format_reference_entry_with_empty_repo_omits_annotation() {
+        let entity = json!({
+            "name": "caller1",
+            "kind": "method",
+            "file_path": "file1.java",
+            "start_line": 10,
+            "repo_name": ""
+        });
+        let formatted = format_reference_entry(&entity);
+        assert!(!formatted.contains("(repo:"), "got {formatted}");
+    }
+
+    #[test]
+    fn target_header_labels_target_repo() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1", "kind": "function",
+                    "file_path": "a.rs", "start_line": 1,
+                    "target_name": "find_me",
+                    "target_file_path": "orphans.rs", "target_start_line": 92,
+                    "repo_name": "alpha", "target_repo_name": "beta"
+                },
+                {
+                    "name": "caller2", "kind": "function",
+                    "file_path": "b.rs", "start_line": 2,
+                    "target_name": "find_me",
+                    "target_file_path": "rust.rs", "target_start_line": 445,
+                    "repo_name": "alpha", "target_repo_name": "gamma"
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let formatted = format_references_result("find_me", &references);
+        assert!(formatted.contains("### Target:"));
+        assert!(formatted.contains("(repo: beta)"), "got {formatted}");
+        assert!(formatted.contains("(repo: gamma)"), "got {formatted}");
     }
 
     #[test]
