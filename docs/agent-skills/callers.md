@@ -17,8 +17,9 @@ Find all places where a specific entity is used, referenced, extended, or implem
   - Supports partial names and signature fragments
   - Examples: "AuthService", "handleRequest", "processPayment"
 
-- **`--repo <name>`**: Filter to a specific repository (optional)
+- **`--repo <scope>`**: Repository scope (optional)
   - Defaults to auto-detecting the current directory's repository name
+  - Accepts a single name (`my-repo`), a comma-separated list (`"repo-a,repo-b"`), or the sentinel `all`/`*` (every indexed repo); MCP also accepts a JSON array `["repo-a", "repo-b"]`
   - Use when working with multiple indexed repositories
 
 ## Output Format
@@ -42,28 +43,38 @@ Shows where this entity is used in annotations, signatures, or type declarations
 ```markdown
 # References to `UserService`
 
+Resolved to 1 target by exact name match:
+- `myapp::src::services::UserService` (class) at `src/services/user.ts:10`  (repo: my-app)
+
 Found 5 reference(s):
 
 ## Calls (2)
 
-- **`getUserById`** (method) at `src/handlers/user.ts:25`
+- **`getUserById`** (method) at `src/handlers/user.ts:25`  (repo: my-app)
   - Signature: `async getUserById(id: string)`
 
-- **`updateUser`** (method) at `src/handlers/user.ts:45`
+- **`updateUser`** (method) at `src/handlers/user.ts:45`  (repo: my-app)
   - Signature: `async updateUser(id: string, data: User)`
 
 ## Extends (0)
 
 ## Implements (2)
 
-- **`AdminService`** (class) at `src/admin/admin-service.ts:10`
+- **`AdminService`** (class) at `src/admin/admin-service.ts:10`  (repo: my-app)
 
-- **`CustomerService`** (class) at `src/customer/customer-service.ts:15`
+- **`CustomerService`** (class) at `src/customer/customer-service.ts:15`  (repo: my-app)
 
 ## References (1)
 
-- **`getServiceProvider`** (function) at `src/utils/providers.ts:5`
+- **`getServiceProvider`** (function) at `src/utils/providers.ts:5`  (repo: my-app)
 ```
+
+**Repo attribution:** every caller entry, target group header, and resolved
+target states its repository as `(repo: name)`. When the scope spans multiple
+repositories (`all`, a comma list, or a JSON array), use the annotation to
+tell which repository each row belongs to — repo-relative paths alone can
+collide across repositories. In the CLI table the Target column is labeled
+only for genuine cross-repo references.
 
 ## ⚠️ CRITICAL: Avoiding Noisy Results with Common Method Names
 

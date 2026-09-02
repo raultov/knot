@@ -352,8 +352,26 @@ Find code entities by meaning, class names, docstrings, or comments.
 ```bash
 knot callers "LoginService" --repo my-app
 knot callers "LoginService" --repo "auth-service,billing-service"
+knot callers "LoginService" --repo all
 ```
 Find all code that references a specific entity (dead code detection, impact analysis, call chains). When multiple entities share the same name in different files, results are automatically grouped by target with file locations and signatures.
+
+Every caller entry is **self-labeling**: the owning repository is printed next to each row as `(repo: <name>)` — in the CLI table, the Markdown answer, and the resolution block — so rows stay attributable when the scope spans multiple repositories:
+
+```markdown
+# References to `LoginService`
+
+Resolved to 1 target by exact name match:
+- `auth::service::LoginService` (class) at `src/service.rs:12`  (repo: auth-service)
+
+Found 1 reference(s) across all relationship types:
+
+## Calls (1)
+
+- **`signup`** (function) at `src/handlers.rs:88`  (repo: auth-service)
+```
+
+In the CLI table the Target column is labeled only for genuine cross-repo references (a caller in repo A referencing a target in repo B); the Caller column is always labeled when a repository is known.
 
 #### `knot explore` — File Structure Inspection
 ```bash
@@ -559,6 +577,8 @@ Result: All auth-related code, signatures, docstrings, and dependencies
 Query: "Find callers of getCurrentTimeInSeconds"
 Result: All code that invokes this function + file locations
 ```
+
+Each caller entry, target group header, and resolved target carries its repository as `(repo: <name>)`, so results remain attributable under multi-repo scopes (`repo_name: "all"` or a comma list). The raw JSON (`--output json`) mirrors this with `repo_name` (referencing entity) and `target_repo_name` (referenced entity) fields on every row, plus `repo_name` on each `resolution.targets[]` entry.
 
 **Advanced: Search by Signature**
 ```bash

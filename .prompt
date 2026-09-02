@@ -32,6 +32,8 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 
 **Do NOT use `grep` to find references.**
 
+**Repo attribution:** every caller entry and resolved target states its repository as `(repo: name)` — use it to tell apart rows coming from different repositories when the scope is multi-repo (`all`, a comma list, or a JSON array).
+
 ### 3. 📄 `explore_file` — File Anatomy & Architecture Overview
 **Use this for:** Getting a high-level view of a file (all classes, methods, signatures, documentation) without reading it line-by-line.
 
