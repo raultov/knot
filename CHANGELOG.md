@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.0 — Refactor: Cognitive Complexity Reduction & Threshold Tradeoff
+
+Internal code-health release: refactored 11 high cognitive complexity functions into modular helpers, fixed a Groovy non-ASCII byte boundary panic, raised `cognitive-complexity-threshold` from 15 to 20, retired 20 obsolete `#[expect(clippy::cognitive_complexity)]` attributes, and documented an auditable expectation policy rule (`score - 7 * tracing_macros <= 20`).
+
+- **Refactor(complexity)**: Refactored 11 complex parser and ingest functions into clean, focused helpers: `collect_declarations` (16→5), `parse_acl` (27→3), `k8s_spec_summary` & `extract_k8s_references` (16/16→4/3), `extract_single_call_intent_javascript` (17→5), `extract_method_calls` (18→3), `strip_comments_line` (17→8), `extract_decorators` (29→2), `link_method_overrides` (20→6), `extract_brace_block` (20→6), `parse_if_statement` (25→3).
+- **Fix(groovy)**: Corrected character boundary indexing in `read_word` (`groovy/refs.rs`) for words ending in non-ASCII characters (e.g. `// está`), resolving a panic during Groovy source scanning.
+- **Test**: Added unit test coverage for Java, TypeScript, C# decorators, VTC embedded brace blocks, `.bind(this)` & `this.prop` JavaScript call intents, Groovy non-ASCII comment handling, and unnamed Kubernetes ports. Fixed three JavaScript call intent unit tests that were silently passing.
+- **Chore(config)**: Raised `cognitive-complexity-threshold` from 15 to 20 in `clippy.toml`. Documented the exact `+7` score inflation per `tracing` macro call and established the auditable policy rule. Cleaned up 20 obsolete `#[expect]` attributes and updated reasons for the remaining 8 macro-dominated functions.
+
+---
+
 ## v1.8.3 — Refactor: Split Oversized Functions into Helpers
 
 Internal code-health release: every function exceeding 100 lines was
