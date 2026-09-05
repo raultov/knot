@@ -247,7 +247,7 @@ fn knot_env_path() -> Option<std::path::PathBuf> {
 /// target repositories from hijacking knot's configuration.
 #[expect(
     clippy::cognitive_complexity,
-    reason = "Environment loading logic is sequential"
+    reason = "score 31 = 4 tracing macros × 7; net branching complexity is 3"
 )]
 fn load_knot_env() {
     let Some(env_path) = knot_env_path() else {

@@ -48,11 +48,17 @@ excessive-nesting-threshold = 6
 too-many-lines-threshold = 100
 
 # clippy::cognitive_complexity (nursery, default: 25)
-# Measured curve: 10 -> 79 | 15 -> 28 | 20 -> 11 | 25 -> 8 | 30 -> 4 | 40 -> 2
-# Worst offender: cognitive complexity of 78 (utils/mod.rs).
-# NOTE: tracing macros inflate the score (~+10 per macro call) because the
-# `tracing/log` feature is enabled transitively (axum → tower/log), so any
-# function with 2+ log statements measures high. Functions below the
-# threshold are expected to carry #[expect(cognitive_complexity)] with an
-# honest reason until the measurement noise is addressed.
-cognitive-complexity-threshold = 15
+# Measured curve (clippy 0.1.97, after 2026-09 refactor pass):
+#   15 -> 28 | 20 -> 8 | 25 -> 6 | 30 -> 4 | 40 -> 2
+#
+# NOTE: tracing macros inflate the score by +7 per macro call because the
+# `tracing/log` feature is enabled transitively (axum → tower/log → tracing/log) via
+# rust-mcp-sdk and cannot be disabled due to additive feature unification.
+#
+# POLICY: An #[expect(clippy::cognitive_complexity)] attribute is only legitimate if:
+#   measured_score - 7 * (number of tracing macros) <= 20
+# Functions with net branching complexity > 20 must be refactored into helpers.
+#
+# Measure all scores with:
+#   cargo clippy --all-targets --all-features --message-format=short -- --force-warn clippy::cognitive_complexity
+cognitive-complexity-threshold = 20

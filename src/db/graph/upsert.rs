@@ -80,7 +80,6 @@ impl UpsertExt for GraphDb {
     /// context with entities from unchanged files that weren't reparsed.
     /// Supports loading from multiple repositories for cross-repository dependency analysis.
     /// Returns two hashmaps for fast lookup during relationship resolution.
-    #[expect(clippy::cognitive_complexity, reason = "Mapping logic is sequential")]
     async fn load_entity_mappings(
         &self,
         repo_names: &[String],
@@ -181,10 +180,6 @@ impl UpsertExt for GraphDb {
     /// Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES) for all resolved edges.
     ///
     /// Batched via `UNWIND` — one Cipher query per relationship type instead of
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Relationship upserting logic is sequential"
-    )]
     /// one per edge. Grouping by relationship type is necessary because Cipher
     /// cannot parameterize relationship labels.
     async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()> {
@@ -263,7 +258,6 @@ impl UpsertExt for GraphDb {
         Ok(())
     }
     /// Create or update a Repository node with project identity metadata.
-    #[expect(clippy::cognitive_complexity, reason = "Upsert logic is sequential")]
     async fn upsert_repository(
         &self,
         repo_name: &str,

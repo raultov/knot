@@ -23,7 +23,7 @@ pub use cross_repo::link_cross_repo_dependencies;
 
 #[expect(
     clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
+    reason = "score 34 = 4 tracing macros × 7; net branching complexity is 6"
 )]
 pub async fn resolve_and_save_relationships(
     entities: &mut [ResolutionEntity],
@@ -71,10 +71,6 @@ pub async fn resolve_and_save_relationships(
     }
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub fn print_run_summary(metrics: &RunMetrics) {
     use std::sync::atomic::Ordering;
     let entities = metrics.entities_indexed.load(Ordering::Relaxed);

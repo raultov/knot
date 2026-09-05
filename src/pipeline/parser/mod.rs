@@ -771,10 +771,6 @@ fn detect_chart_name(absolute_path: &Path, _repo_root: &Path) -> String {
 }
 
 /// Return the query source string, preferring a custom file when available.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 fn load_query_source(filename: &str, default: &str, cfg: &ParseConfig) -> String {
     if let Some(dir) = &cfg.custom_queries_path {
         let custom_path = PathBuf::from(dir).join(filename);

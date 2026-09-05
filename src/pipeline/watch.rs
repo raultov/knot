@@ -45,7 +45,7 @@ pub async fn setup_watch_mode(
 
 #[expect(
     clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
+    reason = "score 60 = 7 tracing macros × 7; net branching complexity is 11"
 )]
 pub async fn setup_watch_mode_with_progress(
     cfg: &Config,
@@ -171,10 +171,6 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
     fn test_watch_supported_files() {
         assert!(is_supported_file(Path::new("test.java"), true));
         assert!(is_supported_file(Path::new("test.ts"), true));
