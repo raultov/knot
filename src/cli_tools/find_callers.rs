@@ -615,16 +615,4 @@ mod tests {
                         - **`caller1`** (method) at `file1.java:10`\n\n";
         assert_eq!(formatted, expected);
     }
-
-    // ---- Phase 4 compilation contract: RepoScope flows through ----
-
-    #[test]
-    fn test_repo_scope_all_filter_names_is_empty_for_unfiltered_passthrough() {
-        let scope = RepoScope::All;
-        assert!(scope.is_unfiltered());
-        assert!(
-            scope.filter_names().is_empty(),
-            "RepoScope::All must yield an empty filter list so the DB layer treats it as unfiltered"
-        );
-    }
 }

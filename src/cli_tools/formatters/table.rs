@@ -257,6 +257,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Builds a callers-references payload with the four relationship buckets;
+    /// in these tests only `calls` ever carries data.
+    fn caller_references(calls: Value) -> Value {
+        json!({
+            "calls": calls,
+            "extends": [],
+            "implements": [],
+            "references": []
+        })
+    }
+
     #[test]
     fn test_format_search_table_empty() {
         let results = json!([]);
@@ -294,12 +305,7 @@ mod tests {
 
     #[test]
     fn test_format_callers_table_empty() {
-        let references = json!({
-            "calls": [],
-            "extends": [],
-            "implements": [],
-            "references": []
-        });
+        let references = caller_references(json!([]));
         let output = format_callers_table("MyEntity", &references);
         assert!(output.contains("No references found"));
         assert!(output.contains("MyEntity"));
@@ -307,14 +313,9 @@ mod tests {
 
     #[test]
     fn test_format_callers_table_with_references() {
-        let references = json!({
-            "calls": [
-                {"name": "caller1", "kind": "method", "file_path": "file1.java", "start_line": 10}
-            ],
-            "extends": [],
-            "implements": [],
-            "references": []
-        });
+        let references = caller_references(json!([
+            {"name": "caller1", "kind": "method", "file_path": "file1.java", "start_line": 10}
+        ]));
         let output = format_callers_table("MyEntity", &references);
         assert!(output.contains("References to `MyEntity`"));
         assert!(output.contains("caller1"));
@@ -323,37 +324,27 @@ mod tests {
 
     #[test]
     fn callers_table_labels_caller_repo() {
-        let references = json!({
-            "calls": [
-                {
-                    "name": "caller1", "kind": "method",
-                    "file_path": "file1.java", "start_line": 10,
-                    "repo_name": "alpha", "target_repo_name": "alpha"
-                }
-            ],
-            "extends": [],
-            "implements": [],
-            "references": []
-        });
+        let references = caller_references(json!([
+            {
+                "name": "caller1", "kind": "method",
+                "file_path": "file1.java", "start_line": 10,
+                "repo_name": "alpha", "target_repo_name": "alpha"
+            }
+        ]));
         let output = format_callers_table("MyEntity", &references);
         assert!(output.contains("caller1 (repo: alpha)"), "got {output}");
     }
 
     #[test]
     fn callers_table_labels_target_repo_when_different() {
-        let references = json!({
-            "calls": [
-                {
-                    "name": "caller1", "kind": "method",
-                    "file_path": "file1.java", "start_line": 10,
-                    "target_fqn": "beta::SharedUtil::work",
-                    "repo_name": "alpha", "target_repo_name": "beta"
-                }
-            ],
-            "extends": [],
-            "implements": [],
-            "references": []
-        });
+        let references = caller_references(json!([
+            {
+                "name": "caller1", "kind": "method",
+                "file_path": "file1.java", "start_line": 10,
+                "target_fqn": "beta::SharedUtil::work",
+                "repo_name": "alpha", "target_repo_name": "beta"
+            }
+        ]));
         let output = format_callers_table("MyEntity", &references);
         assert!(
             output.contains("beta::SharedUtil::work (repo: beta)"),
@@ -363,18 +354,13 @@ mod tests {
 
     #[test]
     fn callers_table_omits_target_label_when_same_repo() {
-        let references = json!({
-            "calls": [
-                {
-                    "name": "caller1", "kind": "method",
-                    "file_path": "file1.java", "start_line": 10,
-                    "repo_name": "alpha", "target_repo_name": "alpha"
-                }
-            ],
-            "extends": [],
-            "implements": [],
-            "references": []
-        });
+        let references = caller_references(json!([
+            {
+                "name": "caller1", "kind": "method",
+                "file_path": "file1.java", "start_line": 10,
+                "repo_name": "alpha", "target_repo_name": "alpha"
+            }
+        ]));
         let output = format_callers_table("MyEntity", &references);
         // Rule R3: intra-repo reference — the Target cell stays bare.
         assert!(!output.contains("MyEntity (repo:"), "got {output}");

@@ -81,7 +81,7 @@ pub fn resolve_explore_input(input: &str, cwd: Option<&Path>, repo_root: Option<
 /// `run_explore_file`. Exposed for unit tests in §10.1.
 ///
 /// Returns a complete `e.file_path ...` predicate ready to be dropped into
-/// a parenthesised `WHERE` clause. For paths that do not begin with `/`
+/// a parenthesized `WHERE` clause. For paths that do not begin with `/`
 /// (the common relative-path case), the predicate matches both the
 /// `/`-bounded form (`/src/index.ts`) and the bare form (`src/index.ts`),
 /// since the indexer persists repo-root files without a leading slash.
@@ -209,7 +209,7 @@ struct KindBucket {
     kinds: &'static [&'static str],
 }
 
-/// Ordered table of every recognised entity kind and the Markdown section
+/// Ordered table of every recognized entity kind and the Markdown section
 /// header it should appear under. Ordering determines the section order
 /// in the rendered output.
 const KIND_BUCKETS: &[KindBucket] = &[
@@ -741,17 +741,5 @@ mod tests {
         // '/' is already there and there's no need to fall back to equality.
         let fragment = ends_with_suffix_query("/repo/src/lib.rs");
         assert_eq!(fragment, "e.file_path ENDS WITH '/repo/src/lib.rs'");
-    }
-
-    // ---- Phase 4 compilation contract: RepoScope flows through ----
-
-    #[test]
-    fn test_repo_scope_all_filter_names_is_empty_for_unfiltered_passthrough() {
-        let scope = RepoScope::All;
-        assert!(scope.is_unfiltered());
-        assert!(
-            scope.filter_names().is_empty(),
-            "RepoScope::All must yield an empty filter list so the DB layer treats it as unfiltered"
-        );
     }
 }

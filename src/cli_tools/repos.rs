@@ -25,19 +25,25 @@ pub async fn run_list_repos(
 ) -> anyhow::Result<serde_json::Value> {
     let repos = graph_db.list_repositories().await?;
     let mut result = serde_json::json!(repos);
-
-    if let Some(filter_str) = filter {
-        let filter_lower = filter_str.to_lowercase();
-        if let Some(arr) = result.as_array_mut() {
-            arr.retain(|repo| {
-                repo.get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
-            });
-        }
-    }
+    filter_repos_by_name(&mut result, filter);
 
     Ok(result)
+}
+
+/// Retain only repositories whose `name` contains `filter` (case-insensitive).
+/// Non-array inputs are left untouched; `None` keeps everything.
+fn filter_repos_by_name(result: &mut serde_json::Value, filter: Option<&str>) {
+    let Some(filter_str) = filter else {
+        return;
+    };
+    let filter_lower = filter_str.to_lowercase();
+    if let Some(arr) = result.as_array_mut() {
+        arr.retain(|repo| {
+            repo.get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
+        });
+    }
 }
 
 /// Format the repository list for the requested output format.
@@ -170,7 +176,7 @@ fn format_repos_markdown(repos: &[serde_json::Value]) -> String {
     out
 }
 
-/// Format an integer with a thin space as a thousands separator so that large
+/// Format an integer with a thin space as a thousand separator so that large
 /// numbers like `4_521` render as `4 521` in the CLI table (matching the
 /// expected output in the plan).
 fn format_thousands(n: i64) -> String {
@@ -348,16 +354,8 @@ mod tests {
 
     #[test]
     fn test_filter_repos_case_insensitive() {
-        let repos = sample_repos();
-        let filter_lower = "API".to_lowercase();
-        let mut filtered = repos.clone();
-        if let Some(arr) = filtered.as_array_mut() {
-            arr.retain(|repo| {
-                repo.get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
-            });
-        }
+        let mut filtered = sample_repos();
+        filter_repos_by_name(&mut filtered, Some("API"));
         let arr = filtered.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], "my-api");
@@ -365,32 +363,16 @@ mod tests {
 
     #[test]
     fn test_filter_repos_no_match() {
-        let repos = sample_repos();
-        let filter_lower = "nonexistent".to_lowercase();
-        let mut filtered = repos.clone();
-        if let Some(arr) = filtered.as_array_mut() {
-            arr.retain(|repo| {
-                repo.get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
-            });
-        }
+        let mut filtered = sample_repos();
+        filter_repos_by_name(&mut filtered, Some("nonexistent"));
         let arr = filtered.as_array().unwrap();
         assert!(arr.is_empty());
     }
 
     #[test]
     fn test_filter_repos_partial_match() {
-        let repos = sample_repos();
-        let filter_lower = "auth".to_lowercase();
-        let mut filtered = repos.clone();
-        if let Some(arr) = filtered.as_array_mut() {
-            arr.retain(|repo| {
-                repo.get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
-            });
-        }
+        let mut filtered = sample_repos();
+        filter_repos_by_name(&mut filtered, Some("auth"));
         let arr = filtered.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], "auth-lib");
@@ -398,19 +380,8 @@ mod tests {
 
     #[test]
     fn test_filter_repos_none_returns_all() {
-        let repos = sample_repos();
-        let filter: Option<&str> = None;
-        let mut filtered = repos.clone();
-        if let Some(filter_str) = filter {
-            let filter_lower = filter_str.to_lowercase();
-            if let Some(arr) = filtered.as_array_mut() {
-                arr.retain(|repo| {
-                    repo.get("name")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|name| name.to_lowercase().contains(&filter_lower))
-                });
-            }
-        }
+        let mut filtered = sample_repos();
+        filter_repos_by_name(&mut filtered, None);
         let arr = filtered.as_array().unwrap();
         assert_eq!(arr.len(), 3);
     }
