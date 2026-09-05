@@ -1,9 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(crate) fn extract_entities_toml(
     source: &str,
     file_path: &str,
@@ -21,52 +17,7 @@ pub(crate) fn extract_entities_toml(
         _ => return entities,
     };
 
-    // Extract [package]
-    if let Some(package) = table.get("package").and_then(|v| v.as_table()) {
-        let name = package
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let version = package
-            .get("version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let edition = package
-            .get("edition")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-
-        let fqn = format!("cargo:{}:{}", name, version);
-
-        entities.push(ParsedEntity::new(
-            name,
-            EntityKind::CargoPackage,
-            &fqn,
-            Some(format!("version: {}, edition: {}", version, edition)),
-            Some(format!("Cargo package: {}", name)),
-            "toml",
-            file_path,
-            1,
-            1,
-            None,
-            repo_name,
-        ));
-
-        // Emit ProjectIdentity entity for cross-repo linking
-        entities.push(ParsedEntity::new(
-            name,
-            EntityKind::ProjectIdentity,
-            format!("cargo:{}", name),
-            Some(format!("version: {}, build_system: cargo", version)),
-            Some(format!("Cargo project identity: {}", name)),
-            "toml",
-            file_path,
-            1,
-            1,
-            None,
-            repo_name,
-        ));
-    }
+    extract_cargo_package(&table, file_path, repo_name, &mut entities);
 
     // Extract dependencies from [dependencies], [dev-dependencies], [build-dependencies]
     let dep_sections = [
@@ -85,26 +36,126 @@ pub(crate) fn extract_entities_toml(
         }
     }
 
-    // Extract [features]
-    if let Some(features) = table.get("features").and_then(|v| v.as_table()) {
-        for (feature_name, feature_value) in features {
-            let enabled_features = match feature_value {
-                toml::Value::Array(arr) => {
-                    let names: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
-                    Some(names.join(", "))
-                }
-                _ => None,
-            };
+    extract_cargo_features(&table, file_path, repo_name, &mut entities);
+    extract_workspace_members(&table, file_path, repo_name, &mut entities);
 
+    entities
+}
+
+fn extract_cargo_package(
+    table: &toml::Table,
+    file_path: &str,
+    repo_name: &str,
+    entities: &mut Vec<ParsedEntity>,
+) {
+    let Some(package) = table.get("package").and_then(|v| v.as_table()) else {
+        return;
+    };
+
+    let name = package
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let version = package
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let edition = package
+        .get("edition")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    let fqn = format!("cargo:{}:{}", name, version);
+
+    entities.push(ParsedEntity::new(
+        name,
+        EntityKind::CargoPackage,
+        &fqn,
+        Some(format!("version: {}, edition: {}", version, edition)),
+        Some(format!("Cargo package: {}", name)),
+        "toml",
+        file_path,
+        1,
+        1,
+        None,
+        repo_name,
+    ));
+
+    // Emit ProjectIdentity entity for cross-repo linking
+    entities.push(ParsedEntity::new(
+        name,
+        EntityKind::ProjectIdentity,
+        format!("cargo:{}", name),
+        Some(format!("version: {}, build_system: cargo", version)),
+        Some(format!("Cargo project identity: {}", name)),
+        "toml",
+        file_path,
+        1,
+        1,
+        None,
+        repo_name,
+    ));
+}
+
+fn extract_cargo_features(
+    table: &toml::Table,
+    file_path: &str,
+    repo_name: &str,
+    entities: &mut Vec<ParsedEntity>,
+) {
+    let Some(features) = table.get("features").and_then(|v| v.as_table()) else {
+        return;
+    };
+
+    for (feature_name, feature_value) in features {
+        let enabled_features = match feature_value {
+            toml::Value::Array(arr) => {
+                let names: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                Some(names.join(", "))
+            }
+            _ => None,
+        };
+
+        entities.push(ParsedEntity::new(
+            feature_name.as_str(),
+            EntityKind::CargoFeature,
+            format!("cargo:crate:feature:{}", feature_name),
+            enabled_features.map(|ef| format!("enables: [{}]", ef)),
+            Some(format!("Cargo feature: {}", feature_name)),
+            "toml",
+            file_path,
+            1,
+            1,
+            None,
+            repo_name,
+        ));
+    }
+}
+
+fn extract_workspace_members(
+    table: &toml::Table,
+    file_path: &str,
+    repo_name: &str,
+    entities: &mut Vec<ParsedEntity>,
+) {
+    let Some(workspace) = table.get("workspace").and_then(|v| v.as_table()) else {
+        return;
+    };
+    let Some(members) = workspace.get("members").and_then(|v| v.as_array()) else {
+        return;
+    };
+
+    for member in members {
+        if let Some(member_path) = member.as_str() {
             entities.push(ParsedEntity::new(
-                feature_name.as_str(),
-                EntityKind::CargoFeature,
-                format!("cargo:crate:feature:{}", feature_name),
-                enabled_features.map(|ef| format!("enables: [{}]", ef)),
-                Some(format!("Cargo feature: {}", feature_name)),
+                member_path,
+                EntityKind::WorkspaceMember,
+                format!("cargo:workspace:{}", member_path),
+                None,
+                Some(format!("Workspace member: {}", member_path)),
                 "toml",
                 file_path,
                 1,
@@ -114,31 +165,6 @@ pub(crate) fn extract_entities_toml(
             ));
         }
     }
-
-    // Extract [workspace] members
-    if let Some(workspace) = table.get("workspace").and_then(|v| v.as_table())
-        && let Some(members) = workspace.get("members").and_then(|v| v.as_array())
-    {
-        for member in members {
-            if let Some(member_path) = member.as_str() {
-                entities.push(ParsedEntity::new(
-                    member_path,
-                    EntityKind::WorkspaceMember,
-                    format!("cargo:workspace:{}", member_path),
-                    None,
-                    Some(format!("Workspace member: {}", member_path)),
-                    "toml",
-                    file_path,
-                    1,
-                    1,
-                    None,
-                    repo_name,
-                ));
-            }
-        }
-    }
-
-    entities
 }
 
 fn extract_dependency(

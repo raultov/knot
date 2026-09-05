@@ -44,10 +44,6 @@ fn parse_html_attribute_node(attr_node: Node<'_>, source: &[u8]) -> (String, Str
 
 /// Extract id and class attributes from HTML elements
 #[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
     clippy::too_many_arguments,
     reason = "function is verbose but correct — extraction deferred"
 )]
@@ -288,19 +284,131 @@ pub(crate) fn handle_html_capture(
     }
 }
 
+fn extract_script_imports(
+    node: Node<'_>,
+    source: &[u8],
+    entities: &mut Vec<ParsedEntity>,
+    file_path: &str,
+    repo_name: &str,
+) {
+    for child in node.children(&mut node.walk()) {
+        if child.kind() == "start_tag" {
+            for attr_child in child.children(&mut child.walk()) {
+                if attr_child.kind() == "attribute" {
+                    let (attr_name, attr_value) = parse_html_attribute_node(attr_child, source);
+
+                    if attr_name == "src" && !attr_value.is_empty() {
+                        let line = attr_child.start_position().row + 1;
+                        let mut entity = ParsedEntity::new(
+                            format!("import({})", attr_value),
+                            EntityKind::Function,
+                            format!("{}::import({})", file_path, attr_value),
+                            None,
+                            None,
+                            "html",
+                            file_path,
+                            line,
+                            line,
+                            None,
+                            repo_name,
+                        );
+                        entity
+                            .reference_intents
+                            .push(ReferenceIntent::HtmlFileImport {
+                                file_path: attr_value,
+                                line: attr_child.start_position().row + 1,
+                            });
+                        entities.push(entity);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn find_tag_name(node: Node<'_>, source: &[u8]) -> String {
+    if let Some(start_tag) = node.child(0).filter(|n| n.kind() == "start_tag") {
+        let mut found_tag = String::new();
+        for child in start_tag.children(&mut start_tag.walk()) {
+            if child.kind() == "tag_name" {
+                found_tag = String::from_utf8_lossy(&source[child.start_byte()..child.end_byte()])
+                    .to_string();
+                break;
+            }
+        }
+        found_tag
+    } else {
+        String::new()
+    }
+}
+
+fn collect_link_attributes(node: Node<'_>, source: &[u8]) -> (bool, String) {
+    let mut is_stylesheet = false;
+    let mut href_value = String::new();
+
+    for child in node.children(&mut node.walk()) {
+        if child.kind() == "start_tag" {
+            for attr_child in child.children(&mut child.walk()) {
+                if attr_child.kind() == "attribute" {
+                    let (attr_name, attr_value) = parse_html_attribute_node(attr_child, source);
+
+                    if attr_name == "rel" && attr_value.contains("stylesheet") {
+                        is_stylesheet = true;
+                    }
+                    if attr_name == "href" {
+                        href_value = attr_value;
+                    }
+                }
+            }
+        }
+    }
+
+    (is_stylesheet, href_value)
+}
+
+fn extract_link_stylesheet_imports(
+    node: Node<'_>,
+    source: &[u8],
+    entities: &mut Vec<ParsedEntity>,
+    file_path: &str,
+    repo_name: &str,
+) {
+    let tag_name = find_tag_name(node, source);
+
+    if tag_name == "link" {
+        let (is_stylesheet, href_value) = collect_link_attributes(node, source);
+
+        if is_stylesheet && !href_value.is_empty() {
+            let line = node.start_position().row + 1;
+            let mut entity = ParsedEntity::new(
+                format!("import({})", href_value),
+                EntityKind::Constant,
+                format!("{}::import({})", file_path, href_value),
+                None,
+                None,
+                "html",
+                file_path,
+                line,
+                line,
+                None,
+                repo_name,
+            );
+            entity
+                .reference_intents
+                .push(ReferenceIntent::CssFileImport {
+                    file_path: href_value,
+                    line: node.start_position().row + 1,
+                });
+            entities.push(entity);
+        }
+    }
+}
+
 /// Extract HTML file imports (<script src="..."> and <link rel="stylesheet" href="...">)
 /// for cross-language linking.
 ///
 /// This creates reference intents that link HTML files to imported JavaScript and CSS files,
 /// enabling queries like "which HTML files import this JavaScript file?"
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 fn extract_html_file_imports(
     node: Node<'_>,
     source: &[u8],
@@ -308,120 +416,10 @@ fn extract_html_file_imports(
     file_path: &str,
     repo_name: &str,
 ) {
-    // Check if this is a script_element (Tree-sitter HTML parses <script> as script_element)
     if node.kind() == "script_element" {
-        // For <script src="...">, find the src attribute
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "start_tag" {
-                for attr_child in child.children(&mut child.walk()) {
-                    if attr_child.kind() == "attribute" {
-                        let (attr_name, attr_value) = parse_html_attribute_node(attr_child, source);
-
-                        #[expect(
-                            clippy::excessive_nesting,
-                            reason = "function is verbose but correct — extraction deferred"
-                        )]
-                        if attr_name == "src" && !attr_value.is_empty() {
-                            // Create a reference intent for the script import
-                            let line = attr_child.start_position().row + 1;
-                            let mut entity = ParsedEntity::new(
-                                format!("import({})", attr_value),
-                                EntityKind::Function,
-                                format!("{}::import({})", file_path, attr_value),
-                                None,
-                                None,
-                                "html",
-                                file_path,
-                                line,
-                                line,
-                                None,
-                                repo_name,
-                            );
-                            entity
-                                .reference_intents
-                                .push(ReferenceIntent::HtmlFileImport {
-                                    file_path: attr_value,
-                                    line: attr_child.start_position().row + 1,
-                                });
-                            entities.push(entity);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Check if this is a regular element (for <link> tags)
-    else if node.kind() == "element" {
-        // Get the tag name by finding the tag_name child in start_tag
-        let tag_name = if let Some(start_tag) = node.child(0).filter(|n| n.kind() == "start_tag") {
-            let mut found_tag = String::new();
-            for child in start_tag.children(&mut start_tag.walk()) {
-                if child.kind() == "tag_name" {
-                    found_tag =
-                        String::from_utf8_lossy(&source[child.start_byte()..child.end_byte()])
-                            .to_string();
-                    break;
-                }
-            }
-            found_tag
-        } else {
-            String::new()
-        };
-
-        // Process <link rel="stylesheet" href="...">
-        // Note: <script src="..."> is handled separately as script_element above
-        if tag_name == "link" {
-            let mut is_stylesheet = false;
-            let mut href_value = String::new();
-
-            // Find rel and href attributes
-            for child in node.children(&mut node.walk()) {
-                if child.kind() == "start_tag" {
-                    for attr_child in child.children(&mut child.walk()) {
-                        #[expect(
-                            clippy::excessive_nesting,
-                            reason = "function is verbose but correct — extraction deferred"
-                        )]
-                        if attr_child.kind() == "attribute" {
-                            let (attr_name, attr_value) =
-                                parse_html_attribute_node(attr_child, source);
-
-                            if attr_name == "rel" && attr_value.contains("stylesheet") {
-                                is_stylesheet = true;
-                            }
-                            if attr_name == "href" {
-                                href_value = attr_value;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if is_stylesheet && !href_value.is_empty() {
-                // Create a reference intent for the stylesheet import
-                let line = node.start_position().row + 1;
-                let mut entity = ParsedEntity::new(
-                    format!("import({})", href_value),
-                    EntityKind::Constant,
-                    format!("{}::import({})", file_path, href_value),
-                    None,
-                    None,
-                    "html",
-                    file_path,
-                    line,
-                    line,
-                    None,
-                    repo_name,
-                );
-                entity
-                    .reference_intents
-                    .push(ReferenceIntent::CssFileImport {
-                        file_path: href_value,
-                        line: node.start_position().row + 1,
-                    });
-                entities.push(entity);
-            }
-        }
+        extract_script_imports(node, source, entities, file_path, repo_name);
+    } else if node.kind() == "element" {
+        extract_link_stylesheet_imports(node, source, entities, file_path, repo_name);
     }
 
     // Recursively process all children

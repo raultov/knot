@@ -60,10 +60,6 @@ pub(super) fn find_method_body_end(source: &str, line_num: usize) -> Option<usiz
 ///
 /// where the opening `(` and closing `)` are on different lines.
 // Reserved for future multiline method parsing
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(super) fn try_extract_typed_method_multiline(
     source: &str,
     line_idx: usize,

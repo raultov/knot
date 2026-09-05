@@ -83,102 +83,126 @@ pub(crate) fn extract_reference_intents_cpp(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::excessive_nesting,
-    reason = "function is verbose but correct — extraction deferred"
-)]
+fn extract_call_expr_intent(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
+    let line = node.start_position().row + 1;
+
+    let arg_count = node.child_by_field_name("arguments").map(|args_node| {
+        let mut count = 0;
+        let mut child = args_node.child(0);
+        while let Some(c) = child {
+            if c.is_named() {
+                count += 1;
+            }
+            child = c.next_sibling();
+        }
+        count
+    });
+
+    if let Some(function_node) = node.child_by_field_name("function") {
+        let kind = function_node.kind();
+        if kind == "identifier" || kind == "field_identifier" {
+            intents.push(CallIntent {
+                method: node_text(function_node, source),
+                receiver: None,
+                line,
+                arg_count,
+            });
+        } else if kind == "field_expression" {
+            let mut receiver = None;
+            let mut method = None;
+
+            let mut child = function_node.child(0);
+            while let Some(c) = child {
+                if c.kind() == "identifier" || c.kind() == "this" {
+                    if receiver.is_none() {
+                        receiver = Some(node_text(c, source));
+                    } else if method.is_none() {
+                        method = Some(node_text(c, source));
+                    }
+                } else if c.kind() == "field_identifier" {
+                    method = Some(node_text(c, source));
+                }
+                child = c.next_sibling();
+            }
+
+            if let Some(m) = method {
+                intents.push(CallIntent {
+                    method: m,
+                    receiver,
+                    line,
+                    arg_count,
+                });
+            }
+        } else if kind == "qualified_identifier" {
+            let text = node_text(function_node, source);
+            let mut parts: Vec<&str> = text.split("::").collect();
+
+            if !parts.is_empty() {
+                let method = parts.pop().unwrap().to_string();
+                let receiver = if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join("::"))
+                };
+                intents.push(CallIntent {
+                    method,
+                    receiver,
+                    line,
+                    arg_count,
+                });
+            }
+        }
+    }
+}
+
+fn extract_type_identifier_intent(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<CallIntent>,
+) -> bool {
+    if let Some(parent) = node.parent() {
+        if parent.kind() == "qualified_identifier" {
+            let text = node_text(parent, source);
+            let mut parts: Vec<&str> = text.split("::").collect();
+
+            if !parts.is_empty() {
+                let type_name = parts.pop().unwrap().to_string();
+                let receiver = if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join("::"))
+                };
+                intents.push(CallIntent {
+                    method: type_name,
+                    receiver,
+                    line: node.start_position().row + 1,
+                    arg_count: None,
+                });
+            }
+            true
+        } else {
+            intents.push(CallIntent {
+                method: node_text(node, source),
+                receiver: None,
+                line: node.start_position().row + 1,
+                arg_count: None,
+            });
+            false
+        }
+    } else {
+        false
+    }
+}
+
 pub(crate) fn extract_call_intents_cpp(
     node: Node<'_>,
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
     if node.kind() == "call_expression" {
-        let line = node.start_position().row + 1;
-
-        let arg_count = node.child_by_field_name("arguments").map(|args_node| {
-            let mut count = 0;
-            let mut child = args_node.child(0);
-            while let Some(c) = child {
-                if c.is_named() {
-                    count += 1;
-                }
-                child = c.next_sibling();
-            }
-            count
-        });
-
-        // In C++, the function being called is usually the first child of call_expression
-        if let Some(function_node) = node.child_by_field_name("function") {
-            let kind = function_node.kind();
-            if kind == "identifier" || kind == "field_identifier" {
-                // Direct call or simple field call: foo()
-                intents.push(CallIntent {
-                    method: node_text(function_node, source),
-                    receiver: None,
-                    line,
-                    arg_count,
-                });
-            } else if kind == "field_expression" {
-                // Object/Pointer access: obj.foo() or ptr->foo()
-                // A field_expression typically has an "argument" (receiver) and a "field" (method name)
-                let mut receiver = None;
-                let mut method = None;
-
-                let mut child = function_node.child(0);
-                while let Some(c) = child {
-                    if c.kind() == "identifier" || c.kind() == "this" {
-                        if receiver.is_none() {
-                            receiver = Some(node_text(c, source));
-                        } else if method.is_none() {
-                            method = Some(node_text(c, source));
-                        }
-                    } else if c.kind() == "field_identifier" {
-                        method = Some(node_text(c, source));
-                    }
-                    child = c.next_sibling();
-                }
-
-                if let Some(m) = method {
-                    intents.push(CallIntent {
-                        method: m,
-                        receiver,
-                        line,
-                        arg_count,
-                    });
-                }
-            } else if kind == "qualified_identifier" {
-                // Scope resolution: std::vector::size()
-                // The text of this node is typically "std::vector::size"
-                let text = node_text(function_node, source);
-                let mut parts: Vec<&str> = text.split("::").collect();
-
-                if !parts.is_empty() {
-                    let method = parts.pop().unwrap().to_string();
-                    let receiver = if parts.is_empty() {
-                        None
-                    } else {
-                        Some(parts.join("::"))
-                    };
-                    intents.push(CallIntent {
-                        method,
-                        receiver,
-                        line,
-                        arg_count,
-                    });
-                }
-            }
-        }
+        extract_call_expr_intent(node, source, intents);
     } else if node.kind() == "identifier" {
         let text = node_text(node, source);
-        // Heuristic: if it's all uppercase and has at least one character, it's likely a macro usage or constant.
         if text
             .chars()
             .all(|c| c.is_uppercase() || c == '_' || c.is_numeric())
@@ -205,39 +229,9 @@ pub(crate) fn extract_call_intents_cpp(
             });
         }
     } else if node.kind() == "type_identifier" {
-        // Type references: class/struct usage in declarations, new expressions, etc.
-        // Check if this is part of a qualified_identifier to get full scope
-        if let Some(parent) = node.parent() {
-            if parent.kind() == "qualified_identifier" {
-                // This is part of Engine::MyClass - handle at parent level
-                let text = node_text(parent, source);
-                let mut parts: Vec<&str> = text.split("::").collect();
-
-                if !parts.is_empty() {
-                    let type_name = parts.pop().unwrap().to_string();
-                    let receiver = if parts.is_empty() {
-                        None
-                    } else {
-                        Some(parts.join("::"))
-                    };
-                    intents.push(CallIntent {
-                        method: type_name,
-                        receiver,
-                        line: node.start_position().row + 1,
-                        arg_count: None,
-                    });
-                }
-                // Don't recurse into qualified_identifier children to avoid duplicates
-                return;
-            } else {
-                // Simple type reference without namespace qualification
-                intents.push(CallIntent {
-                    method: node_text(node, source),
-                    receiver: None,
-                    line: node.start_position().row + 1,
-                    arg_count: None,
-                });
-            }
+        let skip_children = extract_type_identifier_intent(node, source, intents);
+        if skip_children {
+            return;
         }
     }
 
@@ -524,17 +518,7 @@ mod tests {
         }
     }
 
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    fn test_cpp_print_println_internal_calls() {
-        use crate::models::ResolutionEntity;
-        use crate::pipeline::parser::extractor::extract_entities;
-        use std::collections::HashMap;
-
-        let source = r#"
+    const PRINT_CPP_SOURCE: &str = r#"
 size_t Print::print(const char str[]) {
     return write(str);
 }
@@ -570,10 +554,14 @@ size_t Print::println(void) {
 }
 "#;
 
+    #[test]
+    fn test_cpp_print_println_extraction() {
+        use crate::pipeline::parser::extractor::extract_entities;
+
         let query_source = include_str!("../../../../queries/cpp.scm");
 
         let entities = extract_entities(
-            source,
+            PRINT_CPP_SOURCE,
             tree_sitter_cpp::LANGUAGE.into(),
             query_source,
             "cpp",
@@ -627,6 +615,25 @@ size_t Print::println(void) {
             "println(char) should have a Call intent to print, intents: {:?}",
             println_char.reference_intents
         );
+    }
+
+    #[test]
+    fn test_cpp_print_println_resolution() {
+        use crate::models::ResolutionEntity;
+        use crate::pipeline::parser::extractor::extract_entities;
+        use std::collections::HashMap;
+
+        let query_source = include_str!("../../../../queries/cpp.scm");
+
+        let entities = extract_entities(
+            PRINT_CPP_SOURCE,
+            tree_sitter_cpp::LANGUAGE.into(),
+            query_source,
+            "cpp",
+            "src/Print.cpp",
+            "test_repo",
+        )
+        .expect("Failed to extract entities from Print.cpp");
 
         let mut resolution_entities: Vec<ResolutionEntity> =
             entities.iter().map(|e| e.into()).collect();

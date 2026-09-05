@@ -235,10 +235,35 @@ pub(crate) fn extract_helm_template(
     entities
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
+fn values_ref_parts(content: &str, chart_name: &str) -> (String, String, String) {
+    let var_path = content.trim();
+    let segments: Vec<&str> = var_path
+        .split('|')
+        .next()
+        .unwrap_or(var_path)
+        .trim()
+        .split('.')
+        .collect();
+    let full_path = if !segments.is_empty() {
+        segments.join(".")
+    } else {
+        var_path.to_string()
+    };
+    let last_seg = segments.last().copied().unwrap_or(&full_path);
+    let fqn = format!("helm:template:{}.Values.{}", chart_name, full_path);
+    let dedup_key = format!(".Values.{}", full_path);
+    (last_seg.to_string(), fqn, dedup_key)
+}
+
+fn scoped_var_ref_parts(content: &str, scope: &str, chart_name: &str) -> (String, String, String) {
+    let var_name = content.trim();
+    let var_name = var_name.split('|').next().unwrap_or(var_name).trim();
+    let name = var_name.rsplit('.').next().unwrap_or(var_name);
+    let fqn = format!("helm:template:{}{}{}", chart_name, scope, var_name);
+    let dedup_key = format!("{}{}", scope, var_name);
+    (name.to_string(), fqn, dedup_key)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "function is verbose but correct — extraction deferred"
@@ -253,26 +278,11 @@ fn extract_template_refs(
 ) {
     // .Values.X.Y
     if let Some(var_path) = content.strip_prefix(".Values.") {
-        let var_path = var_path.trim();
-        let segments: Vec<&str> = var_path
-            .split('|')
-            .next()
-            .unwrap_or(var_path)
-            .trim()
-            .split('.')
-            .collect();
-        let full_path = if !segments.is_empty() {
-            segments.join(".")
-        } else {
-            var_path.to_string()
-        };
-        let last_seg = segments.last().copied().unwrap_or(&full_path);
-        let fqn = format!("helm:template:{}.Values.{}", chart_name, full_path);
-        let dedup_key = format!(".Values.{}", full_path);
+        let (last_seg, fqn, dedup_key) = values_ref_parts(var_path, chart_name);
 
         if seen_vars.insert(dedup_key.clone()) {
             let mut entity = ParsedEntity::new(
-                last_seg,
+                &last_seg,
                 EntityKind::HelmTemplateVar,
                 &fqn,
                 None,
@@ -288,25 +298,21 @@ fn extract_template_refs(
             entity
                 .reference_intents
                 .push(ReferenceIntent::ValueReference {
-                    value_name: last_seg.to_string(),
+                    value_name: last_seg,
                     line: 1,
                 });
             entities.push(entity);
         }
     } else if let Some(var_name) = content.strip_prefix(".Release.") {
-        let var_name = var_name.trim();
-        let var_name = var_name.split('|').next().unwrap_or(var_name).trim();
-        let name = var_name.rsplit('.').next().unwrap_or(var_name);
-        let fqn = format!("helm:template:{}.Release.{}", chart_name, var_name);
-        let dedup_key = format!(".Release.{}", var_name);
+        let (name, fqn, dedup_key) = scoped_var_ref_parts(var_name, ".Release", chart_name);
 
-        if seen_vars.insert(dedup_key) {
+        if seen_vars.insert(dedup_key.clone()) {
             let mut entity = ParsedEntity::new(
-                name,
+                &name,
                 EntityKind::HelmTemplateVar,
                 &fqn,
                 None,
-                Some(format!("Helm template variable: .Release.{}", var_name)),
+                Some(format!("Helm template variable: {}", dedup_key)),
                 "helm",
                 file_path,
                 1,
@@ -314,23 +320,19 @@ fn extract_template_refs(
                 None,
                 repo_name,
             );
-            entity.embed_text = format!(".Release.{}", var_name);
+            entity.embed_text = dedup_key;
             entities.push(entity);
         }
     } else if let Some(var_name) = content.strip_prefix(".Chart.") {
-        let var_name = var_name.trim();
-        let var_name = var_name.split('|').next().unwrap_or(var_name).trim();
-        let name = var_name.rsplit('.').next().unwrap_or(var_name);
-        let fqn = format!("helm:template:{}.Chart.{}", chart_name, var_name);
-        let dedup_key = format!(".Chart.{}", var_name);
+        let (name, fqn, dedup_key) = scoped_var_ref_parts(var_name, ".Chart", chart_name);
 
-        if seen_vars.insert(dedup_key) {
+        if seen_vars.insert(dedup_key.clone()) {
             let mut entity = ParsedEntity::new(
-                name,
+                &name,
                 EntityKind::HelmTemplateVar,
                 &fqn,
                 None,
-                Some(format!("Helm template variable: .Chart.{}", var_name)),
+                Some(format!("Helm template variable: {}", dedup_key)),
                 "helm",
                 file_path,
                 1,
@@ -338,7 +340,7 @@ fn extract_template_refs(
                 None,
                 repo_name,
             );
-            entity.embed_text = format!(".Chart.{}", var_name);
+            entity.embed_text = dedup_key;
             entities.push(entity);
         }
     } else if let Some(include_name) = content

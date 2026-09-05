@@ -1618,10 +1618,6 @@ fn body() {
 /// failing: parser (no test entity), FQN (collisions), or resolver
 /// (Calls intent dropped).
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 fn diagnose_cfg_test_mod_extraction() {
     let code = r#"
 pub fn is_supported(ext: &str) -> bool {

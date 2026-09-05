@@ -13,14 +13,6 @@ pub(crate) use super::javascript::extract_single_call_intent_javascript as extra
 pub(crate) use super::javascript::extract_callback_arguments;
 
 /// Recursively extract all call intents from TypeScript/TSX, returning (intent, byte_pos) pairs.
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::excessive_nesting,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(crate) fn collect_all_reference_intents_typescript(
     node: Node<'_>,
     source: &[u8],
@@ -78,47 +70,7 @@ pub(crate) fn collect_all_reference_intents_typescript(
             }
         }
         "export_statement" => {
-            // Handle re-exports: `export { A, B } from './x'`
-            if let Some(_source) = node.child_by_field_name("source") {
-                let is_type_export = node.children(&mut node.walk()).any(|c| c.kind() == "type");
-                let mut clause_child = node.child(0);
-                while let Some(c) = clause_child {
-                    match c.kind() {
-                        "export_clause" | "export_type_clause" => {
-                            let mut spec_child = c.child(0);
-                            while let Some(spec) = spec_child {
-                                if spec.kind() == "export_specifier"
-                                    && let Some(name_node) = spec.child_by_field_name("name")
-                                {
-                                    let name = node_text(name_node, source);
-                                    if is_capitalized(&name) {
-                                        if is_type_export || c.kind() == "export_type_clause" {
-                                            intents.push((
-                                                ReferenceIntent::TypeReference {
-                                                    type_name: name,
-                                                    line,
-                                                },
-                                                byte_pos,
-                                            ));
-                                        } else {
-                                            intents.push((
-                                                ReferenceIntent::ValueReference {
-                                                    value_name: name,
-                                                    line,
-                                                },
-                                                byte_pos,
-                                            ));
-                                        }
-                                    }
-                                }
-                                spec_child = spec.next_sibling();
-                            }
-                        }
-                        _ => {}
-                    }
-                    clause_child = c.next_sibling();
-                }
-            }
+            extract_export_statement_intents(node, source, intents);
         }
         "import_statement" => {
             let is_type_import = node.children(&mut node.walk()).any(|c| c.kind() == "type");
@@ -155,6 +107,65 @@ pub(crate) fn collect_all_reference_intents_typescript(
     while let Some(c) = child {
         collect_all_reference_intents_typescript(c, source, intents);
         child = c.next_sibling();
+    }
+}
+
+fn extract_export_statement_intents(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+) {
+    // Handle re-exports: `export { A, B } from './x'`
+    if node.child_by_field_name("source").is_none() {
+        return;
+    }
+
+    let is_type_export = node.children(&mut node.walk()).any(|c| c.kind() == "type");
+    let mut clause_child = node.child(0);
+
+    while let Some(c) = clause_child {
+        if matches!(c.kind(), "export_clause" | "export_type_clause") {
+            process_export_clause_specifiers(c, source, intents, is_type_export);
+        }
+        clause_child = c.next_sibling();
+    }
+}
+
+fn process_export_clause_specifiers(
+    clause_node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<(ReferenceIntent, usize)>,
+    is_type_export: bool,
+) {
+    let byte_pos = clause_node.start_byte();
+    let line = clause_node.start_position().row + 1;
+    let mut spec_child = clause_node.child(0);
+    while let Some(spec) = spec_child {
+        if spec.kind() == "export_specifier"
+            && let Some(name_node) = spec.child_by_field_name("name")
+        {
+            let name = node_text(name_node, source);
+            if is_capitalized(&name) {
+                if is_type_export || clause_node.kind() == "export_type_clause" {
+                    intents.push((
+                        ReferenceIntent::TypeReference {
+                            type_name: name,
+                            line,
+                        },
+                        byte_pos,
+                    ));
+                } else {
+                    intents.push((
+                        ReferenceIntent::ValueReference {
+                            value_name: name,
+                            line,
+                        },
+                        byte_pos,
+                    ));
+                }
+            }
+        }
+        spec_child = spec.next_sibling();
     }
 }
 

@@ -17,11 +17,26 @@ pub(super) struct GroovyPropertyDecl {
 ///
 /// The caller gates extraction via `scope_stack` depth so method-body locals
 /// are never promoted to properties.
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(super) fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
+    let cleaned = strip_leading_annotations(line);
+
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    // Reject pure comments (shouldn't happen after strip_comments_line, but defensive)
+    if cleaned.starts_with("//") || cleaned.starts_with("/*") || cleaned.starts_with('*') {
+        return None;
+    }
+
+    if let Some(eq_idx) = cleaned.find('=') {
+        try_extract_initialized_property(&cleaned, eq_idx)
+    } else {
+        try_extract_bare_property(&cleaned)
+    }
+}
+
+fn strip_leading_annotations(line: &str) -> String {
     let mut cleaned = line.trim().trim_end_matches(';').trim().to_string();
 
     // Strip leading annotations (@Lazy, @PackageScope, @Deprecated, ...)
@@ -34,16 +49,53 @@ pub(super) fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
             break;
         }
     }
+    cleaned
+}
 
-    if cleaned.is_empty() {
+fn try_extract_initialized_property(cleaned: &str, eq_idx: usize) -> Option<GroovyPropertyDecl> {
+    // Discard `==`, `!=`
+    if cleaned.chars().nth(eq_idx + 1) == Some('=') {
+        return None;
+    }
+    let left_side = cleaned[..eq_idx].trim();
+    if left_side.is_empty() {
         return None;
     }
 
-    // Reject pure comments (shouldn't happen after strip_comments_line, but defensive)
-    if cleaned.starts_with("//") || cleaned.starts_with("/*") || cleaned.starts_with('*') {
+    let tokens: Vec<&str> = left_side.split_whitespace().collect();
+    if tokens.len() < 2 {
         return None;
     }
 
+    let name = tokens.last().unwrap();
+    if !is_valid_identifier(name) {
+        return None;
+    }
+
+    let first_token = tokens[0];
+    let declared_type = if first_token == "def" {
+        if tokens.len() >= 2 {
+            Some(tokens[tokens.len() - 2].to_string())
+        } else {
+            None
+        }
+    } else if is_valid_type_name(first_token) {
+        Some(first_token.to_string())
+    } else {
+        tokens
+            .iter()
+            .find(|t| is_valid_type_name(t))
+            .map(|t| t.to_string())
+    };
+    let is_final = tokens.contains(&"final");
+    Some(GroovyPropertyDecl {
+        name: name.to_string(),
+        declared_type,
+        is_final,
+    })
+}
+
+fn try_extract_bare_property(cleaned: &str) -> Option<GroovyPropertyDecl> {
     // Reject keywords that can appear as the first token
     let rejection_keywords = [
         "return",
@@ -63,48 +115,6 @@ pub(super) fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
         "instanceof",
     ];
 
-    // If the line has `=`, try the initialized path
-    if let Some(eq_idx) = cleaned.find('=') {
-        // Discard `==`, `!=`
-        if cleaned.chars().nth(eq_idx + 1) == Some('=') {
-            return None;
-        }
-        let left_side = cleaned[..eq_idx].trim();
-        if left_side.is_empty() {
-            return None;
-        }
-
-        let tokens: Vec<&str> = left_side.split_whitespace().collect();
-        if tokens.len() >= 2 {
-            let name = tokens.last().unwrap();
-            if is_valid_identifier(name) {
-                let first_token = tokens[0];
-                let declared_type = if first_token == "def" {
-                    if tokens.len() >= 2 {
-                        Some(tokens[tokens.len() - 2].to_string())
-                    } else {
-                        None
-                    }
-                } else if is_valid_type_name(first_token) {
-                    Some(first_token.to_string())
-                } else {
-                    tokens
-                        .iter()
-                        .find(|t| is_valid_type_name(t))
-                        .map(|t| t.to_string())
-                };
-                let is_final = tokens.contains(&"final");
-                return Some(GroovyPropertyDecl {
-                    name: name.to_string(),
-                    declared_type,
-                    is_final,
-                });
-            }
-        }
-        return None;
-    }
-
-    // No `=` — bare declaration path
     if cleaned.contains('(')
         || cleaned.contains(')')
         || cleaned.contains('{')
@@ -113,7 +123,7 @@ pub(super) fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
         return None;
     }
     let tokens: Vec<&str> = cleaned.split_whitespace().collect();
-    if tokens.is_empty() || tokens.len() < 2 {
+    if tokens.len() < 2 {
         return None;
     }
 
@@ -142,43 +152,41 @@ pub(super) fn try_extract_property(line: &str) -> Option<GroovyPropertyDecl> {
         return None;
     }
 
-    // After removing modifiers, we need exactly 2 tokens: type + name
-    // But we iterate to find a valid type-name pair
     let name = tokens.last().unwrap();
     if !is_valid_identifier(name) {
         return None;
     }
 
-    // Find the type token (the token before name, or anywhere before it that's a valid type)
-    let type_token = if tokens.len() >= 2 {
-        let candidate = tokens[tokens.len() - 2];
-        let candidate_stripped = strip_balanced_generics(candidate);
-        if candidate == "def" || is_valid_type_name(&candidate_stripped) {
-            Some(candidate.to_string())
-        } else if modifiers.contains(&candidate) {
-            // e.g., `private final String name` — search backwards
-            tokens[..tokens.len() - 1]
-                .iter()
-                .rev()
-                .find(|t| {
-                    !modifiers.contains(t)
-                        && **t != "def"
-                        && is_valid_type_name(&strip_balanced_generics(t))
-                })
-                .map(|t| t.to_string())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    type_token.as_ref()?;
+    let type_token = find_bare_property_type(&tokens, modifiers)?;
 
     let is_final = tokens.contains(&"final");
     Some(GroovyPropertyDecl {
         name: name.to_string(),
-        declared_type: type_token,
+        declared_type: Some(type_token),
         is_final,
     })
+}
+
+fn find_bare_property_type(tokens: &[&str], modifiers: &[&str]) -> Option<String> {
+    if tokens.len() < 2 {
+        return None;
+    }
+    let candidate = tokens[tokens.len() - 2];
+    let candidate_stripped = strip_balanced_generics(candidate);
+    if candidate == "def" || is_valid_type_name(&candidate_stripped) {
+        Some(candidate.to_string())
+    } else if modifiers.contains(&candidate) {
+        // e.g., `private final String name` — search backwards
+        tokens[..tokens.len() - 1]
+            .iter()
+            .rev()
+            .find(|t| {
+                !modifiers.contains(t)
+                    && **t != "def"
+                    && is_valid_type_name(&strip_balanced_generics(t))
+            })
+            .map(|t| t.to_string())
+    } else {
+        None
+    }
 }

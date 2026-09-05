@@ -18,11 +18,6 @@ pub fn format_search_results(context: &serde_json::Value) -> String {
     output
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Formatting logic is sequential"
-)]
-#[expect(clippy::too_many_lines, reason = "Formatting logic is sequential")]
 pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
     let mut output = String::new();
 
@@ -64,91 +59,79 @@ pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
     }
 
     // Show subclasses
-    if let Some(subclasses) = entity
-        .get("subclasses")
-        .and_then(|v| v.as_array())
-        .filter(|d| !d.is_empty())
-    {
-        output.push_str("**Subclasses (extends):**\n");
-        for subclass in subclasses {
-            if let Some(name) = subclass.as_str() {
-                output.push_str(&format!("- `{}`\n", name));
-            }
-        }
-        output.push('\n');
-    }
+    output.push_str(&format_string_list(
+        entity,
+        "subclasses",
+        "**Subclasses (extends):**",
+    ));
 
     // Show implementers
-    if let Some(implementers) = entity
-        .get("implementers")
-        .and_then(|v| v.as_array())
-        .filter(|d| !d.is_empty())
-    {
-        output.push_str("**Implementers:**\n");
-        for impl_class in implementers {
-            if let Some(name) = impl_class.as_str() {
-                output.push_str(&format!("- `{}`\n", name));
-            }
-        }
-        output.push('\n');
-    }
+    output.push_str(&format_string_list(
+        entity,
+        "implementers",
+        "**Implementers:**",
+    ));
 
     // Show type usage summary
     if let Some(count) = entity.get("type_usage_count").and_then(|v| v.as_i64()) {
         output.push_str(&format!(
-            "**Type Usage:** Referenced in {} location(s)\n",
-            count
+            "**Type Usage:** Referenced in {count} location(s)\n"
         ));
-        if let Some(samples) = entity
-            .get("type_usage_samples")
-            .and_then(|v| v.as_array())
-            .filter(|s| !s.is_empty())
-        {
-            output.push_str("Sample usages:\n");
-            for sample in samples {
-                if let Some(s) = sample.as_str() {
-                    output.push_str(&format!("- {}\n", s));
-                }
-            }
-        }
+        append_samples(entity, "type_usage_samples", "Sample usages:", &mut output);
         output.push('\n');
     }
 
     // Show callers summary
     if let Some(count) = entity.get("caller_count").and_then(|v| v.as_i64()) {
-        output.push_str(&format!("**Called by:** {} location(s)\n", count));
-        if let Some(samples) = entity
-            .get("caller_samples")
-            .and_then(|v| v.as_array())
-            .filter(|s| !s.is_empty())
-        {
-            output.push_str("Sample callers:\n");
-            for sample in samples {
-                if let Some(s) = sample.as_str() {
-                    output.push_str(&format!("- {}\n", s));
-                }
-            }
-        }
+        output.push_str(&format!("**Called by:** {count} location(s)\n"));
+        append_samples(entity, "caller_samples", "Sample callers:", &mut output);
         output.push('\n');
     }
 
-    if let Some(deps) = entity
-        .get("dependencies")
-        .and_then(|v| v.as_array())
-        .filter(|d| !d.is_empty())
-    {
-        output.push_str("**Calls:**\n");
-        for dep in deps {
-            if let Some(dep_name) = dep.as_str() {
-                output.push_str(&format!("- `{}`\n", dep_name));
-            }
-        }
-        output.push('\n');
-    }
+    // Show dependencies
+    output.push_str(&format_string_list(entity, "dependencies", "**Calls:**"));
 
     output
 }
 
+/// Formats a non-empty string list as a bulleted section; empty output when
+/// the key is absent or empty.
+fn format_string_list(entity: &serde_json::Value, key: &str, title: &str) -> String {
+    let Some(items) = entity
+        .get(key)
+        .and_then(|v| v.as_array())
+        .filter(|d| !d.is_empty())
+    else {
+        return String::new();
+    };
+    let mut section = format!("{title}\n");
+    for item in items {
+        if let Some(name) = item.as_str() {
+            section.push_str(&format!("- `{name}`\n"));
+        }
+    }
+    section.push('\n');
+    section
+}
+
+/// Appends a sample list block ("Sample usages:" / "Sample callers:") when
+/// the key holds a non-empty array.
+fn append_samples(entity: &serde_json::Value, key: &str, header: &str, output: &mut String) {
+    let Some(samples) = entity
+        .get(key)
+        .and_then(|v| v.as_array())
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    output.push_str(header);
+    output.push('\n');
+    for sample in samples {
+        if let Some(s) = sample.as_str() {
+            output.push_str(&format!("- {s}\n"));
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

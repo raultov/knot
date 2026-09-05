@@ -36,10 +36,6 @@ pub(crate) fn extract_entities_json_config(
     entities
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 fn extract_package_json(
     value: &serde_json::Value,
     file_path: &str,

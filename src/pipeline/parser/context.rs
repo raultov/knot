@@ -68,26 +68,28 @@ pub(crate) fn extract_class_contexts(
     }
 }
 
-/// Compute FQN and enclosing_class based on entity context.
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-pub(crate) fn compute_fqn_and_context(
-    name: &str,
-    kind: &EntityKind,
-    start_line: usize,
-    _lang_name: &str,
-    class_contexts: &[ClassContext],
-) -> (String, Option<String>) {
-    // Find which class contains this entity (if any)
-    let enclosing_class = class_contexts
-        .iter()
-        .find(|ctx| start_line > ctx.start_line && start_line < ctx.end_line)
-        .map(|ctx| ctx.name.clone());
+/// Qualification shape of an entity kind's FQN.
+enum FqnShape {
+    /// Dot-qualified with the enclosing class (JVM/C++/C# convention).
+    DotQualified,
+    /// Path-qualified with `::` (Rust methods).
+    PathQualified,
+    /// FQN = prefix + name (CSS/SCSS selectors and variables).
+    Prefixed(&'static str),
+    /// `name!` (Rust macro invocations).
+    MacroInvoke,
+    /// The FQN is the bare entity name.
+    BareName,
+}
 
-    // Compute FQN
-    let fqn = match kind {
+/// Classifies the qualification shape of an entity kind's FQN: dot-joined
+/// with the enclosing class for JVM/C++/C#-style nesting, `::`-joined for
+/// Rust methods, prefixed for CSS/SCSS selectors, and bare for everything
+/// else.
+fn fqn_shape(kind: &EntityKind) -> FqnShape {
+    match kind {
+        // Dot-qualified with the enclosing class for nested declarations.
+        // For C++, the FQN will be updated dynamically in the extractor later.
         EntityKind::Class
         | EntityKind::Interface
         | EntityKind::KotlinClass
@@ -95,29 +97,16 @@ pub(crate) fn compute_fqn_and_context(
         | EntityKind::KotlinEnum
         | EntityKind::CppClass
         | EntityKind::CStruct
-        | EntityKind::CppNamespace => {
-            // For Java/Kotlin/C++, include enclosing class for nested declarations
-            // For C++, the FQN will be updated dynamically in the extractor later
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        EntityKind::Method | EntityKind::KotlinMethod | EntityKind::CppMethod => {
-            // Method FQN: ClassName.methodName
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
+        | EntityKind::CppNamespace
+        | EntityKind::Method
+        | EntityKind::KotlinMethod
+        | EntityKind::CppMethod
         // C# entities — intermediate form only. The extractor's C# branch
         // replaces the FQN with the namespace-qualified form
         // `<namespace>.<Outer>.<Nested>.<member>` via the ancestor walk
         // (see `csharp::build_csharp_fqn_prefix`). This arm keeps a sensible
         // dot-joined fallback when no namespace prefix is available.
-        EntityKind::CSharpClass
+        | EntityKind::CSharpClass
         | EntityKind::CSharpInterface
         | EntityKind::CSharpStruct
         | EntityKind::CSharpRecord
@@ -131,149 +120,76 @@ pub(crate) fn compute_fqn_and_context(
         | EntityKind::CSharpEvent
         | EntityKind::CSharpIndexer
         | EntityKind::CSharpOperator
-        | EntityKind::CSharpLocalFunction => {
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        EntityKind::CSharpNamespace => name.to_string(),
-        EntityKind::Function | EntityKind::KotlinFunction | EntityKind::CFunction => {
-            // Top-level function - just the function name
-            name.to_string()
-        }
-        EntityKind::Constant | EntityKind::KotlinProperty => {
-            // Constant FQN: ClassName.CONST_NAME or just CONST_NAME for top-level
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        EntityKind::Enum => {
-            // Enum FQN: EnumName or ClassName.EnumName if nested
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        // HTML entities already have their FQN computed in the parser
-        // (e.g., "#id-name", ".class-name", "<custom-element>")
-        EntityKind::HtmlElement | EntityKind::HtmlId | EntityKind::HtmlClass => name.to_string(),
+        | EntityKind::CSharpLocalFunction
+        // Constant FQN: ClassName.CONST_NAME or just CONST_NAME for top-level
+        | EntityKind::Constant
+        | EntityKind::KotlinProperty
+        // Enum FQN: EnumName or ClassName.EnumName if nested
+        | EntityKind::Enum
+        // For nested objects/companions, include enclosing class name
+        | EntityKind::KotlinObject
+        | EntityKind::KotlinCompanionObject
+        | EntityKind::PythonMethod
+        | EntityKind::GroovyMethod => FqnShape::DotQualified,
+        EntityKind::RustMethod => FqnShape::PathQualified,
+        EntityKind::RustMacroInvoke => FqnShape::MacroInvoke,
         // CSS entities: FQN is the selector/variable name
-        EntityKind::CssClass => format!(".{}", name),
-        EntityKind::CssId => format!("#{}", name),
-        EntityKind::CssVariable => format!("--{}", name),
+        EntityKind::CssClass => FqnShape::Prefixed("."),
+        EntityKind::CssId => FqnShape::Prefixed("#"),
+        EntityKind::CssVariable => FqnShape::Prefixed("--"),
         // SCSS entities: FQN is the variable/mixin/function name with prefix
-        EntityKind::ScssVariable => format!("${}", name),
-        EntityKind::ScssMixin => format!("@mixin {}", name),
-        EntityKind::ScssFunction => format!("@function {}", name),
-        // Kotlin-specific entities that don't nest like classes
-        EntityKind::KotlinObject | EntityKind::KotlinCompanionObject => {
-            // For nested objects/companions, include enclosing class name
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        // Rust entities
-        EntityKind::RustStruct
-        | EntityKind::RustEnum
-        | EntityKind::RustUnion
-        | EntityKind::RustTrait
-        | EntityKind::RustImpl
-        | EntityKind::RustFunction
-        | EntityKind::RustMacroDef
-        | EntityKind::RustTypeAlias
-        | EntityKind::RustConstant
-        | EntityKind::RustStatic
-        | EntityKind::RustModule => name.to_string(),
-        EntityKind::RustMethod => {
-            if let Some(class_name) = &enclosing_class {
-                format!("{}::{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        EntityKind::RustMacroInvoke => format!("{}!", name),
-        // Python entities
-        EntityKind::PythonClass
-        | EntityKind::PythonFunction
-        | EntityKind::PythonModule
-        | EntityKind::PythonConstant => name.to_string(),
-        EntityKind::PythonMethod => {
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        // Build Systems & CI/CD entities — use name as FQN
-        EntityKind::BuildDependency
-        | EntityKind::BuildPlugin
-        | EntityKind::BuildTask
-        | EntityKind::PipelineStage
-        | EntityKind::PipelineStep => name.to_string(),
-        // Cargo (Rust build system) entities
-        EntityKind::CargoPackage | EntityKind::CargoFeature | EntityKind::WorkspaceMember => {
-            name.to_string()
-        }
-        // Configuration entities
-        EntityKind::ConfigProperty => name.to_string(),
-        // Kubernetes entities
-        EntityKind::K8sDeployment
-        | EntityKind::K8sService
-        | EntityKind::K8sConfigMap
-        | EntityKind::K8sSecret
-        | EntityKind::K8sIngress
-        | EntityKind::K8sNamespace
-        | EntityKind::K8sResource => name.to_string(),
-        // Helm entities
-        EntityKind::HelmChart | EntityKind::HelmValue | EntityKind::HelmTemplateVar => {
-            name.to_string()
-        }
-        // Project identity for cross-repo linking
-        EntityKind::ProjectIdentity => name.to_string(),
-        // Groovy entities
-        EntityKind::GroovyClass
-        | EntityKind::GroovyInterface
-        | EntityKind::GroovyTrait
-        | EntityKind::GroovyFunction
-        | EntityKind::GroovyEnum
-        | EntityKind::GroovyProperty => name.to_string(),
-        EntityKind::GroovyMethod => {
-            if let Some(class_name) = &enclosing_class {
-                format!("{}.{}", class_name, name)
-            } else {
-                name.to_string()
-            }
-        }
-        EntityKind::MacroDefinition => name.to_string(),
-        EntityKind::MarkdownDocument | EntityKind::MarkdownSection => name.to_string(),
-        // Varnish VCL entities — flat global namespace, FQN is just the name
-        EntityKind::VclVersion
-        | EntityKind::VclSubroutine
-        | EntityKind::VclBuiltinSub
-        | EntityKind::VclBackend
-        | EntityKind::VclProbe
-        | EntityKind::VclAcl
-        | EntityKind::VclImport
-        | EntityKind::VclObjectInstance => name.to_string(),
-        // Varnish VTC entities — file-scoped
-        EntityKind::VtcTestCase
-        | EntityKind::VtcServer
-        | EntityKind::VtcClient
-        | EntityKind::VtcVarnishInstance
-        | EntityKind::VtcLogexpect
-        | EntityKind::VtcBarrier => name.to_string(),
-        // Varnish VCC entities — module-scoped
-        EntityKind::VccModule
-        | EntityKind::VccFunction
-        | EntityKind::VccObject
-        | EntityKind::VccMethod => name.to_string(),
+        EntityKind::ScssVariable => FqnShape::Prefixed("$"),
+        EntityKind::ScssMixin => FqnShape::Prefixed("@mixin "),
+        EntityKind::ScssFunction => FqnShape::Prefixed("@function "),
+        // Bare-name kinds: everything else (top-level entities, build
+        // systems, config and infra entities whose FQN is the name itself).
+        _ => FqnShape::BareName,
+    }
+}
+
+/// Dot-joins the enclosing class (if any) with the entity name — the JVM,
+/// C++ and C# qualification convention.
+fn dot_qualified(enclosing_class: &Option<String>, name: &str) -> String {
+    if let Some(class_name) = enclosing_class {
+        format!("{}.{}", class_name, name)
+    } else {
+        name.to_string()
+    }
+}
+
+/// Double-colon-joins the enclosing class (if any) with the entity name —
+/// the Rust method convention.
+fn path_qualified(enclosing_class: &Option<String>, name: &str) -> String {
+    if let Some(class_name) = enclosing_class {
+        format!("{}::{}", class_name, name)
+    } else {
+        name.to_string()
+    }
+}
+
+/// Compute FQN and enclosing_class based on entity context.
+///
+/// Kinds are classified by qualification shape ([`fqn_shape`]); the CSS/SCSS
+/// selector forms and Rust macro invocations keep their dedicated prefixes.
+pub(crate) fn compute_fqn_and_context(
+    name: &str,
+    kind: &EntityKind,
+    start_line: usize,
+    _lang_name: &str,
+    class_contexts: &[ClassContext],
+) -> (String, Option<String>) {
+    // Find which class contains this entity (if any)
+    let enclosing_class = class_contexts
+        .iter()
+        .find(|ctx| start_line > ctx.start_line && start_line < ctx.end_line)
+        .map(|ctx| ctx.name.clone());
+
+    let fqn = match fqn_shape(kind) {
+        FqnShape::DotQualified => dot_qualified(&enclosing_class, name),
+        FqnShape::PathQualified => path_qualified(&enclosing_class, name),
+        FqnShape::Prefixed(prefix) => format!("{}{}", prefix, name),
+        FqnShape::MacroInvoke => format!("{}!", name),
+        FqnShape::BareName => name.to_string(),
     };
 
     (fqn, enclosing_class)

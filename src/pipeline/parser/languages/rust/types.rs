@@ -77,14 +77,6 @@ pub fn collect_rust_type_references(
 /// node is fully contained within the byte range of a parent `token_tree` that was
 /// already processed, we skip redundant string allocation and `::` pattern matching.
 /// This eliminates exponential blowup for deeply nested macros like `vec![vec![vec![...]]]`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(crate) fn collect_type_nodes(
     node: &Node<'_>,
     source: &[u8],
@@ -92,36 +84,88 @@ pub(crate) fn collect_type_nodes(
     searched_range: Option<(usize, usize)>,
 ) {
     // CASE 1: type_identifier in function signatures and type annotations
-    if node.kind() == "type_identifier" {
-        // Filter out type_identifier in pattern matching contexts (e.g., MyEnum::Variant in match arms)
-        // These are not true type references but enum variant paths
-        let should_capture = if let Some(parent) = node.parent() {
-            // EXCLUDE: scoped_identifier parent in pattern matching (e.g., RelationshipType::Calls in match arm)
-            // INCLUDE: scoped_identifier parent in value context (e.g., crate::models::EntityKind::Class as value)
-            let parent_kind = parent.kind();
-            if parent_kind == "scoped_identifier" {
-                // Check if we're in a value context - if so, include it
-                // The check will be done in CASE 3 for the scoped_identifier itself
-                false // Let CASE 3 handle scoped_identifier
-            } else {
-                true
-            }
-        } else {
-            true
-        };
-
-        if should_capture {
-            let line = node.start_position().row + 1;
-            let type_name = node_text(*node, source).to_string();
-            type_refs.push((line, type_name));
-        }
-    }
+    capture_type_identifier(node, source, type_refs);
 
     // CASE 2: struct_expression like Config { field: value }
-    // In tree-sitter, struct literals have structure:
-    // struct_expression
-    //   ├─ (generic_type | type_identifier | identifier) "Config"  ← We want to capture this
-    //   └─ field_initializer_list
+    capture_struct_expression(node, source, type_refs);
+
+    // CASE 2b: identifier / type_identifier inside use_list (braced imports)
+    capture_use_list_identifier(node, source, type_refs);
+
+    // CASE 3: scoped_identifier like Config::load_mcp(), EntityKind::HtmlId, or crate::models::EntityKind::Class
+    if node.kind() == "scoped_identifier"
+        && handle_scoped_identifier(node, source, type_refs, searched_range)
+    {
+        return;
+    }
+
+    // SPECIAL CASE: Handle token_tree nodes inside macro_invocations
+    // (see `handle_token_tree`).
+    if node.kind() == "token_tree" && handle_token_tree(node, source, type_refs, searched_range) {
+        return;
+    }
+
+    // Recurse to children. When we're inside a processed token_tree, pass its range
+    // so nested token_trees can skip themselves (O(N) optimization).
+    let child_searched_range = if node.kind() == "token_tree" {
+        Some((node.start_byte(), node.end_byte()))
+    } else {
+        searched_range
+    };
+    recurse_children(node, source, type_refs, child_searched_range);
+}
+
+/// Recurses into every child of `node`, propagating the given searched range.
+fn recurse_children(
+    node: &Node<'_>,
+    source: &[u8],
+    type_refs: &mut Vec<(usize, String)>,
+    searched_range: Option<(usize, usize)>,
+) {
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_type_nodes(&c, source, type_refs, searched_range);
+        child = c.next_sibling();
+    }
+}
+
+/// CASE 1: type_identifier in function signatures and type annotations.
+/// Filters out type_identifier in pattern matching contexts (e.g.,
+/// MyEnum::Variant in match arms) — these are not true type references but
+/// enum variant paths.
+fn capture_type_identifier(node: &Node<'_>, source: &[u8], type_refs: &mut Vec<(usize, String)>) {
+    if node.kind() != "type_identifier" {
+        return;
+    }
+    let should_capture = if let Some(parent) = node.parent() {
+        // EXCLUDE: scoped_identifier parent in pattern matching (e.g., RelationshipType::Calls in match arm)
+        // INCLUDE: scoped_identifier parent in value context (e.g., crate::models::EntityKind::Class as value)
+        if parent.kind() == "scoped_identifier" {
+            // Check if we're in a value context - if so, include it
+            // The check will be done in CASE 3 for the scoped_identifier itself
+            false // Let CASE 3 handle scoped_identifier
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+
+    if should_capture {
+        let line = node.start_position().row + 1;
+        let type_name = node_text(*node, source).to_string();
+        type_refs.push((line, type_name));
+    }
+}
+
+/// CASE 2: struct_expression like Config { field: value }.
+/// In tree-sitter, struct literals have structure:
+/// ```text
+/// struct_expression
+///   ├─ (generic_type | type_identifier | identifier) "Config"  ← We want to capture this
+///   └─ field_initializer_list
+/// ```
+fn capture_struct_expression(node: &Node<'_>, source: &[u8], type_refs: &mut Vec<(usize, String)>) {
     if node.kind() == "struct_expression"
         && let Some(first_child) = node.child(0)
         && (first_child.kind() == "generic_type"
@@ -132,10 +176,17 @@ pub(crate) fn collect_type_nodes(
         let type_name = node_text(first_child, source).to_string();
         type_refs.push((line, type_name));
     }
+}
 
-    // CASE 2b: identifier / type_identifier inside use_list (braced imports)
-    // e.g., use foo::{Bar, Baz}; — Bar and Baz are identifier nodes inside use_list
-    // Also handles use_as_clause path: use foo::{Bar as Renamed}; — emit Bar, not Renamed
+/// CASE 2b: identifier / type_identifier inside use_list (braced imports).
+/// e.g., `use foo::{Bar, Baz};` — Bar and Baz are identifier nodes inside
+/// use_list. Also handles the use_as_clause path: `use foo::{Bar as Renamed};`
+/// emits Bar, not Renamed.
+fn capture_use_list_identifier(
+    node: &Node<'_>,
+    source: &[u8],
+    type_refs: &mut Vec<(usize, String)>,
+) {
     if (node.kind() == "identifier" || node.kind() == "type_identifier")
         && let Some(parent) = node.parent()
     {
@@ -149,264 +200,257 @@ pub(crate) fn collect_type_nodes(
             type_refs.push((line, type_name));
         }
     }
+}
 
-    // CASE 3: scoped_identifier like Config::load_mcp(), EntityKind::HtmlId, or crate::models::EntityKind::Class
-    // These are method calls or variant accesses on types. We want to capture the type name.
-    //
-    // CAPTURE:
-    //   - Config::load_mcp() in call_expression ← CAPTURE Config (method call)
-    //   - EntityKind::HtmlId in field initializer ← CAPTURE EntityKind (type usage)
-    //
-    // EXCLUDE:
-    //   - MyEnum::Variant in match pattern ← NOT CAPTURED (enum variant path)
-    //   - ImportedType::Variant1 in return ← NOT CAPTURED (enum variant value)
-    //
-    // Key insight: Only capture if the scoped_identifier is either:
-    // 1. A direct child of call_expression (method call on type), OR
-    // 2. In a use declaration (import statement)
-    if node.kind() == "scoped_identifier" {
-        let parent_kind_raw = node.parent().map(|p| p.kind()).unwrap_or("");
-        let is_scoped_use_list_path = parent_kind_raw == "scoped_use_list";
-        let is_nested_scoped_in_use = parent_kind_raw == "scoped_identifier";
-
-        let in_pattern_match = node
-            .parent()
-            .map(|p| p.kind() == "match_pattern")
-            .unwrap_or(false);
-
-        let in_use = 'check_ancestors: {
-            let mut current = node.parent();
-            while let Some(n) = current {
-                if n.kind() == "use_declaration" || n.kind() == "use_item" {
-                    break 'check_ancestors true;
-                }
-                // Stop at call expression
-                if n.kind() == "call_expression" || n.kind() == "field_expression" {
-                    break 'check_ancestors false;
-                }
-                current = n.parent();
-            }
-            false
-        };
-
-        // Check if this is in a field_initializer context (struct literal field value)
-        let in_field_initializer = 'check_field: {
-            let mut current = node.parent();
-            while let Some(n) = current {
-                if n.kind() == "field_initializer" {
-                    break 'check_field true;
-                }
-                // If we hit call_expression first, we're not in field_initializer
-                if n.kind() == "call_expression" {
-                    break 'check_field false;
-                }
-                current = n.parent();
-            }
-            false
-        };
-
-        // Check if this is in an argument context (function/method call argument)
-        // We need to check if we're inside an 'arguments' node, but NOT as the callee
-        let in_argument = 'check_arg: {
-            let mut current = node.parent();
-            while let Some(n) = current {
-                // Found argument node - we're in an argument position
-                if n.kind() == "argument" || n.kind() == "arguments" {
-                    break 'check_arg true;
-                }
-                // If we hit call_expression, check if we're the function part or in arguments
-                if n.kind() == "call_expression" {
-                    // Check if node is a descendant of the 'arguments' child
-                    if let Some(args_node) = n.child_by_field_name("arguments") {
-                        // Check if our node is within the arguments node's range
-                        if node.start_byte() >= args_node.start_byte()
-                            && node.end_byte() <= args_node.end_byte()
-                        {
-                            break 'check_arg true;
-                        }
-                    }
-                    // Otherwise we're in the function/callee position
-                    break 'check_arg false;
-                }
-                current = n.parent();
-            }
-            false
-        };
-
-        // Only process if NOT in a pattern matching context
-        if !in_pattern_match && !is_scoped_use_list_path && !is_nested_scoped_in_use {
-            let Some(first_child) = node.child(0) else {
-                // Recurse to children
-                let child_searched_range = searched_range;
-                let mut child = node.child(0);
-                while let Some(c) = child {
-                    collect_type_nodes(&c, source, type_refs, child_searched_range);
-                    child = c.next_sibling();
-                }
-                return;
-            };
-
-            let first_child_ok = first_child.kind() == "generic_type"
-                || first_child.kind() == "identifier"
-                || first_child.kind() == "type_identifier"
-                || (in_use && first_child.kind() == "scoped_identifier");
-
-            if !first_child_ok {
-                let child_searched_range = searched_range;
-                let mut child = node.child(0);
-                while let Some(c) = child {
-                    collect_type_nodes(&c, source, type_refs, child_searched_range);
-                    child = c.next_sibling();
-                }
-                return;
-            }
-
-            // Check what kind of context we're in
-            let parent_kind = node.parent().map(|p| p.kind()).unwrap_or("");
-
-            // Capture if:
-            // 1. Direct child of call_expression (method call like Config::load_mcp())
-            // 2. In a use declaration (import statement like use crate::models::EntityKind)
-            // 3. In a field_initializer context (struct field value like EntityKind::HtmlId)
-            // 4. In an argument context (function argument like EntityKind::Class)
-            let should_capture =
-                parent_kind == "call_expression" || in_use || in_field_initializer || in_argument;
-
-            if should_capture {
-                // Collect all identifiers in the scoped_identifier path
-                let mut identifiers: Vec<(String, usize)> = Vec::new();
-                let mut child = first_child;
-                loop {
-                    if child.kind() == "identifier" || child.kind() == "type_identifier" {
-                        let text = node_text(child, source).to_string();
-                        let line = child.start_position().row + 1;
-                        identifiers.push((text, line));
-                    }
-                    if let Some(next) = child.next_sibling() {
-                        child = next;
-                    } else {
-                        break;
-                    }
-                }
-
-                // Determine the type name and line based on context
-                let (type_name, type_line) = if in_use {
-                    let last_idx = identifiers.len() - 1;
-                    (identifiers[last_idx].0.clone(), identifiers[last_idx].1)
-                } else if identifiers.len() >= 3 {
-                    let idx = identifiers.len() - 2;
-                    (identifiers[idx].0.clone(), identifiers[idx].1)
-                } else {
-                    (
-                        identifiers
-                            .first()
-                            .map(|(n, _)| n.clone())
-                            .unwrap_or_default(),
-                        identifiers.first().map(|(_, l)| *l).unwrap_or(1),
-                    )
-                };
-
-                type_refs.push((type_line, type_name));
-            }
+/// Walks ancestors looking for a node kind; stops at any of the given
+/// boundary kinds (returning `false` if one is reached first).
+fn walk_ancestors_until(node: &Node<'_>, target: &[&str], boundary: &[&str]) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if target.contains(&n.kind()) {
+            return true;
         }
+        if boundary.contains(&n.kind()) {
+            return false;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// Checks if this is in an argument context (function/method call argument).
+/// We need to check if we're inside an 'arguments' node, but NOT as the
+/// callee.
+fn is_in_argument(node: &Node<'_>) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        // Found argument node - we're in an argument position
+        if n.kind() == "argument" || n.kind() == "arguments" {
+            return true;
+        }
+        // If we hit call_expression, check if we're the function part or in arguments
+        if n.kind() == "call_expression" {
+            // Check if node is a descendant of the 'arguments' child
+            if let Some(args_node) = n.child_by_field_name("arguments") {
+                // Check if our node is within the arguments node's range
+                if node.start_byte() >= args_node.start_byte()
+                    && node.end_byte() <= args_node.end_byte()
+                {
+                    return true;
+                }
+            }
+            // Otherwise we're in the function/callee position
+            return false;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// CASE 3: scoped_identifier like Config::load_mcp(), EntityKind::HtmlId, or
+/// crate::models::EntityKind::Class. These are method calls or variant
+/// accesses on types; we want to capture the type name.
+///
+/// CAPTURE:
+///   - Config::load_mcp() in call_expression ← CAPTURE Config (method call)
+///   - EntityKind::HtmlId in field initializer ← CAPTURE EntityKind (type usage)
+///
+/// EXCLUDE:
+///   - MyEnum::Variant in match pattern ← NOT CAPTURED (enum variant path)
+///   - ImportedType::Variant1 in return ← NOT CAPTURED (enum variant value)
+///
+/// Key insight: Only capture if the scoped_identifier is either:
+/// 1. A direct child of call_expression (method call on type), OR
+/// 2. In a use declaration (import statement)
+///
+/// Returns `true` when the caller must stop processing (children were
+/// already recursed).
+fn handle_scoped_identifier(
+    node: &Node<'_>,
+    source: &[u8],
+    type_refs: &mut Vec<(usize, String)>,
+    searched_range: Option<(usize, usize)>,
+) -> bool {
+    let parent_kind_raw = node.parent().map(|p| p.kind()).unwrap_or("");
+    let is_scoped_use_list_path = parent_kind_raw == "scoped_use_list";
+    let is_nested_scoped_in_use = parent_kind_raw == "scoped_identifier";
+
+    let in_pattern_match = node
+        .parent()
+        .map(|p| p.kind() == "match_pattern")
+        .unwrap_or(false);
+
+    let in_use = walk_ancestors_until(
+        node,
+        &["use_declaration", "use_item"],
+        &["call_expression", "field_expression"],
+    );
+
+    // Check if this is in a field_initializer context (struct literal field value)
+    let in_field_initializer =
+        walk_ancestors_until(node, &["field_initializer"], &["call_expression"]);
+
+    let in_argument = is_in_argument(node);
+
+    // Only process if NOT in a pattern matching context
+    if in_pattern_match || is_scoped_use_list_path || is_nested_scoped_in_use {
+        return false;
     }
 
-    // SPECIAL CASE: Handle token_tree nodes inside macro_invocations
-    // Macros aren't expanded by tree-sitter, so scoped identifiers inside macros
-    // are stored as raw tokens, not AST nodes. We need to manually extract them.
-    //
-    // PERFORMANCE OPTIMIZATION (O(N) Substring Skipping):
-    // For deeply nested macros like `vec![vec![vec![MyType::new()]]]`, tree-sitter produces
-    // a tree of token_tree nodes. The outermost token_tree contains all the text, and
-    // each nested macro body is also a token_tree. Without skipping, we would:
-    //   1. Extract and search the entire outer token_tree text
-    //   2. Recursively do the SAME work for every nested token_tree (exponential blowup)
-    //
-    // Solution: If a token_tree is fully contained within a parent token_tree's byte range
-    // (i.e., `searched_range`), we skip it entirely since the parent already covered that text.
-    if node.kind() == "token_tree" {
-        let node_start_byte = node.start_byte();
-        let node_end_byte = node.end_byte();
-
-        // O(N) SKIP CHECK: If this token_tree is contained within a parent searched range,
-        // skip the expensive string allocation and pattern matching.
-        if let Some((parent_start, parent_end)) = searched_range
-            && node_start_byte >= parent_start
-            && node_end_byte <= parent_end
-        {
-            // This token_tree is fully contained in parent's searched range - skip!
-            // Recurse to children WITHOUT passing the searched_range (they're not token_tree roots)
-            let mut child = node.child(0);
-            while let Some(c) = child {
-                collect_type_nodes(&c, source, type_refs, None);
-                child = c.next_sibling();
-            }
-            return;
-        }
-
-        let text = &source[node_start_byte..node_end_byte.min(source.len())];
-        let text_str = String::from_utf8_lossy(text);
-
-        // Look for patterns like "EntityKind::Class" or "Config::load_mcp"
-        // Search for Type::Variant patterns (Type starts with uppercase)
-        // Note: This simple pattern matching may have false positives in string literals,
-        // but that's acceptable since macro token trees typically don't contain many string literals
-        // with type-like patterns.
-        for (idx, _) in text_str.match_indices("::") {
-            if idx == 0 {
-                continue;
-            }
-
-            // Skip if this :: appears to be inside a string literal
-            // Simple heuristic: count quotes before this position
-            let before_context = &text_str[..idx];
-            let quote_count = before_context.matches('"').count();
-            if quote_count % 2 == 1 {
-                // Odd number of quotes means we're inside a string
-                continue;
-            }
-
-            // Find the start of the type name before ::
-            let type_start = before_context
-                .rfind(|c: char| !c.is_alphanumeric() && c != '_')
-                .map(|p| p + 1)
-                .unwrap_or(0);
-            let type_name = &before_context[type_start..];
-
-            // Only capture if:
-            // 1. Type name is not empty
-            // 2. Starts with uppercase (Rust type convention)
-            // 3. Is a valid identifier (alphanumeric + underscore only)
-            if !type_name.is_empty()
-                && type_name.chars().next().unwrap().is_uppercase()
-                && type_name.chars().all(|c| c.is_alphanumeric() || c == '_')
-            {
-                // Calculate the actual line number by counting newlines up to this position
-                let byte_offset = node_start_byte + type_start;
-                let line = source[..byte_offset]
-                    .iter()
-                    .filter(|&&b| b == b'\n')
-                    .count()
-                    + 1;
-
-                // Deduplicate: check if we already have this exact (line, type_name) pair
-                if !type_refs.iter().any(|(l, n)| *l == line && n == type_name) {
-                    type_refs.push((line, type_name.to_string()));
-                }
-            }
-        }
-    }
-
-    // Recurse to children. When we're inside a processed token_tree, pass its range
-    // so nested token_trees can skip themselves (O(N) optimization).
-    let child_searched_range = if node.kind() == "token_tree" {
-        Some((node.start_byte(), node.end_byte()))
-    } else {
-        searched_range
+    let Some(first_child) = node.child(0) else {
+        // Recurse to children
+        recurse_children(node, source, type_refs, searched_range);
+        return true;
     };
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        collect_type_nodes(&c, source, type_refs, child_searched_range);
-        child = c.next_sibling();
+
+    let first_child_ok = first_child.kind() == "generic_type"
+        || first_child.kind() == "identifier"
+        || first_child.kind() == "type_identifier"
+        || (in_use && first_child.kind() == "scoped_identifier");
+
+    if !first_child_ok {
+        recurse_children(node, source, type_refs, searched_range);
+        return true;
     }
+
+    // Check what kind of context we're in
+    let parent_kind = node.parent().map(|p| p.kind()).unwrap_or("");
+
+    // Capture if:
+    // 1. Direct child of call_expression (method call like Config::load_mcp())
+    // 2. In a use declaration (import statement like use crate::models::EntityKind)
+    // 3. In a field_initializer context (struct field value like EntityKind::HtmlId)
+    // 4. In an argument context (function argument like EntityKind::Class)
+    let should_capture =
+        parent_kind == "call_expression" || in_use || in_field_initializer || in_argument;
+
+    if should_capture {
+        // Collect all identifiers in the scoped_identifier path
+        let mut identifiers: Vec<(String, usize)> = Vec::new();
+        let mut child = first_child;
+        loop {
+            if child.kind() == "identifier" || child.kind() == "type_identifier" {
+                let text = node_text(child, source).to_string();
+                let line = child.start_position().row + 1;
+                identifiers.push((text, line));
+            }
+            if let Some(next) = child.next_sibling() {
+                child = next;
+            } else {
+                break;
+            }
+        }
+
+        // Determine the type name and line based on context
+        let (type_name, type_line) = if in_use {
+            let last_idx = identifiers.len() - 1;
+            (identifiers[last_idx].0.clone(), identifiers[last_idx].1)
+        } else if identifiers.len() >= 3 {
+            let idx = identifiers.len() - 2;
+            (identifiers[idx].0.clone(), identifiers[idx].1)
+        } else {
+            (
+                identifiers
+                    .first()
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_default(),
+                identifiers.first().map(|(_, l)| *l).unwrap_or(1),
+            )
+        };
+
+        type_refs.push((type_line, type_name));
+    }
+
+    false
+}
+
+/// SPECIAL CASE: Handle token_tree nodes inside macro_invocations.
+/// Macros aren't expanded by tree-sitter, so scoped identifiers inside macros
+/// are stored as raw tokens, not AST nodes. We need to manually extract them.
+///
+/// PERFORMANCE OPTIMIZATION (O(N) Substring Skipping):
+/// For deeply nested macros like `vec![vec![vec![MyType::new()]]]`, tree-sitter produces
+/// a tree of token_tree nodes. The outermost token_tree contains all the text, and
+/// each nested macro body is also a token_tree. Without skipping, we would:
+///   1. Extract and search the entire outer token_tree text
+///   2. Recursively do the SAME work for every nested token_tree (exponential blowup)
+///
+/// Solution: If a token_tree is fully contained within a parent token_tree's byte range
+/// (i.e., `searched_range`), we skip it entirely since the parent already covered that text.
+///
+/// Returns `true` when the caller must stop processing.
+fn handle_token_tree(
+    node: &Node<'_>,
+    source: &[u8],
+    type_refs: &mut Vec<(usize, String)>,
+    searched_range: Option<(usize, usize)>,
+) -> bool {
+    let node_start_byte = node.start_byte();
+    let node_end_byte = node.end_byte();
+
+    // O(N) SKIP CHECK: If this token_tree is contained within a parent searched range,
+    // skip the expensive string allocation and pattern matching.
+    if let Some((parent_start, parent_end)) = searched_range
+        && node_start_byte >= parent_start
+        && node_end_byte <= parent_end
+    {
+        // This token_tree is fully contained in parent's searched range - skip!
+        // Recurse to children WITHOUT passing the searched_range (they're not token_tree roots)
+        recurse_children(node, source, type_refs, None);
+        return true;
+    }
+
+    let text = &source[node_start_byte..node_end_byte.min(source.len())];
+    let text_str = String::from_utf8_lossy(text);
+
+    // Look for patterns like "EntityKind::Class" or "Config::load_mcp"
+    // Search for Type::Variant patterns (Type starts with uppercase)
+    // Note: This simple pattern matching may have false positives in string literals,
+    // but that's acceptable since macro token trees typically don't contain many string literals
+    // with type-like patterns.
+    for (idx, _) in text_str.match_indices("::") {
+        if idx == 0 {
+            continue;
+        }
+
+        // Skip if this :: appears to be inside a string literal
+        // Simple heuristic: count quotes before this position
+        let before_context = &text_str[..idx];
+        let quote_count = before_context.matches('"').count();
+        if quote_count % 2 == 1 {
+            // Odd number of quotes means we're inside a string
+            continue;
+        }
+
+        // Find the start of the type name before ::
+        let type_start = before_context
+            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        let type_name = &before_context[type_start..];
+
+        // Only capture if:
+        // 1. Type name is not empty
+        // 2. Starts with uppercase (Rust type convention)
+        // 3. Is a valid identifier (alphanumeric + underscore only)
+        if !type_name.is_empty()
+            && type_name.chars().next().unwrap().is_uppercase()
+            && type_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+        {
+            // Calculate the actual line number by counting newlines up to this position
+            let byte_offset = node_start_byte + type_start;
+            let line = source[..byte_offset]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count()
+                + 1;
+
+            // Deduplicate: check if we already have this exact (line, type_name) pair
+            if !type_refs.iter().any(|(l, n)| *l == line && n == type_name) {
+                type_refs.push((line, type_name.to_string()));
+            }
+        }
+    }
+
+    false
 }

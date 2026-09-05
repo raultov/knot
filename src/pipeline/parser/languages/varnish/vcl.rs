@@ -575,18 +575,6 @@ impl Parser<'_> {
         self.entities.push(entity);
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    #[expect(
-        clippy::excessive_nesting,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
     fn parse_sub(&mut self) {
         let start_pos = self.pos;
         let start_line = self.line_of_pos(start_pos);
@@ -608,115 +596,7 @@ impl Parser<'_> {
         let mut refs: Vec<ReferenceIntent> = Vec::new();
         let _body_start = self.pos;
 
-        if matches!(self.current(), Token::Punct('{')) {
-            self.advance(); // skip {
-            let mut depth = 1;
-            while depth > 0 && !matches!(self.current(), Token::Eof) {
-                self.skip_comments();
-                match self.current() {
-                    Token::Punct('{') => {
-                        depth += 1;
-                        self.advance();
-                    }
-                    Token::Punct('}') => {
-                        depth -= 1;
-                        if depth > 0 {
-                            self.advance();
-                        }
-                    }
-                    Token::Ident(kw) if kw == "call" => {
-                        let line = self.line_of_pos(self.pos);
-                        self.advance();
-                        if let Token::Ident(callee) = self.current() {
-                            refs.push(ReferenceIntent::VclSubCall {
-                                sub_name: callee.clone(),
-                                line,
-                            });
-                            self.advance();
-                        }
-                        self.skip_semicolon();
-                    }
-                    Token::Ident(kw) if kw == "set" => {
-                        self.parse_set_statement(&mut refs);
-                    }
-                    Token::Ident(kw) if kw == "if" || kw == "elseif" || kw == "else" => {
-                        self.parse_if_statement(&mut refs);
-                    }
-                    Token::Ident(kw) if kw == "unset" => {
-                        self.skip_until_semicolon();
-                    }
-                    Token::Ident(kw) if kw == "return" => {
-                        self.skip_until_semicolon();
-                    }
-                    Token::Ident(kw) if kw == "new" => {
-                        self.parse_new_statement(&mut refs);
-                    }
-                    Token::DottedPath(segs) => {
-                        let segs = segs.clone();
-                        let save = self.pos;
-                        self.advance();
-                        if segs.len() == 2 && matches!(self.current(), Token::Punct('(')) {
-                            let prefix_str = segs[0].clone();
-                            let method_str = segs[1].clone();
-                            let line = self.line_of_pos(save);
-                            let receiver = if self.instances.contains(&prefix_str)
-                                || self.import_map.contains_key(&prefix_str)
-                            {
-                                Some(prefix_str)
-                            } else {
-                                None
-                            };
-                            let arg_count = self.count_args();
-                            refs.push(ReferenceIntent::Call {
-                                method: method_str,
-                                receiver,
-                                line,
-                                arg_count,
-                            });
-                            self.skip_until_semicolon();
-                            continue;
-                        }
-                        self.skip_until_semicolon();
-                    }
-                    Token::Ident(prefix) => {
-                        let save = self.pos;
-                        let prefix_str = prefix.clone();
-                        self.advance();
-                        if matches!(self.current(), Token::Punct('.')) {
-                            // maybe a method call: prefix.method(...)
-                            if let Token::Ident(method) = self.peek(1) {
-                                let line = self.line_of_pos(save);
-                                let receiver = if self.instances.contains(&prefix_str)
-                                    || self.import_map.contains_key(&prefix_str)
-                                {
-                                    Some(prefix_str)
-                                } else {
-                                    None
-                                };
-                                let method_str = method.clone();
-                                self.pos += 2; // skip .method
-                                let arg_count = self.count_args();
-                                refs.push(ReferenceIntent::Call {
-                                    method: method_str,
-                                    receiver,
-                                    line,
-                                    arg_count,
-                                });
-                                self.skip_until_semicolon();
-                                continue;
-                            }
-                        }
-                        // Not a method call, continue
-                    }
-                    _ => {
-                        self.advance();
-                    }
-                }
-            }
-            if matches!(self.current(), Token::Punct('}')) {
-                self.advance(); // skip }
-            }
-        }
+        self.parse_sub_body(&mut refs);
 
         let docstring = self.preceding_comments(start_pos);
         let fqn = format!("vcl:{}:{}", self.repo_name, name);
@@ -735,6 +615,118 @@ impl Parser<'_> {
         );
         entity.reference_intents = refs;
         self.entities.push(entity);
+    }
+
+    fn parse_sub_body(&mut self, refs: &mut Vec<ReferenceIntent>) {
+        if !matches!(self.current(), Token::Punct('{')) {
+            return;
+        }
+        self.advance(); // skip {
+        let mut depth = 1;
+        while depth > 0 && !matches!(self.current(), Token::Eof) {
+            self.skip_comments();
+            match self.current() {
+                Token::Punct('{') => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::Punct('}') => {
+                    depth -= 1;
+                    if depth > 0 {
+                        self.advance();
+                    }
+                }
+                Token::Ident(kw) if kw == "call" => {
+                    self.parse_call_statement(refs);
+                }
+                Token::Ident(kw) if kw == "set" => {
+                    self.parse_set_statement(refs);
+                }
+                Token::Ident(kw) if kw == "if" || kw == "elseif" || kw == "else" => {
+                    self.parse_if_statement(refs);
+                }
+                Token::Ident(kw) if kw == "unset" || kw == "return" => {
+                    self.skip_until_semicolon();
+                }
+                Token::Ident(kw) if kw == "new" => {
+                    self.parse_new_statement(refs);
+                }
+                Token::DottedPath(segs) => {
+                    let segs = segs.clone();
+                    self.parse_dotted_path_statement(segs, refs);
+                }
+                Token::Ident(prefix) => {
+                    let prefix = prefix.clone();
+                    self.parse_ident_statement(prefix, refs);
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        if matches!(self.current(), Token::Punct('}')) {
+            self.advance(); // skip }
+        }
+    }
+
+    fn parse_call_statement(&mut self, refs: &mut Vec<ReferenceIntent>) {
+        let line = self.line_of_pos(self.pos);
+        self.advance();
+        if let Token::Ident(callee) = self.current() {
+            refs.push(ReferenceIntent::VclSubCall {
+                sub_name: callee.clone(),
+                line,
+            });
+            self.advance();
+        }
+        self.skip_semicolon();
+    }
+
+    fn parse_dotted_path_statement(&mut self, segs: Vec<String>, refs: &mut Vec<ReferenceIntent>) {
+        let save = self.pos;
+        self.advance();
+        if segs.len() == 2 && matches!(self.current(), Token::Punct('(')) {
+            self.record_method_call(segs[0].clone(), segs[1].clone(), save, refs);
+            self.skip_until_semicolon();
+            return;
+        }
+        self.skip_until_semicolon();
+    }
+
+    fn parse_ident_statement(&mut self, prefix: String, refs: &mut Vec<ReferenceIntent>) {
+        let save = self.pos;
+        self.advance();
+        if matches!(self.current(), Token::Punct('.'))
+            && let Token::Ident(method) = self.peek(1)
+        {
+            let method_str = method.clone();
+            self.pos += 2; // skip .method
+            self.record_method_call(prefix, method_str, save, refs);
+            self.skip_until_semicolon();
+        }
+    }
+
+    fn record_method_call(
+        &mut self,
+        prefix_str: String,
+        method_str: String,
+        save: usize,
+        refs: &mut Vec<ReferenceIntent>,
+    ) {
+        let line = self.line_of_pos(save);
+        let receiver =
+            if self.instances.contains(&prefix_str) || self.import_map.contains_key(&prefix_str) {
+                Some(prefix_str)
+            } else {
+                None
+            };
+        let arg_count = self.count_args();
+        refs.push(ReferenceIntent::Call {
+            method: method_str,
+            receiver,
+            line,
+            arg_count,
+        });
     }
 
     fn parse_set_statement(&mut self, refs: &mut Vec<ReferenceIntent>) {
@@ -759,10 +751,6 @@ impl Parser<'_> {
         self.skip_semicolon();
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
     #[expect(
         clippy::cognitive_complexity,
         reason = "function is verbose but correct — extraction deferred"

@@ -1,197 +1,238 @@
 use crate::models::{EntityKind, ParsedEntity};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-pub(crate) fn extract_entities_vcc(
-    source: &str,
-    file_path: &str,
-    repo_name: &str,
-) -> Vec<ParsedEntity> {
-    let mut entities = Vec::new();
-    let mut current_module: Option<String> = None;
-    let mut current_object: Option<String> = None;
-    let mut pending_prose: Vec<String> = Vec::new();
-    let mut current_object_fqn: Option<String> = None;
+/// State threaded through the VCC directive handlers.
+struct VccState<'a> {
+    file_path: &'a str,
+    repo_name: &'a str,
+    current_module: Option<String>,
+    current_object: Option<String>,
+    current_object_fqn: Option<String>,
+    pending_prose: Vec<String>,
+    entities: Vec<ParsedEntity>,
+}
 
-    for (line_num, raw_line) in source.lines().enumerate() {
+impl<'a> VccState<'a> {
+    fn process_line(&mut self, raw_line: &str, line_num: usize) {
         let line = raw_line.trim();
         let start_line = line_num + 1;
 
         // Skip RST prose (non-$ lines)
         if !line.starts_with('$') {
-            if !line.is_empty() && current_module.is_some() {
-                pending_prose.push(raw_line.to_string());
+            if !line.is_empty() && self.current_module.is_some() {
+                self.pending_prose.push(raw_line.to_string());
             }
-            continue;
+            return;
         }
 
         let directive = line.to_string();
-        let prose = if pending_prose.is_empty() {
-            None
-        } else {
-            let doc = pending_prose.join("\n");
-            pending_prose.clear();
-            if doc.trim().is_empty() {
-                None
-            } else {
-                Some(doc)
-            }
-        };
+        let prose = self.take_prose();
 
         if directive.starts_with("$Module ") {
-            current_object = None;
-            current_object_fqn = None;
-            let (name, section, desc) = parse_module_directive(&directive);
-            let module_name = name.clone();
-            current_module = Some(module_name.clone());
-
-            let entity = ParsedEntity::new(
-                module_name.clone(),
-                EntityKind::VccModule,
-                format!("vcc:{}", module_name),
-                Some(format!(
-                    "$Module {} {} {}",
-                    name,
-                    section.unwrap_or_default(),
-                    desc.unwrap_or_default()
-                )),
-                prose,
-                "vcc",
-                file_path,
-                start_line,
-                start_line,
-                None,
-                repo_name,
-            );
-            entities.push(entity);
+            self.handle_module(&directive, start_line, prose);
         } else if directive.starts_with("$Function ") {
-            if let Some(module) = &current_module {
-                let (ret_type, func_name, params) = parse_function_directive(&directive);
-                // Exclude PRIV_* params from the signature
-                let vcl_params = vcl_visible_params(&params);
-
-                let sig = if vcl_params.is_empty() {
-                    format!("$Function {} {}()", ret_type, func_name)
-                } else {
-                    format!(
-                        "$Function {} {}({})",
-                        ret_type,
-                        func_name,
-                        vcl_params.join(", ")
-                    )
-                };
-
-                let entity = ParsedEntity::new(
-                    func_name.clone(),
-                    EntityKind::VccFunction,
-                    format!("vcc:{}::{}", module, func_name),
-                    Some(sig),
-                    prose,
-                    "vcc",
-                    file_path,
-                    start_line,
-                    start_line,
-                    None,
-                    repo_name,
-                );
-                entities.push(entity);
-                current_object = None;
-                current_object_fqn = None;
-            }
+            self.handle_function(&directive, start_line, prose);
         } else if directive.starts_with("$Object ") {
-            if let Some(module) = &current_module {
-                let (obj_name, ctor_params) = parse_object_directive(&directive);
-                let sig = if ctor_params.is_empty() {
-                    format!("$Object {}()", obj_name)
-                } else {
-                    format!("$Object {}({})", obj_name, ctor_params.join(", "))
-                };
-
-                let fqn = format!("vcc:{}::{}", module, obj_name);
-                current_object = Some(obj_name.clone());
-                current_object_fqn = Some(fqn.clone());
-
-                let entity = ParsedEntity::new(
-                    obj_name,
-                    EntityKind::VccObject,
-                    fqn,
-                    Some(sig),
-                    prose,
-                    "vcc",
-                    file_path,
-                    start_line,
-                    start_line,
-                    None,
-                    repo_name,
-                );
-                entities.push(entity);
-            }
+            self.handle_object(&directive, start_line, prose);
         } else if directive.starts_with("$Method ") {
-            // gotcha 14: positional binding to preceding $Object
-            if let Some(_obj_name) = &current_object
-                && let Some(_module) = &current_module
-                && let Some(obj_fqn) = &current_object_fqn
-            {
-                let (ret_type, method_name, params) = parse_function_directive(&directive);
-                // Strip leading '.' from method name
-                let clean_name = method_name.strip_prefix('.').unwrap_or(&method_name);
-
-                let vcl_params = vcl_visible_params(&params);
-
-                let sig = if vcl_params.is_empty() {
-                    format!("$Method {} .{}()", ret_type, clean_name)
-                } else {
-                    format!(
-                        "$Method {} .{}({})",
-                        ret_type,
-                        clean_name,
-                        vcl_params.join(", ")
-                    )
-                };
-
-                let fqn = format!("{}::{}", obj_fqn, clean_name);
-
-                let entity = ParsedEntity::new(
-                    clean_name.to_string(),
-                    EntityKind::VccMethod,
-                    fqn,
-                    Some(sig),
-                    prose,
-                    "vcc",
-                    file_path,
-                    start_line,
-                    start_line,
-                    None,
-                    repo_name,
-                );
-                entities.push(entity);
-            }
-            // $Method before any $Object is malformed — skip
+            self.handle_method(&directive, start_line, prose);
         } else {
-            // $ABI, $Event, $Restrict, $Alias, $Synopsis, $Prefix — not entities
-            current_object = None;
-            current_object_fqn = None;
-            if !directive.starts_with("$ABI")
-                && !directive.starts_with("$Event")
-                && !directive.starts_with("$Restrict")
-                && !directive.starts_with("$Alias")
-                && !directive.starts_with("$Synopsis")
-                && !directive.starts_with("$Prefix")
-            {
-                // Unknown directive — skip
-            }
+            self.handle_other(&directive);
         }
     }
 
-    entities
+    /// Joins the prose accumulated since the last directive (if any).
+    fn take_prose(&mut self) -> Option<String> {
+        if self.pending_prose.is_empty() {
+            return None;
+        }
+        let doc = self.pending_prose.join("\n");
+        self.pending_prose.clear();
+        if doc.trim().is_empty() {
+            None
+        } else {
+            Some(doc)
+        }
+    }
+
+    fn handle_module(&mut self, directive: &str, start_line: usize, prose: Option<String>) {
+        self.current_object = None;
+        self.current_object_fqn = None;
+        let (name, section, desc) = parse_module_directive(directive);
+        let module_name = name.clone();
+        self.current_module = Some(module_name.clone());
+
+        let entity = ParsedEntity::new(
+            module_name.clone(),
+            EntityKind::VccModule,
+            format!("vcc:{}", module_name),
+            Some(format!(
+                "$Module {} {} {}",
+                name,
+                section.unwrap_or_default(),
+                desc.unwrap_or_default()
+            )),
+            prose,
+            "vcc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        self.entities.push(entity);
+    }
+
+    fn handle_function(&mut self, directive: &str, start_line: usize, prose: Option<String>) {
+        let Some(module) = self.current_module.clone() else {
+            return;
+        };
+        let (ret_type, func_name, params) = parse_function_directive(directive);
+        // Exclude PRIV_* params from the signature
+        let vcl_params = vcl_visible_params(&params);
+
+        let sig = if vcl_params.is_empty() {
+            format!("$Function {} {}()", ret_type, func_name)
+        } else {
+            format!(
+                "$Function {} {}({})",
+                ret_type,
+                func_name,
+                vcl_params.join(", ")
+            )
+        };
+
+        let entity = ParsedEntity::new(
+            func_name.clone(),
+            EntityKind::VccFunction,
+            format!("vcc:{}::{}", module, func_name),
+            Some(sig),
+            prose,
+            "vcc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        self.entities.push(entity);
+        self.current_object = None;
+        self.current_object_fqn = None;
+    }
+
+    fn handle_object(&mut self, directive: &str, start_line: usize, prose: Option<String>) {
+        let Some(module) = self.current_module.clone() else {
+            return;
+        };
+        let (obj_name, ctor_params) = parse_object_directive(directive);
+        let sig = if ctor_params.is_empty() {
+            format!("$Object {}()", obj_name)
+        } else {
+            format!("$Object {}({})", obj_name, ctor_params.join(", "))
+        };
+
+        let fqn = format!("vcc:{}::{}", module, obj_name);
+        self.current_object = Some(obj_name.clone());
+        self.current_object_fqn = Some(fqn.clone());
+
+        let entity = ParsedEntity::new(
+            obj_name,
+            EntityKind::VccObject,
+            fqn,
+            Some(sig),
+            prose,
+            "vcc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        self.entities.push(entity);
+    }
+
+    fn handle_method(&mut self, directive: &str, start_line: usize, prose: Option<String>) {
+        // gotcha 14: positional binding to preceding $Object
+        let (Some(_obj_name), Some(_module), Some(obj_fqn)) = (
+            &self.current_object,
+            &self.current_module,
+            &self.current_object_fqn,
+        ) else {
+            // $Method before any $Object is malformed — skip
+            return;
+        };
+
+        let (ret_type, method_name, params) = parse_function_directive(directive);
+        // Strip leading '.' from method name
+        let clean_name = method_name.strip_prefix('.').unwrap_or(&method_name);
+
+        let vcl_params = vcl_visible_params(&params);
+
+        let sig = if vcl_params.is_empty() {
+            format!("$Method {} .{}()", ret_type, clean_name)
+        } else {
+            format!(
+                "$Method {} .{}({})",
+                ret_type,
+                clean_name,
+                vcl_params.join(", ")
+            )
+        };
+
+        let fqn = format!("{}::{}", obj_fqn, clean_name);
+
+        let entity = ParsedEntity::new(
+            clean_name.to_string(),
+            EntityKind::VccMethod,
+            fqn,
+            Some(sig),
+            prose,
+            "vcc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        self.entities.push(entity);
+    }
+
+    fn handle_other(&mut self, directive: &str) {
+        // $ABI, $Event, $Restrict, $Alias, $Synopsis, $Prefix — not entities
+        self.current_object = None;
+        self.current_object_fqn = None;
+        if !directive.starts_with("$ABI")
+            && !directive.starts_with("$Event")
+            && !directive.starts_with("$Restrict")
+            && !directive.starts_with("$Alias")
+            && !directive.starts_with("$Synopsis")
+            && !directive.starts_with("$Prefix")
+        {
+            // Unknown directive — skip
+        }
+    }
 }
 
+pub(crate) fn extract_entities_vcc(
+    source: &str,
+    file_path: &str,
+    repo_name: &str,
+) -> Vec<ParsedEntity> {
+    let mut state = VccState {
+        file_path,
+        repo_name,
+        current_module: None,
+        current_object: None,
+        current_object_fqn: None,
+        pending_prose: Vec::new(),
+        entities: Vec::new(),
+    };
+
+    for (line_num, raw_line) in source.lines().enumerate() {
+        state.process_line(raw_line, line_num);
+    }
+
+    state.entities
+}
 fn parse_module_directive(line: &str) -> (String, Option<String>, Option<String>) {
     // $Module <name> <section> "<desc>"
     let rest = line.strip_prefix("$Module ").unwrap_or(line);

@@ -1,25 +1,194 @@
 use super::vcl::extract_entities_vcl_with_offset;
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-pub(crate) fn extract_entities_vtc(
-    source: &str,
-    file_path: &str,
-    repo_name: &str,
-) -> Vec<ParsedEntity> {
-    let mut entities = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-    let mut server_names: Vec<(String, usize)> = Vec::new();
-    let mut varnish_names: Vec<(String, usize)> = Vec::new();
+/// Per-file context for the VTC command handlers: the line buffer, identity
+/// inputs, the collected instance names for cross-referencing, and the
+/// entities produced so far.
+struct VtcContext<'a> {
+    lines: &'a [&'a str],
+    file_path: &'a str,
+    repo_name: &'a str,
+    server_names: &'a [(String, usize)],
+    entities: Vec<ParsedEntity>,
+}
 
-    // Pre-pass: collect server/varnish instance names for cross-referencing
+impl VtcContext<'_> {
+    fn dispatch(&mut self, i: usize, trimmed: &str) -> usize {
+        if trimmed.starts_with("varnishtest ") || trimmed.starts_with("vtest ") {
+            self.handle_test_case(i, trimmed)
+        } else if trimmed.starts_with("server ") {
+            self.handle_server(i, trimmed)
+        } else if trimmed.starts_with("client ") {
+            self.handle_client(i, trimmed)
+        } else if trimmed.starts_with("varnish ") {
+            self.handle_varnish(i, trimmed)
+        } else if trimmed.starts_with("logexpect ") {
+            self.handle_logexpect(i, trimmed)
+        } else if trimmed.starts_with("barrier ") {
+            self.handle_barrier(i, trimmed)
+        } else {
+            // Unknown command — skip
+            i + 1
+        }
+    }
+
+    fn handle_test_case(&mut self, i: usize, trimmed: &str) -> usize {
+        let desc = parse_quoted_or_rest(trimmed);
+        let mut entity = ParsedEntity::new(
+            desc.clone(),
+            EntityKind::VtcTestCase,
+            format!("vtc:{}:{}:testcase", self.repo_name, self.file_path),
+            Some(format!("varnishtest \"{}\"", desc)),
+            None,
+            "vtc",
+            self.file_path,
+            i + 1,
+            i + 1,
+            None,
+            self.repo_name,
+        );
+        entity.is_test_context = true;
+        self.entities.push(entity);
+        i + 1
+    }
+
+    fn handle_server(&mut self, i: usize, trimmed: &str) -> usize {
+        let Some(name) = parse_instance_name(trimmed, "server ") else {
+            return i + 1;
+        };
+        let start_line = i + 1;
+        let (body, next_i) = extract_brace_block(self.lines, i, trimmed);
+        let mut refs: Vec<ReferenceIntent> = Vec::new();
+        // Build refs for VTC entity names
+        for (sname, sline) in self.server_names {
+            if sname.as_str() == "s1" {
+                // Skip self-reference
+                continue;
+            }
+            if body.contains(&format!("-connect ${{{}}}", sname))
+                || body.contains(&format!("${{{}}}", sname))
+            {
+                refs.push(ReferenceIntent::ValueReference {
+                    value_name: format!("vtc:server:{}", sname),
+                    line: *sline,
+                });
+            }
+        }
+        let mut entity = ParsedEntity::new(
+            name.clone(),
+            EntityKind::VtcServer,
+            format!("vtc:{}:{}:{}", self.repo_name, self.file_path, name),
+            Some(format!("server {} {{ ... }}", name)),
+            None,
+            "vtc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        entity.is_test_context = true;
+        entity.reference_intents = refs;
+        self.entities.push(entity);
+        next_i
+    }
+
+    fn handle_client(&mut self, i: usize, trimmed: &str) -> usize {
+        let Some(name) = parse_instance_name(trimmed, "client ") else {
+            return i + 1;
+        };
+        let start_line = i + 1;
+        let (_, next_i) = extract_brace_block(self.lines, i, trimmed);
+        let mut entity = ParsedEntity::new(
+            name.clone(),
+            EntityKind::VtcClient,
+            format!("vtc:{}:{}:{}", self.repo_name, self.file_path, name),
+            Some(format!("client {} {{ ... }}", name)),
+            None,
+            "vtc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        entity.is_test_context = true;
+        self.entities.push(entity);
+        next_i
+    }
+
+    fn handle_varnish(&mut self, i: usize, trimmed: &str) -> usize {
+        let Some(name) = parse_instance_name(trimmed, "varnish ") else {
+            return i + 1;
+        };
+        let start_line = i + 1;
+        let next_i = parse_varnish_command(
+            self.lines,
+            i,
+            trimmed,
+            &name,
+            self.file_path,
+            self.repo_name,
+            self.server_names,
+            &mut self.entities,
+        );
+        next_i.max(start_line)
+    }
+
+    fn handle_logexpect(&mut self, i: usize, trimmed: &str) -> usize {
+        let Some(name) = parse_instance_name(trimmed, "logexpect ") else {
+            return i + 1;
+        };
+        let start_line = i + 1;
+        let (_, next_i) = extract_brace_block(self.lines, i, trimmed);
+        let mut entity = ParsedEntity::new(
+            name.clone(),
+            EntityKind::VtcLogexpect,
+            format!("vtc:{}:{}:{}", self.repo_name, self.file_path, name),
+            Some(format!("logexpect {} {{ ... }}", name)),
+            None,
+            "vtc",
+            self.file_path,
+            start_line,
+            start_line,
+            None,
+            self.repo_name,
+        );
+        entity.is_test_context = true;
+        self.entities.push(entity);
+        next_i
+    }
+
+    fn handle_barrier(&mut self, i: usize, trimmed: &str) -> usize {
+        if let Some(name) = parse_instance_name(trimmed, "barrier ") {
+            let start_line = i + 1;
+            // barrier may or may not have a block
+            let mut entity = ParsedEntity::new(
+                name.clone(),
+                EntityKind::VtcBarrier,
+                format!("vtc:{}:{}:{}", self.repo_name, self.file_path, name),
+                Some(format!("barrier {} ...", name)),
+                None,
+                "vtc",
+                self.file_path,
+                start_line,
+                start_line,
+                None,
+                self.repo_name,
+            );
+            entity.is_test_context = true;
+            self.entities.push(entity);
+        }
+        i + 1
+    }
+}
+
+/// Pre-pass: collect server/varnish instance names for cross-referencing
+fn collect_instance_names(
+    lines: &[&str],
+    server_names: &mut Vec<(String, usize)>,
+    varnish_names: &mut Vec<(String, usize)>,
+) {
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("server ") {
@@ -32,8 +201,29 @@ pub(crate) fn extract_entities_vtc(
             varnish_names.push((name, i + 1));
         }
     }
+}
+
+pub(crate) fn extract_entities_vtc(
+    source: &str,
+    file_path: &str,
+    repo_name: &str,
+) -> Vec<ParsedEntity> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut server_names: Vec<(String, usize)> = Vec::new();
+    let mut varnish_names: Vec<(String, usize)> = Vec::new();
+
+    // Pre-pass: collect server/varnish instance names for cross-referencing
+    collect_instance_names(&lines, &mut server_names, &mut varnish_names);
 
     // Pass: parse top-level commands
+    let mut ctx = VtcContext {
+        lines: &lines,
+        file_path,
+        repo_name,
+        server_names: &server_names,
+        entities: Vec::new(),
+    };
+
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
@@ -41,169 +231,11 @@ pub(crate) fn extract_entities_vtc(
             i += 1;
             continue;
         }
-
-        match () {
-            _ if trimmed.starts_with("varnishtest ") || trimmed.starts_with("vtest ") => {
-                let desc = parse_quoted_or_rest(trimmed);
-                let mut entity = ParsedEntity::new(
-                    desc.clone(),
-                    EntityKind::VtcTestCase,
-                    format!("vtc:{}:{}:testcase", repo_name, file_path),
-                    Some(format!("varnishtest \"{}\"", desc)),
-                    None,
-                    "vtc",
-                    file_path,
-                    i + 1,
-                    i + 1,
-                    None,
-                    repo_name,
-                );
-                entity.is_test_context = true;
-                entities.push(entity);
-                i += 1;
-            }
-            _ if trimmed.starts_with("server ") => {
-                if let Some(name) = parse_instance_name(trimmed, "server ") {
-                    let start_line = i + 1;
-                    let (body, next_i) = extract_brace_block(&lines, i, trimmed);
-                    let mut refs: Vec<ReferenceIntent> = Vec::new();
-                    // Build refs for VTC entity names
-                    for (sname, sline) in &server_names {
-                        if sname.as_str() == "s1" {
-                            // Skip self-reference
-                            continue;
-                        }
-                        if body.contains(&format!("-connect ${{{}}}", sname))
-                            || body.contains(&format!("${{{}}}", sname))
-                        {
-                            refs.push(ReferenceIntent::ValueReference {
-                                value_name: format!("vtc:server:{}", sname),
-                                line: *sline,
-                            });
-                        }
-                    }
-                    let mut entity = ParsedEntity::new(
-                        name.clone(),
-                        EntityKind::VtcServer,
-                        format!("vtc:{}:{}:{}", repo_name, file_path, name),
-                        Some(format!("server {} {{ ... }}", name)),
-                        None,
-                        "vtc",
-                        file_path,
-                        start_line,
-                        start_line,
-                        None,
-                        repo_name,
-                    );
-                    entity.is_test_context = true;
-                    entity.reference_intents = refs;
-                    entities.push(entity);
-                    i = next_i;
-                } else {
-                    i += 1;
-                }
-            }
-            _ if trimmed.starts_with("client ") => {
-                if let Some(name) = parse_instance_name(trimmed, "client ") {
-                    let start_line = i + 1;
-                    let (_, next_i) = extract_brace_block(&lines, i, trimmed);
-                    let entity = ParsedEntity::new(
-                        name.clone(),
-                        EntityKind::VtcClient,
-                        format!("vtc:{}:{}:{}", repo_name, file_path, name),
-                        Some(format!("client {} {{ ... }}", name)),
-                        None,
-                        "vtc",
-                        file_path,
-                        start_line,
-                        start_line,
-                        None,
-                        repo_name,
-                    );
-                    let mut entity = entity;
-                    entity.is_test_context = true;
-                    entities.push(entity);
-                    i = next_i;
-                } else {
-                    i += 1;
-                }
-            }
-            _ if trimmed.starts_with("varnish ") => {
-                if let Some(name) = parse_instance_name(trimmed, "varnish ") {
-                    let start_line = i + 1;
-                    i = parse_varnish_command(
-                        &lines,
-                        i,
-                        trimmed,
-                        &name,
-                        file_path,
-                        repo_name,
-                        &server_names,
-                        &mut entities,
-                    );
-                    i = i.max(start_line);
-                } else {
-                    i += 1;
-                }
-            }
-            _ if trimmed.starts_with("logexpect ") => {
-                if let Some(name) = parse_instance_name(trimmed, "logexpect ") {
-                    let start_line = i + 1;
-                    let (_, next_i) = extract_brace_block(&lines, i, trimmed);
-                    let entity = ParsedEntity::new(
-                        name.clone(),
-                        EntityKind::VtcLogexpect,
-                        format!("vtc:{}:{}:{}", repo_name, file_path, name),
-                        Some(format!("logexpect {} {{ ... }}", name)),
-                        None,
-                        "vtc",
-                        file_path,
-                        start_line,
-                        start_line,
-                        None,
-                        repo_name,
-                    );
-                    let mut entity = entity;
-                    entity.is_test_context = true;
-                    entities.push(entity);
-                    i = next_i;
-                } else {
-                    i += 1;
-                }
-            }
-            _ if trimmed.starts_with("barrier ") => {
-                if let Some(name) = parse_instance_name(trimmed, "barrier ") {
-                    let start_line = i + 1;
-                    // barrier may or may not have a block
-                    let entity = ParsedEntity::new(
-                        name.clone(),
-                        EntityKind::VtcBarrier,
-                        format!("vtc:{}:{}:{}", repo_name, file_path, name),
-                        Some(format!("barrier {} ...", name)),
-                        None,
-                        "vtc",
-                        file_path,
-                        start_line,
-                        start_line,
-                        None,
-                        repo_name,
-                    );
-                    let mut entity = entity;
-                    entity.is_test_context = true;
-                    entities.push(entity);
-                }
-                i += 1;
-            }
-            _ => {
-                // Unknown command — skip
-                i += 1;
-            }
-        }
+        i = ctx.dispatch(i, trimmed);
     }
 
-    entities
+    ctx.entities
 }
-
 fn parse_instance_name(line: &str, prefix: &str) -> Option<String> {
     let rest = line.strip_prefix(prefix)?;
     let rest = rest.trim();

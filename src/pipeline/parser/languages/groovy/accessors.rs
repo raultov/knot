@@ -6,10 +6,6 @@ use crate::models::{EntityKind, ParsedEntity};
 /// Emits Groovy's compiler-generated property accessors as first-class
 /// method entities, so name-based OVERRIDES linking can match a subtype
 /// property against a supertype getter (see resolve/overrides.rs).
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(super) fn synthesize_property_accessors(
     entities: &mut Vec<ParsedEntity>,
     package: &Option<String>,
