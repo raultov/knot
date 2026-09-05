@@ -16,10 +16,6 @@ use knot::{
 };
 
 #[tokio::main]
-#[expect(
-    clippy::too_many_lines,
-    reason = "CLI argument parsing is inherently long"
-)]
 async fn main() -> anyhow::Result<()> {
     utils::init_logging_for_cli()?;
 

@@ -44,10 +44,6 @@ pub async fn setup_watch_mode(
 }
 
 #[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
     clippy::cognitive_complexity,
     reason = "function is verbose but correct — extraction deferred"
 )]
