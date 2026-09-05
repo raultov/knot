@@ -255,6 +255,50 @@ fn lookup_fqn_by_fqn(
     fqn_to_uuid.get(&colon_fqn).copied()
 }
 
+/// Fallback ladder for homonym candidates that share the callee's method name
+/// (neither FQN nor receiver lookup matched):
+///
+/// 1. arg-count match, preferring a same-file candidate;
+/// 2. same-file match;
+/// 3. receiver-chain disambiguation (only when a receiver is available);
+/// 4. a single unambiguous candidate.
+fn resolve_homonym_fallback(
+    uuids: &[Uuid],
+    arg_count: Option<usize>,
+    receiver: Option<&str>,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    if let (Some(ac), Some(ac_map)) = (arg_count, ctx.uuid_to_arg_count) {
+        if let Some(&same_file_ac_uuid) = uuids.iter().find(|&&u| {
+            ac_map.get(&u) == Some(&ac)
+                && ctx
+                    .uuid_to_file
+                    .get(&u)
+                    .is_some_and(|f| f == caller_file_path)
+        }) {
+            return Some(same_file_ac_uuid);
+        }
+        if let Some(u) = find_by_arg_count(uuids, ac, ac_map) {
+            return Some(u);
+        }
+    }
+    if let Some(same_file_uuid) =
+        find_entity_in_same_file(uuids, caller_file_path, ctx.uuid_to_file)
+    {
+        return Some(same_file_uuid);
+    }
+    if let Some(receiver) = receiver
+        && let Some(u) = disambiguate_by_receiver_chain(uuids, receiver, ctx)
+    {
+        return Some(u);
+    }
+    if uuids.len() == 1 {
+        return uuids.first().copied();
+    }
+    None
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "function is verbose but correct — extraction deferred"
@@ -364,64 +408,25 @@ pub(crate) fn resolve_single_call_intent(
             }
         }
 
-        if let Some(uuids) = ctx.name_to_uuids.get(&intent.method) {
-            if let Some(ac) = intent.arg_count
-                && let Some(ac_map) = ctx.uuid_to_arg_count
-            {
-                if let Some(&same_file_ac_uuid) = uuids.iter().find(|&&u| {
-                    ac_map.get(&u) == Some(&ac)
-                        && ctx
-                            .uuid_to_file
-                            .get(&u)
-                            .is_some_and(|f| f == caller_file_path)
-                }) {
-                    return Some(same_file_ac_uuid);
-                }
-                if let Some(u) = find_by_arg_count(uuids, ac, ac_map) {
-                    return Some(u);
-                }
-            }
-            if let Some(same_file_uuid) =
-                find_entity_in_same_file(uuids, caller_file_path, ctx.uuid_to_file)
-            {
-                return Some(same_file_uuid);
-            }
-            if let Some(u) = disambiguate_by_receiver_chain(uuids, receiver, ctx) {
-                return Some(u);
-            }
-            if uuids.len() == 1 {
-                return uuids.first().copied();
-            }
+        if let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
+            && let Some(u) = resolve_homonym_fallback(
+                uuids,
+                intent.arg_count,
+                Some(receiver.as_str()),
+                caller_file_path,
+                ctx,
+            )
+        {
+            return Some(u);
         }
     }
 
     if intent.receiver.is_none()
         && let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
+        && let Some(u) =
+            resolve_homonym_fallback(uuids, intent.arg_count, None, caller_file_path, ctx)
     {
-        if let Some(ac) = intent.arg_count
-            && let Some(ac_map) = ctx.uuid_to_arg_count
-        {
-            if let Some(&same_file_ac_uuid) = uuids.iter().find(|&&u| {
-                ac_map.get(&u) == Some(&ac)
-                    && ctx
-                        .uuid_to_file
-                        .get(&u)
-                        .is_some_and(|f| f == caller_file_path)
-            }) {
-                return Some(same_file_ac_uuid);
-            }
-            if let Some(u) = find_by_arg_count(uuids, ac, ac_map) {
-                return Some(u);
-            }
-        }
-        if let Some(same_file_uuid) =
-            find_entity_in_same_file(uuids, caller_file_path, ctx.uuid_to_file)
-        {
-            return Some(same_file_uuid);
-        }
-        if uuids.len() == 1 {
-            return uuids.first().copied();
-        }
+        return Some(u);
     }
 
     None

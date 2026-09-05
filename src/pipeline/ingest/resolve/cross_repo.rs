@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn test_primary_selection_falls_back_to_shallowest_without_marker() {
         // No marker → falls back to shallowest-path rule (the existing
-        // min_by_key behaviour cross-repo e2e Test 8 pins for
+        // min_by_key behavior cross-repo e2e Test 8 pins for
         // Maven/Gradle/Cargo/npm).
         use crate::models::{EntityKind, ResolutionEntity};
         use uuid::Uuid;

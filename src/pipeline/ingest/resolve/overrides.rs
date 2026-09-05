@@ -411,7 +411,7 @@ mod tests {
     fn scenario_d2_walk_through() {
         let a = capable_type("A", "A", "A.java", EntityKind::Interface);
         let a_run = capable_method("run", "A.run", "A.java", EntityKind::Method);
-        // B implements A but does NOT declare run.
+        // B implements A, but does NOT declare run.
         let mut b = capable_type("B", "B", "B.java", EntityKind::Class);
         b.relationships.push((a.uuid, RelationshipType::Implements));
         let mut c = capable_type("C", "C", "C.java", EntityKind::Class);
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn scenario_i_no_supertype_method() {
         let iface = capable_type("I", "I", "I.java", EntityKind::Interface);
-        // I declares nothing relevant.
+        // It declares nothing relevant.
         let mut cls = capable_type("C", "C", "C.java", EntityKind::Class);
         cls.relationships
             .push((iface.uuid, RelationshipType::Implements));
