@@ -164,6 +164,21 @@ pub(crate) fn collect_implements(intents: &[ReferenceIntent]) -> Vec<&str> {
         .collect()
 }
 
+/// Collect `ValueReference` value names from a slice of reference intents.
+#[cfg(test)]
+pub(crate) fn collect_value_references(intents: &[ReferenceIntent]) -> Vec<&str> {
+    intents
+        .iter()
+        .filter_map(|r| {
+            if let ReferenceIntent::ValueReference { value_name, .. } = r {
+                Some(value_name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 // ── Generic AST node finders for tests ──────────────────────────
 
 /// Find the first node matching any of the given kinds via recursive DFS.

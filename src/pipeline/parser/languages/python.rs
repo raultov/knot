@@ -748,13 +748,7 @@ mod tests {
         let mut intents = Vec::new();
         extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
 
-        let names: Vec<&str> = intents
-            .iter()
-            .filter_map(|i| match i {
-                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
-                _ => None,
-            })
-            .collect();
+        let names = crate::pipeline::parser::test_utils::collect_value_references(&intents);
 
         assert!(
             names.contains(&"loaded"),
@@ -779,13 +773,7 @@ mod tests {
         let mut intents = Vec::new();
         extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
 
-        let names: Vec<&str> = intents
-            .iter()
-            .filter_map(|i| match i {
-                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
-                _ => None,
-            })
-            .collect();
+        let names = crate::pipeline::parser::test_utils::collect_value_references(&intents);
         assert!(
             names.contains(&"load_model"),
             "must emit ValueReference for `load_model` when passed as an arg, got: {:?}",
@@ -804,13 +792,7 @@ mod tests {
         let mut intents = Vec::new();
         extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
 
-        let names: Vec<&str> = intents
-            .iter()
-            .filter_map(|i| match i {
-                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
-                _ => None,
-            })
-            .collect();
+        let names = crate::pipeline::parser::test_utils::collect_value_references(&intents);
         assert!(
             names.contains(&"loaded"),
             "keyword-arg with chained attribute value must emit ValueReference for `loaded`, got: {:?}",
@@ -827,13 +809,7 @@ mod tests {
         let mut intents = Vec::new();
         extract_value_references_python(tree.root_node(), code.as_bytes(), &mut intents);
 
-        let names: Vec<&str> = intents
-            .iter()
-            .filter_map(|i| match i {
-                ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
-                _ => None,
-            })
-            .collect();
+        let names = crate::pipeline::parser::test_utils::collect_value_references(&intents);
         assert!(
             !names.contains(&"load_model"),
             "must NOT emit ValueReference for the trailing identifier of a call's function (already a Call intent), got: {:?}",

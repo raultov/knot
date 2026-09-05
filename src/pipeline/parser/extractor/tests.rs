@@ -1,6 +1,81 @@
 use super::*;
 use crate::models::{EntityKind, ReferenceIntent};
 
+/// Collect the method names of every `Call` intent on an entity.
+fn call_method_names(entity: &ParsedEntity) -> Vec<&str> {
+    entity
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::Call { method, .. } => Some(method.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Collect the method names of receiver-less `Call` intents — the bare
+/// decorator/annotation calls like `@staticmethod` or `@dataclass`.
+fn receiverless_call_method_names(entity: &ParsedEntity) -> Vec<&str> {
+    entity
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::Call {
+                method, receiver, ..
+            } if receiver.is_none() => Some(method.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Collect the referenced type names of every `TypeReference` intent.
+fn type_reference_names(entity: &ParsedEntity) -> Vec<&str> {
+    entity
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::TypeReference { type_name, .. } => Some(type_name.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Collect the referenced value names of every `ValueReference` intent.
+fn value_reference_names(entity: &ParsedEntity) -> Vec<&str> {
+    entity
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::ValueReference { value_name, .. } => Some(value_name.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Collect the parent names of every `Extends` intent.
+fn extends_parent_names(entity: &ParsedEntity) -> Vec<&str> {
+    entity
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::Extends { parent, .. } => Some(parent.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Collect the interface names of every `Implements` intent.
+fn implements_interface_names(entity: &ParsedEntity) -> Vec<&str> {
+    entity
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::Implements { interface, .. } => Some(interface.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn test_extract_entities_empty_source_java() {
     let source = "";
@@ -511,7 +586,7 @@ fn test_extract_entities_angular_decorator_references() {
     let decorator_refs: Vec<_> = app_component
         .reference_intents
         .iter()
-        .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "Component"))
+        .filter(|r| matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "Component"))
         .collect();
     assert!(
         !decorator_refs.is_empty(),
@@ -522,7 +597,7 @@ fn test_extract_entities_angular_decorator_references() {
     let analytics_refs: Vec<_> = app_component
         .reference_intents
         .iter()
-        .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "AnalyticsService"))
+        .filter(|r| matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "AnalyticsService"))
         .collect();
     assert!(
         !analytics_refs.is_empty(),
@@ -532,7 +607,7 @@ fn test_extract_entities_angular_decorator_references() {
     let seo_refs: Vec<_> = app_component
         .reference_intents
         .iter()
-        .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "SeoService"))
+        .filter(|r| matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "SeoService"))
         .collect();
     assert!(
         !seo_refs.is_empty(),
@@ -580,7 +655,7 @@ fn test_extract_entities_angular_ngmodule_references() {
     let ngmodule_refs: Vec<_> = app_module
         .reference_intents
         .iter()
-        .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "NgModule"))
+        .filter(|r| matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "NgModule"))
         .collect();
     assert!(
         !ngmodule_refs.is_empty(),
@@ -591,7 +666,7 @@ fn test_extract_entities_angular_ngmodule_references() {
     let app_component_refs: Vec<_> = app_module
         .reference_intents
         .iter()
-        .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "AppComponent"))
+        .filter(|r| matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "AppComponent"))
         .collect();
     assert!(
         app_component_refs.len() >= 2,
@@ -602,7 +677,7 @@ fn test_extract_entities_angular_ngmodule_references() {
     let user_component_refs: Vec<_> = app_module
         .reference_intents
         .iter()
-        .filter(|r| matches!(r, crate::models::ReferenceIntent::TypeReference { type_name, .. } if type_name == "UserComponent"))
+        .filter(|r| matches!(r, ReferenceIntent::TypeReference { type_name, .. } if type_name == "UserComponent"))
         .collect();
     assert!(
         !user_component_refs.is_empty(),
@@ -632,7 +707,7 @@ fn test_extract_entities_css_class() {
     let entities = result.unwrap();
     assert!(!entities.is_empty());
     assert_eq!(entities[0].name, "btn-primary");
-    assert_eq!(entities[0].kind, crate::models::EntityKind::CssClass);
+    assert_eq!(entities[0].kind, EntityKind::CssClass);
 }
 
 #[test]
@@ -653,7 +728,7 @@ fn test_extract_entities_css_id() {
     let entities = result.unwrap();
     assert!(!entities.is_empty());
     assert_eq!(entities[0].name, "header");
-    assert_eq!(entities[0].kind, crate::models::EntityKind::CssId);
+    assert_eq!(entities[0].kind, EntityKind::CssId);
 }
 
 #[test]
@@ -703,12 +778,12 @@ fn test_extract_scss_and_css_classes_together() {
     assert!(
         entities
             .iter()
-            .any(|e| e.name == "btn" && e.kind == crate::models::EntityKind::CssClass)
+            .any(|e| e.name == "btn" && e.kind == EntityKind::CssClass)
     );
     assert!(
         entities
             .iter()
-            .any(|e| e.name == "btn-primary" && e.kind == crate::models::EntityKind::CssClass)
+            .any(|e| e.name == "btn-primary" && e.kind == EntityKind::CssClass)
     );
 }
 
@@ -730,7 +805,7 @@ fn test_extract_entities_scss_mixin() {
     let entities = result.unwrap();
     assert!(!entities.is_empty());
     assert_eq!(entities[0].name, "flex-center");
-    assert_eq!(entities[0].kind, crate::models::EntityKind::ScssMixin);
+    assert_eq!(entities[0].kind, EntityKind::ScssMixin);
 }
 
 #[test]
@@ -751,7 +826,7 @@ fn test_extract_entities_scss_function() {
     let entities = result.unwrap();
     assert!(!entities.is_empty());
     assert_eq!(entities[0].name, "calculate-rem");
-    assert_eq!(entities[0].kind, crate::models::EntityKind::ScssFunction);
+    assert_eq!(entities[0].kind, EntityKind::ScssFunction);
 }
 
 // ============================================================
@@ -828,10 +903,10 @@ fn test_extract_html_elements_and_attributes() {
     // Should extract HTML ids and classes
     let has_id = entities
         .iter()
-        .any(|e| e.name == "main" && e.kind == crate::models::EntityKind::HtmlId);
+        .any(|e| e.name == "main" && e.kind == EntityKind::HtmlId);
     let has_class = entities
         .iter()
-        .any(|e| e.name == "container" && e.kind == crate::models::EntityKind::HtmlClass);
+        .any(|e| e.name == "container" && e.kind == EntityKind::HtmlClass);
 
     assert!(has_id, "Should extract HTML id 'main'");
     assert!(has_class, "Should extract HTML class 'container'");
@@ -861,8 +936,7 @@ fn test_extract_html_with_custom_elements() {
 
     // Should extract custom HTML elements (Web Components)
     let has_custom_element = entities.iter().any(|e| {
-        e.kind == crate::models::EntityKind::HtmlElement
-            && (e.name == "app-header" || e.name == "custom-widget")
+        e.kind == EntityKind::HtmlElement && (e.name == "app-header" || e.name == "custom-widget")
     });
 
     assert!(has_custom_element, "Should extract custom HTML elements");
@@ -874,7 +948,7 @@ fn test_extract_javascript_with_class_and_function() {
     class DataService {
         fetchData() { return fetch('/api/data'); }
     }
-    
+
     function initApp() {
         const service = new DataService();
         service.fetchData();
@@ -898,17 +972,17 @@ fn test_extract_javascript_with_class_and_function() {
     assert!(
         entities
             .iter()
-            .any(|e| e.name == "DataService" && e.kind == crate::models::EntityKind::Class)
+            .any(|e| e.name == "DataService" && e.kind == EntityKind::Class)
     );
     assert!(
         entities
             .iter()
-            .any(|e| e.name == "fetchData" && e.kind == crate::models::EntityKind::Method)
+            .any(|e| e.name == "fetchData" && e.kind == EntityKind::Method)
     );
     assert!(
         entities
             .iter()
-            .any(|e| e.name == "initApp" && e.kind == crate::models::EntityKind::Function)
+            .any(|e| e.name == "initApp" && e.kind == EntityKind::Function)
     );
 }
 
@@ -927,7 +1001,7 @@ fn test_extract_hybrid_ecosystem_full_integration() {
 </html>"#;
 
     // Use the HTML-specific extraction function that includes file imports
-    let mut parser = tree_sitter::Parser::new();
+    let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_html::LANGUAGE.into())
         .expect("Failed to set HTML language");
@@ -947,7 +1021,7 @@ fn test_extract_hybrid_ecosystem_full_integration() {
     // Should have CSS import
     let has_css_import = entities.iter().any(|e| {
         e.reference_intents.iter().any(|ri| {
-            matches!(ri, crate::models::ReferenceIntent::CssFileImport { file_path, .. } if file_path == "app.css")
+            matches!(ri, ReferenceIntent::CssFileImport { file_path, .. } if file_path == "app.css")
         })
     });
     assert!(has_css_import, "Should capture CSS import");
@@ -955,7 +1029,7 @@ fn test_extract_hybrid_ecosystem_full_integration() {
     // Should have JS import
     let has_js_import = entities.iter().any(|e| {
         e.reference_intents.iter().any(|ri| {
-            matches!(ri, crate::models::ReferenceIntent::HtmlFileImport { file_path, .. } if file_path == "app.js")
+            matches!(ri, ReferenceIntent::HtmlFileImport { file_path, .. } if file_path == "app.js")
         })
     });
     assert!(has_js_import, "Should capture JS import");
@@ -963,13 +1037,13 @@ fn test_extract_hybrid_ecosystem_full_integration() {
     // Should have HTML ID
     let has_html_id = entities
         .iter()
-        .any(|e| e.name == "app-root" && e.kind == crate::models::EntityKind::HtmlId);
+        .any(|e| e.name == "app-root" && e.kind == EntityKind::HtmlId);
     assert!(has_html_id, "Should capture HTML id 'app-root'");
 
     // Should have HTML class
     let has_html_class = entities
         .iter()
-        .any(|e| e.name == "container" && e.kind == crate::models::EntityKind::HtmlClass);
+        .any(|e| e.name == "container" && e.kind == EntityKind::HtmlClass);
     assert!(has_html_class, "Should capture HTML class 'container'");
 }
 
@@ -1231,17 +1305,7 @@ fn test_extract_python_multiple_calls_in_function() {
     let entities = result.unwrap();
     let main_func = entities.iter().find(|e| e.name == "main").unwrap();
     assert!(main_func.reference_intents.len() >= 2);
-    let methods: Vec<_> = main_func
-        .reference_intents
-        .iter()
-        .filter_map(|c| {
-            if let ReferenceIntent::Call { method, .. } = c {
-                Some(method.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let methods = call_method_names(main_func);
     assert!(methods.contains(&"fetch_users"));
     assert!(methods.contains(&"print"));
 }
@@ -1291,17 +1355,7 @@ fn test_extract_python_import_statement() {
     assert!(result.is_ok());
     let entities = result.unwrap();
     let main_func = entities.iter().find(|e| e.name == "<module>").unwrap();
-    let type_refs: Vec<_> = main_func
-        .reference_intents
-        .iter()
-        .filter_map(|c| {
-            if let ReferenceIntent::TypeReference { type_name, .. } = c {
-                Some(type_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let type_refs = type_reference_names(main_func);
     assert!(type_refs.contains(&"os"), "Should have os import reference");
     assert!(
         type_refs.contains(&"sys"),
@@ -1326,17 +1380,7 @@ fn test_extract_python_import_from_statement() {
     assert!(result.is_ok());
     let entities = result.unwrap();
     let func = entities.iter().find(|e| e.name == "<module>").unwrap();
-    let type_refs: Vec<_> = func
-        .reference_intents
-        .iter()
-        .filter_map(|c| {
-            if let ReferenceIntent::TypeReference { type_name, .. } = c {
-                Some(type_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let type_refs = type_reference_names(func);
     assert!(
         type_refs.contains(&"django.db"),
         "Should have django.db module reference"
@@ -1368,17 +1412,7 @@ fn test_extract_python_import_with_alias() {
     assert!(result.is_ok());
     let entities = result.unwrap();
     let func = entities.iter().find(|e| e.name == "<module>").unwrap();
-    let type_refs: Vec<_> = func
-        .reference_intents
-        .iter()
-        .filter_map(|c| {
-            if let ReferenceIntent::TypeReference { type_name, .. } = c {
-                Some(type_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let type_refs = type_reference_names(func);
     assert!(
         type_refs.contains(&"db_models"),
         "Should have aliased import name"
@@ -1404,17 +1438,7 @@ fn test_extract_python_module_synthetic_entity() {
     assert!(!entities.is_empty());
     let module_entity = entities.iter().find(|e| e.name == "<module>").unwrap();
     assert_eq!(module_entity.kind, EntityKind::PythonModule);
-    let type_refs: Vec<_> = module_entity
-        .reference_intents
-        .iter()
-        .filter_map(|c| {
-            if let ReferenceIntent::TypeReference { type_name, .. } = c {
-                Some(type_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let type_refs = type_reference_names(module_entity);
     assert!(type_refs.contains(&"os"), "Should have os import in module");
     assert!(
         type_refs.contains(&"sys"),
@@ -1445,17 +1469,7 @@ fn test_extract_python_value_reference_keyword_arg() {
     assert!(!entities.is_empty());
     let module = entities.iter().find(|e| e.name == "<module>").unwrap();
 
-    let value_refs: Vec<_> = module
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::ValueReference { value_name, .. } = r {
-                Some(value_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let value_refs = value_reference_names(module);
 
     assert!(
         value_refs.contains(&"EnumAction"),
@@ -1481,17 +1495,7 @@ fn test_extract_python_multiple_value_references() {
     let entities = result.unwrap();
     let module = entities.iter().find(|e| e.name == "<module>").unwrap();
 
-    let value_refs: Vec<_> = module
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::ValueReference { value_name, .. } = r {
-                Some(value_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let value_refs = value_reference_names(module);
 
     assert!(value_refs.contains(&"MyHandler"));
     assert!(value_refs.contains(&"my_callback"));
@@ -1516,17 +1520,7 @@ fn test_extract_python_value_reference_filters_keywords() {
     let entities = result.unwrap();
     let module = entities.iter().find(|e| e.name == "<module>").unwrap();
 
-    let value_refs: Vec<_> = module
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::ValueReference { value_name, .. } = r {
-                Some(value_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let value_refs = value_reference_names(module);
 
     assert!(!value_refs.contains(&"True"));
     assert!(!value_refs.contains(&"None"));
@@ -1556,32 +1550,12 @@ def main():
     let entities = result.unwrap();
     let main = entities.iter().find(|e| e.name == "main").unwrap();
 
-    let calls: Vec<_> = main
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call { method, .. } = r {
-                Some(method.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let calls = call_method_names(main);
 
     assert!(calls.contains(&"ArgumentParser"));
     assert!(calls.contains(&"add_argument"));
 
-    let value_refs: Vec<_> = main
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::ValueReference { value_name, .. } = r {
-                Some(value_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let value_refs = value_reference_names(main);
 
     assert!(value_refs.contains(&"MyAction"));
 }
@@ -1608,21 +1582,7 @@ fn test_extract_python_single_inheritance() {
     let entities = result.unwrap();
     assert_eq!(entities[0].name, "Admin");
 
-    let extends: Vec<_> = entities[0]
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Extends {
-                parent: parent_name,
-                ..
-            } = r
-            {
-                Some(parent_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let extends = extends_parent_names(&entities[0]);
 
     assert!(extends.contains(&"User"), "Should extend User");
 }
@@ -1643,21 +1603,7 @@ fn test_extract_python_multiple_inheritance() {
 
     assert!(result.is_ok());
     let entities = result.unwrap();
-    let extends: Vec<_> = entities[0]
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Extends {
-                parent: parent_name,
-                ..
-            } = r
-            {
-                Some(parent_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let extends = extends_parent_names(&entities[0]);
 
     assert!(extends.contains(&"A"));
     assert!(extends.contains(&"B"));
@@ -1680,17 +1626,7 @@ fn test_extract_python_no_inheritance() {
 
     assert!(result.is_ok());
     let entities = result.unwrap();
-    let extends: Vec<_> = entities[0]
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Extends { .. } = r {
-                Some(())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let extends = extends_parent_names(&entities[0]);
 
     assert!(
         extends.is_empty(),
@@ -1720,24 +1656,7 @@ fn test_extract_python_decorator_staticmethod() {
     let entities = result.unwrap();
     let method = entities.iter().find(|e| e.name == "my_method").unwrap();
 
-    let decorator_calls: Vec<_> = method
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call {
-                method, receiver, ..
-            } = r
-            {
-                if receiver.is_none() {
-                    Some(method.as_str())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let decorator_calls = receiverless_call_method_names(method);
 
     assert!(
         decorator_calls.contains(&"staticmethod"),
@@ -1764,24 +1683,7 @@ fn test_extract_python_decorator_property() {
     let entities = result.unwrap();
     let method = entities.iter().find(|e| e.name == "value").unwrap();
 
-    let decorator_calls: Vec<_> = method
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call {
-                method, receiver, ..
-            } = r
-            {
-                if receiver.is_none() {
-                    Some(method.as_str())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let decorator_calls = receiverless_call_method_names(method);
 
     assert!(decorator_calls.contains(&"property"));
 }
@@ -1805,24 +1707,7 @@ fn test_extract_python_decorator_class() {
     let entities = result.unwrap();
     let class_entity = entities.iter().find(|e| e.name == "Point").unwrap();
 
-    let decorator_calls: Vec<_> = class_entity
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call {
-                method, receiver, ..
-            } = r
-            {
-                if receiver.is_none() {
-                    Some(method.as_str())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let decorator_calls = receiverless_call_method_names(class_entity);
 
     assert!(
         decorator_calls.contains(&"dataclass"),
@@ -1856,23 +1741,10 @@ return "hello"
     let entities = result.unwrap();
     let func = entities.iter().find(|e| e.name == "index").unwrap();
 
-    let decorator_calls: Vec<_> = func
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call {
-                method, receiver, ..
-            } = r
-            {
-                Some((method.as_str(), receiver.as_deref()))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let decorator_calls = call_method_names(func);
 
     assert!(
-        decorator_calls.iter().any(|(m, _)| *m == "route"),
+        decorator_calls.contains(&"route"),
         "Should have @app.route decorator, got: {:?}",
         decorator_calls
     );
@@ -1902,24 +1774,7 @@ def handle():
     let entities = result.unwrap();
     let method = entities.iter().find(|e| e.name == "handle").unwrap();
 
-    let decorator_calls: Vec<_> = method
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call {
-                method, receiver, ..
-            } = r
-            {
-                if receiver.is_none() {
-                    Some(method.as_str())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let decorator_calls = receiverless_call_method_names(method);
 
     assert!(decorator_calls.contains(&"staticmethod"));
     assert!(decorator_calls.contains(&"route"));
@@ -1949,42 +1804,11 @@ id: int
     let entities = result.unwrap();
     let class_entity = entities.iter().find(|e| e.name == "Employee").unwrap();
 
-    let extends: Vec<_> = class_entity
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Extends {
-                parent: parent_name,
-                ..
-            } = r
-            {
-                Some(parent_name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let extends = extends_parent_names(class_entity);
 
     assert!(extends.contains(&"Person"), "Should extend Person");
 
-    let decorator_calls: Vec<_> = class_entity
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Call {
-                method, receiver, ..
-            } = r
-            {
-                if receiver.is_none() {
-                    Some(method.as_str())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let decorator_calls = receiverless_call_method_names(class_entity);
 
     assert!(
         decorator_calls.contains(&"dataclass"),
@@ -2074,7 +1898,7 @@ fn test_extract_python_optional_return_type() {
     assert!(result.is_ok());
     let entities = result.unwrap();
     assert_eq!(entities[0].name, "find_user");
-    assert!(entities[0].kind == EntityKind::PythonFunction);
+    assert_eq!(entities[0].kind, EntityKind::PythonFunction);
 }
 
 #[test]
@@ -2273,28 +2097,8 @@ fn test_extract_entities_java_extends_and_implements() {
     )
     .unwrap();
     let admin = entities.iter().find(|e| e.name == "Admin").unwrap();
-    let extends: Vec<_> = admin
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Extends { parent, .. } = r {
-                Some(parent.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
-    let implements: Vec<_> = admin
-        .reference_intents
-        .iter()
-        .filter_map(|r| {
-            if let ReferenceIntent::Implements { interface, .. } = r {
-                Some(interface.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let extends = extends_parent_names(admin);
+    let implements = implements_interface_names(admin);
     assert_eq!(extends, ["User"]);
     assert!(implements.contains(&"Serializable"));
     assert!(implements.contains(&"Comparable"));
@@ -2421,7 +2225,7 @@ Run the binary to start the service.
     assert!(result.is_ok());
     let entities = result.unwrap();
 
-    //check names for ducument kind were correctly overrwritten
+    //check names for document kind were correctly overwritten
     let document = entities
         .iter()
         .find(|e| e.kind == EntityKind::MarkdownDocument)
@@ -2488,7 +2292,7 @@ Run the binary to start the service.
 
     // ============================================================
     // FQN assertions: file path + hierarchical heading chain.
-    // Prevents cross-file collisions (two READMEs each with a
+    // Prevents cross-file collisions (two Readmes each with a
     // "## Setup") and within-file collisions (same heading text
     // at different depths).
     // ============================================================
