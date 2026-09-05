@@ -116,103 +116,128 @@ fn extract_call_intents_javascript(node: Node<'_>, source: &[u8], intents: &mut 
 ///
 /// This is the non-recursive version of `extract_call_intents_javascript`,
 /// designed to be used in contexts where the caller already handles tree traversal.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-pub(crate) fn extract_single_call_intent_javascript(
-    node: Node<'_>,
-    source: &[u8],
-) -> Vec<CallIntent> {
-    let mut intents = Vec::new();
+fn scan_callee(node: Node<'_>, source: &[u8]) -> (Option<String>, Option<String>, bool) {
+    let mut method_name: Option<String> = None;
+    let mut receiver: Option<String> = None;
+    let mut is_bind_call = false;
 
-    if node.kind() == "call_expression" {
-        let line = node.start_position().row + 1;
-
-        let mut method_name: Option<String> = None;
-        let mut receiver: Option<String> = None;
-
-        let mut child = node.child(0);
-        let mut is_bind_call = false;
-
-        while let Some(c) = child {
-            if c.kind() == "member_expression" {
-                if let Some(property_node) = c.child_by_field_name("property") {
-                    let prop_text = node_text(property_node, source);
-                    if prop_text == "bind" {
-                        is_bind_call = true;
-                    }
-                    method_name = Some(prop_text);
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "member_expression" {
+            if let Some(property_node) = c.child_by_field_name("property") {
+                let prop_text = node_text(property_node, source);
+                if prop_text == "bind" {
+                    is_bind_call = true;
                 }
-
-                if let Some(object_node) = c.child_by_field_name("object") {
-                    receiver = Some(node_text(object_node, source));
-                }
-            } else if c.kind() == "identifier" {
-                method_name = Some(node_text(c, source));
+                method_name = Some(prop_text);
             }
-            child = c.next_sibling();
-        }
 
-        if let Some(method) = method_name {
-            if is_bind_call {
-                if let Some(receiver) = receiver
-                    && let Some(last_part) = receiver.split('.').next_back()
-                {
-                    intents.push(CallIntent {
-                        method: last_part.to_string(),
-                        receiver: if receiver.contains('.') {
-                            receiver.split('.').next().map(|s| s.to_string())
-                        } else {
-                            Some("this".to_string())
-                        },
-                        line,
-                        arg_count: None,
-                    });
-                }
-            } else {
-                intents.push(CallIntent {
-                    method,
-                    receiver,
-                    line,
-                    arg_count: None,
-                });
+            if let Some(object_node) = c.child_by_field_name("object") {
+                receiver = Some(node_text(object_node, source));
             }
+        } else if c.kind() == "identifier" {
+            method_name = Some(node_text(c, source));
         }
+        child = c.next_sibling();
+    }
 
-        // Also scan arguments for callback references
-        extract_callback_arguments(node, source, &mut intents, line);
-    } else if node.kind() == "new_expression" {
-        let line = node.start_position().row + 1;
-        if let Some(name) = extract_new_expression_name(node, source) {
+    (method_name, receiver, is_bind_call)
+}
+
+fn split_bind_receiver(receiver: &str) -> Option<(String, Option<String>)> {
+    let last_part = receiver.split('.').next_back()?;
+    let rec_prefix = if receiver.contains('.') {
+        receiver.split('.').next().map(|s| s.to_string())
+    } else {
+        Some("this".to_string())
+    };
+    Some((last_part.to_string(), rec_prefix))
+}
+
+fn bind_call_intent(receiver: &str, line: usize) -> Option<CallIntent> {
+    let (method, rec) = split_bind_receiver(receiver)?;
+    Some(CallIntent {
+        method,
+        receiver: rec,
+        line,
+        arg_count: None,
+    })
+}
+
+fn call_expression_intents(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
+    let line = node.start_position().row + 1;
+    let (method_name, receiver, is_bind_call) = scan_callee(node, source);
+
+    if let Some(method) = method_name {
+        if is_bind_call {
+            if let Some(rec) = receiver
+                && let Some(intent) = bind_call_intent(&rec, line)
+            {
+                intents.push(intent);
+            }
+        } else {
             intents.push(CallIntent {
-                method: name,
-                receiver: None,
-                line,
-                arg_count: None,
-            });
-        }
-    } else if node.kind() == "jsx_self_closing_element" || node.kind() == "jsx_opening_element" {
-        // JSX component invocation
-        extract_jsx_component_invocation(node, source, &mut intents);
-    } else if node.kind() == "member_expression" {
-        // Detect property/getter access via `this.property`
-        if let Some(object_node) = node.child_by_field_name("object")
-            && node_text(object_node, source) == "this"
-            && let Some(property_node) = node.child_by_field_name("property")
-        {
-            let prop_text = node_text(property_node, source);
-            let line = node.start_position().row + 1;
-            intents.push(CallIntent {
-                method: prop_text,
-                receiver: Some("this".to_string()),
+                method,
+                receiver,
                 line,
                 arg_count: None,
             });
         }
     }
 
-    // NO recursive child processing - that's the key difference!
+    extract_callback_arguments(node, source, intents, line);
+}
+
+fn this_property_intent(node: Node<'_>, source: &[u8]) -> Option<CallIntent> {
+    if let Some(object_node) = node.child_by_field_name("object")
+        && node_text(object_node, source) == "this"
+        && let Some(property_node) = node.child_by_field_name("property")
+    {
+        let prop_text = node_text(property_node, source);
+        let line = node.start_position().row + 1;
+        Some(CallIntent {
+            method: prop_text,
+            receiver: Some("this".to_string()),
+            line,
+            arg_count: None,
+        })
+    } else {
+        None
+    }
+}
+
+pub(crate) fn extract_single_call_intent_javascript(
+    node: Node<'_>,
+    source: &[u8],
+) -> Vec<CallIntent> {
+    let mut intents = Vec::new();
+
+    match node.kind() {
+        "call_expression" => {
+            call_expression_intents(node, source, &mut intents);
+        }
+        "new_expression" => {
+            let line = node.start_position().row + 1;
+            if let Some(name) = extract_new_expression_name(node, source) {
+                intents.push(CallIntent {
+                    method: name,
+                    receiver: None,
+                    line,
+                    arg_count: None,
+                });
+            }
+        }
+        "jsx_self_closing_element" | "jsx_opening_element" => {
+            extract_jsx_component_invocation(node, source, &mut intents);
+        }
+        "member_expression" => {
+            if let Some(intent) = this_property_intent(node, source) {
+                intents.push(intent);
+            }
+        }
+        _ => {}
+    }
+
     intents
 }
 

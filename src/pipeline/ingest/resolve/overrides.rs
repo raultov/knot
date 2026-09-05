@@ -117,141 +117,156 @@ fn is_constructor(method_name: &str, enclosing_type_name: &str) -> bool {
     method_name == "<init>" || method_name == enclosing_type_name
 }
 
-/// Adds `subtype.method -[Overrides]-> supertype.method` edges for override-capable entities.
-///
-/// Runs AFTER type-level `Extends`/`Implements` edges are resolved and BEFORE
-/// upsert. Pure in-memory, batch-local, additive: it only pushes new
-/// `RelationshipType::Overrides` tuples onto method entities' `relationships`.
-#[expect(
-    clippy::excessive_nesting,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-pub(crate) fn link_method_overrides(entities: &mut [ResolutionEntity]) {
-    // Edges to apply in phase 2: (method entity index, declaration uuid).
-    let edges: Vec<(usize, Uuid)> = {
-        // --- Phase 1: immutable analysis ---------------------------------
+fn build_type_index(entities: &[ResolutionEntity]) -> (HashMap<&str, Uuid>, HashMap<Uuid, usize>) {
+    let mut type_fqn_to_uuid = HashMap::new();
+    let mut uuid_to_index = HashMap::new();
+    for (idx, e) in entities.iter().enumerate() {
+        uuid_to_index.insert(e.uuid, idx);
+        if is_override_capable_file(&e.file_path) && is_override_capable_type(&e.kind) {
+            type_fqn_to_uuid.insert(e.fqn.as_str(), e.uuid);
+        }
+    }
+    (type_fqn_to_uuid, uuid_to_index)
+}
 
-        // Map type FQN -> type uuid (types only; methods are never looked
-        // up by FQN, since overloads share an FQN). Restricting to capable files
-        // prevents a same-FQN non-participating type from being matched.
-        let mut type_fqn_to_uuid: HashMap<&str, Uuid> = HashMap::new();
-        // uuid -> index, for name lookups (constructor check) and presence tests.
-        let mut uuid_to_index: HashMap<Uuid, usize> = HashMap::new();
+type HierarchyMaps<'a> = (
+    HashMap<Uuid, Vec<Uuid>>,
+    HashMap<Uuid, Vec<MethodEntry<'a>>>,
+);
 
-        for (idx, e) in entities.iter().enumerate() {
-            uuid_to_index.insert(e.uuid, idx);
-            if is_override_capable_file(&e.file_path) && is_override_capable_type(&e.kind) {
-                type_fqn_to_uuid.insert(e.fqn.as_str(), e.uuid);
-            }
+fn collect_hierarchy<'a>(
+    entities: &'a [ResolutionEntity],
+    type_fqn_to_uuid: &HashMap<&str, Uuid>,
+    uuid_to_index: &HashMap<Uuid, usize>,
+) -> HierarchyMaps<'a> {
+    let mut supertypes: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    let mut methods_by_type: HashMap<Uuid, Vec<MethodEntry<'_>>> = HashMap::new();
+
+    for (idx, e) in entities.iter().enumerate() {
+        if !is_override_capable_file(&e.file_path) {
+            continue;
         }
 
-        // supertypes: type uuid -> resolved Extends/Implements target uuids.
-        let mut supertypes: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-        // methods_by_type: type uuid -> [(method name, method uuid, method idx)].
-        let mut methods_by_type: HashMap<Uuid, Vec<MethodEntry<'_>>> = HashMap::new();
-
-        for (idx, e) in entities.iter().enumerate() {
-            if !is_override_capable_file(&e.file_path) {
+        if is_override_capable_type(&e.kind) {
+            let parents: Vec<Uuid> = e
+                .relationships
+                .iter()
+                .filter(|(_, rel)| {
+                    matches!(
+                        rel,
+                        RelationshipType::Extends | RelationshipType::Implements
+                    )
+                })
+                .map(|(uuid, _)| *uuid)
+                .collect();
+            if !parents.is_empty() {
+                supertypes.entry(e.uuid).or_default().extend(parents);
+            }
+        } else if is_override_capable_method(&e.kind) {
+            let Some(type_fqn) = enclosing_type_fqn(&e.fqn, &e.name) else {
+                continue;
+            };
+            let Some(&type_uuid) = type_fqn_to_uuid.get(type_fqn) else {
+                continue;
+            };
+            if let Some(&type_idx) = uuid_to_index.get(&type_uuid)
+                && is_constructor(&e.name, &entities[type_idx].name)
+            {
                 continue;
             }
+            methods_by_type
+                .entry(type_uuid)
+                .or_default()
+                .push((e.name.as_str(), e.uuid, idx));
+        }
+    }
+    (supertypes, methods_by_type)
+}
 
-            if is_override_capable_type(&e.kind) {
-                let parents: Vec<Uuid> = e
-                    .relationships
-                    .iter()
-                    .filter(|(_, rel)| {
-                        matches!(
-                            rel,
-                            RelationshipType::Extends | RelationshipType::Implements
-                        )
-                    })
-                    .map(|(uuid, _)| *uuid)
-                    .collect();
-                if !parents.is_empty() {
-                    supertypes.entry(e.uuid).or_default().extend(parents);
+fn declared_methods(
+    methods_by_type: &HashMap<Uuid, Vec<MethodEntry<'_>>>,
+    s: Uuid,
+    method_name: &str,
+) -> Vec<Uuid> {
+    methods_by_type
+        .get(&s)
+        .map(|ms| {
+            ms.iter()
+                .filter(|(name, _, _)| *name == method_name)
+                .map(|(_, uuid, _)| *uuid)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn nearest_declarations(
+    type_uuid: Uuid,
+    method_name: &str,
+    supertypes: &HashMap<Uuid, Vec<Uuid>>,
+    methods_by_type: &HashMap<Uuid, Vec<MethodEntry<'_>>>,
+) -> Vec<Uuid> {
+    let mut declarations = Vec::new();
+    let mut visited: HashSet<Uuid> = HashSet::new();
+    visited.insert(type_uuid);
+    let mut frontier: Vec<Uuid> = supertypes.get(&type_uuid).cloned().unwrap_or_default();
+
+    while !frontier.is_empty() {
+        let mut next: Vec<Uuid> = Vec::new();
+        for s in frontier {
+            if !visited.insert(s) {
+                continue;
+            }
+            let declared = declared_methods(methods_by_type, s, method_name);
+            if declared.is_empty() {
+                if let Some(parents) = supertypes.get(&s) {
+                    next.extend(parents.iter().copied());
                 }
-            } else if is_override_capable_method(&e.kind) {
-                let Some(type_fqn) = enclosing_type_fqn(&e.fqn, &e.name) else {
-                    continue;
-                };
-                let Some(&type_uuid) = type_fqn_to_uuid.get(type_fqn) else {
-                    continue; // stripped FQN matches no type in the batch: skip
-                };
-                // Constructor exclusion (name == enclosing type name, or <init>).
-                if let Some(&type_idx) = uuid_to_index.get(&type_uuid)
-                    && is_constructor(&e.name, &entities[type_idx].name)
-                {
-                    continue;
-                }
-                methods_by_type
-                    .entry(type_uuid)
-                    .or_default()
-                    .push((e.name.as_str(), e.uuid, idx));
+            } else {
+                declarations.extend(declared);
             }
         }
-
-        // Compute edges via nearest-declaration BFS.
-        let mut edges: Vec<(usize, Uuid)> = Vec::new();
-        let mut emitted: HashSet<(usize, Uuid)> = HashSet::new();
-
-        for (&type_uuid, methods) in &methods_by_type {
-            for &(method_name, _method_uuid, method_idx) in methods {
-                // BFS up the hierarchy: link to the nearest declaration(s),
-                // walking through supertypes that do not declare the method.
-                let mut visited: HashSet<Uuid> = HashSet::new();
-                visited.insert(type_uuid);
-                let mut frontier: Vec<Uuid> =
-                    supertypes.get(&type_uuid).cloned().unwrap_or_default();
-
-                while !frontier.is_empty() {
-                    let mut next: Vec<Uuid> = Vec::new();
-                    for s in frontier {
-                        if !visited.insert(s) {
-                            continue;
-                        }
-                        let declared: Vec<Uuid> = methods_by_type
-                            .get(&s)
-                            .map(|ms| {
-                                ms.iter()
-                                    .filter(|(name, _, _)| *name == method_name)
-                                    .map(|(_, uuid, _)| *uuid)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        if declared.is_empty() {
-                            // Walk through: this supertype does not declare it.
-                            if let Some(parents) = supertypes.get(&s) {
-                                next.extend(parents.iter().copied());
-                            }
-                        } else {
-                            // Nearest declaration found: emit, do NOT expand.
-                            for decl_uuid in declared {
-                                if emitted.insert((method_idx, decl_uuid)) {
-                                    edges.push((method_idx, decl_uuid));
-                                }
-                            }
-                        }
-                    }
-                    frontier = next;
-                }
-            }
+        if !declarations.is_empty() {
+            break;
         }
+        frontier = next;
+    }
+    declarations
+}
 
-        edges
-    };
-
-    // --- Phase 2: mutation -----------------------------------------------
+fn apply_override_edges(entities: &mut [ResolutionEntity], edges: Vec<(usize, Uuid)>) {
     for (idx, decl_uuid) in edges {
         let rels = &mut entities[idx].relationships;
         if !rels.contains(&(decl_uuid, RelationshipType::Overrides)) {
             rels.push((decl_uuid, RelationshipType::Overrides));
         }
     }
+}
+
+/// Adds `subtype.method -[Overrides]-> supertype.method` edges for override-capable entities.
+///
+/// Runs AFTER type-level `Extends`/`Implements` edges are resolved and BEFORE
+/// upsert. Pure in-memory, batch-local, additive: it only pushes new
+/// `RelationshipType::Overrides` tuples onto method entities' `relationships`.
+pub(crate) fn link_method_overrides(entities: &mut [ResolutionEntity]) {
+    let (type_fqn_to_uuid, uuid_to_index) = build_type_index(entities);
+    let (supertypes, methods_by_type) =
+        collect_hierarchy(entities, &type_fqn_to_uuid, &uuid_to_index);
+
+    let mut edges: Vec<(usize, Uuid)> = Vec::new();
+    let mut emitted: HashSet<(usize, Uuid)> = HashSet::new();
+
+    for (&type_uuid, methods) in &methods_by_type {
+        for &(method_name, _method_uuid, method_idx) in methods {
+            let decls = nearest_declarations(type_uuid, method_name, &supertypes, &methods_by_type);
+            for decl_uuid in decls {
+                if emitted.insert((method_idx, decl_uuid)) {
+                    edges.push((method_idx, decl_uuid));
+                }
+            }
+        }
+    }
+
+    apply_override_edges(entities, edges);
 }
 
 #[cfg(test)]

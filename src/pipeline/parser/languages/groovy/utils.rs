@@ -1,6 +1,53 @@
 use std::borrow::Cow;
+use std::iter::Peekable;
+use std::str::CharIndices;
 
 use crate::pipeline::parser::comments::strip_comment_markers;
+
+fn finish(s: &str) -> Cow<'static, str> {
+    let effective = s.trim();
+    if effective.is_empty() {
+        Cow::Owned(String::new())
+    } else {
+        Cow::Owned(effective.to_string())
+    }
+}
+
+fn resume_block<'a>(trimmed: &'a str, in_block: &mut bool) -> Cow<'a, str> {
+    if let Some(end_idx) = trimmed.find("*/") {
+        *in_block = false;
+        let rest = &trimmed[end_idx + 2..];
+        finish(rest)
+    } else {
+        Cow::Owned(String::new())
+    }
+}
+
+fn skip_block_comment(chars: &mut Peekable<CharIndices<'_>>) -> bool {
+    while let Some((_, c2)) = chars.next() {
+        if c2 == '*'
+            && let Some(&(_, '/')) = chars.peek()
+        {
+            chars.next(); // consume '/'
+            return true;
+        }
+    }
+    false
+}
+
+fn copy_string_literal(quote: char, chars: &mut Peekable<CharIndices<'_>>, result: &mut String) {
+    result.push(quote);
+    while let Some((_, c2)) = chars.next() {
+        result.push(c2);
+        if c2 == '\\' {
+            if let Some((_, esc)) = chars.next() {
+                result.push(esc);
+            }
+        } else if c2 == quote {
+            break;
+        }
+    }
+}
 
 /// Strips comment spans from a single source line, tracking multi-line
 /// `/* … */` state across calls. Returns the code-bearing remainder.
@@ -9,10 +56,6 @@ use crate::pipeline::parser::comments::strip_comment_markers;
 /// returned effective line, *not* on the raw line — this is what prevents
 /// Javadoc continuation lines from producing phantom entities and corrupting
 /// scope tracking.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(super) fn strip_comments_line<'a>(line: &'a str, in_block: &mut bool) -> Cow<'a, str> {
     let trimmed = line.trim();
     if !*in_block && !trimmed.contains('/') && !trimmed.contains('*') {
@@ -20,15 +63,7 @@ pub(super) fn strip_comments_line<'a>(line: &'a str, in_block: &mut bool) -> Cow
     }
 
     if *in_block {
-        if let Some(end_idx) = trimmed.find("*/") {
-            *in_block = false;
-            let rest = trimmed[end_idx + 2..].to_string();
-            if rest.trim().is_empty() {
-                return Cow::Owned(String::new());
-            }
-            return Cow::Owned(rest);
-        }
-        return Cow::Owned(String::new());
+        return resume_block(trimmed, in_block);
     }
 
     let mut result = String::with_capacity(trimmed.len());
@@ -39,64 +74,26 @@ pub(super) fn strip_comments_line<'a>(line: &'a str, in_block: &mut bool) -> Cow
             && let Some(&(_, next)) = chars.peek()
         {
             if next == '/' {
-                // Line comment — discard rest
-                let effective = result.trim_end().to_string();
-                return if effective.is_empty() {
-                    Cow::Owned(String::new())
-                } else {
-                    Cow::Owned(effective)
-                };
+                return finish(&result);
             }
             if next == '*' {
                 chars.next(); // consume '*'
-                // Look for matching */ on the same line
-                let mut found_close = false;
-                while let Some((_, c2)) = chars.next() {
-                    if c2 == '*'
-                        && let Some(&(_, '/')) = chars.peek()
-                    {
-                        chars.next(); // consume '/'
-                        found_close = true;
-                        break;
-                    }
-                }
+                let found_close = skip_block_comment(&mut chars);
                 if !found_close {
                     *in_block = true;
-                    let effective = result.trim_end().to_string();
-                    return if effective.is_empty() {
-                        Cow::Owned(String::new())
-                    } else {
-                        Cow::Owned(effective)
-                    };
+                    return finish(&result);
                 }
-                // Single-line block comment closed — continue processing rest of line
                 continue;
             }
         }
         if c == '"' || c == '\'' {
-            let quote = c;
-            result.push(quote);
-            while let Some((_, c2)) = chars.next() {
-                result.push(c2);
-                if c2 == '\\' {
-                    if let Some((_, esc)) = chars.next() {
-                        result.push(esc);
-                    }
-                } else if c2 == quote {
-                    break;
-                }
-            }
+            copy_string_literal(c, &mut chars, &mut result);
             continue;
         }
         result.push(c);
     }
 
-    let effective = result.trim().to_string();
-    if effective.is_empty() {
-        Cow::Owned(String::new())
-    } else {
-        Cow::Owned(effective)
-    }
+    finish(&result)
 }
 /// Extract package name from source (e.g., `package com.example.service`)
 // Reserved for future package resolution

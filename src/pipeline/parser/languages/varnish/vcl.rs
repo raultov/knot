@@ -112,80 +112,54 @@ pub(crate) fn extract_entities_vcl_with_offset(
 
 impl Parser<'_> {
     /// Collects names of all declarations (subs, backends, probes, ACLs, imports, instances).
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
+    fn declare_named_block(&mut self, kind: EntityKind) {
+        let line = self.line_of_pos(self.pos);
+        self.advance();
+        if let Some(decl_name) = self.take_ident() {
+            self.declarations.insert(decl_name, (kind, line));
+        }
+        self.skip_until_brace_depth_0();
+    }
+
+    fn collect_import(&mut self) {
+        self.advance();
+        if let Some(module_name) = self.take_ident() {
+            let alias = self.take_alias().unwrap_or_else(|| module_name.clone());
+            self.import_map.insert(alias, module_name);
+        }
+        self.skip_semicolon();
+    }
+
+    fn collect_instance(&mut self) {
+        self.advance();
+        if let Some(inst_name) = self.take_ident() {
+            self.instances.insert(inst_name.clone());
+            self.declarations.insert(
+                inst_name,
+                (EntityKind::VclObjectInstance, self.line_of_pos(self.pos)),
+            );
+        }
+        self.skip_until_semicolon();
+    }
+
     fn collect_declarations(&mut self) {
         let saved_pos = self.pos;
         self.pos = 0;
         while !matches!(self.current(), Token::Eof) {
             self.skip_comments();
-            match self.current() {
-                Token::Ident(name) if name == "sub" => {
-                    let line = self.line_of_pos(self.pos);
-                    self.advance();
-                    if let Token::Ident(sub_name) = self.current() {
-                        self.declarations
-                            .insert(sub_name.clone(), (EntityKind::VclSubroutine, line));
-                        self.advance();
-                    }
-                    self.skip_until_brace_depth_0();
+            if let Token::Ident(name) = self.current() {
+                let name = name.clone();
+                match name.as_str() {
+                    "sub" => self.declare_named_block(EntityKind::VclSubroutine),
+                    "backend" => self.declare_named_block(EntityKind::VclBackend),
+                    "probe" => self.declare_named_block(EntityKind::VclProbe),
+                    "acl" => self.declare_named_block(EntityKind::VclAcl),
+                    "import" => self.collect_import(),
+                    "new" => self.collect_instance(),
+                    _ => self.advance(),
                 }
-                Token::Ident(name) if name == "backend" => {
-                    let line = self.line_of_pos(self.pos);
-                    self.advance();
-                    if let Token::Ident(backend_name) = self.current() {
-                        self.declarations
-                            .insert(backend_name.clone(), (EntityKind::VclBackend, line));
-                        self.advance();
-                    }
-                    self.skip_until_brace_depth_0();
-                }
-                Token::Ident(name) if name == "probe" => {
-                    let line = self.line_of_pos(self.pos);
-                    self.advance();
-                    if let Token::Ident(probe_name) = self.current() {
-                        self.declarations
-                            .insert(probe_name.clone(), (EntityKind::VclProbe, line));
-                        self.advance();
-                    }
-                    self.skip_until_brace_depth_0();
-                }
-                Token::Ident(name) if name == "acl" => {
-                    let line = self.line_of_pos(self.pos);
-                    self.advance();
-                    if let Token::Ident(acl_name) = self.current() {
-                        self.declarations
-                            .insert(acl_name.clone(), (EntityKind::VclAcl, line));
-                        self.advance();
-                    }
-                    self.skip_until_brace_depth_0();
-                }
-                Token::Ident(name) if name == "import" => {
-                    self.advance();
-                    if let Some(module_name) = self.take_ident() {
-                        let alias = self.take_alias().unwrap_or_else(|| module_name.clone());
-                        self.import_map.insert(alias, module_name);
-                    }
-                    self.skip_semicolon();
-                }
-                Token::Ident(name) if name == "new" => {
-                    self.advance();
-                    if let Token::Ident(instance_name) = self.current() {
-                        let inst_name = instance_name.clone();
-                        self.instances.insert(inst_name.clone());
-                        self.declarations.insert(
-                            inst_name,
-                            (EntityKind::VclObjectInstance, self.line_of_pos(self.pos)),
-                        );
-                        self.advance();
-                    }
-                    self.skip_until_semicolon();
-                }
-                _ => {
-                    self.advance();
-                }
+            } else {
+                self.advance();
             }
         }
         self.pos = saved_pos;
@@ -488,26 +462,21 @@ impl Parser<'_> {
         self.skip_semicolon();
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    #[expect(
-        clippy::excessive_nesting,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    fn parse_acl(&mut self) {
-        let start_pos = self.pos;
-        let start_line = self.line_of_pos(start_pos);
-        self.advance(); // skip 'acl'
+    fn skip_acl_fold_argument(&mut self) {
+        if matches!(self.current(), Token::Punct('(')) {
+            self.advance();
+            if matches!(self.current(), Token::Ident(f) if f.starts_with('-')) {
+                self.advance();
+            } else if let Token::Ident(_) = self.current() {
+                self.advance();
+            }
+            if matches!(self.current(), Token::Punct(')')) {
+                self.advance();
+            }
+        }
+    }
 
-        let Some(name) = self.take_ident() else {
-            return;
-        };
-
-        let body = String::new();
-
-        // Skip flags: +log, +table, -pedantic, +fold(-report), etc.
+    fn skip_acl_flags(&mut self) {
         loop {
             if matches!(self.current(), Token::Ident(f) if f.starts_with('-')) {
                 self.advance();
@@ -517,29 +486,19 @@ impl Parser<'_> {
                 self.advance();
                 if let Token::Ident(_) = self.current() {
                     self.advance();
-                    if matches!(self.current(), Token::Punct('(')) {
-                        self.advance();
-                        if matches!(self.current(), Token::Ident(f) if f.starts_with('-')) {
-                            self.advance();
-                        } else if let Token::Ident(_) = self.current() {
-                            self.advance();
-                        }
-                        if matches!(self.current(), Token::Punct(')')) {
-                            self.advance();
-                        }
-                    }
+                    self.skip_acl_fold_argument();
                     continue;
                 }
             }
             break;
         }
+    }
 
-        // Collect ACL entries - just skip the block
+    fn skip_acl_entries(&mut self) {
         if matches!(self.current(), Token::Punct('{')) {
             self.advance(); // skip {
             while !matches!(self.current(), Token::Punct('}') | Token::Eof) {
                 self.skip_comments();
-                // gotcha 1: ACL mask with "addr"/mask
                 if matches!(self.current(), Token::ShortString(_)) {
                     self.advance();
                     if matches!(self.current(), Token::Punct('/')) {
@@ -556,6 +515,20 @@ impl Parser<'_> {
                 self.advance();
             }
         }
+    }
+
+    fn parse_acl(&mut self) {
+        let start_pos = self.pos;
+        let start_line = self.line_of_pos(start_pos);
+        self.advance(); // skip 'acl'
+
+        let Some(name) = self.take_ident() else {
+            return;
+        };
+
+        let body = String::new();
+        self.skip_acl_flags();
+        self.skip_acl_entries();
 
         let docstring = self.preceding_comments(start_pos);
         let mut entity = ParsedEntity::new(
@@ -751,70 +724,71 @@ impl Parser<'_> {
         self.skip_semicolon();
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    fn parse_if_statement(&mut self, refs: &mut Vec<ReferenceIntent>) {
-        self.advance(); // skip 'if'/'elseif'/'else'
-        // Scan condition for ACL references
+    fn record_acl_ref_after_match_op(&mut self, refs: &mut Vec<ReferenceIntent>) {
+        self.advance();
+        if let Token::Ident(ident) = self.current() {
+            if self
+                .declarations
+                .get(ident)
+                .is_some_and(|(k, _)| *k == EntityKind::VclAcl)
+            {
+                let line = self.line_of_pos(self.pos);
+                refs.push(ReferenceIntent::VclAclRef {
+                    acl_name: ident.clone(),
+                    line,
+                });
+            }
+            self.advance();
+        } else if let Token::ShortString(_) = self.current() {
+            self.advance();
+        }
+    }
+
+    fn record_condition_method_call(&mut self, method: &str, refs: &mut Vec<ReferenceIntent>) {
+        let save = self.pos;
+        let m = method.to_string();
+        self.advance();
+        if matches!(self.current(), Token::Punct('.'))
+            && let Token::Ident(funcname) = self.current()
+        {
+            let line = self.line_of_pos(save);
+            let receiver = if self.instances.contains(&m) || self.import_map.contains_key(&m) {
+                Some(m)
+            } else {
+                None
+            };
+            let fn_name = funcname.clone();
+            self.advance();
+            if matches!(self.current(), Token::Punct('(')) {
+                let arg_count = self.count_args();
+                refs.push(ReferenceIntent::Call {
+                    method: fn_name,
+                    receiver,
+                    line,
+                    arg_count,
+                });
+            }
+        }
+    }
+
+    fn scan_if_condition(&mut self, refs: &mut Vec<ReferenceIntent>) {
         while !matches!(self.current(), Token::Punct('{') | Token::Eof) {
             match self.current() {
                 Token::Op(op) if op == "~" || op == "!~" => {
-                    self.advance();
-                    // gotcha 4: disambiguate regex vs ACL
-                    if let Token::Ident(ident) = self.current() {
-                        if self
-                            .declarations
-                            .get(ident)
-                            .is_some_and(|(k, _)| *k == EntityKind::VclAcl)
-                        {
-                            let line = self.line_of_pos(self.pos);
-                            refs.push(ReferenceIntent::VclAclRef {
-                                acl_name: ident.clone(),
-                                line,
-                            });
-                        }
-                        // If it's a string literal, it's regex — no edge
-                        self.advance();
-                    } else if let Token::ShortString(_) = self.current() {
-                        // regex — no edge (gotcha 4)
-                        self.advance();
-                    }
+                    self.record_acl_ref_after_match_op(refs);
                 }
                 Token::Ident(method) => {
-                    let save = self.pos;
                     let m = method.clone();
-                    self.advance();
-                    if matches!(self.current(), Token::Punct('.'))
-                        && let Token::Ident(funcname) = self.current()
-                    {
-                        let line = self.line_of_pos(save);
-                        let receiver =
-                            if self.instances.contains(&m) || self.import_map.contains_key(&m) {
-                                Some(m)
-                            } else {
-                                None
-                            };
-                        let fn_name = funcname.clone();
-                        self.advance();
-                        if matches!(self.current(), Token::Punct('(')) {
-                            let arg_count = self.count_args();
-                            refs.push(ReferenceIntent::Call {
-                                method: fn_name,
-                                receiver,
-                                line,
-                                arg_count,
-                            });
-                        }
-                    }
+                    self.record_condition_method_call(&m, refs);
                 }
                 _ => {
                     self.advance();
                 }
             }
         }
-        // Scan body for nested statements that emit refs (set req.backend_hint, call, etc.)
+    }
+
+    fn parse_if_body(&mut self, refs: &mut Vec<ReferenceIntent>) {
         if matches!(self.current(), Token::Punct('{')) {
             self.advance();
             let mut depth = 1;
@@ -831,23 +805,14 @@ impl Parser<'_> {
                             self.advance();
                         }
                     }
-                    Token::Ident(kw) if kw == "set" => {
-                        self.parse_set_statement(refs);
-                    }
-                    Token::Ident(kw) if kw == "call" => {
-                        let line = self.line_of_pos(self.pos);
-                        self.advance();
-                        if let Token::Ident(callee) = self.current() {
-                            refs.push(ReferenceIntent::VclSubCall {
-                                sub_name: callee.clone(),
-                                line,
-                            });
-                            self.advance();
+                    Token::Ident(kw) => {
+                        let kw = kw.clone();
+                        match kw.as_str() {
+                            "set" => self.parse_set_statement(refs),
+                            "call" => self.parse_call_statement(refs),
+                            "if" | "elseif" | "else" => self.parse_if_statement(refs),
+                            _ => self.advance(),
                         }
-                        self.skip_semicolon();
-                    }
-                    Token::Ident(kw) if kw == "if" || kw == "elseif" || kw == "else" => {
-                        self.parse_if_statement(refs);
                     }
                     _ => {
                         self.advance();
@@ -858,6 +823,12 @@ impl Parser<'_> {
                 self.advance();
             }
         }
+    }
+
+    fn parse_if_statement(&mut self, refs: &mut Vec<ReferenceIntent>) {
+        self.advance(); // skip 'if'/'elseif'/'else'
+        self.scan_if_condition(refs);
+        self.parse_if_body(refs);
     }
 
     fn parse_new_statement(&mut self, refs: &mut Vec<ReferenceIntent>) {
