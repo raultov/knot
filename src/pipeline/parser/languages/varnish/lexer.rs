@@ -326,11 +326,7 @@ impl Lexer {
     fn scan_attr_name(&mut self) -> Token {
         let start = self.pos;
         self.advance(); // skip leading '.'
-        while self.pos < self.chars.len()
-            && (self.chars[self.pos].is_ascii_alphanumeric()
-                || self.chars[self.pos] == '_'
-                || self.chars[self.pos] == '-')
-        {
+        while self.at_ident_char() {
             self.pos += 1;
         }
         let name: String = self.chars[start..self.pos].iter().collect();
@@ -341,11 +337,17 @@ impl Lexer {
         c.is_ascii_alphanumeric() || c == '_' || c == '-'
     }
 
+    /// `true` when the char at `self.pos` exists and satisfies
+    /// [`Self::is_ident_char`] (alphanumeric, `_`, or `-` — gotcha 5).
+    fn at_ident_char(&self) -> bool {
+        self.pos < self.chars.len() && Self::is_ident_char(self.chars[self.pos])
+    }
+
     fn scan_ident_or_path(&mut self) -> Token {
         let start = self.pos;
 
         // Consume identifier chars (gotcha 5: '-' is inside identifiers)
-        while self.pos < self.chars.len() && Self::is_ident_char(self.chars[self.pos]) {
+        while self.at_ident_char() {
             self.pos += 1;
         }
 
@@ -371,13 +373,9 @@ impl Lexer {
             }
 
             // Otherwise, an alphanumeric segment
-            if self.pos < self.chars.len()
-                && (self.chars[self.pos].is_ascii_alphanumeric()
-                    || self.chars[self.pos] == '_'
-                    || self.chars[self.pos] == '-')
-            {
+            if self.at_ident_char() {
                 let seg_start = self.pos;
-                while self.pos < self.chars.len() && Self::is_ident_char(self.chars[self.pos]) {
+                while self.at_ident_char() {
                     self.pos += 1;
                 }
                 segments.push(self.chars[seg_start..self.pos].iter().collect());

@@ -5,7 +5,7 @@
 //! [`ReferenceIntent::TypeReference`] entries attached to the nearest
 //! enclosing entity. Inside macro `token_tree` bodies (where tree-sitter no
 //! longer parses real AST nodes) the walker falls back to a `::`-based
-//! pattern scan, with an O(N) substring-skip optimisation to keep deeply
+//! pattern scan, with an O(N) substring-skip optimization to keep deeply
 //! nested macros like `vec![vec![vec![...]]]` from blowing up.
 
 use super::utils::find_nearest_entity_by_line;

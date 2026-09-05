@@ -1,6 +1,6 @@
 //! MSBuild (`.csproj`, `Directory.Packages.props`) parser.
 //!
-//! Hand-written, `roxmltree`-based — mirrors the structure of
+//! Handwritten, `roxmltree`-based — mirrors the structure of
 //! [`crate::pipeline::parser::languages::xml`] (Maven). Two public entry
 //! points are required because the dispatcher in
 //! [`crate::pipeline::parser::mod`] uses both extension-based dispatch
@@ -41,7 +41,7 @@ const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 /// Strip a leading UTF-8 BOM if present. The Maven XML parser never had to
 /// do this, but MSBuild files authored on Windows routinely carry one and
-/// the spec pins the behaviour rather than relying on `roxmltree`'s
+/// the spec pins the behavior rather than relying on `roxmltree`'s
 /// tolerance (which is reported inconsistently across versions — see
 /// §10.4).
 fn strip_utf8_bom(source: &str) -> &str {
@@ -100,8 +100,8 @@ fn cpm_cache() -> &'static Mutex<HashMap<PathBuf, CpmMap>> {
 /// (which may not exist if no props file was found) or `None` when the
 /// walk exhausts the repo root.
 ///
-/// `start_dir` and `repo_root` are absolute paths; canonicalisation is the
-/// caller's responsibility (the dispatcher already canonicalises
+/// `start_dir` and `repo_root` are absolute paths; canonicalization is the
+/// caller's responsibility (the dispatcher already canonicals
 /// `repo_root` once per run, §10.1).
 fn find_nearest_props(start_dir: &Path, repo_root: &Path) -> Option<PathBuf> {
     let mut current: Option<&Path> = Some(start_dir);
@@ -153,10 +153,9 @@ fn cpm_map_for(start_dir: &Path, repo_root: &Path) -> CpmMap {
         return HashMap::new();
     };
     let cache = cpm_cache();
-    let mut guard = match cache.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(map) = guard.get(&props_path) {
         return map.clone();
     }
@@ -174,7 +173,7 @@ fn cpm_map_for(start_dir: &Path, repo_root: &Path) -> CpmMap {
 /// `source` is the file contents; `file_path` is the canonical repo-relative
 /// path; `repo_name` is the logical repo name; `csproj_abs_dir` is the
 /// directory of the csproj (used to locate `Directory.Packages.props`);
-/// `repo_root` is the canonicalised repo root (used as the CPM walk
+/// `repo_root` is the canonical repo root (used as the CPM walk
 /// boundary).
 pub(crate) fn extract_entities_csproj(ctx: &MsbuildContext<'_>) -> Vec<ParsedEntity> {
     let mut entities = Vec::new();

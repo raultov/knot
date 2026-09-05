@@ -74,13 +74,7 @@ pub(crate) fn extract_entities_vcc(
             if let Some(module) = &current_module {
                 let (ret_type, func_name, params) = parse_function_directive(&directive);
                 // Exclude PRIV_* params from the signature
-                let vcl_params: Vec<String> = params
-                    .iter()
-                    .filter(|p| {
-                        !p.starts_with("PRIV_") && !p.starts_with("priv_") && !p.contains("PRIV_")
-                    })
-                    .cloned()
-                    .collect();
+                let vcl_params = vcl_visible_params(&params);
 
                 let sig = if vcl_params.is_empty() {
                     format!("$Function {} {}()", ret_type, func_name)
@@ -148,13 +142,7 @@ pub(crate) fn extract_entities_vcc(
                 // Strip leading '.' from method name
                 let clean_name = method_name.strip_prefix('.').unwrap_or(&method_name);
 
-                let vcl_params: Vec<String> = params
-                    .iter()
-                    .filter(|p| {
-                        !p.starts_with("PRIV_") && !p.starts_with("priv_") && !p.contains("PRIV_")
-                    })
-                    .cloned()
-                    .collect();
+                let vcl_params = vcl_visible_params(&params);
 
                 let sig = if vcl_params.is_empty() {
                     format!("$Method {} .{}()", ret_type, clean_name)
@@ -226,23 +214,43 @@ fn parse_function_directive(line: &str) -> (String, String, Vec<String>) {
     let (ret_type, rest) = rest.split_once(' ').unwrap_or((rest, ""));
     let rest = rest.trim();
 
-    // Find name (up to opening paren)
+    let (name, params) = split_name_and_params(rest);
+    (ret_type.to_string(), name, params)
+}
+
+/// Split `<name>(<params>)` into its name and comma-separated, trimmed
+/// parameter list. Returns `(rest, [])` when no parenthesized list is present.
+fn split_name_and_params(rest: &str) -> (String, Vec<String>) {
     if let Some(paren) = rest.find('(') {
         let name = rest[..paren].trim().to_string();
         let params_str = rest[paren + 1..].trim();
         let params_str = params_str.strip_suffix(')').unwrap_or(params_str);
-        let params = if params_str.is_empty() {
-            Vec::new()
-        } else {
-            params_str
-                .split(',')
-                .map(|p| p.trim().to_string())
-                .collect()
-        };
-        (ret_type.to_string(), name, params)
+        (name, split_params(params_str))
     } else {
-        (ret_type.to_string(), rest.to_string(), Vec::new())
+        (rest.to_string(), Vec::new())
     }
+}
+
+/// Split a comma-separated parameter list body into trimmed params.
+fn split_params(params_str: &str) -> Vec<String> {
+    if params_str.is_empty() {
+        Vec::new()
+    } else {
+        params_str
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .collect()
+    }
+}
+
+/// Filter out Varnish `PRIV_*` (privileged) params — they are runtime-injected
+/// by the VMOD machinery and must not appear in the VCL-facing signature.
+fn vcl_visible_params(params: &[String]) -> Vec<String> {
+    params
+        .iter()
+        .filter(|p| !p.starts_with("PRIV_") && !p.starts_with("priv_") && !p.contains("PRIV_"))
+        .cloned()
+        .collect()
 }
 
 fn parse_object_directive(line: &str) -> (String, Vec<String>) {
@@ -250,22 +258,7 @@ fn parse_object_directive(line: &str) -> (String, Vec<String>) {
     let rest = line.strip_prefix("$Object ").unwrap_or(line);
     let rest = rest.trim();
 
-    if let Some(paren) = rest.find('(') {
-        let name = rest[..paren].trim().to_string();
-        let params_str = rest[paren + 1..].trim();
-        let params_str = params_str.strip_suffix(')').unwrap_or(params_str);
-        let params = if params_str.is_empty() {
-            Vec::new()
-        } else {
-            params_str
-                .split(',')
-                .map(|p| p.trim().to_string())
-                .collect()
-        };
-        (name, params)
-    } else {
-        (rest.to_string(), Vec::new())
-    }
+    split_name_and_params(rest)
 }
 
 /// Split on spaces but respect double-quoted arguments.

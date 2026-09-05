@@ -113,15 +113,7 @@ pub(crate) fn extract_entities_vcl_with_offset(
 impl Parser<'_> {
     /// Collects names of all declarations (subs, backends, probes, ACLs, imports, instances).
     #[expect(
-        clippy::too_many_lines,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    #[expect(
         clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
-    #[expect(
-        clippy::excessive_nesting,
         reason = "function is verbose but correct — extraction deferred"
     )]
     fn collect_declarations(&mut self) {
@@ -172,21 +164,8 @@ impl Parser<'_> {
                 }
                 Token::Ident(name) if name == "import" => {
                     self.advance();
-                    if let Token::Ident(module) = self.current() {
-                        let module_name = module.clone();
-                        self.advance();
-                        let alias = if matches!(self.current(), Token::Ident(a) if a == "as") {
-                            self.advance();
-                            if let Token::Ident(alias_name) = self.current() {
-                                let a = alias_name.clone();
-                                self.advance();
-                                a
-                            } else {
-                                module_name.clone()
-                            }
-                        } else {
-                            module_name.clone()
-                        };
+                    if let Some(module_name) = self.take_ident() {
+                        let alias = self.take_alias().unwrap_or_else(|| module_name.clone());
                         self.import_map.insert(alias, module_name);
                     }
                     self.skip_semicolon();
@@ -330,11 +309,7 @@ impl Parser<'_> {
         let start_pos = self.pos;
         let start_line = self.line_of_pos(start_pos);
         self.advance(); // skip 'backend'
-        let name = if let Token::Ident(n) = self.current() {
-            let n = n.clone();
-            self.advance();
-            n
-        } else {
+        let Some(name) = self.take_ident() else {
             return;
         };
 
@@ -457,11 +432,7 @@ impl Parser<'_> {
         let start_line = self.line_of_pos(start_pos);
         self.advance(); // skip 'probe'
 
-        let name = if let Token::Ident(n) = self.current() {
-            let n = n.clone();
-            self.advance();
-            n
-        } else {
+        let Some(name) = self.take_ident() else {
             return;
         };
 
@@ -530,11 +501,7 @@ impl Parser<'_> {
         let start_line = self.line_of_pos(start_pos);
         self.advance(); // skip 'acl'
 
-        let name = if let Token::Ident(n) = self.current() {
-            let n = n.clone();
-            self.advance();
-            n
-        } else {
+        let Some(name) = self.take_ident() else {
             return;
         };
 
@@ -625,11 +592,7 @@ impl Parser<'_> {
         let start_line = self.line_of_pos(start_pos);
         self.advance(); // skip 'sub'
 
-        let name = if let Token::Ident(n) = self.current() {
-            let n = n.clone();
-            self.advance();
-            n
-        } else {
+        let Some(name) = self.take_ident() else {
             return;
         };
 
@@ -913,11 +876,7 @@ impl Parser<'_> {
         let start = self.pos;
         self.advance(); // skip 'new'
 
-        let instance_name = if let Token::Ident(n) = self.current() {
-            let n = n.clone();
-            self.advance();
-            n
-        } else {
+        let Some(instance_name) = self.take_ident() else {
             self.skip_until_semicolon();
             return;
         };
@@ -995,22 +954,8 @@ impl Parser<'_> {
         let line = self.line_of_pos(start_pos);
         self.advance(); // skip 'import'
 
-        if let Token::Ident(module) = self.current() {
-            let module_name = module.clone();
-            self.advance();
-
-            let alias = if matches!(self.current(), Token::Ident(a) if a == "as") {
-                self.advance();
-                if let Token::Ident(alias_name) = self.current() {
-                    let a = alias_name.clone();
-                    self.advance();
-                    Some(a)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+        if let Some(module_name) = self.take_ident() {
+            let alias = self.take_alias();
 
             // If there's a "from" path, skip it
             if matches!(self.current(), Token::Ident(f) if f == "from") {
@@ -1129,6 +1074,28 @@ impl Parser<'_> {
     }
 
     // ---- Helpers ----
+
+    /// Consume an `Ident` token at the cursor, returning its name. The cursor
+    /// is left untouched when the current token is not an `Ident`.
+    fn take_ident(&mut self) -> Option<String> {
+        if let Token::Ident(n) = self.current() {
+            let n = n.clone();
+            self.advance();
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// Consume an optional `as <alias>` clause, returning the alias name.
+    fn take_alias(&mut self) -> Option<String> {
+        if matches!(self.current(), Token::Ident(a) if a == "as") {
+            self.advance();
+            self.take_ident()
+        } else {
+            None
+        }
+    }
 
     fn current_name(&self) -> String {
         match self.current() {

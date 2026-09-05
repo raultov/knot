@@ -2,8 +2,6 @@ use crate::models::{CallIntent, ReferenceIntent};
 use crate::pipeline::parser::utils::{extract_new_expression_name, node_text};
 use tree_sitter::Node;
 
-pub(crate) use crate::pipeline::parser::utils::extract_type_references;
-
 /// Recursively extract all call intents from Java.
 pub(crate) fn collect_all_reference_intents_java(
     node: Node<'_>,

@@ -163,7 +163,7 @@ fn inline_module_path_for_entity(contexts: &[RustModuleContext], line: usize) ->
     (path, is_test)
 }
 
-/// Re-parse `source` and walk the tree to enumerate every inline
+/// Reparse `source` and walk the tree to enumerate every inline
 /// `mod foo { ... }` block, including its line range and whether it is
 /// `#[cfg(test)]`-gated.
 ///

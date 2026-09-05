@@ -35,7 +35,7 @@ pub(crate) fn reclassify_methods_in_impl_blocks(
     }
 
     // Build class contexts from impl_item self-types. We reuse the same
-    // helper that extract_class_contexts() calls, so behaviour is identical.
+    // helper that extract_class_contexts() calls, so behavior is identical.
     let mut class_contexts: Vec<crate::pipeline::parser::context::ClassContext> = Vec::new();
     collect_impl_class_contexts(&root, source, &mut class_contexts);
 
@@ -164,7 +164,7 @@ pub(crate) fn collect_rust_trait_implementations(
 /// For `impl Bar for Foo { ... }` → returns `Some("Foo")` (the self-type,
 ///   not the trait).
 /// For `impl<T> Foo<T> { ... }` → returns `Some("Foo")` (generics dropped).
-/// For unrecognised shapes (lifetimes, exotic paths, parse failures) →
+/// For unrecognized shapes (lifetimes, exotic paths, parse failures) →
 ///   returns `None` (the caller should skip silently).
 pub(crate) fn extract_impl_self_type(node: Node<'_>, source: &[u8]) -> Option<String> {
     if node.kind() != "impl_item" {

@@ -166,8 +166,8 @@ mod section_heading_text_tests {
 
     /// Parse `code` and return the first `section` node found (depth-first).
     /// Returns `None` if no section exists in the tree.
-    fn first_section_node<'tree>(tree: &'tree tree_sitter::Tree) -> Option<Node<'tree>> {
-        fn walk<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    fn first_section_node(tree: &tree_sitter::Tree) -> Option<Node<'_>> {
+        fn walk(node: Node) -> Option<Node> {
             if node.kind() == "section" {
                 return Some(node);
             }

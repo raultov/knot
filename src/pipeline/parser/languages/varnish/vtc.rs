@@ -513,7 +513,7 @@ varnish v1 -vcl+backend {
     sub vcl_recv { set req.backend_hint = s1; }
 } -start"#;
         let entities = extract_entities_vtc(src, "test.vtc", "test-repo");
-        // Should have synthesised backend 's1'
+        // Should have synthesized backend 's1'
         let backends: Vec<_> = entities
             .iter()
             .filter(|e| e.kind == EntityKind::VclBackend)

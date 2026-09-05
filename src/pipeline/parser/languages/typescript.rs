@@ -8,13 +8,9 @@ pub(crate) use super::javascript::extract_enum_usages_javascript as extract_enum
 pub(crate) use super::javascript::extract_jsx_component_invocation;
 pub(crate) use super::javascript::extract_single_call_intent_javascript as extract_single_call_intent_typescript;
 
-#[expect(
-    unused_imports,
-    reason = "re-exports shared JS extractors available for tree-sitter callbacks"
-)]
-pub(crate) use super::javascript::{
-    extract_callback_arguments, extract_jsx_attributes, is_reserved_keyword,
-};
+// Test-only consumer; cfg(test) keeps the lib profile free of unused-import warnings.
+#[cfg(test)]
+pub(crate) use super::javascript::extract_callback_arguments;
 
 /// Recursively extract all call intents from TypeScript/TSX, returning (intent, byte_pos) pairs.
 #[expect(

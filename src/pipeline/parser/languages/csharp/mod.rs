@@ -5,7 +5,7 @@
 //! pipeline cannot express:
 //!
 //! - [`capture`] — capture routing for grammar gaps (`field_declaration`
-//!   has no `name` field, `record_declaration` covers both record flavours,
+//!   has no `name` field, `record_declaration` covers both record flavors,
 //!   indexer/operator declarations have no name at all).
 //! - [`fqn`] — FQN construction: file-scoped namespace pre-pass plus an
 //!   ancestor walk over block namespaces and containing types

@@ -125,7 +125,7 @@ public enum Qux { A, B }
 
 #[test]
 fn test_extract_record_class_and_record_struct_are_records() {
-    // Grammar gap (§2.3, Gap 3): both flavours share `record_declaration`
+    // Grammar gap (§2.3, Gap 3): both flavors share `record_declaration`
     // and surface as CSharpRecord.
     let code = r#"
 namespace App;

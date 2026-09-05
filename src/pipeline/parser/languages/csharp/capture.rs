@@ -8,10 +8,10 @@
 //!   the declaration promotes the entity to [`EntityKind::CSharpConstant`].
 //! - **`csharp.record.name`** — `record_declaration` covers both
 //!   `record class` and `record struct`; both map to [`EntityKind::CSharpRecord`]
-//!   (the struct flavour only matters for the `base_list` heuristic, see
+//!   (the struct flavor only matters for the `base_list` heuristic, see
 //!   `refs::record_is_struct`).
 //! - **`csharp.indexer` / `csharp.operator`** — these declarations have no
-//!   `name` field, so names are synthesised (`this[]`, `operator +`).
+//!   `name` field, so names are synthesized (`this[]`, `operator +`).
 
 use crate::models::EntityKind;
 use crate::pipeline::parser::utils::{find_parent_by_kind, node_text};
@@ -135,13 +135,13 @@ pub(crate) fn handle_csharp_capture<'a>(
             (text, EntityKind::CSharpEvent, decl)
         }
         // Grammar gap (plan §2.3): indexer declarations have no `name` field.
-        // The query captures the whole declaration; the name is synthesised.
+        // The query captures the whole declaration; the name is synthesized.
         "csharp.indexer" => {
             let decl = declaration_or_self(node, "indexer_declaration");
             ("this[]".to_string(), EntityKind::CSharpIndexer, decl)
         }
         // Grammar gap (plan §2.3): operator declarations have no `name`
-        // field. The name is synthesised from the `operator` token.
+        // field. The name is synthesized from the `operator` token.
         "csharp.operator" => {
             let decl = declaration_or_self(node, "operator_declaration");
             let op_token = decl
@@ -163,7 +163,7 @@ pub(crate) fn handle_csharp_capture<'a>(
 
 /// Wrap a resolved capture: the 1-based start line comes from the full
 /// declaration node (attributes/modifiers included).
-fn capture_from<'a>(name: String, kind: EntityKind, entity_node: Node<'a>) -> CsharpCapture<'a> {
+fn capture_from(name: String, kind: EntityKind, entity_node: Node) -> CsharpCapture {
     CsharpCapture {
         name,
         kind,
