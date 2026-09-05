@@ -134,322 +134,130 @@ fn resolve_vcl_include(
         .map(|(_, &uuid)| uuid)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
+/// Owned lookup maps for reference resolution: the incoming global context
+/// seeded with the current batch, plus the per-batch derived maps.
+struct LookupMaps {
+    fqn_to_uuid: HashMap<String, Uuid>,
+    name_to_uuids: HashMap<String, Vec<Uuid>>,
+    uuid_to_file: HashMap<Uuid, String>,
+    uuid_to_arg_count: HashMap<Uuid, usize>,
+    uuid_to_fqn: HashMap<Uuid, String>,
+    uuid_to_kind: HashMap<Uuid, EntityKind>,
+    uuid_to_name: HashMap<Uuid, String>,
+    extends_map: HashMap<String, Vec<String>>,
+    alias_map: HashMap<Uuid, Uuid>,
+}
+
+impl LookupMaps {
+    fn build(
+        entities: &[ResolutionEntity],
+        mut fqn_to_uuid: HashMap<String, Uuid>,
+        mut name_to_uuids: HashMap<String, Vec<Uuid>>,
+    ) -> Self {
+        let uuid_to_file: HashMap<Uuid, String> = entities
+            .iter()
+            .map(|e| (e.uuid, e.file_path.clone()))
+            .collect();
+
+        let uuid_to_arg_count: HashMap<Uuid, usize> = entities
+            .iter()
+            .filter_map(|e| {
+                count_params_from_signature(e.signature.as_deref()?).map(|c| (e.uuid, c))
+            })
+            .collect();
+
+        let uuid_to_fqn: HashMap<Uuid, String> =
+            entities.iter().map(|e| (e.uuid, e.fqn.clone())).collect();
+
+        let uuid_to_kind: HashMap<Uuid, EntityKind> =
+            entities.iter().map(|e| (e.uuid, e.kind.clone())).collect();
+
+        let uuid_to_name: HashMap<Uuid, String> =
+            entities.iter().map(|e| (e.uuid, e.name.clone())).collect();
+
+        let extends_map: HashMap<String, Vec<String>> = entities
+            .iter()
+            .filter_map(|e| {
+                let parents: Vec<String> = e
+                    .reference_intents
+                    .iter()
+                    .filter_map(|i| {
+                        if let ReferenceIntent::Extends { parent, .. } = i {
+                            Some(parent.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if parents.is_empty() {
+                    None
+                } else {
+                    Some((e.name.clone(), parents))
+                }
+            })
+            .collect();
+
+        for e in entities.iter() {
+            fqn_to_uuid.insert(e.fqn.clone(), e.uuid);
+            name_to_uuids
+                .entry(e.name.clone())
+                .or_default()
+                .push(e.uuid);
+        }
+
+        for uuids in name_to_uuids.values_mut() {
+            uuids.sort();
+            uuids.dedup();
+        }
+
+        let alias_map = aliases::build_alias_map(entities, &uuid_to_file);
+
+        Self {
+            fqn_to_uuid,
+            name_to_uuids,
+            uuid_to_file,
+            uuid_to_arg_count,
+            uuid_to_fqn,
+            uuid_to_kind,
+            uuid_to_name,
+            extends_map,
+            alias_map,
+        }
+    }
+
+    fn context(&self) -> ResolutionContext<'_> {
+        ResolutionContext {
+            fqn_to_uuid: &self.fqn_to_uuid,
+            name_to_uuids: &self.name_to_uuids,
+            uuid_to_file: &self.uuid_to_file,
+            extends_map: &self.extends_map,
+            uuid_to_arg_count: Some(&self.uuid_to_arg_count),
+            uuid_to_fqn: Some(&self.uuid_to_fqn),
+            uuid_to_kind: Some(&self.uuid_to_kind),
+            uuid_to_name: Some(&self.uuid_to_name),
+        }
+    }
+}
+
 pub fn resolve_reference_intents_with_context(
     entities: &mut [ResolutionEntity],
-    mut fqn_to_uuid: HashMap<String, Uuid>,
-    mut name_to_uuids: HashMap<String, Vec<Uuid>>,
+    fqn_to_uuid: HashMap<String, Uuid>,
+    name_to_uuids: HashMap<String, Vec<Uuid>>,
 ) -> RunMetrics {
-    let uuid_to_file: HashMap<Uuid, String> = entities
-        .iter()
-        .map(|e| (e.uuid, e.file_path.clone()))
-        .collect();
-
-    let uuid_to_arg_count: HashMap<Uuid, usize> = entities
-        .iter()
-        .filter_map(|e| count_params_from_signature(e.signature.as_deref()?).map(|c| (e.uuid, c)))
-        .collect();
-
-    let uuid_to_fqn: HashMap<Uuid, String> =
-        entities.iter().map(|e| (e.uuid, e.fqn.clone())).collect();
-
-    let uuid_to_kind: HashMap<Uuid, EntityKind> =
-        entities.iter().map(|e| (e.uuid, e.kind.clone())).collect();
-
-    let uuid_to_name: HashMap<Uuid, String> =
-        entities.iter().map(|e| (e.uuid, e.name.clone())).collect();
-
-    let extends_map: HashMap<String, Vec<String>> = entities
-        .iter()
-        .filter_map(|e| {
-            let parents: Vec<String> = e
-                .reference_intents
-                .iter()
-                .filter_map(|i| {
-                    if let ReferenceIntent::Extends { parent, .. } = i {
-                        Some(parent.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if parents.is_empty() {
-                None
-            } else {
-                Some((e.name.clone(), parents))
-            }
-        })
-        .collect();
-
-    for e in entities.iter() {
-        fqn_to_uuid.insert(e.fqn.clone(), e.uuid);
-        name_to_uuids
-            .entry(e.name.clone())
-            .or_default()
-            .push(e.uuid);
-    }
-
-    for uuids in name_to_uuids.values_mut() {
-        uuids.sort();
-        uuids.dedup();
-    }
-
-    let alias_map = aliases::build_alias_map(entities, &uuid_to_file);
-
+    let maps = LookupMaps::build(entities, fqn_to_uuid, name_to_uuids);
+    let ctx = maps.context();
     let metrics = RunMetrics::new(entities.len() as u64);
-
-    let ctx = ResolutionContext {
-        fqn_to_uuid: &fqn_to_uuid,
-        name_to_uuids: &name_to_uuids,
-        uuid_to_file: &uuid_to_file,
-        extends_map: &extends_map,
-        uuid_to_arg_count: Some(&uuid_to_arg_count),
-        uuid_to_fqn: Some(&uuid_to_fqn),
-        uuid_to_kind: Some(&uuid_to_kind),
-        uuid_to_name: Some(&uuid_to_name),
-    };
 
     entities.par_iter_mut().for_each(|entity| {
         let reference_intents = entity.reference_intents.clone();
-
         let mut seen: HashSet<(Uuid, RelationshipType)> = HashSet::new();
 
-        for intent in reference_intents {
-            let (resolved_uuid, rel_type) = match &intent {
-                ReferenceIntent::Call {
-                    method,
-                    receiver,
-                    arg_count,
-                    ..
-                } => {
-                    let call_intent = crate::models::CallIntent {
-                        method: method.clone(),
-                        receiver: receiver.clone(),
-                        line: 0,
-                        arg_count: *arg_count,
-                    };
-                    let resolved = calls::resolve_single_call_intent(
-                        &call_intent,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        &ctx,
-                    )
-                    .map(|uuid| calls::redirect_class_call_to_constructor(uuid, &ctx));
-                    (resolved, RelationshipType::Calls)
-                }
-                ReferenceIntent::Extends { parent, .. } => (
-                    non_calls::resolve_non_call_reference_typed(
-                        parent,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_kind,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::Extends,
-                ),
-                ReferenceIntent::Implements { interface, .. } => (
-                    non_calls::resolve_non_call_reference_typed(
-                        interface,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_kind,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::Implements,
-                ),
-                ReferenceIntent::TypeReference { type_name, .. } => (
-                    non_calls::resolve_non_call_reference_typed(
-                        type_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_kind,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::References,
-                ),
-                ReferenceIntent::ValueReference { value_name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        value_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::References,
-                ),
-                ReferenceIntent::DomElementReference { element_id, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        element_id,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::ReferencesDOM,
-                ),
-                ReferenceIntent::CssClassUsage { class_name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        class_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::UsesCSSClass,
-                ),
-                ReferenceIntent::HtmlFileImport { file_path, .. } => (
-                    ctx.fqn_to_uuid.get(file_path).copied(),
-                    RelationshipType::ImportsScript,
-                ),
-                ReferenceIntent::CssFileImport { file_path, .. } => (
-                    ctx.fqn_to_uuid.get(file_path).copied(),
-                    RelationshipType::ImportsStylesheet,
-                ),
-                ReferenceIntent::RustMacroCall { macro_name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        macro_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::MacroCalls,
-                ),
-                ReferenceIntent::VclSubCall { sub_name, .. } => {
-                    let call_intent = crate::models::CallIntent {
-                        method: sub_name.clone(),
-                        receiver: None,
-                        line: 0,
-                        arg_count: None,
-                    };
-                    let resolved = calls::resolve_single_call_intent(
-                        &call_intent,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        &ctx,
-                    );
-                    (resolved, RelationshipType::Calls)
-                }
-                ReferenceIntent::VclBackendRef { backend_name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        backend_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::UsesBackend,
-                ),
-                ReferenceIntent::VclProbeRef { probe_name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        probe_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::UsesProbe,
-                ),
-                ReferenceIntent::VclAclRef { acl_name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        acl_name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::UsesAcl,
-                ),
-                ReferenceIntent::VclInclude { path, .. } => {
-                    let repo_name = entity.fqn.split(':').nth(1).unwrap_or("");
-                    let resolved_uuid =
-                        resolve_vcl_include(path, &entity.file_path, repo_name, ctx.fqn_to_uuid);
-                    (resolved_uuid, RelationshipType::Includes)
-                }
-                ReferenceIntent::VclVmodImport { module, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        module,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::ImportsVmod,
-                ),
-                ReferenceIntent::VclUnusedRef { name, .. } => (
-                    non_calls::resolve_non_call_reference(
-                        name,
-                        &entity.file_path,
-                        entity.enclosing_class.as_deref(),
-                        ctx.fqn_to_uuid,
-                        ctx.name_to_uuids,
-                        ctx.uuid_to_file,
-                        ctx.uuid_to_fqn,
-                        &metrics,
-                    ),
-                    RelationshipType::DeclaredUnused,
-                ),
+        for intent in &reference_intents {
+            let (uuid, rel_type) = resolve_intent(intent, entity, &ctx, &metrics);
+            let Some(uuid) = uuid.map(|u| maps.alias_map.get(&u).copied().unwrap_or(u)) else {
+                continue;
             };
-
-            if let Some(mut uuid) = resolved_uuid {
-                if let Some(&target) = alias_map.get(&uuid) {
-                    uuid = target;
-                }
-                if rel_type == RelationshipType::References
-                    && let Some(uuid_to_fqn) = ctx.uuid_to_fqn
-                    && let Some(target_fqn) = uuid_to_fqn.get(&uuid)
-                    && target_fqn.starts_with(&format!("{}.", entity.fqn))
-                {
-                    // A parent should not emit a References edge to one of
-                    // its own nested declarations (the parent → child
-                    // direction is implicit ownership, not a usage
-                    // reference). Examples: a record's static field typed
-                    // by one of its nested records.
-                    continue;
-                }
-                if seen.insert((uuid, rel_type)) {
-                    entity.relationships.push((uuid, rel_type));
-                }
-            }
+            push_relationship(uuid, rel_type, entity, &ctx, &mut seen);
         }
     });
 
@@ -459,6 +267,182 @@ pub fn resolve_reference_intents_with_context(
     overrides::link_method_overrides(entities);
 
     metrics
+}
+
+/// Pushes a resolved relationship onto the entity, applying the
+/// nested-declaration self-reference filter and deduplication. The alias
+/// redirection is applied by the caller before this point.
+fn push_relationship(
+    uuid: Uuid,
+    rel_type: RelationshipType,
+    entity: &mut ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+    seen: &mut HashSet<(Uuid, RelationshipType)>,
+) {
+    if rel_type == RelationshipType::References
+        && let Some(uuid_to_fqn) = ctx.uuid_to_fqn
+        && let Some(target_fqn) = uuid_to_fqn.get(&uuid)
+        && target_fqn.starts_with(&format!("{}.", entity.fqn))
+    {
+        // A parent should not emit a References edge to one of
+        // its own nested declarations (the parent → child
+        // direction is implicit ownership, not a usage
+        // reference). Examples: a record's static field typed
+        // by one of its nested records.
+        return;
+    }
+    if seen.insert((uuid, rel_type)) {
+        entity.relationships.push((uuid, rel_type));
+    }
+}
+
+/// Maps a single reference intent to its resolved target UUID (if any) and
+/// the relationship type the intent produces.
+fn resolve_intent(
+    intent: &ReferenceIntent,
+    entity: &ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+    metrics: &RunMetrics,
+) -> (Option<Uuid>, RelationshipType) {
+    match intent {
+        ReferenceIntent::Call {
+            method,
+            receiver,
+            arg_count,
+            ..
+        } => {
+            let call_intent = crate::models::CallIntent {
+                method: method.clone(),
+                receiver: receiver.clone(),
+                line: 0,
+                arg_count: *arg_count,
+            };
+            let resolved = calls::resolve_single_call_intent(
+                &call_intent,
+                &entity.file_path,
+                entity.enclosing_class.as_deref(),
+                ctx,
+            )
+            .map(|uuid| calls::redirect_class_call_to_constructor(uuid, ctx));
+            (resolved, RelationshipType::Calls)
+        }
+        ReferenceIntent::Extends { parent, .. } => (
+            resolve_typed(parent, entity, ctx, metrics),
+            RelationshipType::Extends,
+        ),
+        ReferenceIntent::Implements { interface, .. } => (
+            resolve_typed(interface, entity, ctx, metrics),
+            RelationshipType::Implements,
+        ),
+        ReferenceIntent::TypeReference { type_name, .. } => (
+            resolve_typed(type_name, entity, ctx, metrics),
+            RelationshipType::References,
+        ),
+        ReferenceIntent::ValueReference { value_name, .. } => (
+            resolve_plain(value_name, entity, ctx, metrics),
+            RelationshipType::References,
+        ),
+        ReferenceIntent::DomElementReference { element_id, .. } => (
+            resolve_plain(element_id, entity, ctx, metrics),
+            RelationshipType::ReferencesDOM,
+        ),
+        ReferenceIntent::CssClassUsage { class_name, .. } => (
+            resolve_plain(class_name, entity, ctx, metrics),
+            RelationshipType::UsesCSSClass,
+        ),
+        ReferenceIntent::HtmlFileImport { file_path, .. } => (
+            ctx.fqn_to_uuid.get(file_path).copied(),
+            RelationshipType::ImportsScript,
+        ),
+        ReferenceIntent::CssFileImport { file_path, .. } => (
+            ctx.fqn_to_uuid.get(file_path).copied(),
+            RelationshipType::ImportsStylesheet,
+        ),
+        ReferenceIntent::RustMacroCall { macro_name, .. } => (
+            resolve_plain(macro_name, entity, ctx, metrics),
+            RelationshipType::MacroCalls,
+        ),
+        ReferenceIntent::VclSubCall { sub_name, .. } => {
+            let call_intent = crate::models::CallIntent {
+                method: sub_name.clone(),
+                receiver: None,
+                line: 0,
+                arg_count: None,
+            };
+            let resolved = calls::resolve_single_call_intent(
+                &call_intent,
+                &entity.file_path,
+                entity.enclosing_class.as_deref(),
+                ctx,
+            );
+            (resolved, RelationshipType::Calls)
+        }
+        ReferenceIntent::VclBackendRef { backend_name, .. } => (
+            resolve_plain(backend_name, entity, ctx, metrics),
+            RelationshipType::UsesBackend,
+        ),
+        ReferenceIntent::VclProbeRef { probe_name, .. } => (
+            resolve_plain(probe_name, entity, ctx, metrics),
+            RelationshipType::UsesProbe,
+        ),
+        ReferenceIntent::VclAclRef { acl_name, .. } => (
+            resolve_plain(acl_name, entity, ctx, metrics),
+            RelationshipType::UsesAcl,
+        ),
+        ReferenceIntent::VclInclude { path, .. } => {
+            let repo_name = entity.fqn.split(':').nth(1).unwrap_or("");
+            let resolved_uuid =
+                resolve_vcl_include(path, &entity.file_path, repo_name, ctx.fqn_to_uuid);
+            (resolved_uuid, RelationshipType::Includes)
+        }
+        ReferenceIntent::VclVmodImport { module, .. } => (
+            resolve_plain(module, entity, ctx, metrics),
+            RelationshipType::ImportsVmod,
+        ),
+        ReferenceIntent::VclUnusedRef { name, .. } => (
+            resolve_plain(name, entity, ctx, metrics),
+            RelationshipType::DeclaredUnused,
+        ),
+    }
+}
+
+/// Name-only non-call reference resolution (no kind/FQN disambiguation).
+fn resolve_plain(
+    name: &str,
+    entity: &ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    non_calls::resolve_non_call_reference(
+        name,
+        &entity.file_path,
+        entity.enclosing_class.as_deref(),
+        ctx.fqn_to_uuid,
+        ctx.name_to_uuids,
+        ctx.uuid_to_file,
+        ctx.uuid_to_fqn,
+        metrics,
+    )
+}
+
+/// Non-call reference resolution with kind/FQN disambiguation.
+fn resolve_typed(
+    name: &str,
+    entity: &ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    non_calls::resolve_non_call_reference_typed(
+        name,
+        &entity.file_path,
+        entity.enclosing_class.as_deref(),
+        ctx.fqn_to_uuid,
+        ctx.name_to_uuids,
+        ctx.uuid_to_file,
+        ctx.uuid_to_kind,
+        ctx.uuid_to_fqn,
+        metrics,
+    )
 }
 
 pub fn resolve_reference_intents(entities: &mut [ResolutionEntity]) -> RunMetrics {

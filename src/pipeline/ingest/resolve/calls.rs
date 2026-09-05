@@ -299,137 +299,157 @@ fn resolve_homonym_fallback(
     None
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
+fn resolve_super_call(
+    intent: &CallIntent,
+    caller_enclosing_class: Option<&str>,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    let enclosing_class = caller_enclosing_class?;
+    let parents = ctx.extends_map.get(enclosing_class)?;
+    for parent in parents {
+        if let Some(uuid) = lookup_method_in_class_hierarchy(parent, &intent.method, ctx) {
+            return Some(disambiguate_overload(uuid, intent, ctx, Some(parent)));
+        }
+    }
+    None
+}
+
+fn resolve_implicit_this_call(
+    intent: &CallIntent,
+    caller_enclosing_class: Option<&str>,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    if !(intent.receiver.is_none()
+        || intent.receiver.as_deref() == Some("this")
+        || intent.receiver.as_deref() == Some("self"))
+    {
+        return None;
+    }
+    let enclosing_class = caller_enclosing_class?;
+    if let Some(uuid) = lookup_fqn(enclosing_class, &intent.method, ctx.fqn_to_uuid) {
+        return Some(disambiguate_overload(
+            uuid,
+            intent,
+            ctx,
+            Some(enclosing_class),
+        ));
+    }
+
+    if intent.receiver.as_deref() == Some("self")
+        && let Some(parents) = ctx.extends_map.get(enclosing_class)
+    {
+        for parent in parents {
+            if let Some(uuid) = lookup_fqn(parent, &intent.method, ctx.fqn_to_uuid) {
+                return Some(uuid);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_static_receiver_call(intent: &CallIntent, ctx: &ResolutionContext) -> Option<Uuid> {
+    let receiver = intent.receiver.as_ref()?;
+    if !receiver.chars().next().is_some_and(|c| c.is_uppercase()) || receiver == "this" {
+        return None;
+    }
+    let uuid = lookup_fqn(receiver, &intent.method, ctx.fqn_to_uuid)?;
+    Some(disambiguate_overload(uuid, intent, ctx, Some(receiver)))
+}
+
+fn resolve_receiver_call(
+    intent: &CallIntent,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    let receiver = intent.receiver.as_ref()?;
+    let receiver_class = if receiver.contains('.') {
+        receiver
+            .split('.')
+            .next_back()
+            .map(|s| s.trim())
+            .unwrap_or(receiver)
+    } else {
+        receiver
+    };
+
+    if !receiver_class.is_empty() {
+        if let Some(uuid) = lookup_fqn(receiver_class, &intent.method, ctx.fqn_to_uuid) {
+            return Some(disambiguate_overload(
+                uuid,
+                intent,
+                ctx,
+                Some(receiver_class),
+            ));
+        }
+
+        let mut chars = receiver_class.chars();
+        let capitalized = if let Some(first) = chars.next() {
+            first.to_uppercase().to_string() + chars.as_str()
+        } else {
+            receiver_class.to_string()
+        };
+
+        if let Some(uuid) = lookup_fqn(&capitalized, &intent.method, ctx.fqn_to_uuid) {
+            return Some(disambiguate_overload(uuid, intent, ctx, Some(&capitalized)));
+        }
+
+        let method_dot = format!("{}.{}", receiver_class, intent.method);
+        let capitalized_method_dot = format!("{}.{}", capitalized, intent.method);
+        let method_colon = format!("{}::{}", receiver_class, intent.method);
+        let capitalized_method_colon = format!("{}::{}", capitalized, intent.method);
+        for (fqn, uuid) in ctx.fqn_to_uuid.iter() {
+            if fqn.contains(&method_dot)
+                || fqn.contains(&capitalized_method_dot)
+                || fqn.contains(&method_colon)
+                || fqn.contains(&capitalized_method_colon)
+            {
+                return Some(*uuid);
+            }
+        }
+    }
+
+    if let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
+        && let Some(u) = resolve_homonym_fallback(
+            uuids,
+            intent.arg_count,
+            Some(receiver.as_str()),
+            caller_file_path,
+            ctx,
+        )
+    {
+        return Some(u);
+    }
+
+    None
+}
+
+fn resolve_bare_call(
+    intent: &CallIntent,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    if intent.receiver.is_some() {
+        return None;
+    }
+    let uuids = ctx.name_to_uuids.get(&intent.method)?;
+    resolve_homonym_fallback(uuids, intent.arg_count, None, caller_file_path, ctx)
+}
+
 pub(crate) fn resolve_single_call_intent(
     intent: &CallIntent,
     caller_file_path: &str,
     caller_enclosing_class: Option<&str>,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
-    if let Some(receiver) = intent.receiver.as_deref()
-        && is_super_receiver(receiver)
-    {
-        if let Some(enclosing_class) = caller_enclosing_class
-            && let Some(parents) = ctx.extends_map.get(enclosing_class)
-        {
-            for parent in parents {
-                if let Some(uuid) = lookup_method_in_class_hierarchy(parent, &intent.method, ctx) {
-                    return Some(disambiguate_overload(uuid, intent, ctx, Some(parent)));
-                }
-            }
-        }
-        return None;
+    // `super.` calls are terminal: an unresolved super() must never fall
+    // through to the bare-name fallback (it would be misattributed to self).
+    if intent.receiver.as_deref().is_some_and(is_super_receiver) {
+        return resolve_super_call(intent, caller_enclosing_class, ctx);
     }
-
-    if (intent.receiver.is_none()
-        || intent.receiver.as_deref() == Some("this")
-        || intent.receiver.as_deref() == Some("self"))
-        && let Some(enclosing_class) = caller_enclosing_class
-    {
-        if let Some(uuid) = lookup_fqn(enclosing_class, &intent.method, ctx.fqn_to_uuid) {
-            return Some(disambiguate_overload(
-                uuid,
-                intent,
-                ctx,
-                Some(enclosing_class),
-            ));
-        }
-
-        if intent.receiver.as_deref() == Some("self")
-            && let Some(parents) = ctx.extends_map.get(enclosing_class)
-        {
-            for parent in parents {
-                if let Some(uuid) = lookup_fqn(parent, &intent.method, ctx.fqn_to_uuid) {
-                    return Some(uuid);
-                }
-            }
-        }
-    }
-
-    if let Some(receiver) = &intent.receiver
-        && receiver.chars().next().is_some_and(|c| c.is_uppercase())
-        && receiver != "this"
-        && let Some(uuid) = lookup_fqn(receiver, &intent.method, ctx.fqn_to_uuid)
-    {
-        return Some(disambiguate_overload(uuid, intent, ctx, Some(receiver)));
-    }
-
-    if let Some(receiver) = &intent.receiver {
-        let receiver_class = if receiver.contains('.') {
-            receiver
-                .split('.')
-                .next_back()
-                .map(|s| s.trim())
-                .unwrap_or(receiver)
-        } else {
-            receiver
-        };
-
-        if !receiver_class.is_empty() {
-            if let Some(uuid) = lookup_fqn(receiver_class, &intent.method, ctx.fqn_to_uuid) {
-                return Some(disambiguate_overload(
-                    uuid,
-                    intent,
-                    ctx,
-                    Some(receiver_class),
-                ));
-            }
-
-            let mut chars = receiver_class.chars();
-            let capitalized = if let Some(first) = chars.next() {
-                first.to_uppercase().to_string() + chars.as_str()
-            } else {
-                receiver_class.to_string()
-            };
-
-            if let Some(uuid) = lookup_fqn(&capitalized, &intent.method, ctx.fqn_to_uuid) {
-                return Some(disambiguate_overload(uuid, intent, ctx, Some(&capitalized)));
-            }
-
-            let method_dot = format!("{}.{}", receiver_class, intent.method);
-            let capitalized_method_dot = format!("{}.{}", capitalized, intent.method);
-            let method_colon = format!("{}::{}", receiver_class, intent.method);
-            let capitalized_method_colon = format!("{}::{}", capitalized, intent.method);
-            for (fqn, uuid) in ctx.fqn_to_uuid.iter() {
-                if fqn.contains(&method_dot)
-                    || fqn.contains(&capitalized_method_dot)
-                    || fqn.contains(&method_colon)
-                    || fqn.contains(&capitalized_method_colon)
-                {
-                    return Some(*uuid);
-                }
-            }
-        }
-
-        if let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
-            && let Some(u) = resolve_homonym_fallback(
-                uuids,
-                intent.arg_count,
-                Some(receiver.as_str()),
-                caller_file_path,
-                ctx,
-            )
-        {
-            return Some(u);
-        }
-    }
-
-    if intent.receiver.is_none()
-        && let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
-        && let Some(u) =
-            resolve_homonym_fallback(uuids, intent.arg_count, None, caller_file_path, ctx)
-    {
-        return Some(u);
-    }
-
-    None
+    resolve_implicit_this_call(intent, caller_enclosing_class, ctx)
+        .or_else(|| resolve_static_receiver_call(intent, ctx))
+        .or_else(|| resolve_receiver_call(intent, caller_file_path, ctx))
+        .or_else(|| resolve_bare_call(intent, caller_file_path, ctx))
 }
 
 #[cfg(test)]
@@ -506,10 +526,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
     fn test_e2e_rust_same_file_function_resolution() {
         let orphans_fn = ResolutionEntity {
             uuid: Uuid::new_v4(),

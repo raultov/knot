@@ -4,20 +4,7 @@ use uuid::Uuid;
 
 use crate::models::ResolutionEntity;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-pub fn build_alias_map(
-    entities: &[ResolutionEntity],
-    uuid_to_file: &HashMap<Uuid, String>,
-) -> HashMap<Uuid, Uuid> {
-    let mut alias_map: HashMap<Uuid, Uuid> = HashMap::new();
-
+fn index_file_entities(entities: &[ResolutionEntity]) -> HashMap<&str, Vec<&ResolutionEntity>> {
     let mut file_entities: HashMap<&str, Vec<&ResolutionEntity>> = HashMap::new();
     for e in entities {
         file_entities
@@ -25,8 +12,14 @@ pub fn build_alias_map(
             .or_default()
             .push(e);
     }
+    file_entities
+}
 
-    let mut file_defaults: HashMap<&str, Uuid> = HashMap::new();
+fn build_file_defaults<'a>(
+    entities: &'a [ResolutionEntity],
+    file_entities: &HashMap<&'a str, Vec<&'a ResolutionEntity>>,
+) -> HashMap<&'a str, Uuid> {
+    let mut file_defaults: HashMap<&'a str, Uuid> = HashMap::new();
     for e in entities {
         if let Some(ref default_name) = e.default_export
             && let Some(ents) = file_entities.get(e.file_path.as_str())
@@ -35,12 +28,21 @@ pub fn build_alias_map(
             file_defaults.insert(e.file_path.as_str(), target.uuid);
         }
     }
+    file_defaults
+}
 
+fn resolve_entity_aliases<'a>(
+    entities: &'a [ResolutionEntity],
+    uuid_to_file: &HashMap<Uuid, String>,
+    file_entities: &HashMap<&'a str, Vec<&'a ResolutionEntity>>,
+    file_defaults: &HashMap<&'a str, Uuid>,
+) -> HashMap<Uuid, Uuid> {
+    let mut alias_map: HashMap<Uuid, Uuid> = HashMap::new();
     for entity in entities {
         if let Some(ref module_path) = entity.alias_module_path
             && !module_path.is_empty()
             && let Some(source_file) = uuid_to_file.get(&entity.uuid)
-            && let Some(target_file) = resolve_module_path(source_file, module_path, &file_entities)
+            && let Some(target_file) = resolve_module_path(source_file, module_path, file_entities)
             && let Some(target_entities) = file_entities.get(target_file.as_str())
         {
             let target = target_entities
@@ -71,7 +73,43 @@ pub fn build_alias_map(
             }
         }
     }
+    alias_map
+}
 
+fn chain_terminal(
+    alias_map: &mut HashMap<Uuid, Uuid>,
+    current: Uuid,
+    visited_order: &[Uuid],
+    cycle_detected: bool,
+) -> Uuid {
+    if !cycle_detected {
+        return current;
+    }
+    let back_edge_target = alias_map.get(&current).copied().unwrap_or(current);
+    let cycle_start_idx = visited_order
+        .iter()
+        .position(|u| *u == back_edge_target)
+        .unwrap_or(0);
+    let representative = visited_order[cycle_start_idx..]
+        .iter()
+        .min()
+        .copied()
+        .unwrap_or(current);
+    warn!(
+        "Alias cycle detected involving {} entities; collapsing to representative {}",
+        visited_order.len() - cycle_start_idx,
+        representative
+    );
+    for &member in &visited_order[cycle_start_idx..] {
+        if member != representative {
+            alias_map.insert(member, representative);
+        }
+    }
+    alias_map.remove(&representative);
+    representative
+}
+
+fn collapse_alias_cycles(alias_map: &mut HashMap<Uuid, Uuid>) {
     let keys: Vec<Uuid> = alias_map.keys().copied().collect();
     for key in keys {
         if !alias_map.contains_key(&key) {
@@ -90,37 +128,22 @@ pub fn build_alias_map(
             visited_order.push(next);
             current = next;
         }
-        let terminal = if cycle_detected {
-            let back_edge_target = alias_map.get(&current).copied().unwrap_or(current);
-            let cycle_start_idx = visited_order
-                .iter()
-                .position(|u| *u == back_edge_target)
-                .unwrap_or(0);
-            let representative = visited_order[cycle_start_idx..]
-                .iter()
-                .min()
-                .copied()
-                .unwrap_or(current);
-            warn!(
-                "Alias cycle detected involving {} entities; collapsing to representative {}",
-                visited_order.len() - cycle_start_idx,
-                representative
-            );
-            for &member in &visited_order[cycle_start_idx..] {
-                if member != representative {
-                    alias_map.insert(member, representative);
-                }
-            }
-            alias_map.remove(&representative);
-            representative
-        } else {
-            current
-        };
+        let terminal = chain_terminal(alias_map, current, &visited_order, cycle_detected);
         if !cycle_detected && terminal != key {
             alias_map.insert(key, terminal);
         }
     }
+}
 
+pub fn build_alias_map(
+    entities: &[ResolutionEntity],
+    uuid_to_file: &HashMap<Uuid, String>,
+) -> HashMap<Uuid, Uuid> {
+    let file_entities = index_file_entities(entities);
+    let file_defaults = build_file_defaults(entities, &file_entities);
+    let mut alias_map =
+        resolve_entity_aliases(entities, uuid_to_file, &file_entities, &file_defaults);
+    collapse_alias_cycles(&mut alias_map);
     alias_map
 }
 

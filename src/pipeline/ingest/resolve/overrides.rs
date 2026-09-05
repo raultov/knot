@@ -123,10 +123,6 @@ fn is_constructor(method_name: &str, enclosing_type_name: &str) -> bool {
 /// upsert. Pure in-memory, batch-local, additive: it only pushes new
 /// `RelationshipType::Overrides` tuples onto method entities' `relationships`.
 #[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
     clippy::excessive_nesting,
     reason = "function is verbose but correct — extraction deferred"
 )]
@@ -829,10 +825,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
     fn nextflow_isession_getbasedir_regression() {
         // End-to-end parser + overrides integration test reproducing the
         // reported bug: Session.baseDir must override ISession.getBaseDir.
