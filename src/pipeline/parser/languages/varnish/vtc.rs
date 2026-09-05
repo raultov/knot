@@ -257,70 +257,63 @@ fn parse_quoted_or_rest(line: &str) -> String {
     }
 }
 
+fn scan_block_line(line: &str, depth: &mut usize, is_first_line: bool) -> (String, bool) {
+    let mut content = String::new();
+    let mut in_str = false;
+    let mut started = false;
+
+    for ch in line.chars() {
+        if ch == '"' {
+            in_str = !in_str;
+        }
+        if !in_str && ch == '{' {
+            *depth += 1;
+            started = true;
+            if is_first_line && *depth == 1 {
+                continue;
+            }
+        }
+        if !in_str && ch == '}' && *depth > 0 {
+            *depth -= 1;
+            if *depth == 0 {
+                break;
+            }
+        }
+        if *depth > 0 {
+            content.push(ch);
+        }
+    }
+    (content, started)
+}
+
+fn resume_block_on_next_line(lines: &[&str], i: usize, first_line: &str) -> (String, usize) {
+    if first_line.contains("-vcl+backend") && i + 1 < lines.len() {
+        let trimmed_next = lines[i + 1].trim();
+        if trimmed_next.starts_with('{') {
+            return extract_brace_block(lines, i + 1, lines[i + 1]);
+        }
+    }
+    (String::new(), i + 1)
+}
+
 /// Extract a brace-delimited block, handling embedded VCL `{"...}` long strings.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 fn extract_brace_block(lines: &[&str], start: usize, first_line: &str) -> (String, usize) {
     let mut body = String::new();
     let mut i = start;
     let mut depth = 0;
-    let mut started = false;
-    let mut in_string = false;
 
-    // Pass 1: check first line
-    let mut first_line_content = String::new();
-    for ch in first_line.chars() {
-        if ch == '"' {
-            in_string = !in_string;
-        }
-        if !in_string && ch == '{' {
-            depth += 1;
-            started = true;
-            if depth == 1 {
-                continue;
-            }
-        }
-        if !in_string && ch == '}' && depth > 0 {
-            depth -= 1;
-            if depth == 0 {
-                break;
-            }
-        }
-        if started && depth > 0 {
-            first_line_content.push(ch);
-        }
-    }
+    let (first_content, started) = scan_block_line(first_line, &mut depth, true);
 
     if started {
-        if !first_line_content.trim().is_empty() {
-            body.push_str(&first_line_content);
+        if !first_content.trim().is_empty() {
+            body.push_str(&first_content);
             body.push('\n');
         }
         i += 1;
 
         while i < lines.len() && depth > 0 {
             let line = lines[i];
-            let mut line_content = String::new();
-            let mut in_str = false;
-            for ch in line.chars() {
-                if ch == '"' {
-                    in_str = !in_str;
-                }
-                if !in_str && ch == '{' {
-                    depth += 1;
-                }
-                if !in_str && ch == '}' && depth > 0 {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                if depth > 0 {
-                    line_content.push(ch);
-                }
-            }
+            let (line_content, _) = scan_block_line(line, &mut depth, false);
             if depth > 0 || !line_content.trim().is_empty() {
                 body.push_str(&line_content);
                 body.push('\n');
@@ -329,15 +322,7 @@ fn extract_brace_block(lines: &[&str], start: usize, first_line: &str) -> (Strin
         }
         (body, i)
     } else {
-        // Did not start on first line, check if -vcl+backend flag is present and next line starts block
-        if first_line.contains("-vcl+backend") && i + 1 < lines.len() {
-            let trimmed_next = lines[i + 1].trim();
-            if trimmed_next.starts_with('{') {
-                return extract_brace_block(lines, i + 1, lines[i + 1]);
-            }
-        }
-        // Otherwise no block
-        (String::new(), i + 1)
+        resume_block_on_next_line(lines, i, first_line)
     }
 }
 
@@ -582,5 +567,28 @@ varnish v1 -vcl+backend { sub vcl_recv { } } -start"#;
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_extract_brace_block_embedded_vcl_string() {
+        let lines = vec![
+            "varnish v1 -vcl {",
+            "    sub vcl_recv {",
+            "        if (req.url ~ \"foo{bar}\") { set req.http.x = \"}\"; }",
+            "    }",
+            "} -start",
+        ];
+        let (body, end_idx) = extract_brace_block(&lines, 0, lines[0]);
+        assert_eq!(end_idx, 5);
+        assert!(body.contains("vcl_recv"));
+        assert!(body.contains("foo{bar}"));
+    }
+
+    #[test]
+    fn test_extract_brace_block_vcl_backend_next_line() {
+        let lines = vec!["varnish v1 -vcl+backend", "{", "    sub vcl_recv { }", "}"];
+        let (body, end_idx) = extract_brace_block(&lines, 0, lines[0]);
+        assert_eq!(end_idx, 4);
+        assert!(body.contains("vcl_recv"));
     }
 }

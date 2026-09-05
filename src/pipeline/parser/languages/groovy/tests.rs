@@ -1130,6 +1130,12 @@ fn strip_comments_line_unit() {
             "x = \"// not a comment\"",
             false,
         ),
+        (
+            "x = \"a\\\"b\" // escaped quote",
+            false,
+            "x = \"a\\\"b\"",
+            false,
+        ),
     ];
     for (i, (input, in_before, expected, in_after)) in cases.iter().enumerate() {
         let mut in_block = *in_before;
@@ -1573,6 +1579,42 @@ class Worker {
         .iter()
         .any(|r| matches!(r, ReferenceIntent::Call { method, .. } if method == "println"));
     assert!(!has_println);
+}
+
+#[test]
+fn test_receiver_call_detection() {
+    let source = r#"
+class Service {
+    void run() {
+        obj.compute()
+    }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Service.groovy", "test-repo");
+    let run = entities
+        .iter()
+        .find(|e| e.name == "run")
+        .expect("run not found");
+    let has_recv_call = run.reference_intents.iter().any(|r| {
+        matches!(r, ReferenceIntent::Call { method, receiver: Some(rec), .. } if method == "compute" && rec == "obj")
+    });
+    assert!(
+        has_recv_call,
+        "Expected Call intent with receiver 'obj' for method 'compute'"
+    );
+}
+
+#[test]
+fn test_non_ascii_trailing_comment_does_not_panic() {
+    let source = r#"
+class Test {
+    void run() {
+        def x = 1 // esto está mal
+    }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Test.groovy", "test-repo");
+    assert!(!entities.is_empty());
 }
 
 #[test]

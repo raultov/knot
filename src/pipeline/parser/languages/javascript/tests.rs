@@ -48,13 +48,12 @@ fn test_extract_single_call_intent_javascript_simple() {
     let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
         .expect("Failed to parse JavaScript code");
 
-    if let Some(call) = find_call_expression(tree.root_node()) {
-        let code_bytes = code.as_bytes();
-        let intents = extract_single_call_intent_javascript(call, code_bytes);
-        assert!(!intents.is_empty());
-        assert_eq!(intents[0].method, "method");
-        assert!(intents[0].receiver.is_none());
-    }
+    let call = find_call_expression(tree.root_node()).expect("Call expression not found");
+    let code_bytes = code.as_bytes();
+    let intents = extract_single_call_intent_javascript(call, code_bytes);
+    assert!(!intents.is_empty());
+    assert_eq!(intents[0].method, "method");
+    assert!(intents[0].receiver.is_none());
 }
 
 #[test]
@@ -63,13 +62,12 @@ fn test_extract_single_call_intent_javascript_member() {
     let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
         .expect("Failed to parse JavaScript code");
 
-    if let Some(call) = find_call_expression(tree.root_node()) {
-        let code_bytes = code.as_bytes();
-        let intents = extract_single_call_intent_javascript(call, code_bytes);
-        assert!(!intents.is_empty());
-        assert_eq!(intents[0].method, "method");
-        assert_eq!(intents[0].receiver, Some("obj".to_string()));
-    }
+    let call = find_call_expression(tree.root_node()).expect("Call expression not found");
+    let code_bytes = code.as_bytes();
+    let intents = extract_single_call_intent_javascript(call, code_bytes);
+    assert!(!intents.is_empty());
+    assert_eq!(intents[0].method, "method");
+    assert_eq!(intents[0].receiver, Some("obj".to_string()));
 }
 
 #[test]
@@ -78,13 +76,57 @@ fn test_extract_single_call_intent_javascript_new() {
     let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
         .expect("Failed to parse JavaScript code");
 
-    if let Some(new_expr) = find_new_expression(tree.root_node()) {
-        let code_bytes = code.as_bytes();
-        let intents = extract_single_call_intent_javascript(new_expr, code_bytes);
-        assert!(!intents.is_empty());
-        assert_eq!(intents[0].method, "MyClass");
-        assert!(intents[0].receiver.is_none());
+    let new_expr = find_new_expression(tree.root_node()).expect("New expression not found");
+    let code_bytes = code.as_bytes();
+    let intents = extract_single_call_intent_javascript(new_expr, code_bytes);
+    assert!(!intents.is_empty());
+    assert_eq!(intents[0].method, "MyClass");
+    assert!(intents[0].receiver.is_none());
+}
+
+#[test]
+fn test_extract_single_call_intent_javascript_bind() {
+    let code = "function test() { this.handleClick.bind(this); }";
+    let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+        .expect("Failed to parse JavaScript code");
+
+    let call = find_call_expression(tree.root_node()).expect("Call expression not found");
+    let code_bytes = code.as_bytes();
+    let intents = extract_single_call_intent_javascript(call, code_bytes);
+    assert!(!intents.is_empty());
+    assert_eq!(intents[0].method, "handleClick");
+    assert_eq!(intents[0].receiver, Some("this".to_string()));
+}
+
+#[test]
+fn test_extract_single_call_intent_javascript_this_prop() {
+    let code = "function test() { console.log(this.myProperty); }";
+    let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
+        .expect("Failed to parse JavaScript code");
+
+    // find member_expression: this.myProperty
+    fn find_this_member(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+        if node.kind() == "member_expression"
+            && let Some(obj) = node.child_by_field_name("object")
+            && obj.kind() == "this"
+        {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(n) = find_this_member(child) {
+                return Some(n);
+            }
+        }
+        None
     }
+
+    let member = find_this_member(tree.root_node()).expect("this member expression not found");
+    let code_bytes = code.as_bytes();
+    let intents = extract_single_call_intent_javascript(member, code_bytes);
+    assert!(!intents.is_empty());
+    assert_eq!(intents[0].method, "myProperty");
+    assert_eq!(intents[0].receiver, Some("this".to_string()));
 }
 
 #[test]

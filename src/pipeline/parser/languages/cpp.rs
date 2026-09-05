@@ -444,10 +444,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "function is verbose but correct — extraction deferred"
-    )]
     fn test_cpp_reference_intents_pointers_and_namespaces() {
         let source = r#"
             void test() {

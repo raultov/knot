@@ -116,115 +116,123 @@ fn extract_single_k8s_resource(
     Some(entity)
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
+fn yaml_path<'a>(v: &'a serde_yaml::Value, path: &[&str]) -> Option<&'a serde_yaml::Value> {
+    let mut curr = v;
+    for key in path {
+        curr = curr.get(*key)?;
+    }
+    Some(curr)
+}
+
+fn yaml_seq<'a>(v: &'a serde_yaml::Value, key: &str) -> &'a [serde_yaml::Value] {
+    v.get(key)
+        .and_then(|seq| seq.as_sequence())
+        .map(|s| s.as_slice())
+        .unwrap_or(&[])
+}
+
+fn yaml_str<'a>(v: &'a serde_yaml::Value, key: &str) -> Option<&'a str> {
+    v.get(key).and_then(|val| val.as_str())
+}
+
+fn push_container_summaries(spec: &serde_yaml::Value, parts: &mut Vec<String>) {
+    if let Some(template_spec) = yaml_path(spec, &["template", "spec"]) {
+        for container in yaml_seq(template_spec, "containers") {
+            if let (Some(name), Some(image)) =
+                (yaml_str(container, "name"), yaml_str(container, "image"))
+            {
+                parts.push(format!("container: {} ({})", name, image));
+            }
+        }
+    }
+}
+
+fn push_port_summaries(spec: &serde_yaml::Value, parts: &mut Vec<String>) {
+    for port in yaml_seq(spec, "ports") {
+        if let (Some(p), Some(name)) = (
+            port.get("port").and_then(|v| v.as_i64()),
+            yaml_str(port, "name"),
+        ) {
+            parts.push(format!("port: {} ({})", p, name));
+        } else if let Some(p) = port.get("port").and_then(|v| v.as_i64()) {
+            parts.push(format!("port: {}", p));
+        }
+    }
+}
+
+fn push_kind_specific_summary(
+    yaml: &serde_yaml::Value,
+    spec: &serde_yaml::Value,
+    parts: &mut Vec<String>,
+) {
+    if let Some(kind) = yaml_str(yaml, "kind") {
+        if kind == "Service"
+            && let Some(svc_type) = yaml_str(spec, "type")
+        {
+            parts.push(format!("type: {}", svc_type));
+        }
+        if kind == "Ingress" {
+            for rule in yaml_seq(spec, "rules") {
+                if let Some(host) = yaml_str(rule, "host") {
+                    parts.push(format!("host: {}", host));
+                }
+            }
+        }
+    }
+}
+
 fn k8s_spec_summary(yaml: &serde_yaml::Value) -> Option<String> {
     let spec = yaml.get("spec")?;
-
     let mut parts = Vec::new();
 
     if let Some(replicas) = spec.get("replicas").and_then(|v| v.as_i64()) {
         parts.push(format!("replicas: {}", replicas));
     }
 
-    if let Some(template) = spec.get("template").and_then(|t| t.get("spec"))
-        && let Some(containers) = template.get("containers").and_then(|v| v.as_sequence())
-    {
-        for container in containers {
-            if let Some(name) = container.get("name").and_then(|v| v.as_str())
-                && let Some(image) = container.get("image").and_then(|v| v.as_str())
-            {
-                parts.push(format!("container: {} ({})", name, image));
-            }
-        }
-    }
+    push_container_summaries(spec, &mut parts);
+    push_port_summaries(spec, &mut parts);
+    push_kind_specific_summary(yaml, spec, &mut parts);
 
-    if let Some(ports) = spec.get("ports").and_then(|v| v.as_sequence()) {
-        for port in ports {
-            if let (Some(p), Some(name)) = (
-                port.get("port").and_then(|v| v.as_i64()),
-                port.get("name").and_then(|v| v.as_str()),
-            ) {
-                parts.push(format!("port: {} ({})", p, name));
-            } else if let Some(p) = port.get("port").and_then(|v| v.as_i64()) {
-                parts.push(format!("port: {}", p));
-            }
-        }
-    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
 
-    if let Some(kind) = yaml.get("kind").and_then(|v| v.as_str()) {
-        if kind == "Service"
-            && let Some(svc_type) = spec.get("type").and_then(|v| v.as_str())
-        {
-            parts.push(format!("type: {}", svc_type));
+fn push_container_image_refs(
+    template_spec: &serde_yaml::Value,
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    for container in yaml_seq(template_spec, "containers") {
+        if let Some(image) = yaml_str(container, "image") {
+            intents.push(ReferenceIntent::ValueReference {
+                value_name: image.to_string(),
+                line: 1,
+            });
         }
-        if kind == "Ingress"
-            && let Some(rules) = spec.get("rules").and_then(|v| v.as_sequence())
-        {
-            for rule in rules {
-                if let Some(host) = rule.get("host").and_then(|v| v.as_str()) {
-                    parts.push(format!("host: {}", host));
-                }
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
     }
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-fn extract_k8s_references(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceIntent>) {
-    // spec.template.spec.containers[].image -> ValueReference
-    if let Some(template) = yaml
-        .get("spec")
-        .and_then(|s| s.get("template"))
-        .and_then(|t| t.get("spec"))
-    {
-        if let Some(containers) = template.get("containers").and_then(|v| v.as_sequence()) {
-            for container in containers {
-                if let Some(image) = container.get("image").and_then(|v| v.as_str()) {
-                    intents.push(ReferenceIntent::ValueReference {
-                        value_name: image.to_string(),
-                        line: 1,
-                    });
-                }
-            }
+fn push_volume_refs(template_spec: &serde_yaml::Value, intents: &mut Vec<ReferenceIntent>) {
+    for volume in yaml_seq(template_spec, "volumes") {
+        if let Some(cm) = volume.get("configMap")
+            && let Some(cm_name) = yaml_str(cm, "name")
+        {
+            intents.push(ReferenceIntent::ValueReference {
+                value_name: format!("configmap:{}", cm_name),
+                line: 1,
+            });
         }
-
-        // spec.template.spec.volumes[].configMap.name
-        if let Some(volumes) = template.get("volumes").and_then(|v| v.as_sequence()) {
-            for volume in volumes {
-                if let Some(cm) = volume.get("configMap")
-                    && let Some(cm_name) = cm.get("name").and_then(|v| v.as_str())
-                {
-                    intents.push(ReferenceIntent::ValueReference {
-                        value_name: format!("configmap:{}", cm_name),
-                        line: 1,
-                    });
-                }
-                if let Some(secret) = volume.get("secret")
-                    && let Some(secret_name) = secret.get("secretName").and_then(|v| v.as_str())
-                {
-                    intents.push(ReferenceIntent::ValueReference {
-                        value_name: format!("secret:{}", secret_name),
-                        line: 1,
-                    });
-                }
-            }
+        if let Some(secret) = volume.get("secret")
+            && let Some(secret_name) = yaml_str(secret, "secretName")
+        {
+            intents.push(ReferenceIntent::ValueReference {
+                value_name: format!("secret:{}", secret_name),
+                line: 1,
+            });
         }
     }
+}
 
-    // spec.selector.matchLabels -> ValueReference
-    if let Some(selector) = yaml.get("spec").and_then(|s| s.get("selector"))
+fn push_selector_refs(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceIntent>) {
+    if let Some(selector) = yaml_path(yaml, &["spec", "selector"])
         && let Some(match_labels) = selector.get("matchLabels").and_then(|v| v.as_mapping())
     {
         for (k, v) in match_labels {
@@ -238,21 +246,16 @@ fn extract_k8s_references(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceI
             });
         }
     }
+}
 
-    // spec.rules[].backend.service.name (Ingress)
-    if let Some(rules) = yaml
-        .get("spec")
-        .and_then(|s| s.get("rules"))
-        .and_then(|v| v.as_sequence())
-    {
-        for rule in rules {
-            if let Some(http) = rule.get("http")
-                && let Some(paths) = http.get("paths").and_then(|v| v.as_sequence())
-            {
-                for path in paths {
+fn push_ingress_backend_refs(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceIntent>) {
+    if let Some(spec) = yaml.get("spec") {
+        for rule in yaml_seq(spec, "rules") {
+            if let Some(http) = rule.get("http") {
+                for path in yaml_seq(http, "paths") {
                     if let Some(backend) = path.get("backend")
                         && let Some(service) = backend.get("service")
-                        && let Some(svc_name) = service.get("name").and_then(|v| v.as_str())
+                        && let Some(svc_name) = yaml_str(service, "name")
                     {
                         intents.push(ReferenceIntent::ValueReference {
                             value_name: svc_name.to_string(),
@@ -263,6 +266,16 @@ fn extract_k8s_references(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceI
             }
         }
     }
+}
+
+fn extract_k8s_references(yaml: &serde_yaml::Value, intents: &mut Vec<ReferenceIntent>) {
+    if let Some(template_spec) = yaml_path(yaml, &["spec", "template", "spec"]) {
+        push_container_image_refs(template_spec, intents);
+        push_volume_refs(template_spec, intents);
+    }
+
+    push_selector_refs(yaml, intents);
+    push_ingress_backend_refs(yaml, intents);
 }
 
 #[cfg(test)]
@@ -495,5 +508,27 @@ spec:
         assert!(refs.iter().any(|r| {
             matches!(r, ReferenceIntent::ValueReference { value_name, .. } if value_name == "secret:app-creds")
         }));
+        assert!(refs.iter().any(|r| {
+            matches!(r, ReferenceIntent::ValueReference { value_name, .. } if value_name == "myapp:v2")
+        }));
+        assert!(refs.iter().any(|r| {
+            matches!(r, ReferenceIntent::ValueReference { value_name, .. } if value_name == "app=myapp")
+        }));
+    }
+
+    #[test]
+    fn test_parse_unnamed_port() {
+        let source = r#"
+apiVersion: v1
+kind: Service
+metadata:
+  name: unnamed-svc
+spec:
+  ports:
+    - port: 8080
+"#;
+        let entities = extract_entities_k8s(source, "/k8s/unnamed.yml", "test-repo");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].docstring, Some("port: 8080".to_string()));
     }
 }

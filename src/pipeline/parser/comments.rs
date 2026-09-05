@@ -118,6 +118,75 @@ pub(crate) fn extract_comments(
 
 /// Extract decorators/annotations from an entity node.
 ///
+fn collect_nested_child_text(
+    node: Node<'_>,
+    source: &[u8],
+    container_kind: &str,
+    item_kinds: &[&str],
+) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        if c.kind() == container_kind {
+            let mut item_child = c.child(0);
+            while let Some(ic) = item_child {
+                if item_kinds.contains(&ic.kind()) {
+                    let text = node_text(ic, source);
+                    if !text.is_empty() {
+                        results.push(text);
+                    }
+                }
+                item_child = ic.next_sibling();
+            }
+        }
+        child = c.next_sibling();
+    }
+    results
+}
+
+fn typescript_decorators(entity_node: Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut decorators = Vec::new();
+    let mut child = entity_node.child(0);
+    while let Some(c) = child {
+        if c.kind() == "decorator" {
+            let decorator_text = node_text(c, source);
+            if !decorator_text.is_empty() {
+                decorators.push(decorator_text);
+            }
+        }
+        child = c.next_sibling();
+    }
+
+    if decorators.is_empty()
+        && let Some(parent) = entity_node.parent()
+    {
+        let mut pchild = parent.child(0);
+        let mut found_decorator_section = false;
+
+        while let Some(c) = pchild {
+            if c.id() == entity_node.id() {
+                break;
+            }
+
+            if c.kind() == "decorator" {
+                let decorator_text = node_text(c, source);
+                if !decorator_text.is_empty() {
+                    decorators.push(decorator_text);
+                    found_decorator_section = true;
+                }
+            } else if found_decorator_section
+                && !c.utf8_text(source).unwrap_or("").trim().is_empty()
+                && !matches!(c.kind(), "comment" | "line_comment" | "block_comment")
+            {
+                break;
+            }
+
+            pchild = c.next_sibling();
+        }
+    }
+    decorators
+}
+
 /// **TypeScript:** Looks for `decorator` nodes preceding the entity.
 /// Example: `@OnEvent('foo')` or `@Override`
 ///
@@ -125,117 +194,25 @@ pub(crate) fn extract_comments(
 /// Examples: `@Override`, `@GetMapping("/path")`, `@OnEvent('foo')`
 ///
 /// Returns a vector of decorator strings (e.g., `["@Override", "@OnEvent('foo')"]`).
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::excessive_nesting,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 pub(crate) fn extract_decorators(
     entity_node: Node<'_>,
     source: &[u8],
     lang_name: &str,
 ) -> Vec<String> {
-    let mut decorators: Vec<String> = Vec::new();
-
-    if lang_name == "typescript" {
-        // For TypeScript: decorators are separate nodes that precede the declaration
-        // Look for decorator nodes that come before this entity
-        if let Some(parent) = entity_node.parent() {
-            let mut child = parent.child(0);
-            let entity_line = entity_node.start_position().row;
-            let mut found_decorator_section = false;
-
-            while let Some(c) = child {
-                let child_line = c.start_position().row;
-
-                // Stop once we've passed the entity
-                if child_line >= entity_line {
-                    break;
-                }
-
-                if c.kind() == "decorator" {
-                    let decorator_text = node_text(c, source);
-                    if !decorator_text.is_empty() {
-                        decorators.push(decorator_text);
-                        found_decorator_section = true;
-                    }
-                } else if found_decorator_section
-                    && !c.utf8_text(source).unwrap_or("").trim().is_empty()
-                {
-                    // Stop collecting decorators if we hit a non-decorator, non-whitespace node
-                    if !matches!(c.kind(), "comment" | "line_comment" | "block_comment") {
-                        break;
-                    }
-                }
-
-                child = c.next_sibling();
-            }
+    match lang_name {
+        "typescript" => typescript_decorators(entity_node, source),
+        "java" => collect_nested_child_text(
+            entity_node,
+            source,
+            "modifiers",
+            &["annotation", "marker_annotation"],
+        ),
+        "kotlin" => collect_nested_child_text(entity_node, source, "modifiers", &["annotation"]),
+        "csharp" => {
+            collect_nested_child_text(entity_node, source, "attribute_list", &["attribute"])
         }
-    } else if lang_name == "java" {
-        // For Java: annotations are in the modifiers section
-        let mut child = entity_node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "modifiers" {
-                // Extract annotations from the modifiers node
-                let mut modifier_child = c.child(0);
-                while let Some(mc) = modifier_child {
-                    if matches!(mc.kind(), "annotation" | "marker_annotation") {
-                        let annotation_text = node_text(mc, source);
-                        if !annotation_text.is_empty() {
-                            decorators.push(annotation_text);
-                        }
-                    }
-                    modifier_child = mc.next_sibling();
-                }
-            }
-            child = c.next_sibling();
-        }
-    } else if lang_name == "kotlin" {
-        // For Kotlin: annotations are in the modifiers section (similar to Java)
-        let mut child = entity_node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "modifiers" {
-                // Extract annotations from the modifiers node
-                let mut modifier_child = c.child(0);
-                while let Some(mc) = modifier_child {
-                    if mc.kind() == "annotation" {
-                        let annotation_text = node_text(mc, source);
-                        if !annotation_text.is_empty() {
-                            decorators.push(annotation_text);
-                        }
-                    }
-                    modifier_child = mc.next_sibling();
-                }
-            }
-            child = c.next_sibling();
-        }
-    } else if lang_name == "csharp" {
-        // For C#: attributes live in `attribute_list` children of the
-        // declaration — NOT inside a `modifiers` node as in Java/Kotlin —
-        // so this cannot reuse either existing branch.
-        // Example: `[Obsolete("Use UserServiceV2 instead")]`
-        let mut child = entity_node.child(0);
-        while let Some(c) = child {
-            if c.kind() == "attribute_list" {
-                let mut attr_child = c.child(0);
-                while let Some(ac) = attr_child {
-                    if ac.kind() == "attribute" {
-                        let attribute_text = node_text(ac, source);
-                        if !attribute_text.is_empty() {
-                            decorators.push(attribute_text);
-                        }
-                    }
-                    attr_child = ac.next_sibling();
-                }
-            }
-            child = c.next_sibling();
-        }
+        _ => Vec::new(),
     }
-
-    decorators
 }
 
 /// Extract all child method/function/class declarations within a node.
@@ -520,6 +497,71 @@ class UserService {
             );
         } else {
             panic!("Could not find class declaration in Kotlin code");
+        }
+    }
+
+    #[test]
+    fn test_extract_decorators_java() {
+        let code = r#"
+@Service
+@RequestMapping("/users")
+public class UserService {
+}
+"#;
+        let lang = tree_sitter_java::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        if let Some(class_node) = find_class(tree.root_node()) {
+            let decorators = extract_decorators(class_node, code.as_bytes(), "java");
+            assert_eq!(decorators.len(), 2);
+            assert!(decorators.iter().any(|d| d.contains("Service")));
+            assert!(decorators.iter().any(|d| d.contains("RequestMapping")));
+        } else {
+            panic!("Could not find class declaration in Java code");
+        }
+    }
+
+    #[test]
+    fn test_extract_decorators_typescript() {
+        let code = r#"
+@Component({ selector: 'app-root' })
+class AppComponent {
+}
+"#;
+        let lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        if let Some(class_node) = find_class(tree.root_node()) {
+            let decorators = extract_decorators(class_node, code.as_bytes(), "typescript");
+            assert_eq!(decorators.len(), 1);
+            assert!(decorators[0].contains("Component"));
+        } else {
+            panic!("Could not find class declaration in TypeScript code");
+        }
+    }
+
+    #[test]
+    fn test_extract_decorators_csharp() {
+        let code = r#"
+[Obsolete("Use V2")]
+class UserService {
+}
+"#;
+        let lang = tree_sitter_c_sharp::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+
+        if let Some(class_node) = find_class(tree.root_node()) {
+            let decorators = extract_decorators(class_node, code.as_bytes(), "csharp");
+            assert_eq!(decorators.len(), 1);
+            assert!(decorators[0].contains("Obsolete"));
+        } else {
+            panic!("Could not find class declaration in C# code");
         }
     }
 }
