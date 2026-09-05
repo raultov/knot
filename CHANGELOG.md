@@ -5,6 +5,148 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.8.3 — Refactor: Split Oversized Functions into Helpers
+
+Internal code-health release: every function exceeding 100 lines was
+split into helpers (no public-API or behaviour change), the
+`too_many_lines` clippy threshold was raised to the upstream default
+of 100, and all 41 `#[expect(clippy::too_many_lines, …)]` opt-outs were
+retired. Reasoning is in `clippy.toml` (measured curves under the
+thresholds). No schema changes, no re-index required for already
+indexed repositories.
+
+- **Refactor(extractor)**: `process_capture` (421 lines) — the central
+  tree-sitter capture dispatcher — split into one private handler per
+  capture-name family (`handle_class_captures`, `handle_method_captures`,
+  `handle_kotlin_decl_captures`, `handle_kotlin_function_capture`,
+  `handle_function_captures`, `handle_css_scss_capture`,
+  `handle_html_capture`, `handle_rust_capture`, `handle_python_capture`,
+  `handle_markdown_capture`, `handle_dom_css_ref_capture`,
+  `handle_groovy_capture`, `handle_csharp_capture`,
+  `handle_cpp_captures`). Dispatcher drops to a flat match; each
+  handler holds ≤5 params and ≤100 lines. `tracing/log`-induced
+  lifetime noise resolved with named lifetimes on the shared capture
+  context.
+- **Refactor(parser)**: `parse_single_file` (298 lines) — the per-file
+  format dispatcher — split into `FileCtx` state + per-grammar
+  dispatchers (`dispatch_query_lang`, `dispatch_html_lang`,
+  `dispatch_config_lang`, `dispatch_lexical_lang`). Dispatch is now
+  data-driven via the shared context; early returns for filename-based
+  detection (`Jenkinsfile`, `Directory.Packages.props`) preserved.
+- **Refactor(ingest)**: `resolve_reference_intents_with_context` and its
+  per-intent resolution moved into phase helpers:
+  `LookupMaps::build` / `context()` for the 7 lookup tables;
+  `resolve_intent` (the central dispatch), `resolve_plain`,
+  `resolve_typed` (the dot-`::`-path-qualified family), plus the
+  container-related helpers and the `push_relationship` filter for
+  nested-decl self-references + dedup. The alias-redirection step was
+  pulled into the caller so `resolve_intent` stays pure. `aliases.rs`'s
+  `build_alias_map` split into `index_file_entities`,
+  `build_file_defaults`, `resolve_entity_aliases`, and the cycle
+  collapser `collapse_alias_cycles` (its terminal calculation lifted to
+  `chain_terminal`). `calls.rs`'s `resolve_single_call_intent` split
+  into a dispatcher that chains `resolve_super_call`,
+  `resolve_implicit_this_call`, `resolve_static_receiver_call`,
+  `resolve_receiver_call`, `resolve_bare_call` — with the `super`
+  branch kept terminal so unresolved `super()` never falls through to
+  the bare-name fallback (regression test
+  `test_python_super_init_no_parent_returns_no_edge`).
+- **Refactor(pipeline)**: `run_pipeline_inner` (264 lines) — the indexing
+  pipeline orchestrator — split into `classify_pipeline_inputs` (file
+  discovery + classification), `run_streaming_ingest` (the parse →
+  embed → ingest stages), `spawn_parse_stage`,
+  `spawn_embed_task` + `embed_and_forward` + `maybe_reset_session`,
+  `spawn_ingest_task`, plus two log-only helpers
+  (`log_nothing_to_index`, `log_file_classification`,
+  `log_parse_and_ingest_complete`) extracted to keep the
+  `tracing/log` macro cost out of the control-flow score. `PipelineInputs`
+  carries the per-file pack.
+- **Refactor(db)**: `get_entity_subgraph` (268 lines) split into
+  `is_query_unsupported_check`, `resolve_subgraph_root_node`,
+  `find_root_by_uuid`, `collect_related_nodes`, `finalize_nodes`,
+  `collect_subgraph_edges`, `build_edge_query`,
+  `plain_edge_query`. `upsert_entities` split into
+  `build_entity_params` and `auto_link_contains` (placed at module
+  scope so they aren't picked up as trait methods). `kind_to_label`
+  simplified to `format!("{kind:?}")` — every variant's Neo4j label
+  equals its own name, so the 110-arm match collapses to a `Debug`-derived
+  string.
+- **Refactor(models)**: `Display for EntityKind` (110 arms) — replaced
+  with a module-level `KIND_LABELS: &[(EntityKind, &str)]` table plus a
+  6-line `fmt` that looks up the table and falls back to `Debug` for any
+  future variant. The unknown-arm fallback also guarantees a future
+  variant can never render empty.
+- **Refactor(parser): per-language extractors split into helpers.**
+  `toml.rs`: `extract_cargo_package` / `extract_cargo_features` /
+  `extract_workspace_members`. `groovy/mod.rs`: `GroovyScan` with
+  `try_type_declaration` / `try_methods` / `try_property` / `push_property`
+  and a top-level `collect_instance_names` helper. `groovy/properties.rs`:
+  `try_extract_property` split into `strip_leading_annotations`,
+  `try_extract_initialized_property`, `try_extract_bare_property`,
+  `find_bare_property_type`. `varnish/vcl.rs`: `parse_sub_body` +
+  `parse_call_statement` + `parse_dotted_path_statement` +
+  `parse_ident_statement` + `record_method_call`. `varnish/vcc.rs`:
+  `VccState` + `handle_module` / `handle_function` / `handle_object` /
+  `handle_method` / `handle_other` + `take_prose` + `process_line`.
+  `varnish/vtc.rs`: `VtcContext` + `handle_test_case` / `handle_server`
+  / `handle_client` / `handle_varnish` / `handle_logexpect` /
+  `handle_barrier` + `dispatch` + `collect_instance_names`.
+  `rust/types.rs`: `collect_type_nodes` split into `capture_type_*` /
+  `handle_*` / `walk_ancestors_until` / `recurse_children` /
+  `handle_token_tree` (with the O(N) skip-check preserved).
+  `typescript.rs`: `process_export_clause_specifiers` +
+  `extract_export_statement_intents`. `cpp.rs`: `extract_call_expr_intent`
+  + `extract_type_identifier_intent` + dispatch. `helm.rs`:
+  `values_ref_parts` + `scoped_var_ref_parts`. `html.rs`:
+  `extract_script_imports` + `extract_link_stylesheet_imports` +
+  `find_tag_name` + `collect_link_attributes` (which removed the inner
+  `excessive_nesting` expects). `parser/context.rs`:
+  `compute_fqn_and_context` split into `dot_qualified`,
+  `path_qualified`, plus an `FqnShape` enum classifier (`DotQualified` /
+  `PathQualified` / `Prefixed(&'static str)` / `MacroInvoke` / `BareName`)
+  that keeps the match exhaustive over `EntityKind`. `enrich.rs`: the
+  docstring/decorators/class-inheritance/CssPath/CSharp FQN/type-references
+  blocks split into focused helpers around a `FqnEnrichment` struct
+  (`apply_java_package` / `apply_cpp_namespace` / `apply_csharp_scope`)
+  + `set_markdown_embed_text` + `apply_js_require_alias` +
+  `record_covered_range` + `extract_entity_decorators` +
+  `retain_non_self_references`. `mcp_tools/.../format.rs`:
+  `format_entity` split into `format_string_list` (shared by
+  `subclasses` / `implementers` / `dependencies`) and `append_samples`
+  (used by both the type-usage and the callers summary).
+- **Test(parser)**: Three oversized tests split. `groovy/tests.rs`
+  `test_groovy_parse_sample_full_file` (124 lines) split into
+  `test_groovy_parse_sample_full_file_types`,
+  `test_groovy_parse_sample_full_file_methods_and_properties`,
+  `test_groovy_parse_sample_full_file_docstrings`.
+  `extractor/tests.rs` `test_extract_entities_markdown_section_body_in_embed_text`
+  (119 lines) split into `test_extract_entities_markdown_section_fqn_chain`
+  plus the slimmed body test. `models/entity.rs` gains a `test_display_labels`
+  test (20 spot-checks across language families — the new `KIND_LABELS`
+  table had no test coverage).
+- **Chore(ingest)**: Plain-expect-removal touches — `bin/knot.rs`
+  `main()`, `pipeline/watch.rs` `setup_watch_mode_with_progress` — plus
+  the paired-attribution files in the language extractors
+  (`groovy/{accessors,methods}.rs`, `parser/javascript/jsx.rs`,
+  `parser/json_config.rs`, `parser/rust/tests.rs`,
+  `extractor/post_passes.rs`). All unfulfilled at the new 100-line
+  threshold; now unenforced.
+- **Clippy config**: `clippy.toml` raised `too-many-lines-threshold`
+  from 80 → 100 (upstream default) and documented the measured curves
+  under both `too_many_lines` and `cognitive_complexity`. The
+  `cognitive_complexity` annotation now records the measured
+  `tracing/log` macro inflation observed across `axum → tower/log →
+  tracing/log`.
+
+- **cargo fmt** clean | **cargo clippy --all-targets --all-features -D warnings** clean
+- ✅ Unit tests passing (1250 lib + 3 + 4 binary tests) | **E2E suites** status:
+  21/21 (typescript, java, javascript, web, kotlin, rust, rust_reference_resolution,
+  python, rust_test_module, build_systems, config, k8s_helm, groovy,
+  cross_repo_dep, repo_scope, cross_lang_ref, cpp, markdown,
+  contains_autolink_index, varnish, csharp) — see CI
+
+---
+
 ## v1.8.2 — Refactor: Code Deduplication and Typo Cleanup
 
 Internal code-health release: deduplication, modularization of the
