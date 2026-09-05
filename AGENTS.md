@@ -71,7 +71,7 @@ Located in `src/pipeline/parser/languages/`:
 - `kotlin.rs` (tree-sitter-kotlin-ng v1.1.0)
 - `rust.rs` (tree-sitter-rust v0.24) — Supports macros, type aliases, constants
 - `python.rs` (v0.9.3) — Full async/decorator/type hint support
-- `groovy.rs` (v0.10.3) — Hybrid tree-sitter + lexical parser
+- `groovy/` (v0.10.3) — Hybrid tree-sitter + lexical parser; modularized as `mod.rs` (pipeline), `capture.rs`, `inheritance.rs`, `methods.rs`, `properties.rs`, `accessors.rs`, `refs.rs`, `utils.rs`, `tests.rs`
 - `c_cpp.rs` (v1.0.0) — Namespace-aware FQN for C++
 - `csharp/` (tree-sitter-c-sharp 0.23) — C# classes/interfaces/structs/records/enums, members, namespaces; FQN `<namespace>.<Type>.<member>` across file-scoped and block forms
 - `html.rs`, `css.rs` — Web stack support
