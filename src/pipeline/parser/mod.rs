@@ -290,7 +290,7 @@ fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedE
     if filename == "Directory.Packages.props" {
         // MSBuild Central Package Management: emits no entities of its
         // own — the CPM map is consumed lazily by csproj parsing. The
-        // dispatcher must still have a target so the file is recognised
+        // dispatcher must still have a target so the file is recognized
         // when discovered.
         return Ok(languages::msbuild::extract_entities_props(
             &source,
@@ -1343,7 +1343,7 @@ int bar(const char *s);
     fn given_a_saturated_channel_when_parsing_completes_then_total_is_published_before_blocking() {
         // Heart of the fix (v1.6.2):
         //
-        // The previous behaviour was to block on `blocking_send` after the
+        // The previous behavior was to block on `blocking_send` after the
         // parse was complete, but the parse had already saturated the
         // percentage to 100% before that block. The new contract publishes
         // the entity total BEFORE the first blocking send, so a downstream
@@ -1383,7 +1383,7 @@ int bar(const char *s);
 
         let callbacks = ParseCallbacks {
             on_file_parsed: None,
-            on_entities_extracted: Some(std::sync::Arc::new(move |n: usize| {
+            on_entities_extracted: Some(Arc::new(move |n: usize| {
                 let (lock, cvar) = &*signalled_clone;
                 *lock.lock().unwrap() = true;
                 cvar.notify_all();

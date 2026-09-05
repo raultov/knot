@@ -16,7 +16,7 @@
 //!
 //! **Behavior & Return:**
 //! - Read-only query with no side effects.
-//! - Returns a markdown table (for MCP) or JSON array (for CLI) of repositories.
+//! - Returns a Markdown table (for MCP) or JSON array (for CLI) of repositories.
 //! - Each entry includes: name, entity_count, file_count, build_system, primary_language.
 //!
 //! **Parameter Guidance:**

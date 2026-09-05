@@ -13,7 +13,6 @@
 //! - **Dependency Context**: Get full dependency chains and architectural relationships
 //! - **Multi-language Support**: Works with Java and TypeScript codebases
 
-pub mod enrich;
 pub mod format;
 
 use rust_mcp_sdk::schema::*;

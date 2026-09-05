@@ -50,6 +50,31 @@ pub(crate) struct CaptureState<'a> {
     pub reference_intents: Vec<ReferenceIntent>,
 }
 
+/// Dispatch call-reference extraction to the language handler shared by the
+/// `method.name`, `function.name`, and `constant.name` capture arms.
+/// The fallback is TypeScript: those captures only occur in TS/JS/Kotlin
+/// grammars (Java uses `method.name`), so anything reaching the fallback is
+/// TypeScript.
+fn extract_call_reference_intents(
+    node: Node<'_>,
+    source_bytes: &[u8],
+    lang_name: &str,
+    reference_intents: &mut Vec<ReferenceIntent>,
+) {
+    match lang_name {
+        "java" => java::extract_reference_intents_java(node, source_bytes, reference_intents),
+        "javascript" => {
+            javascript::extract_reference_intents_javascript(node, source_bytes, reference_intents);
+        }
+        "kotlin" => {
+            kotlin::extract_reference_intents_kotlin(node, source_bytes, reference_intents);
+        }
+        _ => {
+            typescript::extract_reference_intents_typescript(node, source_bytes, reference_intents);
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "capture processing requires context from tree-sitter, language, and queries"
@@ -113,39 +138,16 @@ pub(crate) fn process_capture<'a>(
                 .or_else(|| find_parent_by_kind(node, "abstract_method_signature"));
             // For methods, extract reference intents from the method body
             if let Some(method_node) = entity_node {
-                if lang_name == "java" {
-                    java::extract_reference_intents_java(
-                        method_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else if lang_name == "javascript" {
-                    javascript::extract_reference_intents_javascript(
-                        method_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else if lang_name == "kotlin" {
-                    kotlin::extract_reference_intents_kotlin(
-                        method_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else {
-                    typescript::extract_reference_intents_typescript(
-                        method_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                }
+                extract_call_reference_intents(
+                    method_node,
+                    source_bytes,
+                    lang_name,
+                    &mut reference_intents,
+                );
 
                 // Extract type references from method signatures (parameters, return types)
                 if lang_name == "java" {
-                    java::extract_type_references(
-                        method_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
+                    extract_type_references(method_node, source_bytes, &mut reference_intents);
                 } else if lang_name == "kotlin" {
                     kotlin::extract_type_references(
                         method_node,
@@ -258,25 +260,12 @@ pub(crate) fn process_capture<'a>(
                 .or_else(|| find_parent_by_kind(node, "export_statement"));
             // For functions, extract reference intents from the function body
             if let Some(func_node) = entity_node {
-                if lang_name == "javascript" {
-                    javascript::extract_reference_intents_javascript(
-                        func_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else if lang_name == "kotlin" {
-                    kotlin::extract_reference_intents_kotlin(
-                        func_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else {
-                    typescript::extract_reference_intents_typescript(
-                        func_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                }
+                extract_call_reference_intents(
+                    func_node,
+                    source_bytes,
+                    lang_name,
+                    &mut reference_intents,
+                );
             }
         }
         "constant.name" => {
@@ -295,31 +284,12 @@ pub(crate) fn process_capture<'a>(
             //   const config = await getMcpConfig(process.cwd())
             //   val result = someFunction()
             if let Some(const_node) = entity_node {
-                if lang_name == "java" {
-                    java::extract_reference_intents_java(
-                        const_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else if lang_name == "javascript" {
-                    javascript::extract_reference_intents_javascript(
-                        const_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else if lang_name == "kotlin" {
-                    kotlin::extract_reference_intents_kotlin(
-                        const_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                } else {
-                    typescript::extract_reference_intents_typescript(
-                        const_node,
-                        source_bytes,
-                        &mut reference_intents,
-                    );
-                }
+                extract_call_reference_intents(
+                    const_node,
+                    source_bytes,
+                    lang_name,
+                    &mut reference_intents,
+                );
             }
         }
         "enum.name" => {

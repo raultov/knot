@@ -340,7 +340,7 @@ pub(crate) fn strip_comment_markers(raw: &str) -> String {
         .join("\n")
 }
 
-/// XML documentation tags recognised by [`strip_xml_doc_tags`]. Tags whose
+/// XML documentation tags recognized by [`strip_xml_doc_tags`]. Tags whose
 /// name (ignoring `/` closers, `?` declarations, and attributes) is in this
 /// set are removed together with their angle brackets; unknown text in angle
 /// brackets (e.g. a generic `List<T>` mention in prose) is preserved.

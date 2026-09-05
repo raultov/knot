@@ -169,8 +169,8 @@ pub(crate) fn collect_all_reference_intents_with_byte_pos(
 
 /// Find the entity index nearest to the given line number.
 /// First pass: tries to find an entity that CONTAINS the target line (start_line <= target_line <= end_line).
-/// Second pass: falls back to closest entity at or before target_line.
-/// Third pass: falls back to closest entity overall.
+/// Second pass: falls back to the closest entity at or before target_line.
+/// Third pass: falls back to the closest entity overall.
 pub(crate) fn find_nearest_entity_by_line(entities: &[ParsedEntity], target_line: usize) -> usize {
     let mut best_idx = 0;
     let mut best_distance = usize::MAX;
