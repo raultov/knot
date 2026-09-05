@@ -3,7 +3,7 @@ use neo4rs::query;
 use std::collections::HashMap;
 
 use super::GraphDb;
-use super::query::{RootCandidate, rank_root_candidates, target_resolution_tiers};
+use super::query::ResolvedSubgraphRoot;
 use crate::models::{
     RootCandidateLite, RootResolution, SubgraphDirection, SubgraphEdge, SubgraphNode,
     SubgraphQueryOptions, SubgraphResult,
@@ -112,59 +112,16 @@ impl SubgraphQueryExt for GraphDb {
                 .await
                 .context("Failed to resolve subgraph root by name")?
             {
-                Some((winner, tier, total_candidates)) => {
-                    // Re-query all candidates in the winning tier so the
-                    // disclosure can carry them (ranked). Use the same tier
-                    // predicates via `target_resolution_tiers` to find the
-                    // matching tier string.
-                    let (_, predicate) = target_resolution_tiers(options.entity_name)
-                        .into_iter()
-                        .find(|(t, _)| *t == tier)
-                        .unwrap_or((tier, "target.name = $name"));
-                    let disclosure_query = format!(
-                        "MATCH (target:Entity)
-                         WHERE target.repo_name = $repo_name AND ({predicate})
-                         RETURN target.uuid, target.name, target.fqn, target.kind,
-                                target.signature, target.docstring, target.file_path, target.start_line
-                         ORDER BY target.fqn
-                         LIMIT 25"
-                    );
-                    let mut rows = self
-                        .graph
-                        .execute(
-                            query(&disclosure_query)
-                                .param("name", options.entity_name)
-                                .param("repo_name", options.repo_name),
-                        )
-                        .await
-                        .context("Failed to query candidates for disclosure")?;
-                    let mut candidates = Vec::new();
-                    while let Ok(Some(row)) = rows.next().await {
-                        let uuid = row.get::<String>("target.uuid").unwrap_or_default();
-                        let nm = row.get::<String>("target.name").unwrap_or_default();
-                        let fqn = row.get::<String>("target.fqn").ok();
-                        let kind = row.get::<String>("target.kind").ok();
-                        let signature = row.get::<String>("target.signature").ok();
-                        let docstring = row.get::<String>("target.docstring").ok();
-                        let file_path = row.get::<String>("target.file_path").ok();
-                        let start_line = row.get::<i64>("target.start_line").ok();
-                        candidates.push(RootCandidate {
-                            uuid,
-                            name: nm,
-                            fqn,
-                            kind,
-                            signature,
-                            docstring,
-                            file_path,
-                            start_line,
-                        });
-                    }
-                    let ranked = rank_root_candidates(candidates);
+                Some(ResolvedSubgraphRoot {
+                    winner,
+                    tier,
+                    total_candidates,
+                    ranked,
+                }) => {
                     let disclosure_candidates: Vec<RootCandidateLite> = ranked
                         .iter()
                         .take(ROOT_RESOLUTION_CANDIDATES_CAP)
                         .cloned()
-                        .map(RootCandidateLite::from)
                         .collect();
                     root_node = Some(SubgraphNode {
                         uuid: winner.uuid.clone(),
@@ -180,7 +137,7 @@ impl SubgraphQueryExt for GraphDb {
                         query: options.entity_name.to_string(),
                         tier,
                         total_candidates,
-                        chosen: RootCandidateLite::from(winner),
+                        chosen: winner,
                         candidates: disclosure_candidates,
                     });
                 }
@@ -220,7 +177,7 @@ impl SubgraphQueryExt for GraphDb {
         // Traversal is anchored on the resolved UUID only — never on the bare
         // name. This fixes the homonym-union defect (the prior implementation
         // re-bound every homonym by name, returning the union of their
-        // neighbourhoods under a single `root_id`).
+        // neighborhoods under a single `root_id`).
         let mut all_nodes: HashMap<String, SubgraphNode> = HashMap::new();
         all_nodes.insert(root_uuid.clone(), root_node);
 

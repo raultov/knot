@@ -199,7 +199,7 @@ mod tests {
             .await
             .expect("ensure_indexes must succeed");
 
-        // Cypher identical to build_contains_auto_link_cypher() in upsert.rs.
+        // Cipher identical to build_contains_auto_link_cypher() in upsert.rs.
         // EXPLAIN does not execute the query — it only returns the plan.
         let cypher = "\
             UNWIND $entity_uuids AS entity_uuid\n\

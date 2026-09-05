@@ -19,6 +19,9 @@ pub enum MatchTier {
 /// the subgraph root is rendered in the response and surfaced through the
 /// `root_resolution` disclosure — so the fields the consumer expects to see
 /// must be present on the candidate row.
+///
+/// This is the canonical type; `models::RootCandidateLite` is an alias of it
+/// so the wire payload and the db projection cannot drift apart.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RootCandidate {
     pub uuid: String,
@@ -162,7 +165,7 @@ pub fn root_kind_rank(kind: Option<&str>) -> u8 {
         | "cpp_namespace" | "csharp_namespace"
         | "markdown_document" | "markdown_section" => 3,
 
-        // --- rank 4: everything else (build_, k8s_, html_, vtc_, project_identity, …)
+        // --- rank 4: everything else (build_, k8s_, HTML_, vtc_, project_identity, …)
         _ => 4,
     }
 }
@@ -209,7 +212,7 @@ pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
     )
 }
 
-/// Cypher for the `overridden_by` bucket: implementations/overrides declared
+/// Cipher for the `overridden_by` bucket: implementations/overrides declared
 /// in subtypes of the resolved targets.
 pub fn overridden_by_query(repo_scoped: bool) -> String {
     let repo_filter = if repo_scoped {
@@ -232,7 +235,7 @@ pub fn overridden_by_query(repo_scoped: bool) -> String {
     )
 }
 
-/// Cypher for the `overrides` bucket: the supertype methods the resolved
+/// Cipher for the `overrides` bucket: the supertype methods the resolved
 /// targets implement or override. The projection is mirrored (target ↔ entity)
 /// so both buckets share `parse_reference_row` — including the repo aliases,
 /// which are swapped for the same reason (`target.repo_name` labels the row's
@@ -358,7 +361,7 @@ pub fn find_files_by_suffix_query(suffix_fragment: &str, repo_names: &[String]) 
     }
 }
 
-/// Cypher for one tier of the reference-target resolution ladder used by
+/// Cipher for one tier of the reference-target resolution ladder used by
 /// `resolve_reference_targets`. `predicate` is the post-`WHERE` match
 /// expression produced by `target_resolution_tiers` (e.g.
 /// `target.fqn = $name`); `repo_scoped` toggles the `repo_name IN` guard.
@@ -376,6 +379,19 @@ pub fn reference_target_query(predicate: &str, repo_scoped: bool) -> String {
                 target.start_line, target.repo_name
          ORDER BY target.fqn"
     )
+}
+
+/// Outcome of resolving a subgraph root by name: the ranked winner, the
+/// ladder tier that produced it, the un-truncated tier count, and every
+/// candidate of the winning tier in rank order (already bounded by the
+/// ladder's `LIMIT 25`) — so callers can build the `root_resolution`
+/// disclosure without re-running the tier query.
+pub(crate) struct ResolvedSubgraphRoot {
+    pub winner: RootCandidate,
+    pub tier: MatchTier,
+    pub total_candidates: usize,
+    /// All candidates of the winning tier, in rank order.
+    pub ranked: Vec<RootCandidate>,
 }
 
 impl GraphDb {
@@ -443,15 +459,17 @@ impl GraphDb {
     /// walking the same tier ladder as `resolve_reference_targets` with early
     /// stop, then applying `rank_root_candidates` inside the winning tier.
     ///
-    /// Returns `(winner, tier, total_candidates)` — `Some(...)` only when the
-    /// ladder produced at least one hit. `total_candidates` is the **un-truncated**
-    /// tier count (the ladder queries `LIMIT 25` for ranking fairness; the
-    /// caller may surface this in the disclosure).
+    /// Returns `Some(...)` only when the ladder produced at least one hit.
+    /// `total_candidates` is the **un-truncated** tier count (the ladder
+    /// queries `LIMIT 25` for ranking fairness; the caller may surface this
+    /// in the disclosure). `ranked` carries the winning tier's full candidate
+    /// list from the same query that produced the winner, so callers never
+    /// need to re-run the tier.
     pub(crate) async fn resolve_subgraph_root(
         &self,
         name: &str,
         repo_name: &str,
-    ) -> Result<Option<(RootCandidate, MatchTier, usize)>> {
+    ) -> Result<Option<ResolvedSubgraphRoot>> {
         let tiers = target_resolution_tiers(name);
 
         for (tier, predicate) in tiers {
@@ -478,34 +496,29 @@ impl GraphDb {
 
             let mut candidates = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
-                let uuid = row.get::<String>("target.uuid").unwrap_or_default();
-                let nm = row.get::<String>("target.name").unwrap_or_default();
-                let fqn = row.get::<String>("target.fqn").ok();
-                let kind = row.get::<String>("target.kind").ok();
-                let signature = row.get::<String>("target.signature").ok();
-                let docstring = row.get::<String>("target.docstring").ok();
-                let file_path = row.get::<String>("target.file_path").ok();
-                let start_line = row.get::<i64>("target.start_line").ok();
-
                 candidates.push(RootCandidate {
-                    uuid,
-                    name: nm,
-                    fqn,
-                    kind,
-                    signature,
-                    docstring,
-                    file_path,
-                    start_line,
+                    uuid: row.get::<String>("target.uuid").unwrap_or_default(),
+                    name: row.get::<String>("target.name").unwrap_or_default(),
+                    fqn: row.get::<String>("target.fqn").ok(),
+                    kind: row.get::<String>("target.kind").ok(),
+                    signature: row.get::<String>("target.signature").ok(),
+                    docstring: row.get::<String>("target.docstring").ok(),
+                    file_path: row.get::<String>("target.file_path").ok(),
+                    start_line: row.get::<i64>("target.start_line").ok(),
                 });
             }
 
             if !candidates.is_empty() {
                 let total = candidates.len();
                 let ranked = rank_root_candidates(candidates);
-                // Safe: ranked is non-empty (we just confirmed candidates
-                // is non-empty before ranking).
-                let winner = ranked.into_iter().next().expect("ranked non-empty");
-                return Ok(Some((winner, tier, total)));
+                // Safe: ranked is non-empty (candidates was non-empty above).
+                let winner = ranked.first().cloned().expect("ranked non-empty");
+                return Ok(Some(ResolvedSubgraphRoot {
+                    winner,
+                    tier,
+                    total_candidates: total,
+                    ranked,
+                }));
             }
         }
 
@@ -581,7 +594,7 @@ pub trait QueryExt {
     ) -> Result<serde_json::Value>;
     /// Suffix-based fallback used by `explore_file` (§4 of
     /// `docs/specs/relative_file_paths.md`). `suffix_fragment` is the
-    /// fragment after `WHERE e.file_path ` in the Cypher query (e.g.
+    /// fragment after `WHERE e.file_path ` in the Cipher query (e.g.
     /// `ENDS WITH '/Cargo.toml'`). Returns a list of distinct
     /// `(file_path, repo_name)` pairs that match.
     async fn find_files_by_suffix(
@@ -913,9 +926,9 @@ impl QueryExt for GraphDb {
     ) -> Result<serde_json::Value> {
         // `suffix_fragment` is the post-`WHERE` text, e.g.
         // "ENDS WITH '/src/lib.rs'". We hardcode the rest of the WHERE so
-        // callers cannot inject arbitrary Cypher; the fragment is built by
+        // callers cannot inject arbitrary Cipher; the fragment is built by
         // `ends_with_suffix_query` which only ever interpolates a string
-        // literal, so SQL/Cypher injection is not possible here.
+        // literal, so SQL/Cipher injection is not possible here.
         let query_str = find_files_by_suffix_query(suffix_fragment, repo_names);
         let mut q = query(&query_str);
         if !repo_names.is_empty() {
@@ -1297,8 +1310,8 @@ mod tests {
     fn overrides_query_projects_mirrored_repo_aliases() {
         for repo_scoped in [false, true] {
             let query_str = overrides_query(repo_scoped);
-            // Mirrored projection: the Cypher `target` node is the row's
-            // entity and the Cypher `entity` node is the row's target, so
+            // Mirrored projection: the Cipher `target` node is the row's
+            // entity and the Cipher `entity` node is the row's target, so
             // the aliases MUST be swapped. Getting this backwards is silent.
             assert!(
                 query_str.contains("target.repo_name AS repo_name"),

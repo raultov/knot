@@ -141,8 +141,8 @@ pub enum EntityKind {
     VccObject,   // $Object counter(STRING, INT)
     VccMethod,   // $Method VOID .incr(INT)
     // Markdown entities
-    MarkdownDocument, // A full markdown file or frontmatter
-    MarkdownSection,  // A section under a markdown heading
+    MarkdownDocument, // A full Markdown file or frontmatter
+    MarkdownSection,  // A section under a Markdown heading
 }
 
 impl std::fmt::Display for EntityKind {
@@ -288,7 +288,7 @@ pub struct ParsedEntity {
     /// `None` for class/interface entities.
     pub signature: Option<String>,
 
-    /// Associated documentation: JavaDoc, JSDoc, or preceding comments found
+    /// Associated documentation: Javadoc, JSDoc, or preceding comments found
     /// immediately before this node in the source file.
     /// This captures comment blocks that directly precede declarations.
     pub docstring: Option<String>,

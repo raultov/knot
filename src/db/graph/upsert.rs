@@ -13,7 +13,7 @@ fn group_entities_by_kind(entities: &[EmbeddedEntity]) -> HashMap<String, Vec<&E
     }
     groups
 }
-/// Build the Cypher query used by [`UpsertExt::upsert_entities`] to auto-link
+/// Build the Cipher query used by [`UpsertExt::upsert_entities`] to auto-link
 /// parent (class/interface/enum) and child (method/field) entities via the
 /// `CONTAINS` relationship.
 ///
@@ -22,12 +22,12 @@ fn group_entities_by_kind(entities: &[EmbeddedEntity]) -> HashMap<String, Vec<&E
 ///
 /// The query MUST be scoped to the UUIDs of the entities just upserted
 /// (`UNWIND $entity_uuids AS entity_uuid`) to avoid a full-repo scan after
-/// every batch (the previous behaviour was O(n²) total).
+/// every batch (the previous behavior was O(n²) total).
 ///
 /// The parent-class lookup (`c1`, `c2`) intentionally remains a graph-wide
 /// OPTIONAL MATCH scoped by `repo_name` because the parent class may have been
 /// indexed in a previous batch.
-fn build_contains_auto_link_cypher() -> &'static str {
+fn build_contains_auto_link_cipher() -> &'static str {
     "UNWIND $entity_uuids AS entity_uuid
      MATCH (m:Entity {uuid: entity_uuid})
      WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
@@ -40,7 +40,7 @@ fn build_contains_auto_link_cypher() -> &'static str {
 }
 /// Extract the UUIDs of all entities in the batch as strings.
 ///
-/// These UUIDs are passed to the CONTAINS auto-link Cypher query via
+/// These UUIDs are passed to the CONTAINS auto-link Cipher query via
 /// `$entity_uuids` so the MATCH is scoped to the current batch rather than
 /// scanning every entity in the repository.
 fn extract_entity_uuids(entities: &[EmbeddedEntity]) -> Vec<String> {
@@ -77,7 +77,7 @@ impl UpsertExt for GraphDb {
     /// Load entity mappings (name, fqn -> uuid) for incremental indexing.
     ///
     /// This is called before resolving reference intents to hydrate the global
-    /// context with entities from unchanged files that weren't re-parsed.
+    /// context with entities from unchanged files that weren't reparsed.
     /// Supports loading from multiple repositories for cross-repository dependency analysis.
     /// Returns two hashmaps for fast lookup during relationship resolution.
     #[expect(clippy::cognitive_complexity, reason = "Mapping logic is sequential")]
@@ -93,8 +93,8 @@ impl UpsertExt for GraphDb {
             repo_names.len(),
             repo_names.join(", ")
         );
-        // Build Cypher query that filters by multiple repo names
-        let cypher = if repo_names.len() == 1 {
+        // Build Cipher query that filters by multiple repo names
+        let cipher = if repo_names.len() == 1 {
             "MATCH (e:Entity)
              WHERE e.repo_name = $repo_names[0]
              RETURN e.name AS name, e.uuid AS uuid_str, 
@@ -109,7 +109,7 @@ impl UpsertExt for GraphDb {
         };
         let mut stream = self
             .graph
-            .execute(query(&cypher).param("repo_names", repo_names.to_vec()))
+            .execute(query(&cipher).param("repo_names", repo_names.to_vec()))
             .await
             .context("Failed to query entity mappings from Neo4j")?;
         let mut fqn_to_uuid: HashMap<String, Uuid> = HashMap::new();
@@ -139,7 +139,7 @@ impl UpsertExt for GraphDb {
     }
     /// Upsert a batch of entity nodes into Neo4j.
     ///
-    /// Uses `UNWIND` to batch all entities in a single Cypher query,
+    /// Uses `UNWIND` to batch all entities in a single Cipher query,
     /// grouped by entity kind (since labels cannot be parameterized).
     #[expect(
         clippy::too_many_lines,
@@ -213,7 +213,7 @@ impl UpsertExt for GraphDb {
                     map
                 })
                 .collect();
-            let cypher = format!(
+            let cipher = format!(
                 "UNWIND $entities AS e
                  MERGE (n:Entity {{uuid: e.uuid}})
                  SET n:{label},
@@ -230,7 +230,7 @@ impl UpsertExt for GraphDb {
                      n.is_test_context = e.is_test_context"
             );
             self.graph
-                .run(query(&cypher).param("entities", entity_params))
+                .run(query(&cipher).param("entities", entity_params))
                 .await
                 .context("Failed to upsert entity nodes into Neo4j")?;
         }
@@ -245,10 +245,10 @@ impl UpsertExt for GraphDb {
         if let Some(first) = entities.first() {
             let repo_name = &first.entity.repo_name;
             let entity_uuids = extract_entity_uuids(entities);
-            let link_cypher = build_contains_auto_link_cypher();
+            let link_cipher = build_contains_auto_link_cipher();
             self.graph
                 .run(
-                    query(link_cypher)
+                    query(link_cipher)
                         .param("repo_name", repo_name.clone())
                         .param("entity_uuids", entity_uuids),
                 )
@@ -259,12 +259,12 @@ impl UpsertExt for GraphDb {
     }
     /// Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES) for all resolved edges.
     ///
-    /// Batched via `UNWIND` — one Cypher query per relationship type instead of
+    /// Batched via `UNWIND` — one Cipher query per relationship type instead of
     #[expect(
         clippy::cognitive_complexity,
         reason = "Relationship upserting logic is sequential"
     )]
-    /// one per edge. Grouping by relationship type is necessary because Cypher
+    /// one per edge. Grouping by relationship type is necessary because Cipher
     /// cannot parameterize relationship labels.
     async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()> {
         let mut by_type: HashMap<RelationshipType, Vec<(String, String)>> = HashMap::new();
@@ -288,14 +288,14 @@ impl UpsertExt for GraphDb {
                     map
                 })
                 .collect();
-            let cypher = format!(
+            let cipher = format!(
                 "UNWIND $edges AS e
                  MATCH (caller:Entity {{uuid: e.caller_uuid}})
                  MATCH (callee:Entity {{uuid: e.callee_uuid}})
                  MERGE (caller)-[:{rel_label}]->(callee)"
             );
             self.graph
-                .run(query(&cypher).param("edges", edge_params))
+                .run(query(&cipher).param("edges", edge_params))
                 .await
                 .context(format!(
                     "Failed to create {rel_label} relationships in Neo4j"
@@ -311,7 +311,7 @@ impl UpsertExt for GraphDb {
     /// Legacy method for backward compatibility. Creates only CALLS relationships.
     /// New code should use `upsert_relationships()` instead.
     ///
-    /// Batched via `UNWIND` — all CALLS edges in a single Cypher query.
+    /// Batched via `UNWIND` — all CALLS edges in a single Cipher query.
     async fn upsert_calls(&self, entities: &[EmbeddedEntity]) -> Result<()> {
         let mut edge_params: Vec<HashMap<String, BoltType>> = Vec::new();
         for e in entities {
@@ -399,29 +399,29 @@ impl UpsertExt for GraphDb {
 mod tests {
     #[test]
     fn test_contains_auto_link_uses_unwind_with_uuids() {
-        let cypher = super::build_contains_auto_link_cypher();
-        assert!(cypher.contains("UNWIND $entity_uuids AS entity_uuid"));
+        let cipher = super::build_contains_auto_link_cipher();
+        assert!(cipher.contains("UNWIND $entity_uuids AS entity_uuid"));
     }
     #[test]
     fn test_contains_auto_link_matches_by_uuid() {
-        let cypher = super::build_contains_auto_link_cypher();
-        assert!(cypher.contains("MATCH (m:Entity {uuid: entity_uuid})"));
+        let cipher = super::build_contains_auto_link_cipher();
+        assert!(cipher.contains("MATCH (m:Entity {uuid: entity_uuid})"));
     }
     #[test]
     fn test_contains_auto_link_does_not_scan_full_repo() {
-        let cypher = super::build_contains_auto_link_cypher();
-        assert!(!cypher.contains("MATCH (m:Entity {repo_name:"));
+        let cipher = super::build_contains_auto_link_cipher();
+        assert!(!cipher.contains("MATCH (m:Entity {repo_name:"));
     }
     #[test]
     fn test_contains_auto_link_preserves_optional_match_for_parent() {
-        let cypher = super::build_contains_auto_link_cypher();
-        assert!(cypher.contains("OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn"));
-        assert!(cypher.contains("OPTIONAL MATCH (c2:Entity {name: m.enclosing_class"));
+        let cipher = super::build_contains_auto_link_cipher();
+        assert!(cipher.contains("OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn"));
+        assert!(cipher.contains("OPTIONAL MATCH (c2:Entity {name: m.enclosing_class"));
     }
     #[test]
     fn test_contains_auto_link_preserves_coalesce_fallback() {
-        let cypher = super::build_contains_auto_link_cypher();
-        assert!(cypher.contains("COALESCE(c1, c2)"));
+        let cipher = super::build_contains_auto_link_cipher();
+        assert!(cipher.contains("COALESCE(c1, c2)"));
     }
     #[test]
     fn test_contains_uuid_list_contains_all_batch_uuids() {
@@ -442,9 +442,9 @@ mod tests {
         assert!(uuids.is_empty());
     }
     #[test]
-    fn test_contains_cypher_repo_name_still_used_for_parent_lookup() {
-        let cypher = super::build_contains_auto_link_cypher();
-        assert!(cypher.contains("repo_name: $repo_name"));
+    fn test_contains_cipher_repo_name_still_used_for_parent_lookup() {
+        let cipher = super::build_contains_auto_link_cipher();
+        assert!(cipher.contains("repo_name: $repo_name"));
     }
     use super::super::GraphDb;
     use super::UpsertExt;
@@ -547,10 +547,10 @@ mod tests {
         }
     }
     #[test]
-    fn test_load_entity_mappings_cypher_query_single_repo() {
+    fn test_load_entity_mappings_cipher_query_single_repo() {
         let repo_names = ["core-lib".to_string()].to_vec();
         // Verify the query construction logic
-        let cypher = if repo_names.len() == 1 {
+        let cipher = if repo_names.len() == 1 {
             "MATCH (e:Entity)
              WHERE e.repo_name = $repo_names[0]
              RETURN e.name AS name, e.uuid AS uuid_str, 
@@ -563,11 +563,11 @@ mod tests {
                     COALESCE(e.fqn, e.name) AS fqn"
                 .to_string()
         };
-        assert!(cypher.contains("e.repo_name = $repo_names[0]"));
-        assert!(!cypher.contains("IN $repo_names"));
+        assert!(cipher.contains("e.repo_name = $repo_names[0]"));
+        assert!(!cipher.contains("IN $repo_names"));
     }
     #[test]
-    fn test_load_entity_mappings_cypher_query_multiple_repos() {
+    fn test_load_entity_mappings_cipher_query_multiple_repos() {
         let repo_names = [
             "core-lib".to_string(),
             "shared-types".to_string(),
@@ -575,7 +575,7 @@ mod tests {
         ]
         .to_vec();
         // Verify the query construction logic
-        let cypher = if repo_names.len() == 1 {
+        let cipher = if repo_names.len() == 1 {
             "MATCH (e:Entity)
              WHERE e.repo_name = $repo_names[0]
              RETURN e.name AS name, e.uuid AS uuid_str, 
@@ -588,8 +588,8 @@ mod tests {
                     COALESCE(e.fqn, e.name) AS fqn"
                 .to_string()
         };
-        assert!(cypher.contains("IN $repo_names"));
-        assert!(!cypher.contains("e.repo_name = $repo_names[0]"));
+        assert!(cipher.contains("IN $repo_names"));
+        assert!(!cipher.contains("e.repo_name = $repo_names[0]"));
     }
     #[test]
     fn test_hashmap_merging_simulation() {
@@ -681,11 +681,11 @@ mod tests {
         assert_eq!(groups["Method"].len(), 1);
         assert_eq!(groups["Function"].len(), 1);
     }
-    /// Verify UNWIND Cypher query contains the expected structure.
+    /// Verify UNWIND Cipher query contains the expected structure.
     #[test]
-    fn test_unwind_cypher_query_contains_unwind_and_merge() {
+    fn test_unwind_cipher_query_contains_unwind_and_merge() {
         let label = "Class";
-        let cypher = format!(
+        let cipher = format!(
             "UNWIND $entities AS e
              MERGE (n:Entity {{uuid: e.uuid}})
              SET n:{label},
@@ -697,13 +697,13 @@ mod tests {
                  n.embed_text = e.embed_text, n.fqn = e.fqn,
                  n.enclosing_class = e.enclosing_class"
         );
-        assert!(cypher.contains("UNWIND $entities AS e"));
-        assert!(cypher.contains("MERGE (n:Entity {uuid: e.uuid})"));
-        assert!(cypher.contains("SET n:Class"));
-        assert!(cypher.contains("n.name = e.name"));
-        assert!(cypher.contains("n.kind = e.kind"));
-        assert!(cypher.contains("n.fqn = e.fqn"));
-        assert!(cypher.contains("n.enclosing_class = e.enclosing_class"));
+        assert!(cipher.contains("UNWIND $entities AS e"));
+        assert!(cipher.contains("MERGE (n:Entity {uuid: e.uuid})"));
+        assert!(cipher.contains("SET n:Class"));
+        assert!(cipher.contains("n.name = e.name"));
+        assert!(cipher.contains("n.kind = e.kind"));
+        assert!(cipher.contains("n.fqn = e.fqn"));
+        assert!(cipher.contains("n.enclosing_class = e.enclosing_class"));
     }
     /// Verify UNWIND parameter map construction for entities.
     #[test]
@@ -809,20 +809,20 @@ mod tests {
         assert_eq!(by_type[&RelationshipType::Extends].len(), 1);
         assert_eq!(by_type[&RelationshipType::Implements].len(), 1);
     }
-    /// Verify UNWIND relationship Cypher query structure.
+    /// Verify UNWIND relationship Cipher query structure.
     #[test]
-    fn test_unwind_relationship_cypher_query_structure() {
+    fn test_unwind_relationship_cipher_query_structure() {
         let rel_label = "CALLS";
-        let cypher = format!(
+        let cipher = format!(
             "UNWIND $edges AS e
              MATCH (caller:Entity {{uuid: e.caller_uuid}})
              MATCH (callee:Entity {{uuid: e.callee_uuid}})
              MERGE (caller)-[:{rel_label}]->(callee)"
         );
-        assert!(cypher.contains("UNWIND $edges AS e"));
-        assert!(cypher.contains("MATCH (caller:Entity {uuid: e.caller_uuid})"));
-        assert!(cypher.contains("MATCH (callee:Entity {uuid: e.callee_uuid})"));
-        assert!(cypher.contains("MERGE (caller)-[:CALLS]->(callee)"));
+        assert!(cipher.contains("UNWIND $edges AS e"));
+        assert!(cipher.contains("MATCH (caller:Entity {uuid: e.caller_uuid})"));
+        assert!(cipher.contains("MATCH (callee:Entity {uuid: e.callee_uuid})"));
+        assert!(cipher.contains("MERGE (caller)-[:CALLS]->(callee)"));
     }
     /// Verify that relationships grouping handles empty relationships correctly.
     #[test]
@@ -845,15 +845,15 @@ mod tests {
     }
     /// Verify that UNWIND CALLS query is correct.
     #[test]
-    fn test_unwind_calls_cypher_query_structure() {
-        let cypher = "UNWIND $edges AS e
+    fn test_unwind_calls_cipher_query_structure() {
+        let cipher = "UNWIND $edges AS e
              MATCH (caller:Entity {uuid: e.caller_uuid})
              MATCH (callee:Entity {uuid: e.callee_uuid})
              MERGE (caller)-[:CALLS]->(callee)";
-        assert!(cypher.contains("UNWIND $edges AS e"));
-        assert!(cypher.contains("MATCH (caller:Entity {uuid: e.caller_uuid})"));
-        assert!(cypher.contains("MATCH (callee:Entity {uuid: e.callee_uuid})"));
-        assert!(cypher.contains("MERGE (caller)-[:CALLS]->(callee)"));
+        assert!(cipher.contains("UNWIND $edges AS e"));
+        assert!(cipher.contains("MATCH (caller:Entity {uuid: e.caller_uuid})"));
+        assert!(cipher.contains("MATCH (callee:Entity {uuid: e.callee_uuid})"));
+        assert!(cipher.contains("MERGE (caller)-[:CALLS]->(callee)"));
     }
     /// Verify UNWIND entity grouping with a single kind.
     #[test]
@@ -898,10 +898,10 @@ mod tests {
         assert_eq!(RelationshipType::MacroCalls.to_string(), "MACRO_CALLS");
         assert_eq!(RelationshipType::Contains.to_string(), "CONTAINS");
     }
-    /// Verify CONTAINS auto-link Cypher uses enclosing_class_fqn for exact match.
+    /// Verify CONTAINS auto-link Cipher uses enclosing_class_fqn for exact match.
     #[test]
     fn test_contains_auto_link_uses_enclosing_class_fqn() {
-        let link_cypher = "
+        let link_cipher = "
             MATCH (m:Entity {repo_name: $repo_name})
             WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
             OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
@@ -912,28 +912,28 @@ mod tests {
             MERGE (c)-[:CONTAINS]->(m)
         ";
         assert!(
-            link_cypher.contains("m.enclosing_class_fqn"),
-            "Cypher should use enclosing_class_fqn for exact FQN match"
+            link_cipher.contains("m.enclosing_class_fqn"),
+            "Cipher should use enclosing_class_fqn for exact FQN match"
         );
         assert!(
-            link_cypher.contains("COALESCE(c1, c2)"),
-            "Cypher should use COALESCE to prefer FQN match over fallback"
+            link_cipher.contains("COALESCE(c1, c2)"),
+            "Cipher should use COALESCE to prefer FQN match over fallback"
         );
         assert!(
-            link_cypher.contains("file_path: m.file_path"),
-            "Cypher fallback should disambiguate by file_path"
+            link_cipher.contains("file_path: m.file_path"),
+            "Cipher fallback should disambiguate by file_path"
         );
     }
-    /// Verify CONTAINS auto-link Cypher does NOT use global name-only match.
+    /// Verify CONTAINS auto-link Cipher does NOT use global name-only match.
     #[test]
     fn test_contains_auto_link_no_global_name_match() {
-        let old_cypher = "
+        let old_cipher = "
             MATCH (m:Entity {repo_name: $repo_name})
             WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
             MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})
             MERGE (c)-[:CONTAINS]->(m)
         ";
-        let new_cypher = "
+        let new_cipher = "
             MATCH (m:Entity {repo_name: $repo_name})
             WHERE m.enclosing_class IS NOT NULL AND m.enclosing_class <> ''
             OPTIONAL MATCH (c1:Entity {fqn: m.enclosing_class_fqn, repo_name: $repo_name})
@@ -945,15 +945,15 @@ mod tests {
         ";
         // Old pattern: bare name match without file_path disambiguation
         assert!(
-            old_cypher
+            old_cipher
                 .contains("MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})"),
-            "old Cypher had global name-only match"
+            "old Cipher had global name-only match"
         );
         // New pattern must NOT have the bare global name match
         assert!(
-            !new_cypher
+            !new_cipher
                 .contains("MATCH (c:Entity {name: m.enclosing_class, repo_name: $repo_name})\n"),
-            "new Cypher must NOT have global name-only MATCH"
+            "new Cipher must NOT have global name-only MATCH"
         );
     }
     /// Verify enclosing_class_fqn is included in entity parameter map.

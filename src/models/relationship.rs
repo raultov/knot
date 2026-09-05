@@ -106,7 +106,7 @@ pub enum ReferenceIntent {
         /// Line number where this call occurs.
         line: usize,
     },
-    /// VCL backend reference (set req.backend_hint, beresp.backend etc).
+    /// VCL backend reference (set req.backend_hint, beresp.backend etc.)
     /// Example: `set req.backend_hint = b;`
     VclBackendRef {
         /// The backend name being referenced.

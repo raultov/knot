@@ -6,7 +6,6 @@ use crate::db::graph::MatchTier;
 mod tests {
     //! §5.6 disclosure payload tests — additive `root_resolution` field.
     use super::*;
-    use crate::db::graph::RootCandidate;
 
     #[test]
     fn test_subgraph_result_serialises_root_resolution_when_present() {
@@ -61,8 +60,8 @@ mod tests {
     }
 
     #[test]
-    fn test_subgraph_result_deserialises_without_root_resolution() {
-        // Older payloads (no `root_resolution` key) must still deserialise.
+    fn test_subgraph_result_deserializes_without_root_resolution() {
+        // Older payloads (no `root_resolution` key) must still deserialize.
         let legacy_json = r#"{
             "root_id": "u1",
             "nodes": [],
@@ -73,39 +72,6 @@ mod tests {
         let result: SubgraphResult = serde_json::from_str(legacy_json).unwrap();
         assert!(result.root_resolution.is_none());
         assert_eq!(result.root_id.as_deref(), Some("u1"));
-    }
-
-    #[test]
-    fn test_root_candidate_lite_from_root_candidate() {
-        let c = RootCandidate {
-            uuid: "u2".to_string(),
-            name: "Foo".to_string(),
-            fqn: Some("ns.Foo".to_string()),
-            kind: Some("class".to_string()),
-            signature: Some("public class Foo".to_string()),
-            docstring: Some("doc".to_string()),
-            file_path: Some("Foo.cs".to_string()),
-            start_line: Some(5),
-        };
-        let lite: RootCandidateLite = c.into();
-        let RootCandidateLite {
-            uuid,
-            name,
-            fqn,
-            kind,
-            signature,
-            docstring,
-            file_path,
-            start_line,
-        } = lite;
-        assert_eq!(uuid, "u2");
-        assert_eq!(name, "Foo");
-        assert_eq!(fqn.as_deref(), Some("ns.Foo"));
-        assert_eq!(kind.as_deref(), Some("class"));
-        assert_eq!(signature.as_deref(), Some("public class Foo"));
-        assert_eq!(docstring.as_deref(), Some("doc"));
-        assert_eq!(file_path.as_deref(), Some("Foo.cs"));
-        assert_eq!(start_line, Some(5));
     }
 }
 
@@ -158,7 +124,7 @@ pub struct SubgraphQueryOptions<'a> {
 
 /// How the root was resolved when the subgraph was queried by name.
 ///
-/// Additive payload — `serde(default)` keeps older payloads deserialisable;
+/// Additive payload — `serde(default)` keeps older payloads deserializable;
 /// knot-server is not required to surface it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootResolution {
@@ -176,35 +142,11 @@ pub struct RootResolution {
     pub candidates: Vec<RootCandidateLite>,
 }
 
-/// Lightweight projection of `db::graph::RootCandidate` for inclusion in
-/// `SubgraphResult` without a circular dependency between the model and
-/// the db layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RootCandidateLite {
-    pub uuid: String,
-    pub name: String,
-    pub fqn: Option<String>,
-    pub kind: Option<String>,
-    pub signature: Option<String>,
-    pub docstring: Option<String>,
-    pub file_path: Option<String>,
-    pub start_line: Option<i64>,
-}
-
-impl From<crate::db::graph::RootCandidate> for RootCandidateLite {
-    fn from(c: crate::db::graph::RootCandidate) -> Self {
-        Self {
-            uuid: c.uuid,
-            name: c.name,
-            fqn: c.fqn,
-            kind: c.kind,
-            signature: c.signature,
-            docstring: c.docstring,
-            file_path: c.file_path,
-            start_line: c.start_line,
-        }
-    }
-}
+/// Alias of [`crate::db::graph::RootCandidate`] — a single source of truth
+/// for the root-candidate shape shared by the db projection and this wire
+/// payload. The db struct and this alias serialize identically, so the wire
+/// format is unchanged.
+pub type RootCandidateLite = crate::db::graph::RootCandidate;
 
 /// Result of a subgraph traversal query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,7 +160,7 @@ pub struct SubgraphResult {
     pub total_nodes_found: usize,
     /// How the root was resolved when queried by name. `None` when the subgraph
     /// was queried by UUID or no root was found. Additive: `serde(default)` keeps
-    /// older payloads deserialisable; knot-server is not required to surface it.
+    /// older payloads deserializable; knot-server is not required to surface it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_resolution: Option<RootResolution>,
 }
