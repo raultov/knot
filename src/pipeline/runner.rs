@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::info;
 
 use crate::config::Config;
@@ -92,14 +92,6 @@ pub async fn run_indexing_pipeline_with_progress(
 /// 4. Batch and embed entities (fastembed)
 /// 5. Ingest into Qdrant and Neo4j (dual-write)
 /// 6. Resolve cross-repository relationships
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
 async fn run_pipeline_inner(
     cfg: &Config,
     vector_db: &Arc<VectorDb>,
@@ -107,33 +99,15 @@ async fn run_pipeline_inner(
     index_state: &mut IndexState,
     progress: &Arc<ProgressTracker>,
 ) -> Result<RunMetrics> {
-    // Stage 1: Discover and classify files.
-    let all_files = discover_files(&cfg.repo_path, cfg.include_config_files)?;
-    if all_files.is_empty() {
-        info!("No supported source files found.");
+    let Some(PipelineInputs {
+        modified_files,
+        added_files,
+        deleted_files,
+        repo_root,
+    }) = classify_pipeline_inputs(cfg, index_state, progress)?
+    else {
         return Ok(RunMetrics::new(0));
-    }
-
-    progress.set_stage(IndexingStage::Classifying);
-    let repo_root = PathBuf::from(&cfg.repo_path);
-    let (_, modified_files, added_files, deleted_files) =
-        classify_files_for_indexing(&all_files, index_state, cfg.clean, &repo_root)?;
-
-    let unchanged_count =
-        all_files.len() - modified_files.len() - added_files.len() - deleted_files.len();
-
-    if unchanged_count == all_files.len() && deleted_files.is_empty() {
-        info!("No files changed — index is up to date!");
-        return Ok(RunMetrics::new(0));
-    }
-
-    info!(
-        "File classification: {} unchanged, {} modified, {} added, {} deleted",
-        unchanged_count,
-        modified_files.len(),
-        added_files.len(),
-        deleted_files.len()
-    );
+    };
 
     // Detect a full indexing run (no prior state on disk) so that we can
     // short-circuit the slow per-file deletion path with a single bulk
@@ -153,7 +127,6 @@ async fn run_pipeline_inner(
     )
     .await?;
 
-    // Determine files to parse
     let files_to_parse = calculate_files_to_parse(added_files, modified_files);
     progress.set_total_files(files_to_parse.len() as u64);
 
@@ -163,255 +136,10 @@ async fn run_pipeline_inner(
             files_to_parse.len()
         );
 
-        // --- STREAMING PIPELINE ---
-        // Bounded channels provide backpressure: capacity = batch_size * 4
-        // limits worst-case memory to ~1.3MB (256 entities * ~5KB each).
-        let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedEntity>(cfg.batch_size * 4);
-        let (embed_tx, mut embed_rx) = mpsc::channel::<Vec<EmbeddedEntity>>(16);
-        let (res_tx, mut res_rx) = mpsc::channel::<ResolutionEntity>(cfg.batch_size * 4);
-
-        // Stage 2: Parallel Parsing (std::thread::scope OS threads)
-        info!(
-            "Stage 2: Starting parallel parsing of {} files...",
-            files_to_parse.len()
-        );
-        let parse_cfg = build_parse_config(
-            cfg.custom_queries_path.clone(),
-            cfg.repo_name.clone(),
-            cfg.include_config_files,
-            Some(cfg.repo_path.clone()),
-        );
-        let files_to_parse_clone = files_to_parse.clone();
-
-        let cpus = cfg.rayon_threads.unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-        });
-
-        // Build the per-file completion callback.
-        let parse_progress = Arc::clone(progress);
-        let on_file_parsed: FileParsedCallback =
-            Arc::new(move || parse_progress.incr_parsed_files());
-
-        // Hook invoked exactly once, after the parser has aggregated every
-        // entity and *before* any entity is pushed into the bounded channel.
-        // This is the moment the progress observer learns the total entity
-        // count and switches from the parse band (0–10%) to the ingest band
-        // (10–90%) — preventing the "100% then frozen" bug.
-        let total_progress = Arc::clone(progress);
-        let on_entities_extracted: crate::pipeline::parser::EntitiesExtractedCallback =
-            Arc::new(move |n: usize| {
-                total_progress.set_total_entities(n as u64);
-            });
-
-        progress.set_stage(IndexingStage::Parsing);
-
-        let parse_done_progress = Arc::clone(progress);
-        let parse_callbacks = ParseCallbacks {
-            on_file_parsed: Some(on_file_parsed),
-            on_entities_extracted: Some(on_entities_extracted),
-        };
-        tokio::task::spawn_blocking(move || {
-            parse_files_stream(
-                &files_to_parse_clone,
-                &parse_cfg,
-                parse_tx,
-                cpus,
-                Some(parse_callbacks),
-            );
-            info!("Stage 2: Parallel parsing complete.");
-            // Parsing stage done; ingest continues draining.
-            // The stage is flipped here while the ingest task may already
-            // have been ingesting — this matches the state-machine
-            // simplification where Parsing/Ingesting overlap in reality.
-            parse_done_progress.set_stage(IndexingStage::Ingesting);
-        });
-
-        // Stage 3 & 4: Batching & Embedding (CPU)
-        let cache_dir = crate::pipeline::state::fastembed_cache_dir(&cfg.repo_path);
-        let embedder = Arc::new(tokio::sync::Mutex::new(Embedder::init(cache_dir)?));
-        let embed_handle = {
-            let batch_size = cfg.batch_size;
-            let reset_interval = cfg.embedder_reset_interval;
-            let embedder = Arc::clone(&embedder);
-            let embed_tx = embed_tx.clone();
-            tokio::spawn(async move {
-                let mut current_batch = Vec::with_capacity(batch_size);
-                let mut batch_count = 0;
-                while let Some(entity) = parse_rx.recv().await {
-                    current_batch.push(entity);
-                    if current_batch.len() >= batch_size {
-                        batch_count += 1;
-
-                        #[expect(
-                            clippy::excessive_nesting,
-                            reason = "function is verbose but correct — extraction deferred"
-                        )]
-                        if needs_reset(batch_count, reset_interval) {
-                            info!(
-                                "[Worker: Embedder] Resetting ONNX session at batch #{} to release BFCArena memory",
-                                batch_count
-                            );
-                            let mut lock = embedder.lock().await;
-                            lock.reinit()?;
-                        }
-
-                        let mut batch =
-                            std::mem::replace(&mut current_batch, Vec::with_capacity(batch_size));
-                        info!(
-                            "[Worker: Embedder] [{}] Stage 3: Embedding batch #{} ({} entities)...",
-                            batch[0].repo_name,
-                            batch_count,
-                            batch.len()
-                        );
-                        prepare_entities(&mut batch);
-                        let embedder_clone = Arc::clone(&embedder);
-                        #[expect(
-                            clippy::excessive_nesting,
-                            reason = "function is verbose but correct — extraction deferred"
-                        )]
-                        let embedded = tokio::task::spawn_blocking(move || {
-                            let mut lock = embedder_clone.blocking_lock();
-                            lock.embed(batch, batch_size)
-                        })
-                        .await??;
-                        embed_tx.send(embedded).await?;
-                    }
-                }
-                if !current_batch.is_empty() {
-                    batch_count += 1;
-
-                    if needs_reset(batch_count, reset_interval) {
-                        info!(
-                            "[Worker: Embedder] Resetting ONNX session at batch #{} to release BFCArena memory",
-                            batch_count
-                        );
-                        let mut lock = embedder.lock().await;
-                        lock.reinit()?;
-                    }
-
-                    info!(
-                        "[Worker: Embedder] [{}] Stage 3: Embedding final batch #{} ({} entities)...",
-                        current_batch[0].repo_name,
-                        batch_count,
-                        current_batch.len()
-                    );
-                    prepare_entities(&mut current_batch);
-                    let embedded = tokio::task::spawn_blocking(move || {
-                        let mut lock = embedder.blocking_lock();
-                        lock.embed(current_batch, batch_size)
-                    })
-                    .await??;
-                    embed_tx.send(embedded).await?;
-                }
-                Ok::<(), anyhow::Error>(())
-            })
-        };
-
-        // Stage 5 & 6: Ingestion & Resolution Prep (concurrent via JoinSet)
-        // Drain res_rx concurrently to prevent the ingestion task from
-        // deadlocking when the bounded res_tx channel fills up.
-        let res_handle = tokio::spawn(async move {
-            let mut resolution_entities = Vec::new();
-            while let Some(res_entity) = res_rx.recv().await {
-                resolution_entities.push(res_entity);
-            }
-            resolution_entities
-        });
-
-        let ingest_handle = {
-            let vdb = Arc::clone(vector_db);
-            let gdb = Arc::clone(graph_db);
-            let max_concurrent = cfg.ingest_concurrency;
-            let semaphore = Arc::new(Semaphore::new(max_concurrent));
-            let ingest_progress = Arc::clone(progress);
-
-            info!("Ingestion concurrency: {max_concurrent} simultaneous batches");
-
-            tokio::spawn(async move {
-                let mut total_ingested = 0;
-                let mut batch_count = 0;
-                let mut join_set = JoinSet::new();
-
-                while let Some(embedded_batch) = embed_rx.recv().await {
-                    batch_count += 1;
-                    let bl = embedded_batch.len();
-                    total_ingested += bl;
-
-                    ingest_progress.record_batch_ingested(bl as u64);
-                    let snap = ingest_progress.snapshot();
-                    info!(
-                        "[Progress] [{}] {:.1}% — files {}/{}, entities {}/{}, batch #{} ({} entities)",
-                        snap.repo_name,
-                        snap.percent_complete,
-                        snap.parsed_files,
-                        snap.total_files,
-                        snap.entities_ingested,
-                        snap.total_entities,
-                        snap.batches_ingested,
-                        bl
-                    );
-
-                    // Dispatch resolution entities before ingestion spawns
-                    for ee in &embedded_batch {
-                        res_tx.send(ResolutionEntity::from(ee)).await?;
-                    }
-
-                    // Acquire a semaphore permit to limit concurrency
-                    let permit = semaphore.clone().acquire_owned().await?;
-                    let vdb = Arc::clone(&vdb);
-                    let gdb = Arc::clone(&gdb);
-                    let bc = batch_count;
-
-                    join_set.spawn(async move {
-                        info!(
-                            "[Worker: Ingester] [{}] Ingesting batch #{bc} ({bl} entities)...",
-                            embedded_batch[0].entity.repo_name
-                        );
-                        let result = ingest_batch(&embedded_batch, &vdb, &gdb).await;
-                        drop(permit);
-                        result
-                    });
-                }
-
-                info!(
-                    "All {} batches dispatched — waiting for ingestion workers to finish...",
-                    batch_count
-                );
-
-                // Drain all completed tasks, propagating any errors
-                while let Some(result) = join_set.join_next().await {
-                    result??;
-                }
-
-                Ok::<usize, anyhow::Error>(total_ingested)
-            })
-        };
-
-        // Wait for embedding and ingestion to finish
-        embed_handle.await??;
-        drop(embed_tx); // Ensure ingest task finishes when embed_rx is empty
-        let total_entities = ingest_handle.await??;
-
-        // Final progress log showing 100% parse completion
-        let final_snap = progress.snapshot();
-        info!(
-            "[Progress] [{}] {:.1}% — files {}/{}, entities {}/{} — parsing and ingestion complete, resolving references...",
-            final_snap.repo_name,
-            final_snap.percent_complete,
-            final_snap.parsed_files,
-            final_snap.total_files,
-            final_snap.entities_ingested,
-            final_snap.total_entities
-        );
+        let (mut resolution_entities, total_entities) =
+            run_streaming_ingest(cfg, vector_db, graph_db, progress, &files_to_parse).await?;
 
         // Stage 7: Relationship Resolution
-        // The ingest task drops res_tx on exit, which closes the channel
-        // and causes res_handle to finish naturally.
-        progress.set_stage(IndexingStage::ResolvingReferences);
-        let mut resolution_entities = res_handle.await?;
-
         // Cross-repo dependency linking: upsert Repository nodes and create DEPENDS_ON edges.
         // Must run BEFORE relationship resolution so that auto-discovered dependencies
         // are available for cross-repo call resolution.
@@ -445,6 +173,372 @@ async fn run_pipeline_inner(
     } else {
         Ok(RunMetrics::new(0))
     }
+}
+
+/// Files to process for one indexing run, as classified against the
+/// persisted index state.
+struct PipelineInputs {
+    modified_files: Vec<PathBuf>,
+    added_files: Vec<PathBuf>,
+    deleted_files: Vec<String>,
+    repo_root: PathBuf,
+}
+
+/// Centralized progress logging for the "nothing to do" outcomes of stage 1.
+/// Tracing macros carry a large clippy cognitive-complexity cost, so keeping
+/// them in dedicated helpers lets the classification logic stay below the
+/// threshold without suppression attributes.
+fn log_nothing_to_index(msg: &str) {
+    info!("{msg}");
+}
+
+/// Logs the file-classification summary for the indexing run.
+fn log_file_classification(unchanged_count: usize, modified: usize, added: usize, deleted: usize) {
+    info!(
+        "File classification: {} unchanged, {} modified, {} added, {} deleted",
+        unchanged_count, modified, added, deleted
+    );
+}
+
+/// Stage 1: file discovery + classification. Returns `None` when there is
+/// nothing to do (no supported files, or nothing changed since the last run).
+fn classify_pipeline_inputs(
+    cfg: &Config,
+    index_state: &IndexState,
+    progress: &Arc<ProgressTracker>,
+) -> Result<Option<PipelineInputs>> {
+    let all_files = discover_files(&cfg.repo_path, cfg.include_config_files)?;
+    if all_files.is_empty() {
+        log_nothing_to_index("No supported source files found.");
+        return Ok(None);
+    }
+
+    progress.set_stage(IndexingStage::Classifying);
+    let repo_root = PathBuf::from(&cfg.repo_path);
+    let (_, modified_files, added_files, deleted_files) =
+        classify_files_for_indexing(&all_files, index_state, cfg.clean, &repo_root)?;
+
+    let unchanged_count =
+        all_files.len() - modified_files.len() - added_files.len() - deleted_files.len();
+
+    if unchanged_count == all_files.len() && deleted_files.is_empty() {
+        log_nothing_to_index("No files changed — index is up to date!");
+        return Ok(None);
+    }
+
+    log_file_classification(
+        unchanged_count,
+        modified_files.len(),
+        added_files.len(),
+        deleted_files.len(),
+    );
+
+    Ok(Some(PipelineInputs {
+        modified_files,
+        added_files,
+        deleted_files,
+        repo_root,
+    }))
+}
+
+/// Stages 2–6: the streaming parse → embed → ingest pipeline. Returns the
+/// collected resolution entities and the total number of ingested entities.
+async fn run_streaming_ingest(
+    cfg: &Config,
+    vector_db: &Arc<VectorDb>,
+    graph_db: &Arc<GraphDb>,
+    progress: &Arc<ProgressTracker>,
+    files_to_parse: &[PathBuf],
+) -> Result<(Vec<ResolutionEntity>, usize)> {
+    // --- STREAMING PIPELINE ---
+    // Bounded channels provide backpressure: capacity = batch_size * 4
+    // limits worst-case memory to ~1.3MB (256 entities * ~5KB each).
+    let (parse_tx, parse_rx) = mpsc::channel::<ParsedEntity>(cfg.batch_size * 4);
+    let (embed_tx, embed_rx) = mpsc::channel::<Vec<EmbeddedEntity>>(16);
+    let (res_tx, mut res_rx) = mpsc::channel::<ResolutionEntity>(cfg.batch_size * 4);
+
+    // Stage 2: Parallel Parsing (std::thread::scope OS threads)
+    info!(
+        "Stage 2: Starting parallel parsing of {} files...",
+        files_to_parse.len()
+    );
+    spawn_parse_stage(files_to_parse, cfg, progress, parse_tx);
+
+    // Stage 3 & 4: Batching & Embedding (CPU)
+    let cache_dir = crate::pipeline::state::fastembed_cache_dir(&cfg.repo_path);
+    let embed_handle = spawn_embed_task(parse_rx, embed_tx.clone(), cfg, cache_dir)?;
+
+    // Stage 5 & 6: Ingestion & Resolution Prep (concurrent via JoinSet)
+    // Drain res_rx concurrently to prevent the ingestion task from
+    // deadlocking when the bounded res_tx channel fills up.
+    let res_handle = tokio::spawn(async move {
+        let mut resolution_entities = Vec::new();
+        while let Some(res_entity) = res_rx.recv().await {
+            resolution_entities.push(res_entity);
+        }
+        resolution_entities
+    });
+
+    let ingest_handle = spawn_ingest_task(embed_rx, res_tx, (vector_db, graph_db), cfg, progress);
+
+    // Wait for embedding and ingestion to finish
+    embed_handle.await??;
+    drop(embed_tx); // Ensure ingest task finishes when embed_rx is empty
+    let total_entities = ingest_handle.await??;
+
+    // Final progress log showing 100% parse completion
+    log_parse_and_ingest_complete(progress);
+
+    // Stage 7: Relationship Resolution
+    // The ingest task drops res_tx on exit, which closes the channel
+    // and causes res_handle to finish naturally.
+    progress.set_stage(IndexingStage::ResolvingReferences);
+    let resolution_entities = res_handle.await?;
+
+    Ok((resolution_entities, total_entities))
+}
+
+/// Logs the final progress snapshot once parsing and ingestion are complete
+/// and reference resolution is about to start.
+fn log_parse_and_ingest_complete(progress: &Arc<ProgressTracker>) {
+    let snap = progress.snapshot();
+    info!(
+        "[Progress] [{}] {:.1}% — files {}/{}, entities {}/{} — parsing and ingestion complete, resolving references...",
+        snap.repo_name,
+        snap.percent_complete,
+        snap.parsed_files,
+        snap.total_files,
+        snap.entities_ingested,
+        snap.total_entities
+    );
+}
+
+/// Spawns the OS-thread pool that parses `files_to_parse` and streams
+/// entities into `parse_tx`.
+fn spawn_parse_stage(
+    files_to_parse: &[PathBuf],
+    cfg: &Config,
+    progress: &Arc<ProgressTracker>,
+    parse_tx: mpsc::Sender<ParsedEntity>,
+) {
+    let parse_cfg = build_parse_config(
+        cfg.custom_queries_path.clone(),
+        cfg.repo_name.clone(),
+        cfg.include_config_files,
+        Some(cfg.repo_path.clone()),
+    );
+    let files_to_parse_clone = files_to_parse.to_vec();
+
+    let cpus = cfg.rayon_threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
+
+    // Build the per-file completion callback.
+    let parse_progress = Arc::clone(progress);
+    let on_file_parsed: FileParsedCallback = Arc::new(move || parse_progress.incr_parsed_files());
+
+    // Hook invoked exactly once, after the parser has aggregated every
+    // entity and *before* any entity is pushed into the bounded channel.
+    // This is the moment the progress observer learns the total entity
+    // count and switches from the parse band (0–10%) to the ingest band
+    // (10–90%) — preventing the "100% then frozen" bug.
+    let total_progress = Arc::clone(progress);
+    let on_entities_extracted: crate::pipeline::parser::EntitiesExtractedCallback =
+        Arc::new(move |n: usize| {
+            total_progress.set_total_entities(n as u64);
+        });
+
+    progress.set_stage(IndexingStage::Parsing);
+
+    let parse_done_progress = Arc::clone(progress);
+    let parse_callbacks = ParseCallbacks {
+        on_file_parsed: Some(on_file_parsed),
+        on_entities_extracted: Some(on_entities_extracted),
+    };
+    tokio::task::spawn_blocking(move || {
+        parse_files_stream(
+            &files_to_parse_clone,
+            &parse_cfg,
+            parse_tx,
+            cpus,
+            Some(parse_callbacks),
+        );
+        info!("Stage 2: Parallel parsing complete.");
+        // Parsing stage done; ingest continues draining.
+        // The stage is flipped here while the ingest task may already
+        // have been ingesting — this matches the state-machine
+        // simplification where Parsing/Ingesting overlap in reality.
+        parse_done_progress.set_stage(IndexingStage::Ingesting);
+    });
+}
+
+/// Shared environment for the background embedding task.
+struct EmbedTaskEnv {
+    embedder: Arc<tokio::sync::Mutex<Embedder>>,
+    embed_tx: mpsc::Sender<Vec<EmbeddedEntity>>,
+    batch_size: usize,
+    reset_interval: usize,
+}
+
+/// Spawns the batching & embedding task: drains `parse_rx`, groups entities
+/// into batches and forwards embedded batches to the ingest channel.
+fn spawn_embed_task(
+    mut parse_rx: mpsc::Receiver<ParsedEntity>,
+    embed_tx: mpsc::Sender<Vec<EmbeddedEntity>>,
+    cfg: &Config,
+    cache_dir: PathBuf,
+) -> Result<JoinHandle<Result<()>>> {
+    let embedder = Arc::new(tokio::sync::Mutex::new(Embedder::init(cache_dir)?));
+    let env = EmbedTaskEnv {
+        embedder,
+        embed_tx,
+        batch_size: cfg.batch_size,
+        reset_interval: cfg.embedder_reset_interval,
+    };
+
+    Ok(tokio::spawn(async move {
+        let mut current_batch = Vec::with_capacity(env.batch_size);
+        let mut batch_count = 0;
+        while let Some(entity) = parse_rx.recv().await {
+            current_batch.push(entity);
+            if current_batch.len() >= env.batch_size {
+                batch_count += 1;
+                let batch =
+                    std::mem::replace(&mut current_batch, Vec::with_capacity(env.batch_size));
+                embed_and_forward(&env, batch, batch_count, false).await?;
+            }
+        }
+        if !current_batch.is_empty() {
+            batch_count += 1;
+            embed_and_forward(&env, current_batch, batch_count, true).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    }))
+}
+
+/// Embeds one parsed batch — resetting the ONNX session when the reset
+/// interval is hit — and forwards the embedded batch to the ingest channel.
+async fn embed_and_forward(
+    env: &EmbedTaskEnv,
+    mut batch: Vec<ParsedEntity>,
+    batch_count: usize,
+    is_final: bool,
+) -> Result<()> {
+    maybe_reset_session(env, batch_count).await?;
+
+    let batch_label = if is_final { "final batch" } else { "batch" };
+    info!(
+        "[Worker: Embedder] [{}] Stage 3: Embedding {} #{} ({} entities)...",
+        batch[0].repo_name,
+        batch_label,
+        batch_count,
+        batch.len()
+    );
+
+    prepare_entities(&mut batch);
+    let embedder_clone = Arc::clone(&env.embedder);
+    let batch_size = env.batch_size;
+    let embedded = tokio::task::spawn_blocking(move || {
+        let mut lock = embedder_clone.blocking_lock();
+        lock.embed(batch, batch_size)
+    })
+    .await??;
+    env.embed_tx.send(embedded).await?;
+    Ok(())
+}
+
+/// Resets the ONNX session when the configured reset interval is hit, to
+/// release BFCArena memory accumulated across batches.
+async fn maybe_reset_session(env: &EmbedTaskEnv, batch_count: usize) -> Result<()> {
+    if needs_reset(batch_count, env.reset_interval) {
+        info!(
+            "[Worker: Embedder] Resetting ONNX session at batch #{} to release BFCArena memory",
+            batch_count
+        );
+        env.embedder.lock().await.reinit()?;
+    }
+    Ok(())
+}
+
+/// Spawns the ingestion task: drains `embed_rx`, forwards resolution
+/// entities to `res_tx` and ingests embedded batches with bounded
+/// concurrency. Returns the total number of ingested entities.
+fn spawn_ingest_task(
+    mut embed_rx: mpsc::Receiver<Vec<EmbeddedEntity>>,
+    res_tx: mpsc::Sender<ResolutionEntity>,
+    dbs: (&Arc<VectorDb>, &Arc<GraphDb>),
+    cfg: &Config,
+    progress: &Arc<ProgressTracker>,
+) -> JoinHandle<Result<usize>> {
+    let (vector_db, graph_db) = dbs;
+    let vector_db = Arc::clone(vector_db);
+    let graph_db = Arc::clone(graph_db);
+    let max_concurrent = cfg.ingest_concurrency;
+    let semaphore = Arc::new(Semaphore::new(max_concurrent));
+    let ingest_progress = Arc::clone(progress);
+
+    info!("Ingestion concurrency: {max_concurrent} simultaneous batches");
+
+    tokio::spawn(async move {
+        let mut total_ingested = 0;
+        let mut batch_count = 0;
+        let mut join_set = JoinSet::new();
+
+        while let Some(embedded_batch) = embed_rx.recv().await {
+            batch_count += 1;
+            let bl = embedded_batch.len();
+            total_ingested += bl;
+
+            ingest_progress.record_batch_ingested(bl as u64);
+            let snap = ingest_progress.snapshot();
+            info!(
+                "[Progress] [{}] {:.1}% — files {}/{}, entities {}/{}, batch #{} ({} entities)",
+                snap.repo_name,
+                snap.percent_complete,
+                snap.parsed_files,
+                snap.total_files,
+                snap.entities_ingested,
+                snap.total_entities,
+                snap.batches_ingested,
+                bl
+            );
+
+            // Dispatch resolution entities before ingestion spawns
+            for ee in &embedded_batch {
+                res_tx.send(ResolutionEntity::from(ee)).await?;
+            }
+
+            // Acquire a semaphore permit to limit concurrency
+            let permit = semaphore.clone().acquire_owned().await?;
+            let vdb = Arc::clone(&vector_db);
+            let gdb = Arc::clone(&graph_db);
+            let bc = batch_count;
+
+            join_set.spawn(async move {
+                info!(
+                    "[Worker: Ingester] [{}] Ingesting batch #{bc} ({bl} entities)...",
+                    embedded_batch[0].entity.repo_name
+                );
+                let result = ingest_batch(&embedded_batch, &vdb, &gdb).await;
+                drop(permit);
+                result
+            });
+        }
+
+        info!(
+            "All {} batches dispatched — waiting for ingestion workers to finish...",
+            batch_count
+        );
+
+        // Drain all completed tasks, propagating any errors
+        while let Some(result) = join_set.join_next().await {
+            result??;
+        }
+
+        Ok::<usize, anyhow::Error>(total_ingested)
+    })
 }
 
 /// Clean stale data from databases based on files to delete.
