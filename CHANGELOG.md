@@ -5,6 +5,62 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.8.2 — Refactor: Code Deduplication and Typo Cleanup
+
+Internal code-health release: deduplication, modularization of the
+groovy and javascript parsers, type consolidations in the db/models
+layer, and a stack of typo / UK→US spelling fixes. A new
+disambiguation fallback ladder lands in the ingest reference resolver.
+No schema changes, no re-index required for already-indexed
+repositories.
+
+- **Refactor(parser)**: Modularize the groovy parser into a `groovy/`
+  directory module (submodules: `mod`, `capture`, `inheritance`,
+  `methods`, `properties`, `accessors`, `refs`, `utils`, `tests`).
+  Mirrors the csharp / rust / varnish directory-module style. Pure
+  file move; no behaviour change.
+- **Refactor(parser)**: Modularize the javascript parser into a
+  `javascript/` directory module (submodules: `mod`, `refs`, `imports`,
+  `jsx`, `inheritance`, `dom_css`, `tests`). `pub(crate)` re-exports
+  in `mod.rs` preserve the public API for `captures`, `enrich`,
+  `post_passes`, `orphans`, `test_utils` and `typescript`.
+- **Refactor(db, models)**: `models::RootCandidateLite` collapses to a
+  type alias of `db::graph::RootCandidate` so the wire payload and the
+  db projection cannot drift apart. `ResolvedSubgraphRoot` extracted
+  from a tuple return. Cypher → cipher rename in the reference-target
+  resolution ladder.
+- **Refactor(cli)**: `filter_repos_by_name` extracted as a pure helper;
+  CLI table formatter, `explore_file`, `find_callers` and
+  `search_hybrid_context` cleaned of redundant branches.
+- **Refactor(mcp, parser)**: Inline `mcp_tools/search_hybrid_context/enrich.rs`
+  into the surrounding `mod.rs`; extract `extract_call_reference_intents`
+  in `extractor/captures.rs`.
+- **Refactor(parser)**: Tighten varnish (lexer/vcc/vcl/vtc),
+  csharp, rust, java, markdown, typescript and msbuild parsers —
+  dead-code removal, helper extraction, `#[cfg(test)]` gating on
+  test-only re-exports so `cargo clippy` (lib profile) stays
+  warning-free.
+- **Refactor(docs, utils, bin)**: Normalize British → American English
+  across doc-comments (`maximise` → `maximize`, `behaviour` → `behavior`,
+  `initialise` → `initialize`, etc.); tighten utility modules and
+  CLI entry points.
+- **Feat(ingest)**: New `resolve_homonym_fallback` ladder that
+  disambiguates homonym callees (same method name, different targets)
+  when neither FQN nor receiver matches. 4-step escalation:
+  arg-count + same-file, arg-count, same-file, receiver-chain,
+  single-unambiguous. The hot FQN / receiver lookups remain unchanged
+  and the ladder only kicks in when they fail.
+- **Test(parser)**: Add `collect_value_references` helper to
+  `test_utils` (matching the existing `collect_extends` /
+  `collect_implements` convention); dedup 4 inline filter-map blocks in
+  the python ValueReference tests.
+- **Chore(docs)**: `AGENTS.md` groovy entry refreshed to reflect the
+  new directory layout.
+- **cargo fmt** clean | **cargo clippy --all-targets --all-features -D warnings** clean
+- ✅ Unit tests passing (lib + binaries) | **E2E suites** status: see CI
+
+---
+
 ## v1.8.1 — Reference Repo Attribution (`find_callers` rows carry their repository)
 
 Purely additive projection + rendering change: every row returned by
