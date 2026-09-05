@@ -141,10 +141,6 @@ impl UpsertExt for GraphDb {
     ///
     /// Uses `UNWIND` to batch all entities in a single Cipher query,
     /// grouped by entity kind (since labels cannot be parameterized).
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Entity upserting logic is sequential"
-    )]
     /// Each entity is MERGED on its UUID for idempotency.
     async fn upsert_entities(&self, entities: &[EmbeddedEntity]) -> Result<()> {
         if entities.is_empty() {
@@ -152,67 +148,7 @@ impl UpsertExt for GraphDb {
         }
         let groups = group_entities_by_kind(entities);
         for (label, group) in &groups {
-            let entity_params: Vec<HashMap<String, BoltType>> = group
-                .iter()
-                .map(|e| {
-                    let mut map = HashMap::new();
-                    map.insert("uuid".to_string(), e.entity.uuid.to_string().into());
-                    map.insert("name".to_string(), e.entity.name.clone().into());
-                    map.insert("kind".to_string(), e.entity.kind.to_string().into());
-                    map.insert("language".to_string(), e.entity.language.clone().into());
-                    map.insert("repo_name".to_string(), e.entity.repo_name.clone().into());
-                    map.insert("file_path".to_string(), e.entity.file_path.clone().into());
-                    map.insert(
-                        "start_line".to_string(),
-                        (e.entity.start_line as i64).into(),
-                    );
-                    map.insert("end_line".to_string(), (e.entity.end_line as i64).into());
-                    map.insert(
-                        "signature".to_string(),
-                        e.entity.signature.clone().unwrap_or_default().into(),
-                    );
-                    map.insert(
-                        "docstring".to_string(),
-                        e.entity.docstring.clone().unwrap_or_default().into(),
-                    );
-                    map.insert(
-                        "inline_comments".to_string(),
-                        e.entity.inline_comments.clone().into(),
-                    );
-                    map.insert("decorators".to_string(), e.entity.decorators.clone().into());
-                    map.insert("embed_text".to_string(), e.entity.embed_text.clone().into());
-                    map.insert("fqn".to_string(), e.entity.fqn.clone().into());
-                    map.insert(
-                        "enclosing_class".to_string(),
-                        e.entity.enclosing_class.clone().unwrap_or_default().into(),
-                    );
-                    map.insert(
-                        "enclosing_class_fqn".to_string(),
-                        e.entity
-                            .enclosing_class_fqn
-                            .clone()
-                            .unwrap_or_default()
-                            .into(),
-                    );
-                    map.insert(
-                        "alias_module_path".to_string(),
-                        e.entity
-                            .alias_module_path
-                            .clone()
-                            .unwrap_or_default()
-                            .into(),
-                    );
-                    map.insert(
-                        "default_export".to_string(),
-                        e.entity.default_export.clone().unwrap_or_default().into(),
-                    );
-                    map.insert(
-                        "is_test_context".to_string(),
-                        e.entity.is_test_context.into(),
-                    );
-                    map
-                })
-                .collect();
+            let entity_params = build_entity_params(group);
             let cipher = format!(
                 "UNWIND $entities AS e
                  MERGE (n:Entity {{uuid: e.uuid}})
@@ -239,22 +175,7 @@ impl UpsertExt for GraphDb {
             entities[0].entity.repo_name,
             entities.len()
         );
-        // Auto-link entities using their enclosing_class property to create physical CONTAINS edges.
-        // Uses enclosing_class_fqn (when populated by the Rust qualifier) for exact match,
-        // falling back to (name, file_path) for non-Rust languages or when FQN is unknown.
-        if let Some(first) = entities.first() {
-            let repo_name = &first.entity.repo_name;
-            let entity_uuids = extract_entity_uuids(entities);
-            let link_cipher = build_contains_auto_link_cipher();
-            self.graph
-                .run(
-                    query(link_cipher)
-                        .param("repo_name", repo_name.clone())
-                        .param("entity_uuids", entity_uuids),
-                )
-                .await
-                .context("Failed to auto-link CONTAINS relationships")?;
-        }
+        auto_link_contains(self, entities).await?;
         Ok(())
     }
     /// Create typed relationships (CALLS, EXTENDS, IMPLEMENTS, REFERENCES) for all resolved edges.
@@ -394,6 +315,91 @@ impl UpsertExt for GraphDb {
         info!("Created DEPENDS_ON: {from_repo} -> {to_repo}");
         Ok(())
     }
+}
+
+fn build_entity_params(group: &[&EmbeddedEntity]) -> Vec<HashMap<String, BoltType>> {
+    group
+        .iter()
+        .map(|e| {
+            let mut map = HashMap::new();
+            map.insert("uuid".to_string(), e.entity.uuid.to_string().into());
+            map.insert("name".to_string(), e.entity.name.clone().into());
+            map.insert("kind".to_string(), e.entity.kind.to_string().into());
+            map.insert("language".to_string(), e.entity.language.clone().into());
+            map.insert("repo_name".to_string(), e.entity.repo_name.clone().into());
+            map.insert("file_path".to_string(), e.entity.file_path.clone().into());
+            map.insert(
+                "start_line".to_string(),
+                (e.entity.start_line as i64).into(),
+            );
+            map.insert("end_line".to_string(), (e.entity.end_line as i64).into());
+            map.insert(
+                "signature".to_string(),
+                e.entity.signature.clone().unwrap_or_default().into(),
+            );
+            map.insert(
+                "docstring".to_string(),
+                e.entity.docstring.clone().unwrap_or_default().into(),
+            );
+            map.insert(
+                "inline_comments".to_string(),
+                e.entity.inline_comments.clone().into(),
+            );
+            map.insert("decorators".to_string(), e.entity.decorators.clone().into());
+            map.insert("embed_text".to_string(), e.entity.embed_text.clone().into());
+            map.insert("fqn".to_string(), e.entity.fqn.clone().into());
+            map.insert(
+                "enclosing_class".to_string(),
+                e.entity.enclosing_class.clone().unwrap_or_default().into(),
+            );
+            map.insert(
+                "enclosing_class_fqn".to_string(),
+                e.entity
+                    .enclosing_class_fqn
+                    .clone()
+                    .unwrap_or_default()
+                    .into(),
+            );
+            map.insert(
+                "alias_module_path".to_string(),
+                e.entity
+                    .alias_module_path
+                    .clone()
+                    .unwrap_or_default()
+                    .into(),
+            );
+            map.insert(
+                "default_export".to_string(),
+                e.entity.default_export.clone().unwrap_or_default().into(),
+            );
+            map.insert(
+                "is_test_context".to_string(),
+                e.entity.is_test_context.into(),
+            );
+            map
+        })
+        .collect()
+}
+
+/// Auto-link entities using their enclosing_class property to create physical CONTAINS edges.
+/// Uses enclosing_class_fqn (when populated by the Rust qualifier) for exact match,
+/// falling back to (name, file_path) for non-Rust languages or when FQN is unknown.
+async fn auto_link_contains(db: &GraphDb, entities: &[EmbeddedEntity]) -> Result<()> {
+    let Some(first) = entities.first() else {
+        return Ok(());
+    };
+    let repo_name = &first.entity.repo_name;
+    let entity_uuids = extract_entity_uuids(entities);
+    let link_cipher = build_contains_auto_link_cipher();
+    db.graph
+        .run(
+            query(link_cipher)
+                .param("repo_name", repo_name.clone())
+                .param("entity_uuids", entity_uuids),
+        )
+        .await
+        .context("Failed to auto-link CONTAINS relationships")?;
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
