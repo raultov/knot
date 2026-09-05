@@ -175,23 +175,9 @@ fn test_groovy_method_in_class_extracts_correctly() {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-fn test_groovy_parse_sample_full_file() {
+fn test_groovy_parse_sample_full_file_types() {
     let source = include_str!("../../../../../tests/testing_files/sample_full.groovy");
     let entities = extract_entities_groovy(source, "sample_full.groovy", "test-repo");
-
-    println!("--- Extracted Entities ---");
-    for e in &entities {
-        println!("{:?} - {}", e.kind, e.name);
-    }
-    println!("--------------------------");
 
     assert!(
         entities
@@ -223,6 +209,18 @@ fn test_groovy_parse_sample_full_file() {
             .iter()
             .any(|e| e.name == "Status" && e.kind == EntityKind::GroovyEnum)
     );
+    assert!(
+        entities.len() >= 20,
+        "Expected at least 20 entities, got {}",
+        entities.len()
+    );
+}
+
+#[test]
+fn test_groovy_parse_sample_full_file_methods_and_properties() {
+    let source = include_str!("../../../../../tests/testing_files/sample_full.groovy");
+    let entities = extract_entities_groovy(source, "sample_full.groovy", "test-repo");
+
     assert!(
         entities
             .iter()
@@ -272,12 +270,12 @@ fn test_groovy_parse_sample_full_file() {
             .iter()
             .any(|e| e.name == "maxLoginAttempts" && e.kind == EntityKind::GroovyProperty)
     );
+}
 
-    assert!(
-        entities.len() >= 20,
-        "Expected at least 20 entities, got {}",
-        entities.len()
-    );
+#[test]
+fn test_groovy_parse_sample_full_file_docstrings() {
+    let source = include_str!("../../../../../tests/testing_files/sample_full.groovy");
+    let entities = extract_entities_groovy(source, "sample_full.groovy", "test-repo");
 
     // Docstring extraction: comments in the fixture now surface as docstrings.
     let global_config = entities

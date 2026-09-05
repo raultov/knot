@@ -2172,18 +2172,7 @@ fn test_extract_ts_import_alias() {
 // ============================================================
 // Markdown section embed_text and end_line tests
 // ============================================================
-#[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-fn test_extract_entities_markdown_section_body_in_embed_text() {
-    // The core of the issue: when a Markdown section is captured, its
-    // embed_text must contain the section body (paragraphs, lists, code
-    // blocks) — not just the heading. The captured node should be the
-    // enclosing `section`, so end_line covers the full section and
-    // node.utf8_text() gives us the body for the embedding.
-    let source = r#"# Top Level
+const MARKDOWN_SAMPLE_SOURCE: &str = r#"# Top Level
 
 Intro paragraph under the H1.
 
@@ -2207,25 +2196,29 @@ You need a recent rustc.
 Run the binary to start the service.
 "#;
 
-    let query = r#"
+const MARKDOWN_SAMPLE_QUERY: &str = r#"
 (document) @markdown.document.name
 
 (section) @markdown.section
 "#;
 
+fn parse_markdown_sample_entities() -> Vec<ParsedEntity> {
     let result = extract_entities(
-        source,
+        MARKDOWN_SAMPLE_SOURCE,
         tree_sitter_md::LANGUAGE.into(),
-        query,
+        MARKDOWN_SAMPLE_QUERY,
         "markdown",
         "/test/README.md",
         "test-repo",
     );
-
     assert!(result.is_ok());
-    let entities = result.unwrap();
+    result.unwrap()
+}
 
-    //check names for document kind were correctly overwritten
+#[test]
+fn test_extract_entities_markdown_section_body_in_embed_text() {
+    let entities = parse_markdown_sample_entities();
+
     let document = entities
         .iter()
         .find(|e| e.kind == EntityKind::MarkdownDocument)
@@ -2236,7 +2229,6 @@ Run the binary to start the service.
         document.name
     );
 
-    // 1 document + 4 sections (Top Level, Setup, Prerequisites, Usage)
     let sections: Vec<_> = entities
         .iter()
         .filter(|e| e.kind == EntityKind::MarkdownSection)
@@ -2248,8 +2240,6 @@ Run the binary to start the service.
         sections.len()
     );
 
-    // The "Setup" section's embed_text must contain the section body —
-    // the paragraph, the list, and the code block — not just the heading.
     let setup = sections
         .iter()
         .find(|e| e.name == "Setup")
@@ -2289,13 +2279,11 @@ Run the binary to start the service.
         prereqs.embed_text.contains("recent rustc"),
         "Prerequisites embed_text must contain its own body"
     );
+}
 
-    // ============================================================
-    // FQN assertions: file path + hierarchical heading chain.
-    // Prevents cross-file collisions (two Readmes each with a
-    // "## Setup") and within-file collisions (same heading text
-    // at different depths).
-    // ============================================================
+#[test]
+fn test_extract_entities_markdown_section_fqn_chain() {
+    let entities = parse_markdown_sample_entities();
 
     let document = entities
         .iter()
@@ -2307,6 +2295,11 @@ Run the binary to start the service.
         document.fqn
     );
 
+    let sections: Vec<_> = entities
+        .iter()
+        .filter(|e| e.kind == EntityKind::MarkdownSection)
+        .collect();
+
     let top_level = sections
         .iter()
         .find(|e| e.name == "Top Level")
@@ -2317,12 +2310,20 @@ Run the binary to start the service.
         top_level.fqn
     );
 
+    let setup = sections
+        .iter()
+        .find(|e| e.name == "Setup")
+        .expect("Setup section should be extracted");
     assert_eq!(
         setup.fqn, "/test/README.md::Top Level > Setup",
         "Nested H2 FQN should include its H1 ancestor, got: {:?}",
         setup.fqn
     );
 
+    let prereqs = sections
+        .iter()
+        .find(|e| e.name == "Prerequisites")
+        .expect("Prerequisites section should be extracted");
     assert_eq!(
         prereqs.fqn, "/test/README.md::Top Level > Setup > Prerequisites",
         "Nested H3 FQN should include both ancestors, got: {:?}",
