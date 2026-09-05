@@ -129,7 +129,7 @@ impl ProgressTracker {
         let total_entities_known = self.total_entities_known.load(Ordering::Acquire);
 
         // The `known` flag is consumed here so its semantics are local to
-        // the snapshot computation. Without it we could not distinguish
+        // the snapshot computation. Without it, we could not distinguish
         // "parser has not finished aggregating yet" from "parser finished
         // and produced zero entities".
         let total_entities = if total_entities_known {
@@ -192,10 +192,10 @@ impl ProgressTracker {
     /// Record the total number of entities the parse stage produced.
     ///
     /// Called exactly once, after the parser has finished collecting entities
-    /// from every file and before they are pushed into the bounded channel.
+    /// from every file, and before they are pushed into the bounded channel.
     /// `0` is a legal value (empty repository), so the caller uses a separate
     /// `AtomicBool` (`total_entities_known`) to disambiguate "not yet seen"
-    /// from "saw the value and it was zero".
+    /// from "saw the value, and it was zero".
     pub(crate) fn set_total_entities(&self, n: u64) {
         self.total_entities.store(n, Ordering::Release);
         self.total_entities_known.store(true, Ordering::Release);

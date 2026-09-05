@@ -4,7 +4,7 @@
 //! `embed_text` of every [`ParsedEntity`] into a high-dimensional vector.
 //!
 //! The default model is `AllMiniLML6V2` (384-dim, fast, good quality).
-//! All entities are embedded in a single batched call to maximise throughput.
+//! All entities are embedded in a single batched call to maximize throughput.
 
 use anyhow::Result;
 use tracing::info;
@@ -40,7 +40,7 @@ impl Embedder {
         Ok(())
     }
 
-    /// Initialise the embedding model.
+    /// Initialize the embedding model.
     ///
     /// On first run this will download the ONNX model weights (~23 MB for
     /// AllMiniLML6V2) and cache them locally. Subsequent runs load from cache.

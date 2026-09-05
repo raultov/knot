@@ -1,10 +1,10 @@
-//! Utility helpers: logging initialisation and miscellaneous functions.
+//! Utility helpers: logging initialization and miscellaneous functions.
 
 use anyhow::{Context, Result};
 use std::io::{IsTerminal, Write};
 use tracing_subscriber::{EnvFilter, fmt};
 
-/// Initialise the global `tracing` subscriber.
+/// Initialize the global `tracing` subscriber.
 ///
 /// Log level is controlled by the `RUST_LOG` environment variable.
 /// Falls back to `info` when the variable is not set.
@@ -25,7 +25,7 @@ pub fn init_logging() -> Result<()> {
     Ok(())
 }
 
-/// Initialise the global `tracing` subscriber for the CLI tool.
+/// Initialize the global `tracing` subscriber for the CLI tool.
 ///
 /// This is a specialized version for the `knot` CLI that:
 /// - Defaults to `error` level (not `info`) to minimize noise from dependencies
@@ -61,7 +61,7 @@ pub fn init_logging_for_cli() -> Result<()> {
 /// `std::env::set_var` is marked unsafe in Rust 2024 because concurrent modification
 /// from multiple threads is a data race. This function is safe because:
 /// - It is called exactly once, early in main(), before any Tokio threads exist.
-/// - The tokio runtime is not yet running at this point.
+/// - The Tokio runtime is not yet running at this point.
 #[inline(always)]
 pub fn inject_custom_ca_certs(cert_path: &Option<String>) {
     if let Some(path) = cert_path {

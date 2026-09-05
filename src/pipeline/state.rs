@@ -33,7 +33,7 @@ const STATE_FILE: &str = "index_state.json";
 const CURRENT_STATE_VERSION: u32 = 4;
 
 /// Returns the cache directory for fastembed models.
-/// Prioritises the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
+/// Prioritizes the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
 /// If not set, defaults to `<repo_path>/.knot/fastembed_cache/`.
 pub fn fastembed_cache_dir(repo_path: &str) -> PathBuf {
     if let Ok(custom_dir) = std::env::var("KNOT_FASTEMBED_CACHE_DIR") {
