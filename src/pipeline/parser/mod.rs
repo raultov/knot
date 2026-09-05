@@ -250,329 +250,404 @@ fn is_cpp_header(source: &str) -> bool {
     cpp_indicators.iter().any(|kw| source.contains(kw))
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "function is verbose but correct — extraction deferred"
-)]
-fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
-    let source = {
+/// Per-file inputs shared by the language dispatch helpers below.
+struct FileCtx<'a> {
+    source: String,
+    path: &'a Path,
+    ext: &'a str,
+    filename: &'a str,
+    file_path: String,
+    parse_cfg: &'a ParseConfig,
+}
+
+impl<'a> FileCtx<'a> {
+    fn new(path: &'a Path, parse_cfg: &'a ParseConfig) -> Result<Self> {
         let bytes =
             fs::read(path).with_context(|| format!("Cannot read file: {}", path.display()))?;
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
+        let source = String::from_utf8_lossy(&bytes).into_owned();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        // Handle files identified by name (no extension), e.g. Jenkinsfile
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let file_path = crate::pipeline::files::to_repo_relative(path, &parse_cfg.repo_root);
+        Ok(Self {
+            source,
+            path,
+            ext,
+            filename,
+            file_path,
+            parse_cfg,
+        })
+    }
 
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
+    /// Runs the shared tree-sitter query pipeline for one language.
+    fn extract_with_query(
+        &self,
+        query_file: &'static str,
+        default_query: &'static str,
+        language: tree_sitter::Language,
+        lang_name: &str,
+    ) -> Result<Vec<ParsedEntity>> {
+        let query_src = load_query_source(query_file, default_query, self.parse_cfg);
+        extractor::extract_entities(
+            &self.source,
+            language,
+            &query_src,
+            lang_name,
+            &self.file_path,
+            &self.parse_cfg.repo_name,
+        )
+    }
+}
 
-    // Handle files identified by name (no extension), e.g. Jenkinsfile
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
+fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
+    let ctx = FileCtx::new(path, parse_cfg)?;
 
-    let file_path = crate::pipeline::files::to_repo_relative(path, &parse_cfg.repo_root);
+    if let Some(entities) = dispatch_by_filename(&ctx) {
+        return Ok(entities);
+    }
 
-    // Dispatch by filename first for extensionless files
-    if filename == "Jenkinsfile" {
-        return Ok(languages::jenkins::extract_entities_jenkins(
-            &source,
-            &file_path,
-            &parse_cfg.repo_name,
+    let entities = dispatch_by_extension(&ctx)?;
+
+    debug!(
+        "Extracted {} entities from {}",
+        entities.len(),
+        ctx.file_path
+    );
+    Ok(entities)
+}
+
+/// Extensionless build files identified by name rather than by extension.
+fn dispatch_by_filename(ctx: &FileCtx<'_>) -> Option<Vec<ParsedEntity>> {
+    if ctx.filename == "Jenkinsfile" {
+        return Some(languages::jenkins::extract_entities_jenkins(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
         ));
     }
 
-    if filename == "Directory.Packages.props" {
+    if ctx.filename == "Directory.Packages.props" {
         // MSBuild Central Package Management: emits no entities of its
         // own — the CPM map is consumed lazily by csproj parsing. The
         // dispatcher must still have a target so the file is recognized
         // when discovered.
-        return Ok(languages::msbuild::extract_entities_props(
-            &source,
-            &file_path,
-            &parse_cfg.repo_name,
+        return Some(languages::msbuild::extract_entities_props(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
         ));
     }
 
-    let entities = match ext {
-        "java" => {
-            let query_src = load_query_source("java.scm", DEFAULT_JAVA_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_java::LANGUAGE.into(),
-                &query_src,
-                "java",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "kt" | "kts" => {
-            let query_src = load_query_source("kotlin.scm", DEFAULT_KOTLIN_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_kotlin_ng::LANGUAGE.into(),
-                &query_src,
-                "kotlin",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "ts" | "tsx" | "cts" => {
-            let mut query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, parse_cfg);
-            let lang: tree_sitter::Language = if ext == "tsx" {
-                // For TSX files, append TSX-specific rules (JSX component invocations)
-                let tsx_rules = load_query_source("tsx.scm", DEFAULT_TSX_QUERY, parse_cfg);
-                query_src.push('\n');
-                query_src.push_str(&tsx_rules);
-                tree_sitter_typescript::LANGUAGE_TSX.into()
-            } else {
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-            };
-            extractor::extract_entities(
-                &source,
-                lang,
-                &query_src,
-                "typescript",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "js" | "mjs" | "cjs" | "jsx" => {
-            let query_src = load_query_source("javascript.scm", DEFAULT_JS_QUERY, parse_cfg);
-            let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
-            extractor::extract_entities(
-                &source,
-                lang,
-                &query_src,
-                "javascript",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "html" | "htm" => {
-            let mut parser = tree_sitter::Parser::new();
-            parser
-                .set_language(&tree_sitter_html::LANGUAGE.into())
-                .context("Failed to load HTML grammar")?;
-            let tree = parser
-                .parse(&source, None)
-                .context("Failed to parse HTML")?;
-            languages::html::extract_entities_html(
-                tree.root_node(),
-                source.as_bytes(),
-                &file_path,
-                &parse_cfg.repo_name,
-            )
-        }
+    None
+}
+
+/// Dispatches by extension across the language families. Each family owns a
+/// disjoint set of extensions, so the fallthrough order only decides which
+/// dispatcher is tried first.
+fn dispatch_by_extension(ctx: &FileCtx<'_>) -> Result<Vec<ParsedEntity>> {
+    if let Some(entities) = dispatch_query_lang(ctx.ext, ctx)? {
+        return Ok(entities);
+    }
+    if let Some(entities) = dispatch_html_lang(ctx.ext, ctx)? {
+        return Ok(entities);
+    }
+    if let Some(entities) = dispatch_config_lang(ctx.ext, ctx) {
+        return Ok(entities);
+    }
+    if let Some(entities) = dispatch_lexical_lang(ctx.ext, ctx) {
+        return Ok(entities);
+    }
+    warn!("Unsupported extension '{}', skipping", ctx.ext);
+    Ok(vec![])
+}
+
+/// Tree-sitter query pipeline languages (Java, Kotlin, TS/JS, C/C++, C#,
+/// Python, Rust, CSS/SCSS, Markdown). Returns `None` when `ext` is not
+/// handled here so the caller can try the remaining dispatchers.
+///
+/// Most languages are a plain (query, grammar) pair matched in the table
+/// below; those needing extra handling (TSX query concat, Rust FQN
+/// qualification, C-vs-C++ header sniffing) delegate to their own helpers.
+fn dispatch_query_lang(ext: &str, ctx: &FileCtx<'_>) -> Result<Option<Vec<ParsedEntity>>> {
+    if ext == "ts" || ext == "tsx" || ext == "cts" {
+        return dispatch_typescript(ext, ctx).map(Some);
+    }
+    if ext == "rs" {
+        return dispatch_rust(ctx).map(Some);
+    }
+    if ext == "h" {
+        return dispatch_c_header(ctx).map(Some);
+    }
+
+    let (query_file, default_query, language, lang_name) = match ext {
+        "java" => (
+            "java.scm",
+            DEFAULT_JAVA_QUERY,
+            tree_sitter_java::LANGUAGE.into(),
+            "java",
+        ),
+        "kt" | "kts" => (
+            "kotlin.scm",
+            DEFAULT_KOTLIN_QUERY,
+            tree_sitter_kotlin_ng::LANGUAGE.into(),
+            "kotlin",
+        ),
+        "js" | "mjs" | "cjs" | "jsx" => (
+            "javascript.scm",
+            DEFAULT_JS_QUERY,
+            tree_sitter_javascript::LANGUAGE.into(),
+            "javascript",
+        ),
+        "css" => (
+            "css.scm",
+            DEFAULT_CSS_QUERY,
+            tree_sitter_css::LANGUAGE.into(),
+            "css",
+        ),
+        "scss" | "sass" => (
+            "scss.scm",
+            DEFAULT_SCSS_QUERY,
+            tree_sitter_scss::language(),
+            "scss",
+        ),
+        "py" | "pyi" | "pyw" => (
+            "python.scm",
+            DEFAULT_PYTHON_QUERY,
+            tree_sitter_python::LANGUAGE.into(),
+            "python",
+        ),
+        "c" => (
+            "c.scm",
+            DEFAULT_C_QUERY,
+            tree_sitter_c::LANGUAGE.into(),
+            "c",
+        ),
+        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => (
+            "cpp.scm",
+            DEFAULT_CPP_QUERY,
+            tree_sitter_cpp::LANGUAGE.into(),
+            "cpp",
+        ),
+        "cs" => (
+            "csharp.scm",
+            DEFAULT_CSHARP_QUERY,
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            "csharp",
+        ),
+        "md" | "markdown" => (
+            "markdown.scm",
+            DEFAULT_MD_QUERY,
+            tree_sitter_md::LANGUAGE.into(),
+            "markdown",
+        ),
+        _ => return Ok(None),
+    };
+    Ok(Some(ctx.extract_with_query(
+        query_file,
+        default_query,
+        language,
+        lang_name,
+    )?))
+}
+
+/// TypeScript family. TSX appends JSX-specific query rules (component
+/// invocations) to the shared TypeScript query.
+fn dispatch_typescript(ext: &str, ctx: &FileCtx<'_>) -> Result<Vec<ParsedEntity>> {
+    let mut query_src = load_query_source("typescript.scm", DEFAULT_TS_QUERY, ctx.parse_cfg);
+    let lang: tree_sitter::Language = if ext == "tsx" {
+        let tsx_rules = load_query_source("tsx.scm", DEFAULT_TSX_QUERY, ctx.parse_cfg);
+        query_src.push('\n');
+        query_src.push_str(&tsx_rules);
+        tree_sitter_typescript::LANGUAGE_TSX.into()
+    } else {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    };
+    extractor::extract_entities(
+        &ctx.source,
+        lang,
+        &query_src,
+        "typescript",
+        &ctx.file_path,
+        &ctx.parse_cfg.repo_name,
+    )
+}
+
+/// Rust: query pipeline plus the crate-anchored FQN qualification post-pass.
+fn dispatch_rust(ctx: &FileCtx<'_>) -> Result<Vec<ParsedEntity>> {
+    let mut rust_entities = ctx.extract_with_query(
+        "rust.scm",
+        DEFAULT_RUST_QUERY,
+        tree_sitter_rust::LANGUAGE.into(),
+        "rust",
+    )?;
+    languages::rust::qualify_rust_fqns(
+        &mut rust_entities,
+        &ctx.file_path,
+        ctx.parse_cfg.repo_path.as_deref(),
+        Some(&ctx.source),
+    );
+    Ok(rust_entities)
+}
+
+/// C headers: sniff the content to decide between the C++ and C grammars.
+fn dispatch_c_header(ctx: &FileCtx<'_>) -> Result<Vec<ParsedEntity>> {
+    if is_cpp_header(&ctx.source) {
+        return ctx.extract_with_query(
+            "cpp.scm",
+            DEFAULT_CPP_QUERY,
+            tree_sitter_cpp::LANGUAGE.into(),
+            "cpp",
+        );
+    }
+    ctx.extract_with_query(
+        "c.scm",
+        DEFAULT_C_QUERY,
+        tree_sitter_c::LANGUAGE.into(),
+        "c",
+    )
+}
+
+/// HTML: parsed with its own tree walk instead of the shared query pipeline.
+/// Returns `None` for non-HTML extensions.
+fn dispatch_html_lang(ext: &str, ctx: &FileCtx<'_>) -> Result<Option<Vec<ParsedEntity>>> {
+    if ext != "html" && ext != "htm" {
+        return Ok(None);
+    }
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_html::LANGUAGE.into())
+        .context("Failed to load HTML grammar")?;
+    let tree = parser
+        .parse(&ctx.source, None)
+        .context("Failed to parse HTML")?;
+    Ok(Some(languages::html::extract_entities_html(
+        tree.root_node(),
+        ctx.source.as_bytes(),
+        &ctx.file_path,
+        &ctx.parse_cfg.repo_name,
+    )))
+}
+
+/// Configuration-file languages. All of them emit no entities unless
+/// `include_config_files` is enabled (package.json/tsconfig.json excepted).
+/// Returns `None` for non-config extensions.
+fn dispatch_config_lang(ext: &str, ctx: &FileCtx<'_>) -> Option<Vec<ParsedEntity>> {
+    match ext {
         "yml" | "yaml" => {
-            if !parse_cfg.include_config_files {
-                Vec::new()
-            } else {
-                dispatch_yaml(&source, path, &file_path, &parse_cfg.repo_name)
+            if !ctx.parse_cfg.include_config_files {
+                return Some(Vec::new());
             }
+            Some(dispatch_yaml(
+                &ctx.source,
+                ctx.path,
+                &ctx.file_path,
+                &ctx.parse_cfg.repo_name,
+            ))
         }
         "json" => {
-            if !parse_cfg.include_config_files
-                && filename != "package.json"
-                && filename != "tsconfig.json"
+            if !ctx.parse_cfg.include_config_files
+                && ctx.filename != "package.json"
+                && ctx.filename != "tsconfig.json"
             {
-                Vec::new()
-            } else {
-                languages::json_config::extract_entities_json_config(
-                    &source,
-                    &file_path,
-                    &parse_cfg.repo_name,
-                )
+                return Some(Vec::new());
             }
+            Some(languages::json_config::extract_entities_json_config(
+                &ctx.source,
+                &ctx.file_path,
+                &ctx.parse_cfg.repo_name,
+            ))
         }
         "properties" => {
-            if !parse_cfg.include_config_files {
-                Vec::new()
-            } else {
-                languages::properties::extract_entities_properties(
-                    &source,
-                    &file_path,
-                    &parse_cfg.repo_name,
-                )
+            if !ctx.parse_cfg.include_config_files {
+                return Some(Vec::new());
             }
+            Some(languages::properties::extract_entities_properties(
+                &ctx.source,
+                &ctx.file_path,
+                &ctx.parse_cfg.repo_name,
+            ))
         }
         "tpl" => {
-            if !parse_cfg.include_config_files {
-                Vec::new()
-            } else {
-                let chart_name = detect_chart_name(path, &parse_cfg.repo_root);
-                languages::helm::extract_helm_template(
-                    &source,
-                    &file_path,
-                    &parse_cfg.repo_name,
-                    &chart_name,
-                )
+            if !ctx.parse_cfg.include_config_files {
+                return Some(Vec::new());
             }
+            let chart_name = detect_chart_name(ctx.path, &ctx.parse_cfg.repo_root);
+            Some(languages::helm::extract_helm_template(
+                &ctx.source,
+                &ctx.file_path,
+                &ctx.parse_cfg.repo_name,
+                &chart_name,
+            ))
         }
-        "css" => {
-            let query_src = load_query_source("css.scm", DEFAULT_CSS_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_css::LANGUAGE.into(),
-                &query_src,
-                "css",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "scss" | "sass" => {
-            let query_src = load_query_source("scss.scm", DEFAULT_SCSS_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_scss::language(),
-                &query_src,
-                "scss",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "py" | "pyi" | "pyw" => {
-            let query_src = load_query_source("python.scm", DEFAULT_PYTHON_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_python::LANGUAGE.into(),
-                &query_src,
-                "python",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "rs" => {
-            let query_src = load_query_source("rust.scm", DEFAULT_RUST_QUERY, parse_cfg);
-            let mut rust_entities = extractor::extract_entities(
-                &source,
-                tree_sitter_rust::LANGUAGE.into(),
-                &query_src,
-                "rust",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?;
-            languages::rust::qualify_rust_fqns(
-                &mut rust_entities,
-                &file_path,
-                parse_cfg.repo_path.as_deref(),
-                Some(&source),
-            );
-            rust_entities
-        }
-        "c" => {
-            let query_src = load_query_source("c.scm", DEFAULT_C_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_c::LANGUAGE.into(),
-                &query_src,
-                "c",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "h" => {
-            if is_cpp_header(&source) {
-                let query_src = load_query_source("cpp.scm", DEFAULT_CPP_QUERY, parse_cfg);
-                extractor::extract_entities(
-                    &source,
-                    tree_sitter_cpp::LANGUAGE.into(),
-                    &query_src,
-                    "cpp",
-                    &file_path,
-                    &parse_cfg.repo_name,
-                )?
-            } else {
-                let query_src = load_query_source("c.scm", DEFAULT_C_QUERY, parse_cfg);
-                extractor::extract_entities(
-                    &source,
-                    tree_sitter_c::LANGUAGE.into(),
-                    &query_src,
-                    "c",
-                    &file_path,
-                    &parse_cfg.repo_name,
-                )?
-            }
-        }
-        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => {
-            let query_src = load_query_source("cpp.scm", DEFAULT_CPP_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_cpp::LANGUAGE.into(),
-                &query_src,
-                "cpp",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "cs" => {
-            let query_src = load_query_source("csharp.scm", DEFAULT_CSHARP_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_c_sharp::LANGUAGE.into(),
-                &query_src,
-                "csharp",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "groovy" => {
-            languages::groovy::extract_entities_groovy(&source, &file_path, &parse_cfg.repo_name)
-        }
-        "gradle" => {
-            languages::gradle::extract_entities_gradle(&source, &file_path, &parse_cfg.repo_name)
-        }
-        "jenkinsfile" => {
-            languages::jenkins::extract_entities_jenkins(&source, &file_path, &parse_cfg.repo_name)
-        }
-        "xml" => languages::xml::extract_entities_xml(&source, &file_path, &parse_cfg.repo_name),
+        _ => None,
+    }
+}
+
+/// Hand-written (non-tree-sitter) language parsers. Returns `None` for
+/// extensions not handled here.
+fn dispatch_lexical_lang(ext: &str, ctx: &FileCtx<'_>) -> Option<Vec<ParsedEntity>> {
+    match ext {
+        "groovy" => Some(languages::groovy::extract_entities_groovy(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        "gradle" => Some(languages::gradle::extract_entities_gradle(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        "jenkinsfile" => Some(languages::jenkins::extract_entities_jenkins(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        "xml" => Some(languages::xml::extract_entities_xml(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
         "csproj" => {
             // MSBuild: requires the csproj's directory + repo_root so the
             // CPM lookup can walk up to `Directory.Packages.props`.
-            let csproj_abs_dir = path.parent().unwrap_or(path);
-            let ctx = languages::msbuild::MsbuildContext {
-                source: &source,
-                file_path: &file_path,
-                repo_name: &parse_cfg.repo_name,
+            let csproj_abs_dir = ctx.path.parent().unwrap_or(ctx.path);
+            let msbuild_ctx = languages::msbuild::MsbuildContext {
+                source: &ctx.source,
+                file_path: &ctx.file_path,
+                repo_name: &ctx.parse_cfg.repo_name,
                 csproj_abs_dir,
-                repo_root: &parse_cfg.repo_root,
+                repo_root: &ctx.parse_cfg.repo_root,
             };
-            languages::msbuild::extract_entities_csproj(&ctx)
+            Some(languages::msbuild::extract_entities_csproj(&msbuild_ctx))
         }
-        "toml" => languages::toml::extract_entities_toml(&source, &file_path, &parse_cfg.repo_name),
-        "md" | "markdown" => {
-            let query_src = load_query_source("markdown.scm", DEFAULT_MD_QUERY, parse_cfg);
-            extractor::extract_entities(
-                &source,
-                tree_sitter_md::LANGUAGE.into(),
-                &query_src,
-                "markdown",
-                &file_path,
-                &parse_cfg.repo_name,
-            )?
-        }
-        "vcl" => {
-            languages::varnish::extract_entities_vcl(&source, &file_path, &parse_cfg.repo_name)
-        }
-        "vtc" => {
-            languages::varnish::extract_entities_vtc(&source, &file_path, &parse_cfg.repo_name)
-        }
-        "vcc" => {
-            languages::varnish::extract_entities_vcc(&source, &file_path, &parse_cfg.repo_name)
-        }
-        other => {
-            warn!("Unsupported extension '{other}', skipping");
-            vec![]
-        }
-    };
-
-    debug!("Extracted {} entities from {}", entities.len(), file_path);
-    Ok(entities)
+        "toml" => Some(languages::toml::extract_entities_toml(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        "vcl" => Some(languages::varnish::extract_entities_vcl(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        "vtc" => Some(languages::varnish::extract_entities_vtc(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        "vcc" => Some(languages::varnish::extract_entities_vcc(
+            &ctx.source,
+            &ctx.file_path,
+            &ctx.parse_cfg.repo_name,
+        )),
+        _ => None,
+    }
 }
 
 /// Dispatch YAML files to the appropriate parser based on content.
