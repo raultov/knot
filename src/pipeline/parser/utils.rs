@@ -140,6 +140,69 @@ pub(crate) fn find_parent_by_kind<'a>(mut node: Node<'a>, kind: &str) -> Option<
     None
 }
 
+/// Convert extracted `CallIntent`s into `ReferenceIntent::Call` items.
+pub(crate) fn convert_call_intents_to_reference_intents<F>(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+    extractor: F,
+) where
+    F: FnOnce(Node<'_>, &[u8], &mut Vec<crate::models::CallIntent>),
+{
+    let mut call_intents = Vec::new();
+    extractor(node, source, &mut call_intents);
+    for call in call_intents {
+        intents.push(ReferenceIntent::Call {
+            method: call.method,
+            receiver: call.receiver,
+            line: call.line,
+            arg_count: call.arg_count,
+        });
+    }
+}
+
+/// Recursively collect `CallIntent` items from a tree node using a single-node extractor.
+pub(crate) fn collect_recursive_call_intents<F>(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<crate::models::CallIntent>,
+    single_node_extractor: F,
+) where
+    F: Fn(Node<'_>, &[u8]) -> Vec<crate::models::CallIntent> + Copy,
+{
+    intents.extend(single_node_extractor(node, source));
+
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        collect_recursive_call_intents(c, source, intents, single_node_extractor);
+        child = c.next_sibling();
+    }
+}
+
+/// Recursively search an AST for a single string matching a predicate.
+pub(crate) fn find_node_value_recursive<F>(root: Node<'_>, matcher: F) -> Option<String>
+where
+    F: Fn(Node<'_>) -> Option<String> + Copy,
+{
+    fn walk<F>(node: Node<'_>, matcher: F) -> Option<String>
+    where
+        F: Fn(Node<'_>) -> Option<String> + Copy,
+    {
+        if let Some(found) = matcher(node) {
+            return Some(found);
+        }
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if let Some(result) = walk(c, matcher) {
+                return Some(result);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+    walk(root, matcher)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

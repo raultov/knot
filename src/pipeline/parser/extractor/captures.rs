@@ -333,7 +333,7 @@ fn handle_kotlin_decl_captures<'a>(
 }
 
 /// `kotlin_function.name` capture. A Kotlin `function_declaration` enclosed
-/// in a class/object/companion/interface is really a method; outside them it
+/// in a class/object/companion/interface is really a method; outside them, it
 /// is a free function.
 fn handle_kotlin_function_capture<'a>(
     text: &str,
@@ -444,6 +444,23 @@ fn handle_function_captures<'a>(
     }
 }
 
+fn promote_captured_entity<'a, F>(
+    name_or_intent: &str,
+    text: &str,
+    ctx: &CaptureCtx<'a>,
+    state: &mut CaptureState<'a>,
+    handler: F,
+) where
+    F: FnOnce(&str, &str, Node<'a>) -> Option<(String, EntityKind, usize)>,
+{
+    if let Some((entity_name, entity_kind, entity_line)) = handler(name_or_intent, text, ctx.node) {
+        state.name = Some(entity_name);
+        state.kind = Some(entity_kind);
+        state.start_line = entity_line;
+        state.entity_node = Some(ctx.node);
+    }
+}
+
 /// CSS/SCSS capture: delegates to the CSS handler and promotes its result to
 /// an entity capture on the same node.
 fn handle_css_scss_capture<'a>(
@@ -452,14 +469,7 @@ fn handle_css_scss_capture<'a>(
     ctx: &CaptureCtx<'a>,
     state: &mut CaptureState<'a>,
 ) {
-    if let Some((entity_name, entity_kind, entity_line)) =
-        css::handle_css_capture(name_or_intent, text, ctx.node)
-    {
-        state.name = Some(entity_name);
-        state.kind = Some(entity_kind);
-        state.start_line = entity_line;
-        state.entity_node = Some(ctx.node);
-    }
+    promote_captured_entity(name_or_intent, text, ctx, state, css::handle_css_capture);
 }
 
 /// HTML capture: delegates to the HTML handler and promotes its result to an
@@ -470,14 +480,7 @@ fn handle_html_capture<'a>(
     ctx: &CaptureCtx<'a>,
     state: &mut CaptureState<'a>,
 ) {
-    if let Some((entity_name, entity_kind, entity_line)) =
-        html::handle_html_capture(name_or_intent, text, ctx.node)
-    {
-        state.name = Some(entity_name);
-        state.kind = Some(entity_kind);
-        state.start_line = entity_line;
-        state.entity_node = Some(ctx.node);
-    }
+    promote_captured_entity(name_or_intent, text, ctx, state, html::handle_html_capture);
 }
 
 /// Rust entity capture (`rust.*`). Entity kinds that carry preceding doc

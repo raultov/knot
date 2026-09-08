@@ -419,16 +419,12 @@ pub(crate) fn extract_reference_intents_kotlin(
     source: &[u8],
     intents: &mut Vec<ReferenceIntent>,
 ) {
-    let mut call_intents = Vec::new();
-    extract_call_intents_kotlin(node, source, &mut call_intents);
-    for call in call_intents {
-        intents.push(ReferenceIntent::Call {
-            method: call.method,
-            receiver: call.receiver,
-            line: call.line,
-            arg_count: call.arg_count,
-        });
-    }
+    crate::pipeline::parser::utils::convert_call_intents_to_reference_intents(
+        node,
+        source,
+        intents,
+        extract_call_intents_kotlin,
+    );
 }
 
 /// Extract function/method invocation call intents from a Kotlin method body.
@@ -437,15 +433,12 @@ pub(crate) fn extract_call_intents_kotlin(
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
-    // Use the non-recursive version for the current node
-    intents.extend(extract_single_call_intent_kotlin(node, source));
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_call_intents_kotlin(c, source, intents);
-        child = c.next_sibling();
-    }
+    crate::pipeline::parser::utils::collect_recursive_call_intents(
+        node,
+        source,
+        intents,
+        extract_single_call_intent_kotlin,
+    );
 }
 
 /// Helper function to extract receiver and method from postfix_expression or navigation_expression.

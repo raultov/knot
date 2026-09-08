@@ -13,8 +13,9 @@ use tracing_subscriber::{EnvFilter, fmt};
 /// ```text
 /// RUST_LOG=debug knot --repo-path /path/to/repo
 /// ```
-pub fn init_logging() -> Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+fn setup_logging_subscriber(fallback_level: &str) -> Result<()> {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(fallback_level));
 
     fmt()
         .with_env_filter(filter)
@@ -23,6 +24,19 @@ pub fn init_logging() -> Result<()> {
         .init();
 
     Ok(())
+}
+
+/// Initialize the global `tracing` subscriber.
+///
+/// Log level is controlled by the `RUST_LOG` environment variable.
+/// Falls back to `info` when the variable is not set.
+///
+/// # Example
+/// ```text
+/// RUST_LOG=debug knot --repo-path /path/to/repo
+/// ```
+pub fn init_logging() -> Result<()> {
+    setup_logging_subscriber("info")
 }
 
 /// Initialize the global `tracing` subscriber for the CLI tool.
@@ -41,15 +55,7 @@ pub fn init_logging() -> Result<()> {
 /// RUST_LOG=debug knot search "something"
 /// ```
 pub fn init_logging_for_cli() -> Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error"));
-
-    fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .with_writer(std::io::stderr) // Ensure logs go to stderr, not stdout
-        .init();
-
-    Ok(())
+    setup_logging_subscriber("error")
 }
 
 /// Injects custom CA certificates into the process environment for TLS connections.
@@ -127,23 +133,39 @@ pub fn format_output(
     }
 }
 
+fn format_output_with_handlers<FTable, FMd>(
+    key: &str,
+    json_value: serde_json::Value,
+    output_format: crate::config::OutputFormat,
+    table_fn: FTable,
+    md_fn: FMd,
+) -> String
+where
+    FTable: FnOnce(&str, &serde_json::Value) -> String,
+    FMd: FnOnce(&str, &serde_json::Value) -> String,
+{
+    match output_format {
+        crate::config::OutputFormat::Table => table_fn(key, &json_value),
+        crate::config::OutputFormat::Json => {
+            serde_json::to_string_pretty(&json_value).unwrap_or_default()
+        }
+        crate::config::OutputFormat::Markdown => md_fn(key, &json_value),
+    }
+}
+
 /// Format callers (reverse dependency) results according to the requested output format.
 pub fn format_callers_output(
     entity_name: &str,
     json_value: serde_json::Value,
     output_format: crate::config::OutputFormat,
 ) -> String {
-    match output_format {
-        crate::config::OutputFormat::Table => {
-            crate::cli_tools::formatters::format_callers_table(entity_name, &json_value)
-        }
-        crate::config::OutputFormat::Json => {
-            serde_json::to_string_pretty(&json_value).unwrap_or_default()
-        }
-        crate::config::OutputFormat::Markdown => {
-            crate::cli_tools::format_references_result(entity_name, &json_value)
-        }
-    }
+    format_output_with_handlers(
+        entity_name,
+        json_value,
+        output_format,
+        crate::cli_tools::formatters::format_callers_table,
+        crate::cli_tools::format_references_result,
+    )
 }
 
 /// Format file exploration results according to the requested output format.
@@ -152,17 +174,13 @@ pub fn format_explore_output(
     json_value: serde_json::Value,
     output_format: crate::config::OutputFormat,
 ) -> String {
-    match output_format {
-        crate::config::OutputFormat::Table => {
-            crate::cli_tools::formatters::format_explore_table(file_path, &json_value)
-        }
-        crate::config::OutputFormat::Json => {
-            serde_json::to_string_pretty(&json_value).unwrap_or_default()
-        }
-        crate::config::OutputFormat::Markdown => {
-            crate::cli_tools::format_file_entities(file_path, &json_value)
-        }
-    }
+    format_output_with_handlers(
+        file_path,
+        json_value,
+        output_format,
+        crate::cli_tools::formatters::format_explore_table,
+        crate::cli_tools::format_file_entities,
+    )
 }
 
 /// Compute the number of Rayon threads to use based on available CPUs.

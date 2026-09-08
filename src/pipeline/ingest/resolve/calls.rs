@@ -247,12 +247,7 @@ fn lookup_fqn_by_fqn(
     method: &str,
     fqn_to_uuid: &HashMap<String, Uuid>,
 ) -> Option<Uuid> {
-    let dot_fqn = format!("{}.{}", class_fqn, method);
-    if let Some(&uuid) = fqn_to_uuid.get(&dot_fqn) {
-        return Some(uuid);
-    }
-    let colon_fqn = format!("{}::{}", class_fqn, method);
-    fqn_to_uuid.get(&colon_fqn).copied()
+    lookup_fqn(class_fqn, method, fqn_to_uuid)
 }
 
 /// Fallback ladder for homonym candidates that share the callee's method name

@@ -203,16 +203,12 @@ pub(crate) fn extract_reference_intents_java(
     source: &[u8],
     intents: &mut Vec<ReferenceIntent>,
 ) {
-    let mut call_intents = Vec::new();
-    extract_call_intents_java(node, source, &mut call_intents);
-    for call in call_intents {
-        intents.push(ReferenceIntent::Call {
-            method: call.method,
-            receiver: call.receiver,
-            line: call.line,
-            arg_count: call.arg_count,
-        });
-    }
+    crate::pipeline::parser::utils::convert_call_intents_to_reference_intents(
+        node,
+        source,
+        intents,
+        extract_call_intents_java,
+    );
 }
 
 /// Extract method invocation call intents from a Java method body.
@@ -221,14 +217,12 @@ pub(crate) fn extract_call_intents_java(
     source: &[u8],
     intents: &mut Vec<CallIntent>,
 ) {
-    intents.extend(extract_single_call_intent_java(node, source));
-
-    // Recursively process children
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        extract_call_intents_java(c, source, intents);
-        child = c.next_sibling();
-    }
+    crate::pipeline::parser::utils::collect_recursive_call_intents(
+        node,
+        source,
+        intents,
+        extract_single_call_intent_java,
+    );
 }
 
 /// Extract call intents from a SINGLE Java node without recursive descent.

@@ -71,16 +71,12 @@ pub(crate) fn extract_reference_intents_cpp(
     source: &[u8],
     intents: &mut Vec<ReferenceIntent>,
 ) {
-    let mut call_intents = Vec::new();
-    extract_call_intents_cpp(node, source, &mut call_intents);
-    for call in call_intents {
-        intents.push(ReferenceIntent::Call {
-            method: call.method,
-            receiver: call.receiver,
-            line: call.line,
-            arg_count: call.arg_count,
-        });
-    }
+    crate::pipeline::parser::utils::convert_call_intents_to_reference_intents(
+        node,
+        source,
+        intents,
+        extract_call_intents_cpp,
+    );
 }
 
 fn extract_call_expr_intent(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {

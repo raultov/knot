@@ -508,13 +508,12 @@ pub(crate) fn scan_import_module_aliases(
 
 /// Scan the AST for `export default X` and return the target name.
 pub(crate) fn scan_default_export_target(root: Node<'_>, source: &[u8]) -> Option<String> {
-    fn walk(node: Node<'_>, source: &[u8]) -> Option<String> {
+    crate::pipeline::parser::utils::find_node_value_recursive(root, |node| {
         if node.kind() == "export_statement"
             && node
                 .children(&mut node.walk())
                 .any(|c| c.kind() == "default")
         {
-            // Find the value child that is an identifier
             let mut child = node.child(0);
             while let Some(c) = child {
                 if c.kind() == "identifier" {
@@ -523,16 +522,8 @@ pub(crate) fn scan_default_export_target(root: Node<'_>, source: &[u8]) -> Optio
                 child = c.next_sibling();
             }
         }
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if let Some(result) = walk(c, source) {
-                return Some(result);
-            }
-            child = c.next_sibling();
-        }
         None
-    }
-    walk(root, source)
+    })
 }
 
 #[cfg(test)]

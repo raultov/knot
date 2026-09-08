@@ -204,7 +204,7 @@ fn extract_require_string(call_node: Node<'_>, source: &[u8]) -> Option<String> 
 }
 
 pub(crate) fn scan_module_exports_target(root: Node<'_>, source: &[u8]) -> Option<String> {
-    fn walk(node: Node<'_>, source: &[u8]) -> Option<String> {
+    crate::pipeline::parser::utils::find_node_value_recursive(root, |node| {
         if node.kind() == "assignment_expression" {
             let left = node.child_by_field_name("left")?;
             if left.kind() == "member_expression"
@@ -219,14 +219,6 @@ pub(crate) fn scan_module_exports_target(root: Node<'_>, source: &[u8]) -> Optio
                 }
             }
         }
-        let mut child = node.child(0);
-        while let Some(c) = child {
-            if let Some(result) = walk(c, source) {
-                return Some(result);
-            }
-            child = c.next_sibling();
-        }
         None
-    }
-    walk(root, source)
+    })
 }

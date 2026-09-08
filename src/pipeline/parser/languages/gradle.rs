@@ -94,11 +94,11 @@ pub(crate) fn extract_entities_gradle(
     entities
 }
 
-fn extract_gradle_group(source: &str) -> Option<String> {
+fn extract_gradle_property(source: &str, key: &str) -> Option<String> {
     for line in source.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("group")
-            && let Some(after_keyword) = trimmed.strip_prefix("group")
+        if trimmed.starts_with(key)
+            && let Some(after_keyword) = trimmed.strip_prefix(key)
         {
             let rest = after_keyword.trim_start_matches([' ', '=']).trim();
             if let Some(quoted) = extract_single_quoted(rest) {
@@ -109,19 +109,12 @@ fn extract_gradle_group(source: &str) -> Option<String> {
     None
 }
 
+fn extract_gradle_group(source: &str) -> Option<String> {
+    extract_gradle_property(source, "group")
+}
+
 fn extract_gradle_version(source: &str) -> Option<String> {
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("version")
-            && let Some(after_keyword) = trimmed.strip_prefix("version")
-        {
-            let rest = after_keyword.trim_start_matches([' ', '=']).trim();
-            if let Some(quoted) = extract_single_quoted(rest) {
-                return Some(quoted);
-            }
-        }
-    }
-    None
+    extract_gradle_property(source, "version")
 }
 
 fn extract_gradle_artifact_name(file_path: &str) -> Option<String> {
