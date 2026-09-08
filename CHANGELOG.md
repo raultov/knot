@@ -5,6 +5,44 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.1 — Refactor: Duplicate-Code Backlog & `cargo-dupes` Quality Gate
+
+Internal code-health release: cleared 8 of the 16 genuine-duplication
+items from the §11 backlog of `docs/specs/duplication_quality_gate.md`,
+and shipped a fifth quality gate (`cargo-dupes` 0.2.1) that blocks new
+duplicate code at PR time. No public-API or behaviour change; existing
+indexes remain valid.
+
+- **Refactor(parser)**: Extracted shared helpers that collapse 8 pairs of
+  near-identical functions into single implementations. `parser/utils.rs`
+  gained `convert_call_intents_to_reference_intents`,
+  `collect_recursive_call_intents`, `find_node_value_recursive`;
+  `extractor/captures.rs` gained `promote_captured_entity`; `gradle.rs`
+  gained `extract_gradle_property(key)`; `utils/mod.rs` gained
+  `setup_logging_subscriber` and `format_output_with_handlers`;
+  `calls.rs` `lookup_fqn_by_fqn` now delegates to `lookup_fqn`. Affected
+  call-sites: Java, Kotlin, C++, TypeScript, JavaScript, Gradle,
+  CSS/SCSS/HTML captures, ingest FQN lookup, CLI output formatting.
+- **Feat(quality)**: Added `cargo-dupes` duplication quality gate.
+  `dupes.toml` defines a ratcheted baseline (`max_exact_duplicates = 8`,
+  `max_near_duplicates = 9`, `min_lines = 10`, `exclude = tests/ +
+  benches/ + tests.rs`) so the gate is green on the current tree and may
+  only ever be lowered. `.dupes-ignore.toml` documents 5 known false
+  positives (3 Cypher query builders in `db/graph/query.rs`, 2
+  `rust-mcp-sdk` `Tool::tool` schema declarations). `Makefile` adds
+  `make check` (fmt + clippy + test + dupes) and `make dupes-cleanup`
+  targets. `.github/workflows/ci.yml` and `.github/workflows/release.yml`
+  cache, install, run `cargo dupes check`, and surface stale ignores via
+  `cargo dupes cleanup --dry-run` inside the existing `test-unit` job.
+- **Docs**: Added `docs/specs/duplication_quality_gate.md` (full design
+  spec, measured curves, Phase 2 backlog); `AGENTS.md` documents the gate
+  and the duplicate-suppression policy next to the `#[expect(..., reason)]`
+  rule; `CONTRIBUTING.md` adds the gate to the contributor checklist and
+  the install one-liner to prerequisites; `README.md` documents the gate
+  in the development section.
+
+---
+
 ## v1.9.0 — Refactor: Cognitive Complexity Reduction & Threshold Tradeoff
 
 Internal code-health release: refactored 11 high cognitive complexity functions into modular helpers, fixed a Groovy non-ASCII byte boundary panic, raised `cognitive-complexity-threshold` from 15 to 20, retired 20 obsolete `#[expect(clippy::cognitive_complexity)]` attributes, and documented an auditable expectation policy rule (`score - 7 * tracing_macros <= 20`).
