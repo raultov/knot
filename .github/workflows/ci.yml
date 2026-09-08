@@ -86,6 +86,17 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Run Unit Tests
         run: cargo test --lib --all-features
+      - name: Cache cargo-dupes
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-dupes
+          key: ${{ runner.os }}-cargo-dupes-0.2.1
+      - name: Install cargo-dupes
+        run: test -x ~/.cargo/bin/cargo-dupes || cargo install cargo-dupes --version 0.2.1 --locked
+      - name: Duplication Check
+        run: cargo dupes check
+      - name: Stale duplication suppressions (informational)
+        run: cargo dupes cleanup --dry-run
 
   test-e2e:
     name: E2E Integration Tests

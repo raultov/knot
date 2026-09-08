@@ -1,0 +1,19 @@
+[[ignore]]
+fingerprint = "063774d2011429cc"
+reason = "Cypher query builders: identical AST shape due to literal erasure"
+
+[[ignore]]
+fingerprint = "a5b9b106a6a71e41"
+reason = "Cypher query builders: identical AST shape due to literal erasure"
+
+[[ignore]]
+fingerprint = "e77dd72a96fb81a1"
+reason = "Cypher query builders: identical AST shape due to literal erasure"
+
+[[ignore]]
+fingerprint = "72fa93e52fbd2227"
+reason = "MCP tool schema boilerplate required by rust-mcp-sdk"
+
+[[ignore]]
+fingerprint = "9c4eef28574686ee"
+reason = "MCP tool schema boilerplate required by rust-mcp-sdk"
