@@ -2,8 +2,8 @@
 
 Contributions are welcome! Please ensure:
 
-- All code passes `cargo clippy --all-targets -- -D warnings`
-- Code is formatted with `cargo fmt`
+- All quality gates pass via `make check` (or individually: `cargo fmt`, `cargo clippy`, `cargo test`, `cargo dupes check`)
+- No new duplicated code is introduced (`cargo dupes check`); suppressions require a documented `reason`
 - Changes are compatible with Rust 2024 edition (requires Rust 1.90+)
 - Unit tests are added for new functionality
 - E2E regression tests are added for bug fixes
@@ -14,7 +14,7 @@ Contributions are welcome! Please ensure:
 
 To run `knot` locally, you need Docker to spin up the required databases and the Rust toolchain to build the project.
 
-1. **Prerequisites**: Ensure you have Docker (20.10+) and Rust 1.90+ installed.
+1. **Prerequisites**: Ensure you have Docker (20.10+) and Rust 1.90+ installed. For code duplication quality checks, install [`cargo-dupes`](https://crates.io/crates/cargo-dupes): `cargo install cargo-dupes --version 0.2.1 --locked`.
 2. **Clone the repository**:
    ```bash
    git clone https://github.com/raultov/knot

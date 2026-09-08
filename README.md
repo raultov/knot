@@ -790,6 +790,18 @@ Contributions are welcome! Please ensure:
 - All new functionality includes unit tests
 - Performance regressions are validated with the benchmark framework before submitting PRs
 
+### Development & Code Quality
+
+```bash
+make check                                  # Run all local quality gates (fmt, clippy, test, dupes)
+
+# Or run gates individually:
+cargo clippy --all-targets -- -D warnings  # Must pass
+cargo fmt -- --check                        # Must pass
+cargo test                                  # Run all unit tests
+cargo dupes check                           # Code duplication check
+```
+
 ### Performance Benchmarking
 
 The project includes a three-level benchmarking framework to validate optimizations and detect regressions:

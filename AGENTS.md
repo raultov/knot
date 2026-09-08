@@ -41,11 +41,17 @@ cargo test
 ./tests/run_repo_scope_e2e.sh        # Repository scope selection (all / multi-repo)
 ```
 
-**Code quality:**
+**Quick Commands:**
+
 ```bash
+make check                           # Run all quality gates (fmt-check, clippy, test, dupes)
+make e2e                             # Run all E2E tests (requires Docker)
+make check-all                       # Run quality gates + E2E integration tests
 cargo clippy --all-targets -- -D warnings  # Must pass
 cargo fmt -- --check                        # Must pass before commit
 cargo fmt                                   # Auto-fix formatting
+cargo dupes check                           # Duplication check (must pass)
+cargo dupes report                          # Detailed duplication report
 ```
 
 ---
@@ -253,6 +259,10 @@ Relationship types (enum `RelationshipType`):
 **All PRs must pass:**
 
 ```bash
+# 1. Makefile (runs all quality gates)
+make check
+
+# Or individually:
 # 1. Clippy (lint rules enforced)
 cargo clippy --all-targets -- -D warnings
 
@@ -262,11 +272,27 @@ cargo fmt -- --check
 # 3. Unit tests
 cargo test
 
-# 4. E2E tests (optional locally, required in CI)
+# 4. Code duplication check (ratcheted threshold in dupes.toml)
+cargo dupes check
+
+# 5. E2E tests (optional locally, required in CI)
 ./tests/run_all_e2e_fast.sh
 ```
 
 `unsafe_code = "deny"` is enforced at crate level. One audited exception survives in `src/utils/mod.rs` for `std::env::set_var("SSL_CERT_FILE")`, documented via `#[expect(unsafe_code, reason = "…")]`. fastembed/hf-hub expose no API to supply a CA bundle, making environment mutation the only mechanism for corporate proxy support.
+
+### Code Duplication Policy (`cargo-dupes`)
+
+When `cargo dupes check` fails, the conventional fix is **always** to remove the duplication by extracting a shared, parameterized helper.
+
+Adding a fingerprint to `.dupes-ignore.toml` is tolerated **only** when unifying the code units would make the code worse, and every entry MUST carry a `reason` explaining why. Two legitimate categories exist in knot today:
+
+1. **Literal-differentiated units** — functions whose entire semantic content lives in string literals that AST normalization erases (Cypher query builders in `src/db/graph/query.rs`). Merging them would obscure the queries.
+2. **Externally-imposed boilerplate** — trait implementations whose shape is dictated by a third-party crate (`Tool::tool` declarations required by `rust-mcp-sdk`).
+
+Raising `max_exact_duplicates` / `max_near_duplicates` in `dupes.toml` to accommodate new code is **prohibited**. The thresholds may only move downwards.
+
+Run `cargo dupes cleanup --dry-run` after any refactor; stale ignore entries must be removed in the same PR.
 
 ---
 
