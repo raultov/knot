@@ -5,6 +5,20 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.4 — Deterministic `find_callers` Target Grouping
+
+Fix release: ensures `find_callers` Markdown output rendered by the CLI and MCP tools is fully deterministic across process runs and cluster nodes.
+
+- **Fixed**: `find_callers` Markdown output is now deterministic. The
+  `### Target:` sections inside each relationship bucket were grouped in a
+  `HashMap` and rendered in process-random order (SipHash keys are seeded per
+  process), so the same query against the same graph could render targets in
+  a different order across runs and across nodes. The grouping now uses a
+  `BTreeMap` keyed by `target_file_path:start_line`, pinning a stable sorted
+  order. Pinned by `test_format_references_result_target_order_is_deterministic`.
+
+---
+
 ## v1.9.3 — Runtime-free MCP Tool Surface for Embedders
 
 Additive release: the MCP tool table and tool dispatch become public,
