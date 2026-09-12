@@ -1,9 +1,9 @@
 # 🤖 System Directive: Codebase Navigation & Analysis
 
 <critical-instruction>
-You are operating in a codebase indexed by the 'knot' MCP (Model Context Protocol) server.
+You are operating in a codebase indexed by the 'knot' MCP (Model Context Protocol) server (v1.9.1+).
 You have access to advanced semantic and structural search tools that leverage Vector Database (Qdrant) 
-and Graph Database (Neo4j) for precise code understanding.
+and Graph Database (Neo4j) for precise code understanding across single and multi-repository workspaces.
 
 You MUST prioritize these tools over traditional shell utilities (like `grep`, `rg`, `find`, or recursive `cat`).
 </critical-instruction>
@@ -19,10 +19,12 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 - "Find the UserController class"
 - "Search for decorator/annotation usage"
 
+**Multi-Repo Scope (v1.8.0+):** By default (or when `repo_name` is set to `all`, `*`, a comma-separated list `"repo-a,repo-b"`, or a JSON array `["repo-a", "repo-b"]`), `search_hybrid_context` executes a global multi-repository search across all indexed repos, ordering results by unified semantic relevance. Pass a specific `repo_name` to restrict scope to a single project.
+
 **Do NOT use `grep` for these tasks.**
 
 ### 2. 🔗 `find_callers` — Dependency & Impact Analysis
-**Use this for:** Reverse dependency lookup, dead code detection, impact analysis before refactoring, understanding call chains.
+**Use this for:** Reverse dependency lookup, dead code detection, impact analysis before refactoring, understanding call chains across single or multiple repositories.
 
 **Examples:**
 - "Who calls the `authenticate()` method?"
@@ -30,9 +32,11 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 - "What breaks if I modify this function?"
 - "Find all references to `DatabaseService`"
 
-**Do NOT use `grep` to find references.**
+**Matching Precedence:** Exact FQN (`Namespace.Type.member` or `crate::mod::Type::member`) → FQN Suffix (`Type.member`) → Exact Name → Signature Prefix (`accept(List`) → Fuzzy Substring.
 
-**Repo attribution:** every caller entry and resolved target states its repository as `(repo: name)` — use it to tell apart rows coming from different repositories when the scope is multi-repo (`all`, a comma list, or a JSON array).
+**Repo attribution:** Every caller entry and resolved target states its repository as `(repo: name)` — use it to attribute calls across multi-repository dependencies.
+
+**Do NOT use `grep` to find references.**
 
 ### 3. 📄 `explore_file` — File Anatomy & Architecture Overview
 **Use this for:** Getting a high-level view of a file (all classes, methods, signatures, documentation) without reading it line-by-line.
@@ -42,13 +46,15 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 - "Show me the structure of Application.java"
 - "What's in the UserController?"
 
+**Path handling:** `explore_file` accepts repo-relative paths (preferred, e.g. `src/pipeline/embed.rs`) or absolute local paths (e.g. `/home/you/work/myrepo/src/lib.rs`). The tool strips the local root automatically. If `ambiguous_path_candidates` is returned, retry with a more specific path or pass `repo_name`.
+
 **Do NOT `cat` or `read` entire files just to see their signatures.**
 
-**Path handling:** `explore_file` accepts repo-relative paths (preferred, e.g. `src/pipeline/embed.rs`)
-or absolute local paths (e.g. `/home/you/work/myrepo/src/lib.rs`). The tool strips the known
-local root automatically. If you see `ambiguous_path_candidates` in the response, retry
-with a more specific path or pass `repo_name` (accepts single name, comma-separated list `"repo-a,repo-b"`,
-sentinel `all` or `*`, or JSON array `["repo-a", "repo-b"]`).
+### 4. 📦 `list_repositories` — Discovery of Indexed Codebases
+**Use this for:** Discovering which codebases are indexed before querying. Returns metadata (entity count, file count, build system, primary language). Supports optional case-insensitive `filter`.
+
+### 5. 🕸️ `list_repo_dependencies` — Cross-Repository Dependency Graph
+**Use this for:** Traversing repository-to-repository dependencies declared in build files (Maven, Gradle, Cargo, npm, NuGet). Use `reverse: true` for blast-radius impact analysis before breaking changes in shared libraries.
 
 ## Why This Matters
 
@@ -59,17 +65,17 @@ Traditional regex-based searches (`grep`, `rg`, `find`) have critical limitation
 - ❌ They return raw matches without dependency context
 
 The `knot` MCP tools use **Vector Embeddings + Graph Analysis** to provide:
-- ✅ Context-aware, semantic results
-- ✅ Full call chain visibility
-- ✅ Framework-aware discovery (decorators, annotations)
-- ✅ Multi-repository filtering support
+- ✅ Context-aware, semantic results across 15+ languages (Java, Kotlin, Groovy, C#, Rust, C/C++, Python, TS/JS, Web, Configs)
+- ✅ Full call chain and override visibility (`Overridden by` / `Overrides`)
+- ✅ Framework-aware discovery (decorators, annotations, dependency injection)
+- ✅ Global multi-repository search and cross-repo dependency linking (`DEPENDS_ON`)
 
 ## Enforcement Rule
 
 <enforcement>
 BEFORE you execute a `bash` command using `grep`, `rg`, `ripgrep`, `find`, `awk`, or `sed` for code searching or exploration:
 
-1. STOP and ask yourself: "Can `search_hybrid_context`, `find_callers`, or `explore_file` solve this?"
+1. STOP and ask yourself: "Can `search_hybrid_context`, `find_callers`, `explore_file`, `list_repositories`, or `list_repo_dependencies` solve this?"
 2. If YES → Use the `knot` MCP tool immediately.
 3. If NO → Only then use the shell utility, and document why the MCP tool was insufficient.
 
@@ -83,13 +89,11 @@ Exceptions (where shell tools are acceptable):
 ## Integration Notes
 
 - The `knot` MCP server requires Qdrant and Neo4j running (default: `localhost:6334` and `bolt://localhost:7687`)
-- All tools support optional `repo_name` parameter for multi-repository scope (accepts a single name, comma-separated list `"repo-a,repo-b"`, sentinel `all`/`*`, or JSON string array `["repo-a", "repo-b"]`). Multi-repo scope applies a global `max_results` limit across the union — increase `max_results` when searching across multiple repositories.
+- All search/callers tools support `repo_name` for scope selection: single name (`"my-repo"`), comma list (`"repo-a,repo-b"`), sentinel (`"all"` / `"*"`), or JSON array (`["repo-a", "repo-b"]`). Multi-repo scope applies a global `max_results` limit across the union — increase `max_results` when searching across multiple repositories.
 - Results include full context (signatures, docstrings, file locations, call chains)
-- **Returned file paths are repo-relative** (e.g. `src/pipeline/embed.rs`). The owning repository
-  is printed next to each path as `(repo: name)`. To open a file in your editor, resolve the
-  relative path against your local checkout of the named repository.
+- **Returned file paths are repo-relative** (e.g. `src/pipeline/embed.rs`). The owning repository is printed next to each path as `(repo: name)`. To open a file in your editor, resolve the relative path against your local checkout of the named repository.
 
 ---
 
-**Last Updated:** 2026-07-04
+**Last Updated:** 2026-09-11
 **Applies To:** All LLMs, CLI agents, and IDE integrations accessing this codebase
