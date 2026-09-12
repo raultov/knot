@@ -553,7 +553,7 @@ See `tests/KOTLIN_E2E_TESTS.md` for detailed coverage and troubleshooting.
 
 ### Using the MCP Server
 
-The MCP server exposes three tools to any compatible AI client:
+The MCP server exposes five tools to any compatible AI client (built on `rust-mcp-sdk 1.1` implementing MCP protocol `2025-11-25` with full tool annotations):
 
 #### Tool 1: `search_hybrid_context` 
 **Find code by meaning or keywords**
@@ -564,7 +564,8 @@ Result: All auth-related code, signatures, docstrings, and dependencies
 ```
 
 **Capabilities:**
-- Semantic search by functionality
+- Semantic search by functionality (vector embeddings)
+- Global multi-repository search by default (`repo_name: "all"`)
 - Class/method/function name lookup
 - Docstring and inline comment search
 - Architectural pattern discovery
@@ -615,10 +616,21 @@ Query: "What's in BrowserService.ts?"
 Result: All classes, methods, and functions with signatures and docs
 ```
 
-**Use Cases:**
-- Quick file navigation
-- Module structure overview
-- Finding all methods in a class without reading line-by-line
+#### Tool 4: `list_repositories`
+**Discover indexed codebases**
+
+```
+Query: "What codebases are indexed?"
+Result: Markdown table of all indexed repos with entity/file counts, language, and build system
+```
+
+#### Tool 5: `list_repo_dependencies`
+**Traverse cross-repository dependency graphs**
+
+```
+Query: "What repositories depend on auth-lib?"
+Result: Repositories declaring build dependencies (pom.xml, build.gradle, Cargo.toml, package.json, NuGet)
+```
 
 ---
 
