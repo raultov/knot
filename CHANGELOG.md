@@ -5,6 +5,34 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.3 — Runtime-free MCP Tool Surface for Embedders
+
+Additive release: the MCP tool table and tool dispatch become public,
+runtime-free API on `KnotMcpHandler`, so embedders (knot-server's HTTP
+`/mcp` endpoint) can serve the exact same tool surface as `knot-mcp`
+over stdio without duplicating it. No behavioural change for MCP clients;
+existing indexes remain valid.
+
+- **Added**: `KnotMcpHandler::tools()` and `KnotMcpHandler::dispatch()`:
+  runtime-free access to the MCP tool surface for library embedders.
+  `tools()` is a free function of no state (usable before any database
+  connection exists); `dispatch()` behaves identically to
+  `handle_call_tool_request`, whose `Arc<dyn McpServer>` runtime argument
+  was never read by any tool.
+- **Added**: `DRY_RUN_MESSAGE` public constant — the error text returned by
+  `dispatch` when the handler was built with `new_dry_run()`.
+- **Changed**: the `ServerHandler` methods now delegate to the new API
+  (`handle_list_tools_request` → `Self::tools()`,
+  `handle_call_tool_request` → `self.dispatch()`); no behavioural change
+  for MCP clients. Adding a tool to knot now makes it visible on every
+  surface at once, by construction rather than by convention.
+- **Tests**: new unit tests pin the tool surface, the delegation invariants
+  (source-level drift guards), dry-run refusal for every tool, unknown-tool
+  error mapping, and guard ordering (dry-run checked before the offline
+  database guard).
+
+---
+
 ## v1.9.2 — Dependency Upgrades + MCP SDK 1.1 LTS Migration
 
 Maintenance release: bring the dependency tree onto current upstream
