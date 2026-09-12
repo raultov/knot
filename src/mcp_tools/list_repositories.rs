@@ -23,58 +23,50 @@
 //! - `filter` is optional. When provided, only repositories whose name contains
 //!   the filter string (case-insensitive) are returned.
 
+use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::*;
-use serde_json::json;
-use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
 
-pub struct ListRepositoriesTool;
+/// Input contract for `list_repositories`.
+///
+/// The `#[mcp_tool]` macro derives `ListRepositoriesTool::tool()` from this
+/// declaration, so the JSON Schema advertised over MCP stays in lockstep with
+/// the fields documented here.
+#[mcp_tool(
+    name = "list_repositories",
+    title = "List indexed repositories",
+    description = "Read-only listing of all indexed repositories with optional name filtering. \
+                   Shows repository metadata including entity count, file count, build system, and primary language. \
+                   Answers 'what codebases have I indexed?' and 'which repositories match this name?'. \
+                   \n\nUsage: Use this tool FIRST to discover available codebases before searching or exploring. \
+                   Once you know the repository name, switch to 'search_hybrid_context' for semantic search, \
+                   'find_callers' for reverse dependency lookup, 'explore_file' for file anatomy, \
+                   or 'list_repo_dependencies' for cross-repo dependency graphs. \
+                   Do NOT use this tool to search for code entities — use 'search_hybrid_context' instead. \
+                   \n\nBehaviour & Return: Read-only query with no side effects. \
+                   Returns a Markdown table with columns: REPO, BUILD SYSTEM, LANGUAGE, FILES, ENTITIES. \
+                   When no repositories match the filter, returns 'No repositories found.' \
+                   \n\nParameter guidance: 'filter' is optional. When provided, only repositories whose name \
+                   contains the filter string are returned (case-insensitive substring match). \
+                   Omit to list all indexed repositories. \
+                   \n\nSupports all languages and build systems indexed by knot.",
+    read_only_hint = true,
+    destructive_hint = false,
+    idempotent_hint = true,
+    open_world_hint = false
+)]
+#[derive(JsonSchema)]
+pub struct ListRepositoriesTool {
+    #[json_schema(
+        description = "Optional filter to narrow down repositories by name (case-insensitive substring match). When provided, only repositories whose name contains this string are returned. Examples: 'auth' matches 'auth-service' and 'Auth-Lib', 'api' matches 'my-api'. Omit to list all indexed repositories.",
+        min_length = 1,
+        max_length = 255
+    )]
+    pub filter: Option<String>,
+}
 
 impl ListRepositoriesTool {
-    pub fn tool() -> Tool {
-        let mut properties = HashMap::new();
-        properties.insert(
-            "filter".to_string(),
-            serde_json::from_value(json!({
-                "type": "string",
-                "description": "Optional filter to narrow down repositories by name (case-insensitive substring match). When provided, only repositories whose name contains this string are returned. Examples: 'auth' matches 'auth-service' and 'Auth-Lib', 'api' matches 'my-api'. Omit to list all indexed repositories.",
-                "minLength": 1,
-                "maxLength": 255
-            }))
-            .unwrap(),
-        );
-
-        Tool {
-            name: "list_repositories".to_string(),
-            description: Some(
-                "Read-only listing of all indexed repositories with optional name filtering. \
-                 Shows repository metadata including entity count, file count, build system, and primary language. \
-                 Answers 'what codebases have I indexed?' and 'which repositories match this name?'. \
-                 \n\nUsage: Use this tool FIRST to discover available codebases before searching or exploring. \
-                 Once you know the repository name, switch to 'search_hybrid_context' for semantic search, \
-                 'find_callers' for reverse dependency lookup, 'explore_file' for file anatomy, \
-                 or 'list_repo_dependencies' for cross-repo dependency graphs. \
-                 Do NOT use this tool to search for code entities — use 'search_hybrid_context' instead. \
-                 \n\nBehaviour & Return: Read-only query with no side effects. \
-                 Returns a Markdown table with columns: REPO, BUILD SYSTEM, LANGUAGE, FILES, ENTITIES. \
-                 When no repositories match the filter, returns 'No repositories found.' \
-                 \n\nParameter guidance: 'filter' is optional. When provided, only repositories whose name \
-                 contains the filter string are returned (case-insensitive substring match). \
-                 Omit to list all indexed repositories. \
-                 \n\nSupports all languages and build systems indexed by knot."
-                    .to_string(),
-            ),
-            input_schema: ToolInputSchema::new(vec![], Some(properties), None),
-            annotations: None,
-            execution: None,
-            icons: vec![],
-            meta: None,
-            output_schema: None,
-            title: None,
-        }
-    }
-
     pub async fn handle(
         params: CallToolRequestParams,
         handler: &KnotMcpHandler,

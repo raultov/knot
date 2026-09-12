@@ -15,73 +15,57 @@
 
 pub mod format;
 
+use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::*;
-use serde_json::json;
-use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
 use crate::mcp_tools::repo_scope_from_args;
 
-pub struct SearchHybridContextTool;
+/// Input contract for `search_hybrid_context`.
+///
+/// The `#[mcp_tool]` macro derives `SearchHybridContextTool::tool()` from this
+/// declaration, so the JSON Schema advertised over MCP stays in lockstep with
+/// the fields documented here.
+#[mcp_tool(
+    name = "search_hybrid_context",
+    title = "Hybrid semantic + structural search",
+    description = "Read-only semantic and structural code search combining vector embeddings with graph analysis. Use this for initial codebase discovery to find features by their meaning (e.g., 'user authentication'). \
+                   Locates code based on natural language descriptions instead of exact keywords, returning relevant files, signatures, and documentation. \
+                   \n\n⚠️ PREREQUISITE: This tool requires an active knot-mcp server with vector database (Qdrant) and graph database (Neo4j) initialized. \
+                   \n\nBehavior & Return: Performs a read-only dual query against vector DB (for semantic similarity) and graph DB (for architectural relationships). \
+                   Returns Markdown-formatted results with file paths, line numbers, code snippets, and cross-repository dependencies. No side effects. \
+                   \n\nUsage: Use as your FIRST step when exploring unfamiliar code or discovering architectural patterns. Do NOT use this to find all usages of a specific function—use the 'find_callers' tool for that instead. \
+                   \n\nParameter guidance: 'query' should be 2-5 words describing functionality. Increase 'max_results' to 10-20 for broad discovery, keep at 5 for focused search. Include 'repo_name' in your first query to avoid cross-repository pollution. \
+                   \n\nSupports Java, Kotlin, C#, and TypeScript codebases.",
+    read_only_hint = true,
+    destructive_hint = false,
+    idempotent_hint = true,
+    open_world_hint = false
+)]
+#[derive(JsonSchema)]
+pub struct SearchHybridContextTool {
+    #[json_schema(
+        description = "Search query describing what you're looking for (e.g., 'user authentication', 'API error handling')",
+        min_length = 1,
+        max_length = 500
+    )]
+    pub query: String,
+    #[json_schema(
+        description = "Maximum number of results to return (default: 5)",
+        minimum = 1,
+        maximum = 20,
+        default = 5
+    )]
+    pub max_results: Option<i64>,
+    #[json_schema(
+        description = "Optional but HIGHLY RECOMMENDED: repository scope. Accepts a single repository name (`'my-repo'`), a comma-separated list (`'repo-a,repo-b'`), or `'all'` (or `'*'`) to query every indexed repository. If you know the repository you are working on, include it in your FIRST query to avoid mixed results from other indexed projects. Omit to search across all repositories.",
+        min_length = 1,
+        max_length = 255
+    )]
+    pub repo_name: Option<String>,
+}
 
 impl SearchHybridContextTool {
-    pub fn tool() -> Tool {
-        let mut properties = HashMap::new();
-        properties.insert(
-            "query".to_string(),
-            serde_json::from_value(json!({
-                "type": "string",
-                "description": "Search query describing what you're looking for (e.g., 'user authentication', 'API error handling')",
-                "minLength": 1,
-                "maxLength": 500
-            }))
-            .unwrap(),
-        );
-        properties.insert(
-            "max_results".to_string(),
-            serde_json::from_value(json!({
-                "type": "integer",
-                "description": "Maximum number of results to return (default: 5)",
-                "minimum": 1,
-                "maximum": 20,
-                "default": 5
-            }))
-            .unwrap(),
-        );
-        properties.insert(
-            "repo_name".to_string(),
-            serde_json::from_value(json!({
-                "type": "string",
-                "description": "Optional but HIGHLY RECOMMENDED: repository scope. Accepts a single repository name (`'my-repo'`), a comma-separated list (`'repo-a,repo-b'`), or `'all'` (or `'*'`) to query every indexed repository. If you know the repository you are working on, include it in your FIRST query to avoid mixed results from other indexed projects. Omit to search across all repositories.",
-                "minLength": 1,
-                "maxLength": 255
-            }))
-            .unwrap(),
-        );
-
-        Tool {
-            name: "search_hybrid_context".to_string(),
-            description: Some(
-                "Read-only semantic and structural code search combining vector embeddings with graph analysis. Use this for initial codebase discovery to find features by their meaning (e.g., 'user authentication'). \
-                 Locates code based on natural language descriptions instead of exact keywords, returning relevant files, signatures, and documentation. \
-                 \n\n⚠️ PREREQUISITE: This tool requires an active knot-mcp server with vector database (Qdrant) and graph database (Neo4j) initialized. \
-                 \n\nBehavior & Return: Performs a read-only dual query against vector DB (for semantic similarity) and graph DB (for architectural relationships). \
-                 Returns Markdown-formatted results with file paths, line numbers, code snippets, and cross-repository dependencies. No side effects. \
-                 \n\nUsage: Use as your FIRST step when exploring unfamiliar code or discovering architectural patterns. Do NOT use this to find all usages of a specific function—use the 'find_callers' tool for that instead. \
-                 \n\nParameter guidance: 'query' should be 2-5 words describing functionality. Increase 'max_results' to 10-20 for broad discovery, keep at 5 for focused search. Include 'repo_name' in your first query to avoid cross-repository pollution. \
-                 \n\nSupports Java, Kotlin, C#, and TypeScript codebases."
-                    .to_string(),
-            ),
-            input_schema: ToolInputSchema::new(vec!["query".to_string()], Some(properties), None),
-            annotations: None,
-            execution: None,
-            icons: vec![],
-            meta: None,
-            output_schema: None,
-            title: None,
-        }
-    }
-
     pub async fn handle(
         params: CallToolRequestParams,
         handler: &KnotMcpHandler,

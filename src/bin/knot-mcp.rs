@@ -63,6 +63,7 @@ async fn main() -> SdkResult<()> {
         handler: handler.to_mcp_server_handler(),
         task_store: None,
         client_task_store: None,
+        message_observer: None,
     });
 
     info!("MCP server listening on stdio");

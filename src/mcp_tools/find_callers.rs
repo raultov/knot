@@ -13,71 +13,55 @@
 //! - **Call Graph Traversal**: Explore the full dependency chain of a method
 //! - **Multi-language Support**: Works with Java and TypeScript codebases
 
+use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::*;
-use serde_json::json;
-use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
 use crate::mcp_tools::repo_scope_from_args;
 
-pub struct FindCallersTool;
+/// Input contract for `find_callers`.
+///
+/// The `#[mcp_tool]` macro derives `FindCallersTool::tool()` from this
+/// declaration, so the JSON Schema advertised over MCP stays in lockstep with
+/// the fields documented here.
+#[mcp_tool(
+    name = "find_callers",
+    title = "Find callers (reverse dependencies)",
+    description = "Read-only reverse dependency lookup. Use this to find all code that references, calls, extends, or implements a specific entity. \
+                   Answers 'who uses this code?' by querying the graph database. Differs from search tools by providing exact dependency tracking. \
+                   \n\nUsage: Use for impact analysis before refactoring or to detect dead code. Do NOT use this for semantic feature discovery—use 'search_hybrid_context' instead. \
+                   \n\nMatching is precedence-based: exact FQN (containing '.' or '::') → FQN suffix (`Type.member`) → exact name → signature prefix (`accept(List`) → fuzzy substring. \
+                   The first tier that matches wins, so an exact name never returns fuzzy noise. Pass a qualified name (`Namespace.Type.Member`) to disambiguate homonyms. \
+                   Responses state which tier matched and flag fuzzy results explicitly. \
+                   \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References, Overridden by, Overrides) with exact file paths and line numbers. \
+                   Each caller entry and each resolved target states its repository as `(repo: name)`, so rows are attributable when multiple repositories are in scope. \
+                   For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
+                   When multiple entities with the same name exist (e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references. \
+                   Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
+                   \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
+                   \n\nSupports Java, Kotlin, C#, Rust, and TypeScript codebases.",
+    read_only_hint = true,
+    destructive_hint = false,
+    idempotent_hint = true,
+    open_world_hint = false
+)]
+#[derive(JsonSchema)]
+pub struct FindCallersTool {
+    #[json_schema(
+        description = "The name of the function, method, or class to find callers for",
+        min_length = 1,
+        max_length = 255
+    )]
+    pub entity_name: String,
+    #[json_schema(
+        description = "Optional but HIGHLY RECOMMENDED: repository scope. Accepts a single repository name (`'my-repo'`), a comma-separated list (`'repo-a,repo-b'`), or `'all'` (or `'*'`) to query every indexed repository. If you know the repository you are working on, include it in your FIRST query to avoid mixed results from other indexed projects. Omit to search across all repositories.",
+        min_length = 1,
+        max_length = 255
+    )]
+    pub repo_name: Option<String>,
+}
 
 impl FindCallersTool {
-    pub fn tool() -> Tool {
-        let mut properties = HashMap::new();
-        properties.insert(
-            "entity_name".to_string(),
-            serde_json::from_value(json!({
-                "type": "string",
-                "description": "The name of the function, method, or class to find callers for",
-                "minLength": 1,
-                "maxLength": 255
-            }))
-            .unwrap(),
-        );
-        properties.insert(
-            "repo_name".to_string(),
-            serde_json::from_value(json!({
-                "type": "string",
-                "description": "Optional but HIGHLY RECOMMENDED: repository scope. Accepts a single repository name (`'my-repo'`), a comma-separated list (`'repo-a,repo-b'`), or `'all'` (or `'*'`) to query every indexed repository. If you know the repository you are working on, include it in your FIRST query to avoid mixed results from other indexed projects. Omit to search across all repositories.",
-                "minLength": 1,
-                "maxLength": 255
-            }))
-            .unwrap(),
-        );
-
-        Tool {
-            name: "find_callers".to_string(),
-            description: Some(
-                "Read-only reverse dependency lookup. Use this to find all code that references, calls, extends, or implements a specific entity. \
-                 Answers 'who uses this code?' by querying the graph database. Differs from search tools by providing exact dependency tracking. \
-                 \n\nUsage: Use for impact analysis before refactoring or to detect dead code. Do NOT use this for semantic feature discovery—use 'search_hybrid_context' instead. \
-                 \n\nMatching is precedence-based: exact FQN (containing '.' or '::') → FQN suffix (`Type.member`) → exact name → signature prefix (`accept(List`) → fuzzy substring. \
-                 The first tier that matches wins, so an exact name never returns fuzzy noise. Pass a qualified name (`Namespace.Type.Member`) to disambiguate homonyms. \
-                 Responses state which tier matched and flag fuzzy results explicitly. \
-                 \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References, Overridden by, Overrides) with exact file paths and line numbers. \
-                 Each caller entry and each resolved target states its repository as `(repo: name)`, so rows are attributable when multiple repositories are in scope. \
-                 For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
-                 When multiple entities with the same name exist (e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references. \
-                 Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
-                 \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
-                 \n\nSupports Java, Kotlin, C#, Rust, and TypeScript codebases."
-                    .to_string(),
-            ),
-            input_schema: ToolInputSchema::new(
-                vec!["entity_name".to_string()],
-                Some(properties),
-                None,
-            ),
-            annotations: None,
-            execution: None,
-            icons: vec![],
-            meta: None,
-            output_schema: None,
-            title: None,
-        }
-    }
-
     pub async fn handle(
         params: CallToolRequestParams,
         handler: &KnotMcpHandler,

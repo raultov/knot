@@ -42,77 +42,57 @@
 //! Maven (pom.xml), Gradle (build.gradle), Cargo (Cargo.toml), npm (package.json),
 //! NuGet (`.csproj` + `Directory.Packages.props` for Central Package Management).
 
+use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::*;
-use serde_json::json;
-use std::collections::HashMap;
 
 use crate::mcp_handler::KnotMcpHandler;
 
-pub struct ListRepoDependenciesTool;
+/// Input contract for `list_repo_dependencies`.
+///
+/// The `#[mcp_tool]` macro derives `ListRepoDependenciesTool::tool()` from this
+/// declaration, so the JSON Schema advertised over MCP stays in lockstep with
+/// the fields documented here.
+#[mcp_tool(
+    name = "list_repo_dependencies",
+    title = "List cross-repository dependencies",
+    description = "Read-only cross-repository dependency graph lookup. \
+                   Shows which repositories depend on each other via build system declarations (Maven, Gradle, Cargo, npm, NuGet). \
+                   Answers 'which repos does this repo depend on?' and 'which repos depend on this repo?'. \
+                   \n\nUsage: Use BEFORE cross-repo analysis to discover which other indexed repos are available for call tracing. \
+                   Use reverse mode for impact analysis before making breaking changes in shared libraries. \
+                   \n\nBehaviour & Return: Read-only graph traversal with no side effects. \
+                   Returns a JSON array of repository names. Empty results mean no DEPENDS_ON relationships exist for that repo. \
+                   \n\nParameter guidance: 'repo_name' is required and must match the name used during indexing. \
+                   'max_depth' defaults to 3 (1 = direct only). 'reverse' toggles between forward and reverse dependency lookup. \
+                   \n\nSupports all build systems indexed by knot: Maven, Gradle, Cargo, npm, NuGet (`.csproj` + Central Package Management via `Directory.Packages.props`). C# repos that previously reported `build_system: \"none\"` now report `\"nuget\"` on re-index; `knot-indexer --clean` is recommended for immediate effect.",
+    read_only_hint = true,
+    destructive_hint = false,
+    idempotent_hint = true,
+    open_world_hint = false
+)]
+#[derive(JsonSchema)]
+pub struct ListRepoDependenciesTool {
+    #[json_schema(
+        description = "Repository name to show dependencies for. Must match the name used during indexing (e.g., 'my-java-repo', 'auth-service'). This is REQUIRED — there is no default.",
+        min_length = 1,
+        max_length = 255
+    )]
+    pub repo_name: String,
+    #[json_schema(
+        description = "Maximum depth for transitive dependency traversal (default: 3). Use 1 for direct dependencies only. Higher values follow chains deeper. Must be between 1 and 10.",
+        minimum = 1,
+        maximum = 10,
+        default = 3
+    )]
+    pub max_depth: Option<i64>,
+    #[json_schema(
+        description = "If true, show repositories that depend ON this repo (reverse lookup). If false (default), show repositories this repo depends ON. Use reverse for impact analysis before breaking changes.",
+        default = false
+    )]
+    pub reverse: Option<bool>,
+}
 
 impl ListRepoDependenciesTool {
-    pub fn tool() -> Tool {
-        let mut properties = HashMap::new();
-        properties.insert(
-            "repo_name".to_string(),
-            serde_json::from_value(json!({
-                "type": "string",
-                "description": "Repository name to show dependencies for. Must match the name used during indexing (e.g., 'my-java-repo', 'auth-service'). This is REQUIRED — there is no default.",
-                "minLength": 1,
-                "maxLength": 255
-            }))
-            .unwrap(),
-        );
-        properties.insert(
-            "max_depth".to_string(),
-            serde_json::from_value(json!({
-                "type": "integer",
-                "description": "Maximum depth for transitive dependency traversal (default: 3). Use 1 for direct dependencies only. Higher values follow chains deeper. Must be between 1 and 10.",
-                "minimum": 1,
-                "maximum": 10,
-                "default": 3
-            }))
-            .unwrap(),
-        );
-        properties.insert(
-            "reverse".to_string(),
-            serde_json::from_value(json!({
-                "type": "boolean",
-                "description": "If true, show repositories that depend ON this repo (reverse lookup). If false (default), show repositories this repo depends ON. Use reverse for impact analysis before breaking changes.",
-                "default": false
-            }))
-            .unwrap(),
-        );
-
-        Tool {
-            name: "list_repo_dependencies".to_string(),
-description: Some(
-                "Read-only cross-repository dependency graph lookup. \
-                 Shows which repositories depend on each other via build system declarations (Maven, Gradle, Cargo, npm, NuGet). \
-                 Answers 'which repos does this repo depend on?' and 'which repos depend on this repo?'. \
-                 \n\nUsage: Use BEFORE cross-repo analysis to discover which other indexed repos are available for call tracing. \
-                 Use reverse mode for impact analysis before making breaking changes in shared libraries. \
-                 \n\nBehaviour & Return: Read-only graph traversal with no side effects. \
-                 Returns a JSON array of repository names. Empty results mean no DEPENDS_ON relationships exist for that repo. \
-                 \n\nParameter guidance: 'repo_name' is required and must match the name used during indexing. \
-                 'max_depth' defaults to 3 (1 = direct only). 'reverse' toggles between forward and reverse dependency lookup. \
-                 \n\nSupports all build systems indexed by knot: Maven, Gradle, Cargo, npm, NuGet (`.csproj` + Central Package Management via `Directory.Packages.props`). C# repos that previously reported `build_system: \"none\"` now report `\"nuget\"` on re-index; `knot-indexer --clean` is recommended for immediate effect."
-                    .to_string(),
-            ),
-            input_schema: ToolInputSchema::new(
-                vec!["repo_name".to_string()],
-                Some(properties),
-                None,
-            ),
-            annotations: None,
-            execution: None,
-            icons: vec![],
-            meta: None,
-            output_schema: None,
-            title: None,
-        }
-    }
-
     pub async fn handle(
         params: CallToolRequestParams,
         handler: &KnotMcpHandler,
