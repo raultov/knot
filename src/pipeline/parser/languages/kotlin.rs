@@ -452,7 +452,7 @@ fn extract_receiver_and_method(
     if node.kind() == "navigation_expression" {
         let count = node.child_count();
         if count >= 3 {
-            let last_child = node.child(count as u32 - 1).unwrap();
+            let last_child = node.child(count - 1).unwrap();
             let first_child = node.child(0).unwrap();
 
             if matches!(last_child.kind(), "simple_identifier" | "identifier") {

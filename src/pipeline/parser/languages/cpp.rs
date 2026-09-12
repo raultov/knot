@@ -50,7 +50,7 @@ fn find_qualified_identifier_in_descendants(node: Node<'_>, source: &[u8]) -> Op
             return true;
         }
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i as u32)
+            if let Some(child) = node.child(i)
                 && walk(child, source, parts)
             {
                 return true;
@@ -247,7 +247,7 @@ pub(crate) fn extract_cpp_signature(entity_node: Node<'_>, source: &[u8]) -> Opt
             return Some(node);
         }
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i as u32)
+            if let Some(child) = node.child(i)
                 && let Some(result) = find_func_declarator(child, depth + 1)
             {
                 return Some(result);
@@ -324,7 +324,7 @@ mod tests {
             matches.advance();
             matches.get()
         } {
-            for capture in m.captures {
+            for capture in m.captures() {
                 if query.capture_names()[capture.index as usize] == capture_name {
                     names.push(node_text(capture.node, source.as_bytes()));
                 }

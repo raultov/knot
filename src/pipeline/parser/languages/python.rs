@@ -142,7 +142,7 @@ pub(crate) fn extract_import_intents_python(
         }
     } else if node.kind() == "import_from_statement" {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i as u32) {
+            if let Some(child) = node.child(i) {
                 match child.kind() {
                     "dotted_name" => {
                         let name = node_text(child, source);
@@ -254,7 +254,7 @@ pub(crate) fn extract_inheritance_intents_python(
     let line = entity_node.start_position().row + 1;
 
     for i in 0..entity_node.child_count() {
-        if let Some(child) = entity_node.child(i as u32)
+        if let Some(child) = entity_node.child(i)
             && child.kind() == "argument_list"
         {
             // Walk the argument_list to find parent class identifiers
@@ -270,7 +270,7 @@ fn extract_superclass_names(
     line: usize,
 ) {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
+        if let Some(child) = node.child(i) {
             if child.kind() == "identifier" {
                 let parent_name = node_text(child, source);
                 if !is_python_reserved_value(&parent_name) {
@@ -300,7 +300,7 @@ pub(crate) fn extract_decorator_intents_python(
     let line = entity_node.start_position().row + 1;
 
     for i in 0..parent.child_count() {
-        if let Some(child) = parent.child(i as u32)
+        if let Some(child) = parent.child(i)
             && child.kind() == "decorator"
         {
             extract_decorator_name(child, source, intents, line);
@@ -319,7 +319,7 @@ fn extract_decorator_name(
     // Case 2: @call(args) (e.g., @route("/path"), @app.get("/"))
     //   decorator → (call function: (identifier|attribute))
     for i in 0..decorator_node.child_count() {
-        if let Some(child) = decorator_node.child(i as u32) {
+        if let Some(child) = decorator_node.child(i) {
             let method_name = match child.kind() {
                 "identifier" => Some(node_text(child, source)),
                 "attribute" => child
@@ -398,7 +398,7 @@ pub(crate) fn extract_decorator_names_python(
     };
 
     for i in 0..parent.child_count() {
-        if let Some(child) = parent.child(i as u32)
+        if let Some(child) = parent.child(i)
             && child.kind() == "decorator"
         {
             // Skip the leading '@' if present

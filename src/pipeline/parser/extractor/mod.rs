@@ -74,7 +74,7 @@ pub(crate) fn extract_entities(
     } {
         let mut state = captures::CaptureState::default();
 
-        for cap in m.captures {
+        for cap in m.captures() {
             let cap_name = &capture_names[cap.index as usize];
             let node = cap.node;
             let text = node_text(node, source_bytes);

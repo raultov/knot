@@ -43,7 +43,7 @@ pub(crate) fn extract_comments(
                         // Try to find the doc_comment child node by iterating through children
                         let mut doc_text = None;
                         for i in 0..node.child_count() {
-                            if let Some(child) = node.child(i as u32)
+                            if let Some(child) = node.child(i)
                                 && child.kind() == "doc_comment"
                             {
                                 doc_text = Some(node_text(child, source));
