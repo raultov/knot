@@ -9,7 +9,8 @@
 //!
 //! Run with: cargo bench --bench pipeline_bench
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 

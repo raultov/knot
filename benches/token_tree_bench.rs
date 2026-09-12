@@ -6,7 +6,8 @@
 //!
 //! Run with: cargo bench --bench token_tree_bench
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use tree_sitter::Parser;
 
 fn generate_nested_macro_code(depth: usize) -> String {
