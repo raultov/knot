@@ -105,10 +105,16 @@ fn format_resolution_markdown(references: &serde_json::Value) -> String {
 
 /// Render one relationship bucket, grouping callers by resolved target when
 /// the bucket spans more than a single target (homonym disambiguation).
+///
+/// The grouping uses a `BTreeMap`, not a `HashMap`: iterating a `HashMap`
+/// yields the `### Target:` sections in a process-random order (SipHash keys
+/// are seeded per process), which made the rendered output non-reproducible
+/// across runs and across nodes serving the same graph. Sorting by the group
+/// key (target file path, then start line) keeps the output deterministic.
 fn format_relationship_bucket(entity_name: &str, arr: &[serde_json::Value]) -> String {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
-    let mut grouped: HashMap<String, Vec<&serde_json::Value>> = HashMap::new();
+    let mut grouped: BTreeMap<String, Vec<&serde_json::Value>> = BTreeMap::new();
     for entity in arr {
         grouped
             .entry(target_group_key(entity))
@@ -444,6 +450,53 @@ mod tests {
         assert!(formatted.contains("caller1"));
         assert!(formatted.contains("caller2"));
         assert!(formatted.contains("caller3"));
+    }
+
+    #[test]
+    fn test_format_references_result_target_order_is_deterministic() {
+        // The `### Target:` sections are grouped in a BTreeMap keyed by
+        // `file:line`. A HashMap here would render them in process-random
+        // order (SipHash keys are seeded per process), making the output
+        // non-reproducible across runs and across nodes serving the same
+        // graph. Pin the sorted-by-key order.
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller_z", "kind": "function",
+                    "file_path": "src/z.rs", "start_line": 1,
+                    "target_name": "shared", "target_file_path": "src/zeta.rs",
+                    "target_start_line": 20
+                },
+                {
+                    "name": "caller_a", "kind": "function",
+                    "file_path": "src/a.rs", "start_line": 1,
+                    "target_name": "shared", "target_file_path": "src/alpha.rs",
+                    "target_start_line": 5
+                },
+                {
+                    "name": "caller_m", "kind": "function",
+                    "file_path": "src/m.rs", "start_line": 1,
+                    "target_name": "shared", "target_file_path": "src/mu.rs",
+                    "target_start_line": 99
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+
+        let formatted = format_references_result("shared", &references);
+        let alpha = formatted
+            .find("src/alpha.rs:5")
+            .expect("alpha target present");
+        let mu = formatted.find("src/mu.rs:99").expect("mu target present");
+        let zeta = formatted
+            .find("src/zeta.rs:20")
+            .expect("zeta target present");
+        assert!(
+            alpha < mu && mu < zeta,
+            "targets must render sorted by file:line, not in map order"
+        );
     }
 
     #[test]
