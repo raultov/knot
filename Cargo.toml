@@ -50,28 +50,27 @@ rayon = "1"
 # --- Filesystem Traversal ---
 ignore = "0.4"
 walkdir = "2"
-notify = "6.1.1"
-notify-debouncer-mini = "0.4.1"
+notify-debouncer-mini = "0.7.0"
 
 # --- Tree-sitter Parsing ---
-tree-sitter = "0.26"
+tree-sitter = "0.27.0"
 tree-sitter-java = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.23"
 tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-html = "0.23"
-tree-sitter-css = "0.23"
+tree-sitter-css = "0.25.0"
 tree-sitter-scss = "1.0"
 tree-sitter-rust = "0.24"
-tree-sitter-python = "0.23"
+tree-sitter-python = "0.25.0"
 tree-sitter-groovy = "0.1.2"
-tree-sitter-c = "0.23"
+tree-sitter-c = "0.24.2"
 tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-md = "0.5.3"
 
 # --- Local Embeddings ---
-fastembed = { version = "5", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls", "image-models"], optional = true }
+fastembed = { version = "6", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls", "image-models"], optional = true }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
 
 # --- Vector Database ---
@@ -84,7 +83,7 @@ neo4rs = "0.9.0-rc.9"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 # --- Cryptographic Hashing ---
-sha2 = "0.10"
+sha2 = "0.11.0"
 
 # --- Configuration & CLI ---
 clap = { version = "4", features = ["derive", "env"] }
@@ -102,7 +101,7 @@ serde_json = "1"
 roxmltree = "0.21"
 
 # --- TOML Parsing (Cargo.toml) ---
-toml = "0.8"
+toml = "1.1"
 
 # --- YAML Parsing (Config, Helm, K8s) ---
 serde_yaml = "0.9"
@@ -118,12 +117,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # --- MCP Server SDK ---
-rust-mcp-sdk = "0.8.3"
+# Pinned to the 1.x LTS line: it implements MCP 2025-11-25. The 2.x line
+# migrated to MCP 2026-07-28 (stateless, no `initialize`), which not every
+# MCP client speaks yet — see README "MCP protocol version".
+rust-mcp-sdk = "1.1"
 async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3.10"
-criterion = "0.4"
+criterion = "0.8.2"
 temp-env = "0.3"
 
 [[bench]]
