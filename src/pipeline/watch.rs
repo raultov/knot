@@ -5,6 +5,7 @@
 //! to avoid redundant re-indexing when IDEs generate multiple events.
 
 use anyhow::Result;
+use notify_debouncer_mini::notify::RecursiveMode;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -43,10 +44,6 @@ pub async fn setup_watch_mode(
     .await
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "score 60 = 7 tracing macros × 7; net branching complexity is 11"
-)]
 pub async fn setup_watch_mode_with_progress(
     cfg: &Config,
     vector_db: &Arc<VectorDb>,
@@ -82,7 +79,7 @@ pub async fn setup_watch_mode_with_progress(
     let repo_path = Path::new(&cfg.repo_path);
     match debouncer
         .watcher()
-        .watch(repo_path, notify::RecursiveMode::Recursive)
+        .watch(repo_path, RecursiveMode::Recursive)
     {
         Ok(()) => {
             info!("Recursive watch mode enabled for {}", cfg.repo_path);
@@ -97,7 +94,7 @@ pub async fn setup_watch_mode_with_progress(
                 );
                 debouncer
                     .watcher()
-                    .watch(repo_path, notify::RecursiveMode::NonRecursive)?;
+                    .watch(repo_path, RecursiveMode::NonRecursive)?;
                 warn!("Watch mode is now monitoring only top-level directories.");
             } else {
                 return Err(e.into());
