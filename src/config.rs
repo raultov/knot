@@ -245,10 +245,6 @@ fn knot_env_path() -> Option<std::path::PathBuf> {
 /// Only loads from knot's XDG-style config directory (see [`knot_env_path`]).
 /// Never loads from the current working directory, preventing `.env` files in
 /// target repositories from hijacking knot's configuration.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "score 31 = 4 tracing macros × 7; net branching complexity is 3"
-)]
 fn load_knot_env() {
     let Some(env_path) = knot_env_path() else {
         tracing::debug!("No .env location found (set KNOT_CONFIG_DIR, HOME, or USERPROFILE)");

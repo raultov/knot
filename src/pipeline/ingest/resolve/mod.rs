@@ -21,10 +21,6 @@ use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEnt
 pub use context::{ResolutionContext, RunMetrics};
 pub use cross_repo::link_cross_repo_dependencies;
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "score 34 = 4 tracing macros × 7; net branching complexity is 6"
-)]
 pub async fn resolve_and_save_relationships(
     entities: &mut [ResolutionEntity],
     graph_db: &GraphDb,

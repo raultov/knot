@@ -221,10 +221,6 @@ pub fn configure_rayon(threads: Option<usize>) -> Result<usize> {
 }
 
 /// Print startup banner with configuration details for the indexer.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "score 78 = 11 tracing macros × 7; net branching complexity is 1"
-)]
 pub fn print_startup_banner(cfg: &crate::config::Config, rayon_threads: usize) {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())

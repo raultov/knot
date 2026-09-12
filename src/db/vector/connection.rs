@@ -37,10 +37,6 @@ impl VectorConnectExt for VectorDb {
 
     /// Ensure the collection exists; create it with cosine distance if not.
     /// Also ensures a Keyword payload index on 'repo_name' for optimized multi-repo queries.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "score 26 = 3 tracing macros × 7; net branching complexity is 5"
-    )]
     async fn ensure_collection(&self) -> Result<()> {
         let exists = self
             .client

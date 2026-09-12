@@ -551,10 +551,6 @@ fn spawn_ingest_task(
     clippy::too_many_arguments,
     reason = "function is verbose but correct — extraction deferred"
 )]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "score 27 = 3 tracing macros × 7; net branching complexity is 6"
-)]
 pub async fn clean_stale_data(
     vector_db: &VectorDb,
     graph_db: &GraphDb,

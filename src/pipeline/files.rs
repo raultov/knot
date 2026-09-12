@@ -93,10 +93,6 @@ pub fn calculate_files_to_parse(added: Vec<PathBuf>, modified: Vec<PathBuf>) -> 
     clippy::too_many_arguments,
     reason = "function is verbose but correct — extraction deferred"
 )]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "score 24 = 2 tracing macros × 7; net branching complexity is 10"
-)]
 pub fn update_index_state(
     index_state: &mut IndexState,
     files_to_parse: &[PathBuf],
