@@ -151,6 +151,8 @@ impl IndexState {
 
     /// Compute the SHA-256 hash of a file.
     pub fn compute_file_hash(file_path: &Path) -> Result<String> {
+        use std::fmt::Write as _;
+
         let content = fs::read(file_path)
             .with_context(|| format!("Failed to read file for hashing: {}", file_path.display()))?;
 
@@ -158,7 +160,12 @@ impl IndexState {
         hasher.update(&content);
         let hash = hasher.finalize();
 
-        Ok(format!("{:x}", hash))
+        let mut hex = String::with_capacity(hash.len() * 2);
+        for byte in hash {
+            let _ = write!(hex, "{byte:02x}");
+        }
+
+        Ok(hex)
     }
 
     /// Classify files based on state comparison.
