@@ -5,6 +5,61 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.2 — Dependency Upgrades + MCP SDK 1.1 LTS Migration
+
+Maintenance release: bring the dependency tree onto current upstream
+crates and migrate `knot-mcp` to `rust-mcp-sdk` 1.1 (LTS, MCP protocol
+2025-11-25). No public-API or behaviour change; existing indexes remain
+valid.
+
+- **Chore(deps)**: bumped transitive dependencies to current versions:
+  - `tree-sitter` 0.26 → 0.27, `tree-sitter-css` 0.23 → 0.25,
+    `tree-sitter-python` 0.23 → 0.25, `tree-sitter-c` 0.23 → 0.24,
+    `sha2` 0.10 → 0.11, `fastembed` 5 → 6, `toml` 0.8 → 1.1,
+    `criterion` 0.4 → 0.8.
+  - `notify-debouncer-mini` 0.4.1 → 0.7.0. Removed the pinned
+    `notify = "6.1.1"` direct dep and rely on the SDK re-export
+    `notify_debouncer_mini::notify` to avoid two concurrent copies of
+    `notify` (v6 + v8) in the dependency graph.
+- **Fix(parser)**: tree-sitter 0.27 turned `QueryMatch::captures` from a
+  public field into an accessor method (`QueryMatch::captures()`).
+  Updated both call sites in `src/pipeline/parser/extractor/mod.rs`
+  and `src/pipeline/parser/languages/cpp.rs` (test helper). Removed
+  unnecessary `i as u32` casts at the parser sites now that the
+  indexing into `Node::child(...)` accepts `usize` directly; clippy
+  flagged these as `unnecessary_cast`.
+- **Fix(hash)**: `sha2` 0.11 / `digest` 0.11 swapped `generic-array`
+  for `hybrid-array`, whose `Output` no longer implements
+  `std::fmt::LowerHex`. Replaced `format!("{:x}", hash)` with an
+  explicit `std::fmt::Write` loop in `src/pipeline/state.rs` so the
+  persisted hash format (64-char lowercase hex) is byte-for-byte
+  unchanged — existing `.knot/index_state.json` files remain valid.
+- **Refactor(mcp)**: migrated `knot-mcp` to `rust-mcp-sdk = "1.1"`.
+  Replaced the hand-rolled `HashMap` + `serde_json::json!` JSON schemas
+  for the five tools (`search_hybrid_context`, `find_callers`,
+  `explore_file`, `list_repositories`, `list_repo_dependencies`) with
+  the SDK's `#[mcp_tool]` procedural macro and `derive(JsonSchema)`.
+  The macro generates `Tool::tool()` and the schema from the struct's
+  field-level `#[json_schema(...)]` attributes, keeping the advertised
+  schema and the documented behaviour in lockstep. Added MCP tool
+  annotations: `read_only_hint = true`, `idempotent_hint = true`,
+  `destructive_hint = false`, `open_world_hint = false` for all five
+  tools. The schema crate upgrade (0.13 → 1.0) also moved
+  `ToolInputSchema::properties` from `HashMap` to `BTreeMap` for
+  deterministic JSON output; the macro generates the right map type
+  directly, so no manual conversion is required.
+- **Refactor(benches)**: `criterion` 0.8 deprecated
+  `criterion::black_box` in favour of `std::hint::black_box`. Updated
+  the four benchmarks to use the stdlib re-export.
+- **Chore(lint)**: retired 8 `#[expect(clippy::cognitive_complexity)]`
+  attributes whose functions had already been simplified below the
+  cognitive-complexity threshold (20) by previous refactors. The two
+  remaining `#[expect(clippy::too_many_arguments)]` markers
+  (`update_index_state`, `clean_stale_data`) are preserved — extraction
+  is on the Phase-3 backlog.
+
+---
+
 ## v1.9.1 — Refactor: Duplicate-Code Backlog & `cargo-dupes` Quality Gate
 
 Internal code-health release: cleared 8 of the 16 genuine-duplication
