@@ -555,6 +555,14 @@ See `tests/KOTLIN_E2E_TESTS.md` for detailed coverage and troubleshooting.
 
 The MCP server exposes five tools to any compatible AI client (built on `rust-mcp-sdk 1.1` implementing MCP protocol `2025-11-25` with full tool annotations):
 
+**Embedding the tool surface:** library consumers can serve the same five tools
+from their own transport (e.g. an HTTP `/mcp` endpoint) without going through
+the stdio server. `KnotMcpHandler::tools()` returns the canonical tool table
+(no state or database connection required), and
+`KnotMcpHandler::dispatch(params)` executes a `tools/call` without needing an
+`Arc<dyn McpServer>` runtime handle. The stdio `ServerHandler` methods delegate
+to these two entry points, so every surface stays identical by construction.
+
 #### Tool 1: `search_hybrid_context` 
 **Find code by meaning or keywords**
 
