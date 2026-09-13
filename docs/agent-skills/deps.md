@@ -20,11 +20,13 @@ cross-repository dependencies from build-system files (Maven `pom.xml`, Gradle
   `:Repository.name` already present in the graph. Use `knot repos` to discover
   the available names.
 
-- **`--depth <N>`**: Maximum depth for transitive traversal (default: 3).
+- **`--depth <N>`**: Maximum depth for transitive traversal (default: 3, max: 10 — the bound is enforced; larger values are clamped to 10, values below 1 to 1).
   - `1` = direct dependencies only
   - `2` = direct + one level deeper
   - `3` = the default and the deepest level usually needed in practice
-  - Maximum: 10 (set internally)
+  - Maximum: 10 (enforced; larger values are clamped)
+  - Applies to **both** directions: with `--reverse` it controls how many
+    levels of dependents are followed (transitive impact analysis).
 
 - **`--reverse`**: Show **reverse** dependencies — repositories that depend
   ON this one. Useful for "who depends on this shared library?" impact analysis.
@@ -182,9 +184,19 @@ diff /tmp/deps-before.json /tmp/deps-after.json
 - **Build-system-driven**: Edge discovery comes from `pom.xml`,
   `build.gradle`, `Cargo.toml`, and `package.json` — it does not crawl source
   code for `import` statements.
-- **Retroactive linking**: If you index a library *after* its consumer, the
-  consumer will retroactively gain a `DEPENDS_ON` edge on the next index run.
-  Re-run `knot-indexer` on the consumer to pick up the new edge.
+- **Bidirectional linking**: Indexing **either** side of the relationship
+  creates the `DEPENDS_ON` edge. Index the consumer and it links to already
+  indexed libraries; index a library *after* its consumer and the reverse
+  sweep links every already-indexed consumer without re-indexing them. The
+  edge appears on whichever run notices the match — no `--clean` required.
+- **One identity per repository**: Only the root build manifest registers the
+  repository identity. For npm workspaces, sub-package manifests are *not*
+  matchable dependency targets — only the workspace root's `package.json`
+  name participates in linking.
+- **Helm chart dependencies are not linked**: the Helm parser emits chart
+  dependency names without a `helm:` prefix, which the forward matcher cannot
+  resolve back to an indexed Helm repository. This is a known limitation
+  (candidate for a follow-up fix).
 
 ## Troubleshooting
 
@@ -193,16 +205,90 @@ diff /tmp/deps-before.json /tmp/deps-after.json
 **Cause:** The depended-on repository has not been indexed yet.
 
 **Solutions:**
-- Run `knot-indexer --repo-path /path/to/dependency`
+- Run `knot-indexer --repo-path /path/to/dependency` — the `DEPENDS_ON` edge
+  is created by that run itself (the reverse sweep links every already
+  indexed consumer)
 - Verify with `knot repos` that both repositories are present
-- Re-run `knot-indexer` on the consumer so the retroactive `DEPENDS_ON` edge
-  is created
+
+### `knot deps` reports declared dependencies but none indexed
+
+When a repository declares build dependencies but none of them resolves to an
+indexed repository, the output says so explicitly instead of a bare
+"No dependencies found.":
+
+```
+`job-watch-ui` declares 35 build dependencies, but none of them
+resolves to a repository indexed in knot.
+...
+Declared build dependencies (35):
+  npm:@eslint/js:^9.39.5
+  npm:@hookform/resolvers:^5.7.1
+  ...
+```
+
+**Cause:** None of the declared dependency artifacts is an indexed
+repository — entity extraction worked, linking correctly found nothing to
+link.
+
+**Solutions:**
+- Check `knot repos` for what *is* indexed; the full declared list (as a
+  reference to the identity names the consumers match on) is right there
+- Index the dependency's own repository with
+  `knot-indexer --repo-path <path>` — the edge is created by that run
+- The `--output json` shape is unchanged (array of `{ "repo_name": ... }`);
+  the explanation only appears in the human-readable output
+
+Other empty-result explanations:
+
+- `Repository \`X\` is not indexed.` — the queried name has no `:Repository`
+  node; check the spelling against `knot repos`.
+- `No dependencies found: \`X\` declares no build dependencies` — the repo
+  has no dependency section in its manifest at all.
+- `Cannot determine dependents of \`X\`: no matchable build identity` — the
+  reverse lookup cannot answer because the repository has no usable
+  build-system identity (e.g. `build_system: "none"`); re-index it with a
+  build manifest. This is never conflated with "nobody declares it".
+
+### Declared dependency resolves, but no DEPENDS_ON edge yet
+
+If a declared dependency **resolves** to an indexed repository but the edge
+is missing, the output says so explicitly instead of claiming the dependency
+is not indexed:
+
+```
+`job-watch` declares 24 build dependencies; 1 of them resolve to a
+repository indexed in knot but have no DEPENDS_ON edge yet:
+  cdp-browser-lite:0.3.4 -> cdp-browser-lite
+The graph is stale: re-index either side to create the edge(s)
+(`knot-indexer --repo-path <path>` on `job-watch` or on the
+dependency's own repository).
+```
+
+The same distinction exists in reverse: if indexed repositories **declare**
+the queried repository but the edges are missing, they are named:
+
+```
+No DEPENDS_ON edges point at `cdp-browser-lite`, but 2 indexed repositories
+declare it as a build dependency:
+  chrome-control-mcp (declares `cdp-browser-lite:0.3`)
+  job-watch (declares `cdp-browser-lite:0.3.4`)
+The graph is stale: re-index either side to create the edge(s).
+```
+
+**Cause:** a stale graph — the consumer was indexed before the library
+existed (or before its identity was matchable) and linking did not run since.
+A declared artifact that resolves is never reported as "not indexed"; the
+three outcomes (edge exists / resolves without edge / does not resolve) are
+always reported separately.
 
 ### Repository name in `knot deps` does not match the directory
 
-Knot uses `[package].name` from the build file (with dashes converted to
-underscores). For Maven, this is the `<artifactId>`. For npm, it is the
-top-level `name` field. Use `knot repos` to confirm the canonical name.
+Knot uses the identity declared in the build manifest: the npm package `name`
+field (including `@scope/name`, which is stored split as scope + package),
+Maven's `<groupId>:<artifactId>`, Cargo's `[package].name`, or MSBuild's
+`<PackageId>`. The dashes-to-underscores conversion applies to Rust crates
+picked up without a nearest-crate anchor only — it does not apply to npm,
+Maven, or Gradle names. Use `knot repos` to confirm the canonical name.
 
 ### Results look stale after a build-file change
 

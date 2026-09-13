@@ -34,6 +34,10 @@ plan.md
 # Ignore knot index state in test fixture directories
 tests/testing_files/**/.knot/
 
+# Ignore cargo build artifacts produced by fixture test suites
+tests/testing_files/**/target/
+tests/testing_files/**/Cargo.lock
+
 # Agent skills generated artifacts
 .knot-agent-skills/
 /tests/testing_files/autolink_scale/

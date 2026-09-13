@@ -19,7 +19,7 @@ The indexer automatically builds:
 - **Graph Database** (Neo4j) — architectural relationships via call graphs
 
 This dual-database approach powers both:
-- **MCP (Model Context Protocol) Server** — Exposes three tools to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.)
+- **MCP (Model Context Protocol) Server** — Exposes four read-only tools (search, callers, explore, list_files/repos) to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.)
 - **CLI Tool** — Standalone `knot` command for terminal and scripting environments
 
 ### Knot in action
@@ -121,9 +121,10 @@ point them at any repository you have indexed to measure your own codebase.
 
 **🔍 Code Intelligence Tools**
 - **`search_hybrid_context`**: Semantic + structural search. Find code by meaning, class name, method signature, docstrings, or comments. Returns full context including dependencies.
-- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. When multiple entities share the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target showing which specific entity each caller references. Supports cross-repository call resolution via `DEPENDS_ON` graph edges. For JVM languages (Java/Kotlin/Groovy) it also surfaces method-level `OVERRIDES` edges bidirectionally — an **Overridden by** group listing subtype implementations/overrides and an **Overrides** group listing the supertype methods a method implements/overrides.
+- **`find_callers`**: Reverse dependency lookup. Identify dead code, perform impact analysis, or understand the full call chain of any function/method. Whenever the query resolves to more than one entity sharing the same name (e.g., `find_nearest_entity_by_line` in different files), results are automatically grouped by target (`### Target: <fqn> at <file>:<line>`) showing which specific entity each caller references — including when only one of the homonyms has callers. A genuinely single-target resolution keeps the concise ungrouped form. Supports cross-repository call resolution via `DEPENDS_ON` graph edges. For JVM languages (Java/Kotlin/Groovy) it also surfaces method-level `OVERRIDES` edges bidirectionally — an **Overridden by** group listing subtype implementations/overrides and an **Overrides** group listing the supertype methods a method implements/overrides.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, and functions in a file with signatures and documentation.
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
+- **`list_files`** (MCP) / **`knot files`** (CLI): Read-only file enumeration with entity counts, deterministically ordered. Accepts an optional `path` — a repo-relative directory prefix matched on a path boundary (`src/api` never matches `src/api-notes.md`) or a glob (`src/**/*_test.rs`). Pair with the new `--path`/`path` scope on `search_hybrid_context` to restrict a semantic search to a subtree.
 - **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Supports optional case-insensitive name filtering via `--filter` (CLI) or `filter` parameter (MCP). Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
 
 **🏗️ Multi-Language Support**
@@ -141,7 +142,7 @@ point them at any repository you have indexed to measure your own codebase.
 - **Groovy**: Full Groovy language support via hybrid tree-sitter + ad-hoc lexical parser. Extracts classes, interfaces, traits, enums, typed/`def`/quoted methods (incl. Spock specs), constructors, closures, script-level variables, fields/properties with visibility modifiers, nested classes, and decorators. Tracks package FQN and enclosing class relationships. Multi-line signatures (closure default params), assignment-vs-declaration disambiguation, innermost assignment for nested closures, UUID collision fix for duplicate method names, `find_callers` accurately tracks private methods including those in anonymous `new AnAction` closures. **Inheritance tracking:** emits `EXTENDS`/`IMPLEMENTS` reference intents for `class`/`interface`/`trait`/`enum` headers (single-line and multi-line) so `find_callers` surfaces real nextflow-style hierarchies — qualified parents (e.g. `extends nextflow.plugin.BasePlugin`) and generic-argument stripping (e.g. `extends AbstractRepo<Order, Long> → extends AbstractRepo`) are supported, and generic bounds (`class Box<T extends Comparable>`) are correctly **not** promoted to inheritance edges. **Property accessors:** bare property declarations (`Path baseDir`, `boolean cacheable`) are now indexed as `GroovyProperty`, and compiler-generated `getX`/`setX`/`isX` accessors are synthesised as first-class method entities so `OVERRIDES` edges link Groovy properties to interface getter declarations. Comment-stripping prevents Javadoc continuation lines (`* The pipeline script name`) from producing phantom entities or corrupting scope tracking.
 - **Build Systems**: Maven `pom.xml` (dependencies + plugins via roxmltree), Gradle `build.gradle` (deps + plugins + tasks), `Jenkinsfile` pipeline (stages + steps), Cargo `Cargo.toml` (deps + workspace members + features), and MSBuild `.csproj` / `Directory.Packages.props` extraction. MSBuild resolves project identity (`<PackageId>` → `<AssemblyName>` → file stem), emits a `BuildDependency` per `<PackageReference>` (attribute-form and version-less), and resolves Central Package Management versions from the nearest `Directory.Packages.props` ancestor. UTF-8 BOMs are tolerated defensively. Identity marker `identity: package_id` is carried in the signature when the project has an explicit `<PackageId>` so the cross-repo resolver prefers published packages over depth-tied unmarked candidates.
 - **Cargo.toml**: Rust package manager support with package metadata, features, workspace members, and multi-format dependency parsing (simple, table, git, path).
-- **Configuration Files**: YAML (.yml/.yaml), JSON (.json), and Java Properties (.properties) with leaf-key granularity. Special handling for package.json (npm dependencies as BuildDependency, scripts as ConfigProperty).
+- **Configuration Files**: YAML (.yml/.yaml), JSON (.json), and Java Properties (.properties) with leaf-key granularity. Special handling for package.json (detected by filename: npm dependencies as BuildDependency, scripts as ConfigProperty, ProjectIdentity even for dependency-free library manifests).
 - **Varnish Cache**: Hand-written parsers for `.vcl` (configuration), `.vtc` (test cases), and `.vcc` (VMOD C source). VCL extracts backends, probes, ACLs, subroutines (custom + built-in with `vcl_*` names, including aggregator entities for multi-part built-ins), `import` directives (with `as` aliases and `from` paths), `include` edges, `unused` declarations, VMOD instantiations, and `req.backend_hint` assignments. VTC extracts `varnishtest`/`vtest` cases, servers, clients, varnish instances, logexpect blocks, barriers, and `-vcl+backend` synthesised backends (with `is_test_context`). VCC extracts `$Module`, `$Function`, `$Object`, `$Method`, `$Event`, `$Restrict`, ENUMs, and default parameters. References: `Calls`, `Extends`, `Implements`, `References` (with intents `VclSubCall`, `VclBackendRef`, `VclProbeRef`, `VclAclRef`, `VclInclude`, `VclVmodImport`, `VclUnusedRef`, `ValueReference`); relationships: `UsesBackend`, `UsesProbe`, `UsesAcl`, `Includes`, `ImportsVmod`, `DeclaredUnused`. The Fastly VCL dialect is detected and skipped (returns empty entities).
 - **Kubernetes + Helm**: K8s manifest parsing (Deployment, Service, ConfigMap, Secret, Ingress, Namespace) with label/annotation tracking and cross-resource references. Helm chart indexing (Chart.yaml metadata, values.yaml key-value pairs, template variable extraction via {{ .Values.X }}).
 - **C/C++**: Complete C/C++ support with namespace-aware FQN resolution (`Engine::MyClass::start`), class/struct extraction, function/method tracking, macro definition and usage detection (uppercase identifier heuristic), type reference tracking (declarations, `new` expressions), and full call graph analysis. Supports `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hh`, `.hxx` extensions via tree-sitter-c and tree-sitter-cpp parsers. Includes intelligent auto-detection for `.h` headers to parse them correctly as C or C++ based on their contents.
@@ -161,6 +162,7 @@ point them at any repository you have indexed to measure your own codebase.
 - **Parallel Streaming Pipeline**: Overlaps CPU-bound embedding with I/O-bound ingestion via MPSC channels
 - **Incremental Indexing**: Uses SHA-256 hashes to skip unchanged files
 - **Real-time Watch Mode**: Automatically re-indexes changed files in seconds via `--watch`
+- **Embed-Text Recall**: Every entity's embed text carries its identifier surface — name, FQN and the camel/snake-case-tokenized form of both, plus the tokenized names of what it calls in its body. A function with no doc comment is still findable by the behaviour described in natural language ("authenticate user with email and password" surfaces a doc-less `login` through the `normalize_email` / `verify_credentials` vocabulary in its body). Rust signatures (`(email: &str, password: &str)`) survive extraction too. Requires one re-index when upgrading from an older index state version (automatic: old states are rejected with instructions).
 - **CPU Parallelism**: AST extraction via Rayon
 - **Scalable**: Configurable batch processing and constant memory footprint (~2GB) regardless of repository size
 - **Performance Benchmarking**: Multi-level validation framework
@@ -345,8 +347,16 @@ The **knot CLI** provides the same capabilities as the MCP server via command-li
 knot search "user authentication" --max-results 10 --repo my-app
 knot search "user authentication" --max-results 20 --repo "app-a,app-b"  # Union across repos
 knot search "user authentication" --max-results 20 --repo all              # All indexed repos ('all' or '*')
+knot search "user authentication" --kinds definition                        # Only functions/methods/types
 ```
 Find code entities by meaning, class names, docstrings, or comments.
+
+Ranking is kind-aware: function/method/class/struct definitions outrank
+markdown docs, test files, config properties and build-dependency entities
+for natural-language queries, and callers/helpers are shown as context
+attached to a definition — never as substitutes. Use `--kinds` to narrow the
+result types (aliases: `definition`, `callable`, `class`/`type`/`struct`, or
+exact kinds like `rust_function`).
 
 #### `knot callers` — Reverse Dependency Lookup
 ```bash
@@ -354,7 +364,7 @@ knot callers "LoginService" --repo my-app
 knot callers "LoginService" --repo "auth-service,billing-service"
 knot callers "LoginService" --repo all
 ```
-Find all code that references a specific entity (dead code detection, impact analysis, call chains). When multiple entities share the same name in different files, results are automatically grouped by target with file locations and signatures.
+Find all code that references a specific entity (dead code detection, impact analysis, call chains). Whenever the query resolves to more than one target sharing that name, results are automatically grouped by target (`### Target: <fqn> at <file>:<line>`) with file locations and signatures — including when only one of the homonyms has callers.
 
 Every caller entry is **self-labeling**: the owning repository is printed next to each row as `(repo: <name>)` — in the CLI table, the Markdown answer, and the resolution block — so rows stay attributable when the scope spans multiple repositories:
 
@@ -401,7 +411,7 @@ Both the CLI `--repo/-r` flag and MCP `repo_name` parameter support:
 - Comma-separated list: `--repo "repo-a,repo-b"` (MCP also accepts `["repo-a", "repo-b"]`)
 - Sentinel: `--repo all` or `--repo "*"` (searches every indexed repository)
 
-*Note:* Multi-repo scope applies a global `max_results` limit across the union. Increase `--max-results` when searching across multiple repositories.
+*Note:* Multi-repo scope applies a global `max_results` limit across the union. Increase `--max-results` (range 1-100, enforced; larger values are clamped and a note is printed — no pagination, narrow with `--kinds`/`--path`/`--repo` or refine the query instead) when searching across multiple repositories.
 
 **For detailed CLI usage guide**, see [`.knot-agent.md`](.knot-agent.md) — a machine-readable skill that teaches LLMs how to use knot CLI for autonomous code analysis.
 
@@ -616,6 +626,29 @@ echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entit
   every implementation, and querying an implementation surfaces the declaration it
   overrides.
 
+**Truncation & completeness:** the queried name is first resolved to concrete
+targets, capped at 25 by default (hard ceiling 500). When more targets match, the
+response states it explicitly and quantified:
+
+```
+> **Truncated** — 112 targets matched; showing the first 25 by FQN.
+
+> **Counts below are partial** — they cover only the 25 of 112 targets shown.
+> Re-run with a fully qualified name, or raise `max_targets`, for the complete set.
+```
+
+The relationship buckets (`Calls`, `Extends`, `Implements`, `References`) are
+complete for the resolved targets — there is no per-bucket cap — so the partial
+counts caveat tells you exactly what to do next: pass a fully qualified name to
+disambiguate homonyms, or raise `max_targets` (MCP parameter, default `25`,
+maximum `500`; CLI `--max-targets`) to opt into the full impact set.
+
+The same shown-vs-total contract applies to `search_hybrid_context`: when the
+`Sample callers:` / `Sample usages:` blocks under an entity list fewer entries
+than the reported count, the header reads
+`Sample callers — showing 3 of 21 (truncated):` instead of implying the sample
+is the complete set.
+
 #### Tool 3: `explore_file`
 **Understand file structure**
 
@@ -632,6 +665,17 @@ Query: "What codebases are indexed?"
 Result: Markdown table of all indexed repos with entity/file counts, language, and build system
 ```
 
+#### Tool 4b: `list_files`
+**Enumerate a repository's files**
+
+```
+Query: path = "src/hooks", repo = "my-app"
+Result: Ordered table of the files under src/hooks with their entity counts
+```
+
+`search_hybrid_context` shares the same `path` parameter to scope results
+to that subtree.
+
 #### Tool 5: `list_repo_dependencies`
 **Traverse cross-repository dependency graphs**
 
@@ -639,6 +683,16 @@ Result: Markdown table of all indexed repos with entity/file counts, language, a
 Query: "What repositories depend on auth-lib?"
 Result: Repositories declaring build dependencies (pom.xml, build.gradle, Cargo.toml, package.json, NuGet)
 ```
+
+Indexing **either** side of a relationship creates the `DEPENDS_ON` edge:
+index a library after its consumers and they are linked retroactively
+(reverse sweep); an empty lookup is explained explicitly with a three-way
+classification — declared-but-unindexed dependencies are listed by name
+(uncapped), but a dependency that *resolves* to an indexed repository
+without an edge yet is reported as a stale graph with a re-index hint
+instead of being falsely called "not indexed"; the reverse direction names
+consumers that declare the repo without an edge — never a bare
+"No dependencies found."
 
 ---
 
@@ -783,7 +837,7 @@ This works for all three binaries: `knot-indexer`, `knot-mcp`, and `knot`.
 ```
 
 **Step 4: Use with Claude Desktop**
-- Claude will list the three tools in its Tools menu
+- Claude will list the read-only tool surface in its Tools menu
 - Ask: "Search for all authentication logic"
 - Ask: "Find who calls the login method"
 - Ask: "Explore the structure of UserService.java"

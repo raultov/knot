@@ -69,6 +69,23 @@ Found 5 reference(s):
 - **`getServiceProvider`** (function) at `src/utils/providers.ts:5`  (repo: my-app)
 ```
 
+**Target attribution:** when the query resolves to more than one entity
+sharing that name, every reference is attributed to the target it actually
+points at with a `### Target:` header — including the case where only one of
+the homonyms has callers, where the header is what tells you *which* homonym
+they reference:
+
+```markdown
+## Calls (1)
+
+### Target: `channels.ChannelsPage.onDelete` at `src/channels/ChannelsPage.tsx:20`
+
+- **`handleClick`** (function) at `src/channels/ChannelsPage.tsx:30`
+```
+
+A genuinely single-target resolution (exact FQN, or one unique name) keeps
+the concise ungrouped form with no `### Target:` header.
+
 **Repo attribution:** every caller entry, target group header, and resolved
 target states its repository as `(repo: name)`. When the scope spans multiple
 repositories (`all`, a comma list, or a JSON array), use the annotation to

@@ -320,9 +320,9 @@ Run `cargo dupes cleanup --dry-run` after any refactor; stale ignore entries mus
 
 1. **Index libraries first** → Best practice for full call resolution
 2. **Index client repos** → Auto-discovers DEPENDS_ON edges from build files (pom.xml, build.gradle, Cargo.toml, package.json)
-3. **Retroactive linking** → Indexing a library after its clients creates DEPENDS_ON edges retroactively; re-index clients with `--clean` for full cross-repo call resolution
+3. **Bidirectional linking** → Indexing **either** side creates the edge: indexing a library after its clients retroactively links those clients (reverse sweep, no consumer re-index needed); re-indexing a consumer links newly indexed libraries even with no file changes (no `--clean` required)
 4. **Manual override** → Use `--dependencies` / `KNOT_DEPENDENCIES` to force linking without matching build file identities
-5. **Query deps** → `knot deps <repo>` for forward dependencies, `knot deps --reverse <repo>` for reverse lookups
+5. **Query deps** → `knot deps <repo>` for forward dependencies, `knot deps --reverse <repo>` for reverse lookups (`--depth` applies to both directions; stale-graph empties distinguish "resolves but no edge yet" from "not indexed")
 
 ### Refactoring Parser Logic
 

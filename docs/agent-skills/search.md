@@ -13,7 +13,10 @@ Find code entities by semantic meaning. This is your primary tool for explorator
   - Good queries describe *what the code does*, not specific names
   - Works best with 2-5 word descriptions
 
-- **`--max-results <N>`**: Limit the number of results (default: 5, max: 20)
+- **`--max-results <N>`**: Limit the number of results (default: 5, max: 100).
+  The bound is enforced — larger values are clamped to 100 and a note is
+  printed; there is no cursor or pagination. When 100 results are not
+  enough, narrow with `--kinds`, `--path` or `--repo`, or refine the query.
   - Use higher values (10-20) when exploring unfamiliar codebases
   - Use lower values (3-5) when you need focused results
 
@@ -21,6 +24,63 @@ Find code entities by semantic meaning. This is your primary tool for explorator
   - Defaults to auto-detecting the current directory's repository name
   - Use when working with multiple indexed repositories
   - Example: `--repo backend` to search only in the backend repo
+
+- **`--kinds <spec>`**: Optional entity-kind filter (comma-separated)
+  - Aliases: `definition` (all functions/methods/types), `callable` /
+    `function` / `method`, `class` / `type` / `struct`
+  - Exact wire-format kinds also work: `rust_function`, `markdown_section`,
+    `kotlin_class`, `csharp_method`, …
+  - Example: `--kinds definition` to search only for code definitions
+
+- **`--path <prefix-or-glob>`**: optional path scope (comma-free)
+  - Directory prefix matched on a path boundary (`src/api` never matches
+    `src/api-notes.md`) or a glob (`src/**/*_test.rs`).
+  - Use `knot files` first to discover the layout, then scope the search
+    to the relevant subtree.
+
+## Ranking Contract
+
+Results are **kind-aware**. For a natural-language query describing a
+behaviour, the entity's own definition (function/method/class/struct) ranks
+at or near the top:
+
+- Definitions (callables and types) outrank markdown docs, test files,
+  config properties and build-dependency entities.
+- A method can outrank its own container when the query names it
+  (`LookupMaps::build` beats `LookupMaps` for "build lookup maps").
+- An identifier the query literally names is probed by exact name and can
+  surface even when its pure similarity rank is deep.
+- Callers and helpers appear as **context attached to** a definition
+  (caller samples, subclasses, implementers) — never as substitutes that
+  displace it.
+- Ordering is deterministic (ties break on file path, line, UUID) and
+  duplicate rows are removed.
+- Documentation-only topics still surface their best markdown section; to
+  search docs exclusively pass `--kinds markdown_section`.
+
+## Recall Contract
+
+The embed text of every code entity carries its full identifier surface, so
+paraphrases that never name the identifier are still retrievable:
+
+- **Name, FQN and identifier tokens** (`useChangePassword` → `use change
+  password`) are part of the embedded text, in raw and tokenized form.
+- **Call names**: the names an entity calls or refers to in its body are
+  tokenized into the embed (`Calls: normalize email, verify credentials`).
+  A function with no doc comment is therefore findable by the behaviour
+  described in natural language — its body's callees share the query's
+  vocabulary.
+- **Token-level probe**: query words that appear as parts of identifiers
+  reach entities regardless of the identifier's spelling (`similarity
+  search` reaches `similaritySearch` from the tokens alone).
+- **Caller bridge**: the callers of the top semantic hits enter the
+  candidate pool; the shared caller of several helpers is usually the
+  entry point the paraphrase describes (a definition with `caller_roots`
+  evidence earns a bounded boost).
+- If a definition still does not surface for a paraphrase, the vocabulary
+  genuinely is absent from its embed — try naming the responsibility you
+  know (`login`, `hook`, endpoint), or use `find_callers` from one of its
+  callees.
 
 ## Output Format
 
@@ -106,7 +166,7 @@ knot callers "loginUser" --repo my-app
 
 - **Speed:** Fast (vector similarity in Qdrant) — typical response < 1 second
 - **Accuracy:** Depends on query clarity; semantic searches work best with natural language
-- **Large Codebases:** Use `--max-results 20` to see more options; use `--repo` to narrow scope
+- **Large Codebases:** Use `--max-results 20` (up to the enforced 100) to see more options; use `--repo` to narrow scope
 
 ## Examples by Language
 

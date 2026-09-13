@@ -13,6 +13,10 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 ### 1. 🔍 `search_hybrid_context` — Semantic & Structural Discovery
 **Use this for:** Finding feature implementations, looking up classes/methods by name, searching docstrings and comments, discovering architectural patterns.
 
+**Ranking:** Definitions (functions/methods/classes) rank above docs, tests and config; callers/helpers appear as context attached to a definition. Pass `kinds: "definition"` to restrict results to code definitions.
+
+**Recall:** Entity embeds carry name, FQN and identifier tokens plus the tokenized call names of the entity's body, so naturual-language paraphrases of what a doc-less definition does still surface it ("authenticate user with email and password" → `login`).
+
 **Examples:**
 - "How is user authentication implemented?"
 - "Where is the login logic?"
@@ -20,6 +24,13 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 - "Search for decorator/annotation usage"
 
 **Multi-Repo Scope (v1.8.0+):** By default (or when `repo_name` is set to `all`, `*`, a comma-separated list `"repo-a,repo-b"`, or a JSON array `["repo-a", "repo-b"]`), `search_hybrid_context` executes a global multi-repository search across all indexed repos, ordering results by unified semantic relevance. Pass a specific `repo_name` to restrict scope to a single project.
+
+**Path filter:** pass the optional `path` parameter (e.g. `"src/api"`, `"src/**/*_test.rs"`) to scope the search to files under that prefix; combine with `list_files` when you do not know the layout.
+
+**Do NOT use `grep` for these tasks.**
+
+### 1.1 📁 `list_files` — File Enumeration
+**Use this for:** listing every indexed file of a repo (with entity counts), optionally narrowed by a directory prefix or glob; the answer to "which files live under src/hooks?".
 
 **Do NOT use `grep` for these tasks.**
 
@@ -54,7 +65,7 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 **Use this for:** Discovering which codebases are indexed before querying. Returns metadata (entity count, file count, build system, primary language). Supports optional case-insensitive `filter`.
 
 ### 5. 🕸️ `list_repo_dependencies` — Cross-Repository Dependency Graph
-**Use this for:** Traversing repository-to-repository dependencies declared in build files (Maven, Gradle, Cargo, npm, NuGet). Use `reverse: true` for blast-radius impact analysis before breaking changes in shared libraries.
+**Use this for:** Traversing repository-to-repository dependencies declared in build files (Maven, Gradle, Cargo, npm, NuGet). Use `reverse: true` for blast-radius impact analysis before breaking changes in shared libraries. Empty results are explained in the response text with a three-way classification (repository not indexed / no declared dependencies / declared-but-unindexed, or — distinguishing the stale graph — dependencies that RESOLVE to an indexed repository but have no edge yet, with a re-index hint; the reverse direction names consumers that declare the repo without an edge). Read the explanation before concluding a repo has no dependencies.
 
 ## Why This Matters
 
@@ -89,7 +100,7 @@ Exceptions (where shell tools are acceptable):
 ## Integration Notes
 
 - The `knot` MCP server requires Qdrant and Neo4j running (default: `localhost:6334` and `bolt://localhost:7687`)
-- All search/callers tools support `repo_name` for scope selection: single name (`"my-repo"`), comma list (`"repo-a,repo-b"`), sentinel (`"all"` / `"*"`), or JSON array (`["repo-a", "repo-b"]`). Multi-repo scope applies a global `max_results` limit across the union — increase `max_results` when searching across multiple repositories.
+- All search/callers tools support `repo_name` for scope selection: single name (`"my-repo"`), comma list (`"repo-a,repo-b"`), sentinel (`"all"` / `"*"`), or JSON array (`["repo-a", "repo-b"]`). Multi-repo scope applies a global `max_results` limit across the union — increase `max_results` when searching across multiple repositories (range 1-100, enforced; a larger request is clamped to 100 — no pagination, narrow with `kinds` / `path` / `repo_name` instead).
 - Results include full context (signatures, docstrings, file locations, call chains)
 - **Returned file paths are repo-relative** (e.g. `src/pipeline/embed.rs`). The owning repository is printed next to each path as `(repo: name)`. To open a file in your editor, resolve the relative path against your local checkout of the named repository.
 
