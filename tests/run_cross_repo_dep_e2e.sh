@@ -78,7 +78,7 @@ cleanup() {
     if [ -d "$E2E_DATA_DIR" ]; then
         sudo rm -rf "$E2E_DATA_DIR" 2>/dev/null || rm -rf "$E2E_DATA_DIR" 2>/dev/null || true
     fi
-    rm -rf "$TMP_LIB_DIR" "$TMP_CLIENT_DIR" "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR" "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR" "$TMP_NUGET_LIB_DIR" "$TMP_NUGET_CLIENT_DIR" 2>/dev/null || true
+    rm -rf "$TMP_LIB_DIR" "$TMP_CLIENT_DIR" "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR" "$TMP_CARGO_CHAIN_DIR" "$TMP_PROJ_LIB_DIR" "$TMP_PROJ_BIN_DIR" "$TMP_NUGET_LIB_DIR" "$TMP_NUGET_CLIENT_DIR" "$TMP_NPM_LIB_DIR" "$TMP_NPM_CLIENT_DIR" "$TMP_NPM_LATE_LIB_DIR" "$TMP_NPM_ORPHAN_DIR" 2>/dev/null || true
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
@@ -538,6 +538,133 @@ else
     exit 1
 fi
 
+# Test 7e: stale-graph diagnostics — a declared dependency that RESOLVES to
+# an indexed repository must be reported as "resolves but no edge yet", never
+# as "none of them resolves to a repository indexed in knot".
+echo ""
+echo "Test 7e: Stale-graph diagnostics (resolves, but no DEPENDS_ON edge)..."
+docker exec knot_neo4j_e2e cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+    "MATCH (:Repository {name: '$CARGO_BIN_NAME'})-[d:DEPENDS_ON]->(:Repository {name: '$CARGO_LIB_NAME'}) DELETE d" \
+    >/dev/null 2>&1
+CARGO_STALE_OUTPUT=$(cargo run --release --bin knot -- deps "$CARGO_BIN_NAME" --depth 1 2>/dev/null)
+if echo "$CARGO_STALE_OUTPUT" | grep -q "none of them resolves"; then
+    echo -e "${RED}✗ Stale edge falsely reported as 'none of them resolves'. Output:${NC}"
+    echo "$CARGO_STALE_OUTPUT"
+    exit 1
+fi
+if echo "$CARGO_STALE_OUTPUT" | grep -q "no DEPENDS_ON edge yet" \
+    && echo "$CARGO_STALE_OUTPUT" | grep -q "rust-lib-a" \
+    && echo "$CARGO_STALE_OUTPUT" | grep -q "The graph is stale"; then
+    echo -e "${GREEN}✓ Stale edge reported as 'resolves but no edge yet' with re-index hint${NC}"
+else
+    echo -e "${RED}✗ Stale-graph diagnostics missing. Output:${NC}"
+    echo "$CARGO_STALE_OUTPUT"
+    exit 1
+fi
+
+# Test 7f: stale-graph reverse diagnostics — a consumer that DECLARES the
+# queried repo must be named, never flattened into 'no repositories depend
+# on X: none of them resolves back'.
+echo ""
+echo "Test 7f: Stale-graph reverse diagnostics..."
+CARGO_STALE_REV=$(cargo run --release --bin knot -- deps "$CARGO_LIB_NAME" --reverse --depth 1 2>/dev/null)
+if echo "$CARGO_STALE_REV" | grep -q "none of them resolves back"; then
+    echo -e "${RED}✗ Reverse stale edge falsely reported as 'none of them resolves back'. Output:${NC}"
+    echo "$CARGO_STALE_REV"
+    exit 1
+fi
+if echo "$CARGO_STALE_REV" | grep -q "declare it as a build dependency" \
+    && echo "$CARGO_STALE_REV" | grep -q "$CARGO_BIN_NAME"; then
+    echo -e "${GREEN}✓ Reverse stale edge names the declaring consumer${NC}"
+else
+    echo -e "${RED}✗ Reverse stale-graph diagnostics missing. Output:${NC}"
+    echo "$CARGO_STALE_REV"
+    exit 1
+fi
+
+# Restore the edge for the remaining tests by re-indexing the consumer
+# (linking is idempotent).
+export KNOT_REPO_PATH="$TMP_CARGO_BIN_DIR"
+export KNOT_REPO_NAME="$CARGO_BIN_NAME"
+cargo run --release --bin knot-indexer >/dev/null 2>&1
+
+# Test 7g: transitive reverse traversal — --depth applies to --reverse too.
+# Chain: rust-chain-base <- rust-lib-a <- rust-bin-b (indexed in that order).
+echo ""
+echo "Test 7g: Transitive reverse traversal (--reverse --depth)..."
+CARGO_CHAIN_BASE_NAME="rust-chain-base"
+TMP_CARGO_CHAIN_DIR="$SCRIPT_DIR/.e2e_cross_repo_cargo_chain"
+rm -rf "$TMP_CARGO_CHAIN_DIR"
+mkdir -p "$TMP_CARGO_CHAIN_DIR/src"
+cat > "$TMP_CARGO_CHAIN_DIR/Cargo.toml" << 'TOML_EOF'
+[package]
+name = "rust-chain-base"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+TOML_EOF
+cat > "$TMP_CARGO_CHAIN_DIR/src/lib.rs" << 'RUST_EOF'
+pub fn base_value() -> u32 {
+    42
+}
+RUST_EOF
+
+# Make rust-lib-a depend on rust-chain-base and re-index it.
+cat > "$TMP_CARGO_LIB_DIR/Cargo.toml" << 'TOML_EOF'
+[package]
+name = "rust-lib-a"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rust-chain-base = "0.1.0"
+TOML_EOF
+
+echo "Indexing chain base '${CARGO_CHAIN_BASE_NAME}'..."
+export KNOT_REPO_PATH="$TMP_CARGO_CHAIN_DIR"
+export KNOT_REPO_NAME="$CARGO_CHAIN_BASE_NAME"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}" >/dev/null 2>&1
+
+echo "Re-indexing '${CARGO_LIB_NAME}' (now depends on ${CARGO_CHAIN_BASE_NAME})..."
+export KNOT_REPO_PATH="$TMP_CARGO_LIB_DIR"
+export KNOT_REPO_NAME="$CARGO_LIB_NAME"
+cargo run --release --bin knot-indexer >/dev/null 2>&1
+
+# Forward transitive: depth 3 from the binary must reach the chain base.
+CARGO_FWD_DEPTH3=$(cargo run --release --bin knot -- deps "$CARGO_BIN_NAME" --depth 3 2>/dev/null)
+if echo "$CARGO_FWD_DEPTH3" | grep -q "$CARGO_CHAIN_BASE_NAME"; then
+    echo -e "${GREEN}✓ Forward depth 3 reaches ${CARGO_CHAIN_BASE_NAME}${NC}"
+else
+    echo -e "${RED}✗ Forward transitive traversal failed. Output:${NC}"
+    echo "$CARGO_FWD_DEPTH3"
+    exit 1
+fi
+
+# Reverse transitive: depth 2 from the chain base must reach the binary.
+CARGO_REV_DEPTH2=$(cargo run --release --bin knot -- deps "$CARGO_CHAIN_BASE_NAME" --reverse --depth 2 2>/dev/null)
+if echo "$CARGO_REV_DEPTH2" | grep -q "$CARGO_BIN_NAME"; then
+    echo -e "${GREEN}✓ Reverse depth 2 reaches ${CARGO_BIN_NAME}${NC}"
+else
+    echo -e "${RED}✗ Reverse transitive traversal failed (reverse stayed single-hop?). Output:${NC}"
+    echo "$CARGO_REV_DEPTH2"
+    exit 1
+fi
+
+# Reverse depth 1 must NOT reach the binary (only rust-lib-a is direct).
+CARGO_REV_DEPTH1=$(cargo run --release --bin knot -- deps "$CARGO_CHAIN_BASE_NAME" --reverse --depth 1 2>/dev/null)
+if echo "$CARGO_REV_DEPTH1" | grep -q "$CARGO_BIN_NAME"; then
+    echo -e "${RED}✗ Reverse depth 1 leaked a transitive dependent (${CARGO_BIN_NAME}). Output:${NC}"
+    echo "$CARGO_REV_DEPTH1"
+    exit 1
+else
+    echo -e "${GREEN}✓ Reverse depth 1 correctly excludes transitive dependents${NC}"
+fi
+
+rm -rf "$TMP_CARGO_CHAIN_DIR"
+
 # Clean up cargo test directories
 rm -rf "$TMP_CARGO_LIB_DIR" "$TMP_CARGO_BIN_DIR"
 
@@ -847,6 +974,288 @@ fi
 rm -rf "$TMP_NUGET_LIB_DIR" "$TMP_NUGET_CLIENT_DIR"
 
 echo -e "${GREEN}✓ All NuGet cross-repo dependency tests passed${NC}"
+
+# Test 10: npm cross-repo dependency linking
+#
+# Covers three regression classes observed on real npm repos where
+# `build_dependency` entities existed but `DEPENDS_ON` edges never appeared:
+#   10a-10c: scoped/unscoped npm linking (forward, reverse, MCP, JSON)
+#   10d:     incremental re-index must NOT wipe the Repository identity
+#   10e:     re-indexing the consumer with zero file changes keeps links alive
+#   10f:     indexing the LIBRARY last creates the edge (reverse sweep)
+#   10g:     an unindexable dependency set gets an honest, uncapped report
+echo ""
+echo "Test 10: npm cross-repo dependency linking..."
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}knot Cross-Repo npm Dependency Linking E2E Test${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+NPM_LIB_NAME="npm-lib-acme-ui-kit"
+NPM_CLIENT_NAME="npm-client-app"
+NPM_LATE_LIB_NAME="npm-late-lib"
+NPM_LATE_PACKAGE="@acme/late-lib"
+
+TMP_NPM_LIB_DIR="$SCRIPT_DIR/.e2e_cross_repo_npm_lib"
+TMP_NPM_CLIENT_DIR="$SCRIPT_DIR/.e2e_cross_repo_npm_client"
+TMP_NPM_LATE_LIB_DIR="$SCRIPT_DIR/.e2e_cross_repo_npm_late_lib"
+
+rm -rf "$TMP_NPM_LIB_DIR" "$TMP_NPM_CLIENT_DIR" "$TMP_NPM_LATE_LIB_DIR"
+mkdir -p "$TMP_NPM_LIB_DIR"
+mkdir -p "$TMP_NPM_CLIENT_DIR"
+mkdir -p "$TMP_NPM_LATE_LIB_DIR"
+
+# Library: package.json WITHOUT any dependencies field. This is the D3
+# regression — content-based detection used to skip such manifests entirely
+# and no ProjectIdentity was emitted.
+cat > "$TMP_NPM_LIB_DIR/package.json" << 'JSONEOF'
+{
+  "name": "@acme/ui-kit",
+  "version": "1.0.0",
+  "main": "index.js"
+}
+JSONEOF
+
+cat > "$TMP_NPM_LIB_DIR/index.js" << 'JSEOF'
+function renderButton(label) {
+    return "button: " + label;
+}
+
+module.exports = { renderButton };
+JSEOF
+
+# Client: declares the lib (scoped) and a not-yet-indexed second lib that
+# will be indexed afterwards for the reverse-sweep test (10f).
+cat > "$TMP_NPM_CLIENT_DIR/package.json" << 'JSONEOF'
+{
+  "name": "npm-client-app",
+  "version": "0.1.0",
+  "dependencies": {
+    "@acme/ui-kit": "^1.0.0",
+    "@acme/late-lib": "^2.0.0"
+  }
+}
+JSONEOF
+
+cat > "$TMP_NPM_CLIENT_DIR/app.js" << 'JSEOF'
+const { renderButton } = require("@acme/ui-kit");
+
+function main() {
+    console.log(renderButton("run"));
+}
+
+module.exports = { main };
+JSEOF
+
+# Late library: indexed LAST (Test 10f).
+cat > "$TMP_NPM_LATE_LIB_DIR/package.json" << 'JSONEOF'
+{
+  "name": "@acme/late-lib",
+  "version": "2.0.0",
+  "main": "core.js"
+}
+JSONEOF
+
+cat > "$TMP_NPM_LATE_LIB_DIR/core.js" << 'JSEOF'
+function computeHash(input) {
+    return "hash: " + input;
+}
+
+module.exports = { computeHash };
+JSEOF
+
+# Test 10a: library Repository node has build_system = "npm" + scoped identity
+echo ""
+echo "Test 10a: Indexing library '${NPM_LIB_NAME}' (package.json WITHOUT dependencies)..."
+export KNOT_REPO_PATH="$TMP_NPM_LIB_DIR"
+export KNOT_REPO_NAME="$NPM_LIB_NAME"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
+
+NPM_LIB_IDENTITY=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${NPM_LIB_NAME}'}) RETURN r.build_system AS bs, r.group_id AS gid, r.artifact_id AS aid" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if echo "$NPM_LIB_IDENTITY" | grep -q "npm" && echo "$NPM_LIB_IDENTITY" | grep -q "acme" && echo "$NPM_LIB_IDENTITY" | grep -q "ui-kit"; then
+    echo -e "${GREEN}✓ Library Repository has npm identity (@acme/ui-kit): $NPM_LIB_IDENTITY${NC}"
+else
+    echo -e "${RED}✗ Library Repository missing npm identity: $NPM_LIB_IDENTITY${NC}"
+    echo -e "${RED}  (dependency-free package.json must still emit a ProjectIdentity)${NC}"
+    exit 1
+fi
+
+# Test 10b: forward lookup — client depends on the lib
+echo ""
+echo "Test 10b: Indexing client '${NPM_CLIENT_NAME}' and asserting forward lookup..."
+export KNOT_REPO_PATH="$TMP_NPM_CLIENT_DIR"
+export KNOT_REPO_NAME="$NPM_CLIENT_NAME"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
+
+NPM_DEPS_OUTPUT=$(cargo run --release --bin knot -- deps "$NPM_CLIENT_NAME" --depth 1 2>/dev/null)
+if echo "$NPM_DEPS_OUTPUT" | grep -q "$NPM_LIB_NAME"; then
+    echo -e "${GREEN}✓ Forward lookup: ${NPM_CLIENT_NAME} depends on ${NPM_LIB_NAME}${NC}"
+else
+    echo -e "${RED}✗ Forward lookup failed for npm. Output:${NC}"
+    echo "$NPM_DEPS_OUTPUT"
+    exit 1
+fi
+
+# Test 10c: reverse lookup + MCP + JSON output
+echo ""
+echo "Test 10c: Reverse lookup, MCP tool and JSON output..."
+NPM_REV_OUTPUT=$(cargo run --release --bin knot -- deps "$NPM_LIB_NAME" --reverse 2>/dev/null)
+if echo "$NPM_REV_OUTPUT" | grep -q "$NPM_CLIENT_NAME"; then
+    echo -e "${GREEN}✓ Reverse lookup: ${NPM_LIB_NAME} has dependent ${NPM_CLIENT_NAME}${NC}"
+else
+    echo -e "${RED}✗ Reverse lookup failed for npm. Output:${NC}"
+    echo "$NPM_REV_OUTPUT"
+    exit 1
+fi
+
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"list_repo_dependencies\",\"arguments\":{\"repo_name\":\"$NPM_CLIENT_NAME\"}}}"
+MCP_NPM_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TMP_NPM_CLIENT_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_NPM_RESPONSE" | grep -q "$NPM_LIB_NAME"; then
+    echo -e "${GREEN}✓ MCP list_repo_dependencies returns ${NPM_LIB_NAME} as npm dependency${NC}"
+else
+    echo -e "${RED}✗ MCP list_repo_dependencies failed for npm. Response:${NC}"
+    echo "$MCP_NPM_RESPONSE"
+    exit 1
+fi
+
+NPM_JSON_OUTPUT=$(cargo run --release --bin knot -- deps "$NPM_CLIENT_NAME" --depth 1 --output json 2>/dev/null)
+if echo "$NPM_JSON_OUTPUT" | grep -q "$NPM_LIB_NAME"; then
+    echo -e "${GREEN}✓ JSON output contains ${NPM_LIB_NAME}${NC}"
+else
+    echo -e "${RED}✗ JSON output failed for npm. Output:${NC}"
+    echo "$NPM_JSON_OUTPUT"
+    exit 1
+fi
+
+# Test 10d: incremental re-index (source change only) must NOT wipe identity
+echo ""
+echo "Test 10d: Incremental re-index of client (source-only change) preserves identity..."
+echo '// touched source line for incremental test' >> "$TMP_NPM_CLIENT_DIR/app.js"
+export KNOT_REPO_PATH="$TMP_NPM_CLIENT_DIR"
+export KNOT_REPO_NAME="$NPM_CLIENT_NAME"
+cargo run --release --bin knot-indexer
+
+CLIENT_IDENTITY_AFTER_TOUCH=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (r:Repository {name: '${NPM_CLIENT_NAME}'}) RETURN r.build_system AS bs, r.artifact_id AS aid" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if echo "$CLIENT_IDENTITY_AFTER_TOUCH" | grep -q "npm" && echo "$CLIENT_IDENTITY_AFTER_TOUCH" | grep -q "npm-client-app"; then
+    echo -e "${GREEN}✓ Identity preserved after incremental re-index: $CLIENT_IDENTITY_AFTER_TOUCH${NC}"
+else
+    echo -e "${RED}✗ Identity was WIPED by incremental re-index: $CLIENT_IDENTITY_AFTER_TOUCH${NC}"
+    exit 1
+fi
+
+# Test 10e: re-indexing the client with ZERO file changes keeps the edge
+echo ""
+echo "Test 10e: Re-index client with no changes — linking must still run..."
+export KNOT_REPO_PATH="$TMP_NPM_CLIENT_DIR"
+export KNOT_REPO_NAME="$NPM_CLIENT_NAME"
+cargo run --release --bin knot-indexer
+
+NPM_DEPS_AFTER_NOTHING=$(cargo run --release --bin knot -- deps "$NPM_CLIENT_NAME" --depth 1 2>/dev/null)
+if echo "$NPM_DEPS_AFTER_NOTHING" | grep -q "$NPM_LIB_NAME"; then
+    echo -e "${GREEN}✓ Edge survives a no-change re-index${NC}"
+else
+    echo -e "${RED}✗ Edge lost after a no-change re-index. Output:${NC}"
+    echo "$NPM_DEPS_AFTER_NOTHING"
+    exit 1
+fi
+
+# Test 10f: index the LATE library last — the reverse sweep must create the
+# edge from the already-indexed client WITHOUT re-indexing the client.
+echo ""
+echo "Test 10f: Indexing '${NPM_LATE_LIB_NAME}' last — reverse sweep must link the client..."
+export KNOT_REPO_PATH="$TMP_NPM_LATE_LIB_DIR"
+export KNOT_REPO_NAME="$NPM_LATE_LIB_NAME"
+cargo run --release --bin knot-indexer
+
+NPM_LATE_EDGE=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
+    "MATCH (from:Repository {name: '${NPM_CLIENT_NAME}'})-[d:DEPENDS_ON]->(to:Repository {name: '${NPM_LATE_LIB_NAME}'}) RETURN count(d) AS cnt" \
+    2>/dev/null | grep -v '^$' | tail -n 1 | tr -d '" ')
+
+if [ "$NPM_LATE_EDGE" -ge 1 ] 2>/dev/null; then
+    echo -e "${GREEN}✓ Reverse sweep edge exists: ${NPM_CLIENT_NAME} -> ${NPM_LATE_LIB_NAME}${NC}"
+else
+    echo -e "${RED}✗ No reverse-sweep edge from ${NPM_CLIENT_NAME} to ${NPM_LATE_LIB_NAME}${NC}"
+    exit 1
+fi
+
+NPM_DEPS_AFTER_LATE=$(cargo run --release --bin knot -- deps "$NPM_CLIENT_NAME" --depth 1 2>/dev/null)
+if echo "$NPM_DEPS_AFTER_LATE" | grep -q "$NPM_LATE_LIB_NAME"; then
+    echo -e "${GREEN}✓ 'knot deps ${NPM_CLIENT_NAME}' reports ${NPM_LATE_LIB_NAME}${NC}"
+else
+    echo -e "${RED}✗ 'knot deps ${NPM_CLIENT_NAME}' does not report ${NPM_LATE_LIB_NAME}. Output:${NC}"
+    echo "$NPM_DEPS_AFTER_LATE"
+    exit 1
+fi
+
+# Test 10g: the two honest-empty branches.
+#   (1) repo with declared dependencies but no indexed repo resolves →
+#       quantified report listing every declared name (uncapped);
+#   (2) repo not indexed at all → explicit "not indexed".
+echo ""
+echo "Test 10g: Honest messaging for empty dependency lookups..."
+
+TMP_NPM_ORPHAN_DIR="$SCRIPT_DIR/.e2e_cross_repo_npm_orphan"
+mkdir -p "$TMP_NPM_ORPHAN_DIR"
+cat > "$TMP_NPM_ORPHAN_DIR/package.json" << 'JSONEOF'
+{
+  "name": "@acme/orphan-app",
+  "version": "0.0.1",
+  "dependencies": {
+    "never-indexed-pkg-a": "^1.0.0",
+    "never-indexed-pkg-b": "^2.1.0",
+    "@never/scope-pkg": "^3.0.0"
+  }
+}
+JSONEOF
+printf 'module.exports = {};\n' > "$TMP_NPM_ORPHAN_DIR/orphan.js"
+
+export KNOT_REPO_PATH="$TMP_NPM_ORPHAN_DIR"
+export KNOT_REPO_NAME="npm-orphan-app"
+INDEXER_FLAGS=()
+[[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]] && INDEXER_FLAGS+=("--clean")
+cargo run --release --bin knot-indexer -- "${INDEXER_FLAGS[@]}"
+
+NPM_EMPTY_OUTPUT=$(cargo run --release --bin knot -- deps "npm-orphan-app" --depth 1 2>/dev/null)
+if echo "$NPM_EMPTY_OUTPUT" | grep -q "declares 3 build dependencies" \
+    && echo "$NPM_EMPTY_OUTPUT" | grep -q "never-indexed-pkg-a" \
+    && echo "$NPM_EMPTY_OUTPUT" | grep -q "never-indexed-pkg-b" \
+    && echo "$NPM_EMPTY_OUTPUT" | grep -q "@never/scope-pkg" \
+    && echo "$NPM_EMPTY_OUTPUT" | grep -q "Declared build dependencies (3):"; then
+    echo -e "${GREEN}✓ Declared-but-unresolved result quantifies itself and lists all names${NC}"
+else
+    echo -e "${RED}✗ Declared-but-unresolved result not explained honestly. Output:${NC}"
+    echo "$NPM_EMPTY_OUTPUT"
+    exit 1
+fi
+if echo "$NPM_EMPTY_OUTPUT" | grep -q "^No dependencies found\."; then
+    echo -e "${RED}✗ Bare 'No dependencies found.' still present — must not appear with diagnostics${NC}"
+    echo "$NPM_EMPTY_OUTPUT"
+    exit 1
+fi
+
+NPM_UNINDEXED_OUTPUT=$(cargo run --release --bin knot -- deps "definitely-not-indexed-repo" --depth 1 2>/dev/null || true)
+if echo "$NPM_UNINDEXED_OUTPUT" | grep -q "is not indexed"; then
+    echo -e "${GREEN}✓ Unindexed repo query reports 'not indexed'${NC}"
+else
+    echo -e "${RED}✗ Unindexed repo query not explained. Output:${NC}"
+    echo "$NPM_UNINDEXED_OUTPUT"
+    exit 1
+fi
+
+# Clean up
+rm -rf "$TMP_NPM_LIB_DIR" "$TMP_NPM_CLIENT_DIR" "$TMP_NPM_LATE_LIB_DIR" "$TMP_NPM_ORPHAN_DIR"
+
+echo -e "${GREEN}✓ All npm cross-repo dependency tests passed${NC}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"

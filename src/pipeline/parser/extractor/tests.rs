@@ -249,6 +249,120 @@ fn test_extract_entities_with_docstring() {
 }
 
 #[test]
+fn test_extract_entities_rust_doc_comment_reaches_docstring() {
+    // Regression: Rust captures point at the identifier; the docstring
+    // upward pass must re-anchor to the parent item or `///` docs never
+    // reach the docstring (and therefore the embed text), leaving Rust
+    // definitions unfindable by behaviour.
+    let source = concat!(
+        "/// Authenticates a user with email and password.\n",
+        "pub fn login(email: &str, password: &str) -> bool { true }\n",
+        "\n",
+        "/// Trims and lowercases an address string.\n",
+        "pub fn normalize_email(email: &str) -> String { email.to_string() }\n"
+    );
+    let query = "(function_item name: (identifier) @rust.function.name)";
+
+    let result = extract_entities(
+        source,
+        tree_sitter_rust::LANGUAGE.into(),
+        query,
+        "rust",
+        "/lib.rs",
+        "test-repo",
+    )
+    .expect("rust extraction failed");
+
+    let login = result
+        .iter()
+        .find(|e| e.name == "login")
+        .expect("login entity missing");
+    assert_eq!(
+        login.docstring.as_deref(),
+        Some("Authenticates a user with email and password."),
+        "login docstring must be captured from the preceding /// comment"
+    );
+
+    let normalize = result
+        .iter()
+        .find(|e| e.name == "normalize_email")
+        .expect("normalize_email entity missing");
+    assert_eq!(
+        normalize.docstring.as_deref(),
+        Some("Trims and lowercases an address string."),
+        "each function must get its own docstring, not its neighbour's"
+    );
+}
+
+#[test]
+fn test_extract_entities_rust_struct_doc_comment_reaches_docstring() {
+    let source = "/// Represents a simple counter.\npub struct Counter { count: u32 }";
+    let query = "(struct_item name: (type_identifier) @rust.struct.name)";
+
+    let result = extract_entities(
+        source,
+        tree_sitter_rust::LANGUAGE.into(),
+        query,
+        "rust",
+        "/lib.rs",
+        "test-repo",
+    )
+    .expect("rust extraction failed");
+
+    let counter = result
+        .iter()
+        .find(|e| e.name == "Counter")
+        .expect("Counter entity missing");
+    assert_eq!(
+        counter.docstring.as_deref(),
+        Some("Represents a simple counter."),
+        "struct docstring must be captured from the preceding /// comment"
+    );
+}
+
+/// BDD contract (recall bug): a Rust function's parameter list must land in
+/// the signature so its type vocabulary (`LoginRequest`, `&str`, …) reaches
+/// the embed text. The `rust.scm` query yields two duplicate matches per
+/// function (one with `parameters: (parameters) @signature`, one fallback
+/// without); if dedup keeps the match lacking the signature, every Rust
+/// definition embeds as `[kind] name + file` alone.
+#[test]
+fn test_extract_rust_function_signature_is_extracted() {
+    let source = "pub fn login(email: &str, password: &str) -> bool { true }";
+    // The real production query: it alternates `function_item` into two
+    // duplicate patterns (with and without `parameters: (parameters)
+    // @signature`), so this test exercises the dedup tie-break.
+    let query = include_str!("../../../../queries/rust.scm");
+
+    let result = extract_entities(
+        source,
+        tree_sitter_rust::LANGUAGE.into(),
+        query,
+        "rust",
+        "/lib.rs",
+        "test-repo",
+    )
+    .expect("rust extraction failed");
+
+    assert!(
+        result.iter().any(|e| e.name == "login"),
+        "login entity must be extracted exactly once"
+    );
+    let login = result
+        .iter()
+        .find(|e| e.name == "login")
+        .expect("login entity missing");
+    let sig = login
+        .signature
+        .as_deref()
+        .expect("login signature must be captured from the parameters node");
+    assert!(
+        sig.contains("email") && sig.contains("password"),
+        "signature must carry the parameter names, got: {sig}"
+    );
+}
+
+#[test]
 fn test_extract_entities_multiple_entities_java() {
     let source = "public class FirstClass {} public class SecondClass {}";
     let query = "(class_declaration name: (identifier) @class.name)";

@@ -625,6 +625,107 @@ else
     exit 1
 fi
 
+# Test 29: Kind-aware ranking — the definition outranks prose, the test
+# file, the helper and the caller for a natural-language query.
+echo ""
+echo "Test 29: Recall — paraphrase of a doc-less definition reaches the top slots..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"authenticate user with email and password\",\"max_results\":8,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "authenticate user with email and password" -r "$REPO_NAME" -m 8 -o markdown 2>/dev/null)
+
+# The `login` definition must appear within the leading result slots
+# (recall contract; near-verbatim name queries keep it at #1).
+MCP_HEADERS=$(echo "$MCP_RESPONSE" | grep -o '## `[^`]*`' | head -5)
+CLI_HEADERS=$(echo "$CLI_RESPONSE" | grep -o '## `[^`]*`' | head -5)
+
+if echo "$MCP_HEADERS" | grep -q '`login`'; then
+    echo -e "${GREEN}✓ MCP: login definition reaches the top slots${NC}"
+else
+    echo -e "${RED}✗ MCP: expected login within top-5, got: $MCP_HEADERS${NC}"
+    echo "Response was: $MCP_RESPONSE"
+    exit 1
+fi
+
+if echo "$CLI_HEADERS" | grep -q '`login`'; then
+    echo -e "${GREEN}✓ CLI: login definition reaches the top slots${NC}"
+else
+    echo -e "${RED}✗ CLI: expected login within top-5, got: $CLI_HEADERS${NC}"
+    exit 1
+fi
+
+# Test 30: Optional kinds filter — 'definition' restricts to code kinds.
+echo ""
+echo "Test 30: kinds=definition filter excludes markdown sections..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"authenticate user with email and password","max_results":8,"repo_name":"rust_e2e_test_repo","kinds":"definition"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "login" && ! echo "$MCP_RESPONSE" | grep -q "markdown_section"; then
+    echo -e "${GREEN}✓ kinds=definition returns login and no markdown sections${NC}"
+else
+    echo -e "${RED}✗ kinds=definition filter did not behave as expected${NC}"
+    echo "Response was: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test 31: Optional kinds filter — exact kind picks prose only.
+echo ""
+echo "Test 31: kinds=markdown_section filter returns prose only..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"authenticate user with email and password","max_results":8,"repo_name":"rust_e2e_test_repo","kinds":"markdown_section"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "markdown_section" && ! echo "$MCP_RESPONSE" | grep -q "rust_function"; then
+    echo -e "${GREEN}✓ kinds=markdown_section returns prose only${NC}"
+else
+    echo -e "${RED}✗ kinds=markdown_section filter did not behave as expected${NC}"
+    echo "Response was: $MCP_RESPONSE"
+    exit 1
+fi
+
+# Test 32: list_files — the search_rank fixture listing, MCP and CLI parity.
+echo ""
+echo "Test 32: list_files — 'search_rank/src' prefix lists the fixture file..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"list_files","arguments":{"path":"search_rank/src","repo_name":"rust_e2e_test_repo"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- files --path "search_rank/src" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+for RESPONSE in MCP CLI; do
+    RESPONSE_VAL=$(eval "echo \"\$$RESPONSE"_"RESPONSE\"")
+    if echo "$RESPONSE_VAL" | grep -q "search_rank/src/lib.rs"; then
+        echo -e "${GREEN}✓ $RESPONSE: list_files honours the directory prefix${NC}"
+    else
+        echo -e "${RED}✗ $RESPONSE: expected search_rank/src/lib.rs in the listing${NC}"
+        echo "Response was: $RESPONSE_VAL"
+        exit 1
+    fi
+done
+
+# Test 33: path filter on search — restrict results to search_rank/src.
+echo ""
+echo "Test 33: search path filter — scoped results stay inside the prefix..."
+MCP_REQUEST='{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"session token generation","max_results":5,"repo_name":"rust_e2e_test_repo","path":"search_rank/src"}}}'
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "session token generation" -r "$REPO_NAME" -m 5 -o markdown --path "search_rank/src" 2>/dev/null)
+
+MCP_ITEMS=$(echo "$MCP_RESPONSE" | grep -o 'search_rank/src/[^`]*' | sort -u)
+if [ -n "$MCP_ITEMS" ]; then
+    echo -e "${GREEN}✓ MCP: path-scoped search only returns matching files${NC}"
+else
+    echo -e "${RED}✗ MCP: expected hits under search_rank/src${NC}"
+    echo "Response was: $MCP_RESPONSE"
+    exit 1
+fi
+if echo "$CLI_RESPONSE" | grep -q "search_rank/src/"; then
+    echo -e "${GREEN}✓ CLI: path-scoped search only returns matching files${NC}"
+else
+    echo -e "${RED}✗ CLI: expected hits under search_rank/src${NC}"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Rust E2E tests passed!${NC}"
@@ -652,6 +753,8 @@ echo "  - Explore file outgoing references (Imports / Referenced Types)"
 echo "  - Qualified-call resolution (Type::method from top-level functions)"
 echo "  - Homonymous new() disambiguation by receiver (WidgetA::new vs WidgetB::new)"
 echo "  - impl Trait for Type self-type extraction (Logger::new FQN)"
+echo "  - Kind-aware ranking (definition outranks prose/tests/helpers) + kinds filter"
+  echo "  - list_files (directory prefix + glob) and the search --path filter"
 echo ""
 
 # Step 5: Summarize

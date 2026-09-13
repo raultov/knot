@@ -220,8 +220,10 @@ fi
 # Cypher cross-check: verify there are exactly 3 distinct Setup sections
 # (one per file), each with its own embed_text containing the file-specific
 # token. Proves the two entities are structurally separate, not just
-# returned separately by search.
-SETUP_COUNT=$(run_neo4j_cypher "MATCH (s:Entity) WHERE s.kind = 'markdown_section' AND s.name = 'Setup' RETURN count(s) AS cnt;")
+# returned separately by search. Repo-scoped on purpose: the fast E2E
+# orchestrator shares one database across every language suite, so an
+# unscoped count would count other suites' markdown sections too.
+SETUP_COUNT=$(run_neo4j_cypher "MATCH (s:Entity) WHERE s.kind = 'markdown_section' AND s.name = 'Setup' AND s.repo_name = '$REPO_NAME' RETURN count(s) AS cnt;")
 SETUP_COUNT=${SETUP_COUNT:-0}
 
 if [ "$SETUP_COUNT" = "3" ]; then

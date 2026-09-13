@@ -315,6 +315,35 @@ else
     exit 1
 fi
 
+# Test 11: Kind-aware ranking — the login method definition outranks the
+# class, the helper and the markdown doc for a natural-language query.
+echo ""
+echo "Test 11: Recall — paraphrase of a doc-less definition reaches the top slots..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"authenticate user with email and password\",\"max_results\":8,\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "authenticate user with email and password" -r "$REPO_NAME" -m 8 -o markdown 2>/dev/null)
+
+# The `login` method definition must appear within the leading result
+# slots (recall contract). Naming `login` verbatim keeps it at #1.
+MCP_HEADERS=$(echo "$MCP_RESPONSE" | grep -o '## `[^`]*`' | head -5)
+CLI_HEADERS=$(echo "$CLI_RESPONSE" | grep -o '## `[^`]*`' | head -5)
+
+if echo "$MCP_HEADERS" | grep -q '`login`'; then
+    echo -e "${GREEN}✓ MCP: login method definition reaches the top slots${NC}"
+else
+    echo -e "${RED}✗ MCP: expected login within top-5, got: $MCP_HEADERS${NC}"
+    echo "Response was: $MCP_RESPONSE"
+    exit 1
+fi
+
+if echo "$CLI_HEADERS" | grep -q '`login`'; then
+    echo -e "${GREEN}✓ CLI: login method definition reaches the top slots${NC}"
+else
+    echo -e "${RED}✗ CLI: expected login within top-5, got: $CLI_HEADERS${NC}"
+    exit 1
+fi
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -332,6 +361,7 @@ echo "  ✓ Java class EXTENDS class (AdminUser → User)"
 echo "  ✓ Java interface EXTENDS interface (AuditableRepository → Repository)"
 echo "  ✓ Java anonymous class interface implementation"
 echo "  ✓ Java interface search (MessageHandler)"
+echo "  ✓ Recall ranking (doc-less method definition reaches the top slots)"
 echo ""
 
 exit 0
