@@ -5,6 +5,21 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.5
+
+- Search `max_results` (1–100) and Deps `max_depth` (1–10) bound enforcement across CLI & MCP.
+- `list_files` read-only file enumeration MCP tool & `knot files` CLI subcommand.
+- `path` filter support on `search_hybrid_context` and CLI `knot search`.
+- `search_hybrid_context` recall improvements: embed text carries FQN, identifier tokens, and call names; token-level lexical probe & caller-recall bridge.
+- Search ranking improvements: definition entities outrank prose, tests, and config; optional `kinds` filter added.
+- `knot deps` empty-result diagnostics enhanced and reverse lookups made transitive while honoring `--depth`.
+- `find_callers` target attribution bug fix for callerless homonyms; npm cross-repo linking made bidirectional with persistent repository identity.
+- Truncation explicit & quantified notices in `find_callers` and `search_hybrid_context`.
+- Fixed Qdrant delete filter substring bug preventing sibling repository deletion.
+- Fixed deterministic target ordering in `find_callers` Markdown output.
+
+---
+
 ## v1.9.4 — Deterministic `find_callers` Target Grouping
 
 Fix release: ensures `find_callers` Markdown output rendered by the CLI and MCP tools is fully deterministic across process runs and cluster nodes.
