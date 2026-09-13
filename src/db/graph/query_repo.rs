@@ -16,6 +16,20 @@ async fn collect_column_strings(rows: &mut DetachedRowStream, column: &str) -> V
     result
 }
 
+async fn collect_column_pairs(
+    rows: &mut DetachedRowStream,
+    column_a: &str,
+    column_b: &str,
+) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        if let (Ok(a), Ok(b)) = (row.get::<String>(column_a), row.get::<String>(column_b)) {
+            result.push((a, b));
+        }
+    }
+    result
+}
+
 /// Extension trait for repository dependency query operations.
 #[expect(
     async_fn_in_trait,
@@ -23,61 +37,110 @@ async fn collect_column_strings(rows: &mut DetachedRowStream, column: &str) -> V
 )]
 pub trait RepoQueryExt {
     async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>>;
-    async fn find_repo_dependents(&self, repo_name: &str) -> Result<Vec<String>>;
+    async fn find_repo_dependents(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>>;
     async fn find_repository_by_artifact(
         &self,
         group_id: &str,
         artifact_id: &str,
         build_system: &str,
     ) -> Result<Option<String>>;
+    async fn find_build_dependency_names(&self, repo_name: &str) -> Result<Vec<String>>;
+    async fn find_repository_identity(&self, repo_name: &str) -> Result<Option<RepoIdentity>>;
+    async fn find_dependency_candidates(
+        &self,
+        needle: &str,
+        exclude_repo: &str,
+    ) -> Result<Vec<(String, String)>>;
+    /// Shared traversal behind [`RepoQueryExt::find_repo_dependencies`] and
+    /// [`RepoQueryExt::find_repo_dependents`]: the two directions differ only
+    /// in the edge pattern.
+    async fn traverse_depends_on(
+        &self,
+        repo_name: &str,
+        max_depth: u32,
+        reverse: bool,
+    ) -> Result<Vec<String>>;
     async fn list_repositories(&self) -> Result<Vec<serde_json::Value>>;
 }
 
+/// Build-system identity recorded on a `:Repository` node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoIdentity {
+    pub build_system: String,
+    pub group_id: String,
+    pub artifact_id: String,
+    pub version: String,
+}
+
 impl RepoQueryExt for GraphDb {
-    /// Find all repositories that this repo depends on (transitive, up to max_depth).
-    async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>> {
+    /// Traverse the `DEPENDS_ON` graph from `repo_name` up to `max_depth`
+    /// hops, in the requested direction (forward = dependencies of the repo,
+    /// reverse = repositories that depend on it).
+    ///
+    /// One shared builder keeps the forward and reverse queries in lockstep
+    /// (same depth semantics, same self-exclusion, same ordering) — the two
+    /// directions differ only in the edge pattern, so two hand-written
+    /// builders would be a drift hazard and a near-duplicate pair.
+    async fn traverse_depends_on(
+        &self,
+        repo_name: &str,
+        max_depth: u32,
+        reverse: bool,
+    ) -> Result<Vec<String>> {
+        let pattern = if reverse {
+            format!(
+                "MATCH (other:Repository)-[:DEPENDS_ON*1..{max_depth}]->(r:Repository {{name: $repo_name}})"
+            )
+        } else {
+            format!(
+                "MATCH (r:Repository {{name: $repo_name}})-[:DEPENDS_ON*1..{max_depth}]->(other:Repository)"
+            )
+        };
         let cypher = format!(
-            "MATCH (from:Repository {{name: $repo_name}})-[:DEPENDS_ON*1..{}]->(to:Repository)
-             RETURN DISTINCT to.name AS dep_name",
-            max_depth
+            "{pattern}
+             WHERE other.name <> $repo_name
+             RETURN DISTINCT other.name AS dep_name
+             ORDER BY dep_name"
         );
 
         let mut rows = self
             .graph
             .execute(query(&cypher).param("repo_name", repo_name))
             .await
-            .context("Failed to query repository dependencies")?;
+            .with_context(|| {
+                format!(
+                    "Failed to query {} of '{repo_name}' (depth {max_depth})",
+                    if reverse {
+                        "dependents"
+                    } else {
+                        "dependencies"
+                    }
+                )
+            })?;
 
-        let dependencies = collect_column_strings(&mut rows, "dep_name").await;
+        let names = collect_column_strings(&mut rows, "dep_name").await;
 
         info!(
-            "Found {} repository dependencies for '{repo_name}' (depth {max_depth})",
-            dependencies.len()
+            "Found {} {} of '{repo_name}' (depth {max_depth})",
+            names.len(),
+            if reverse {
+                "dependents"
+            } else {
+                "dependencies"
+            }
         );
-        Ok(dependencies)
+        Ok(names)
     }
 
-    /// Find all repositories that depend on this repo (reverse lookup).
-    async fn find_repo_dependents(&self, repo_name: &str) -> Result<Vec<String>> {
-        let mut rows = self
-            .graph
-            .execute(
-                query(
-                    "MATCH (dependent:Repository)-[:DEPENDS_ON]->(target:Repository {name: $repo_name})
-                     RETURN DISTINCT dependent.name AS dep_name",
-                )
-                .param("repo_name", repo_name),
-            )
-            .await
-            .context("Failed to query repository dependents")?;
+    /// Find all repositories that this repo depends on (transitive, up to max_depth).
+    async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>> {
+        self.traverse_depends_on(repo_name, max_depth, false).await
+    }
 
-        let dependents = collect_column_strings(&mut rows, "dep_name").await;
-
-        info!(
-            "Found {} repositories that depend on '{repo_name}'",
-            dependents.len()
-        );
-        Ok(dependents)
+    /// Find all repositories that depend on this repo (reverse lookup,
+    /// transitive, up to max_depth).
+    async fn find_repo_dependents(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>> {
+        self.traverse_depends_on(repo_name, max_depth, true).await
     }
 
     /// Find a repository by its build system artifact identity.
@@ -111,6 +174,90 @@ impl RepoQueryExt for GraphDb {
         }
 
         Ok(None)
+    }
+
+    /// All persisted `build_dependency` entity names for a repository,
+    /// including those from manifests that the current incremental batch did
+    /// not re-parse. Used by cross-repo linking so a consumer whose manifest
+    /// is unchanged still links newly indexed dependencies.
+    async fn find_build_dependency_names(&self, repo_name: &str) -> Result<Vec<String>> {
+        let mut rows = self
+            .graph
+            .execute(
+                query(
+                    "MATCH (e:Entity {kind: 'build_dependency', repo_name: $repo_name})
+                     RETURN DISTINCT e.name AS dep_name
+                     ORDER BY dep_name",
+                )
+                .param("repo_name", repo_name),
+            )
+            .await
+            .context("Failed to query persisted build dependencies")?;
+        Ok(collect_column_strings(&mut rows, "dep_name").await)
+    }
+
+    /// The build-system identity recorded on a `:Repository` node, or `None`
+    /// when no such repository node exists (never indexed).
+    async fn find_repository_identity(&self, repo_name: &str) -> Result<Option<RepoIdentity>> {
+        let mut rows = self
+            .graph
+            .execute(
+                query(
+                    "MATCH (r:Repository {name: $repo_name})
+                     RETURN coalesce(r.build_system, '') AS build_system,
+                            coalesce(r.group_id, '')     AS group_id,
+                            coalesce(r.artifact_id, '')  AS artifact_id,
+                            coalesce(r.version, '')      AS version",
+                )
+                .param("repo_name", repo_name),
+            )
+            .await
+            .context("Failed to query repository identity")?;
+        if let Ok(Some(row)) = rows.next().await {
+            let build_system = row.get::<String>("build_system").unwrap_or_default();
+            let group_id = row.get::<String>("group_id").unwrap_or_default();
+            let artifact_id = row.get::<String>("artifact_id").unwrap_or_default();
+            let version = row.get::<String>("version").unwrap_or_default();
+            return Ok(Some(RepoIdentity {
+                build_system,
+                group_id,
+                artifact_id,
+                version,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// Graph-wide candidates for the reverse dependency sweep: every
+    /// `build_dependency` entity name that contains `needle`, together with
+    /// the repository that declares it, excluding `exclude_repo`.
+    ///
+    /// `kind` is deliberately a `WHERE` filter rather than an inline map
+    /// pattern so the planner selects a `NodeIndexContainsScan` on the
+    /// `entity_name_text` TEXT index (verified with PROFILE: 1 total DB
+    /// hit graph-wide). Do not inline it.
+    async fn find_dependency_candidates(
+        &self,
+        needle: &str,
+        exclude_repo: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let mut rows = self
+            .graph
+            .execute(
+                query(
+                    "MATCH (e:Entity)
+                     WHERE e.name CONTAINS $needle
+                       AND e.kind = 'build_dependency'
+                       AND e.repo_name <> $exclude_repo
+                     RETURN DISTINCT e.repo_name AS consumer, e.name AS dep_name
+                     ORDER BY consumer, dep_name",
+                )
+                .param("needle", needle)
+                .param("exclude_repo", exclude_repo),
+            )
+            .await
+            .context("Failed to query dependency candidates for reverse sweep")?;
+        Ok(collect_column_pairs(&mut rows, "consumer", "dep_name").await)
     }
 
     /// List all indexed repositories with their entity count, file count, build

@@ -63,9 +63,14 @@ pub struct TargetRow {
 /// This prevents very short queries from matching almost everything.
 pub const MIN_FUZZY_LEN: usize = 4;
 
-/// Maximum number of targets to return before truncating.
+/// Default maximum number of targets to return before truncating.
 /// Keeps the performance reasonable and prevents huge outputs.
-pub const MAX_TARGETS: usize = 25;
+pub const DEFAULT_MAX_TARGETS: usize = 25;
+
+/// Hard ceiling for the number of targets a single resolution may return.
+/// Callers may raise the cap up to this value (MCP `max_targets` /
+/// CLI `--max-targets`) but never beyond it.
+pub const MAX_TARGETS_CEILING: usize = 500;
 
 pub fn target_resolution_tiers(name: &str) -> Vec<(MatchTier, &'static str)> {
     let mut tiers = Vec::new();
@@ -343,6 +348,30 @@ pub fn get_file_outgoing_references_query(repo_names: &[String]) -> String {
     }
 }
 
+/// Cipher for the read-only file listing used by the `list_files` CLI
+/// subcommand and MCP tool: distinct repo-relative paths of the scoped
+/// repositories with their entity counts, deterministically ordered.
+/// `prefix` filters paths with a path-boundary `STARTS WITH` so a
+/// directory prefix (`src/api`) never matches a sibling path that merely
+/// contains the fragment (`docs/src/api-notes.md`). `None` (no prefix)
+/// lists every file of the scope; the cap keeps the surface read-only
+/// cheap even on monorepos.
+pub fn list_files_query(repo_scoped: bool) -> String {
+    let prefix_clause = "WHERE e.file_path STARTS WITH $prefix ";
+    let repo_clause = if repo_scoped {
+        "AND e.repo_name IN $repo_names "
+    } else {
+        ""
+    };
+    format!(
+        "MATCH (e:Entity) \
+         {prefix_clause}{repo_clause}\
+         RETURN e.file_path AS file_path, e.repo_name AS repo_name, count(e) AS entity_count \
+         ORDER BY e.repo_name, e.file_path \
+         LIMIT $limit"
+    )
+}
+
 pub fn find_files_by_suffix_query(suffix_fragment: &str, repo_names: &[String]) -> String {
     if !repo_names.is_empty() {
         format!(
@@ -359,6 +388,28 @@ pub fn find_files_by_suffix_query(suffix_fragment: &str, repo_names: &[String]) 
              ORDER BY e.file_path LIMIT 50"
         )
     }
+}
+
+/// Cipher for the caller-recall bridge: the `(caller_uuid, target_uuid)`
+/// pairs that CALL any of the given target UUIDs. Used by
+/// `search_hybrid_context` to pull the callers of the strongest semantic
+/// hits into the candidate pool and to count how many top roots each
+/// caller touches — a shared caller of several roots is strong evidence of
+/// the described behaviour's entry point (`login` calls both
+/// `normalize_email` and `verify_credentials_or_fail`).
+pub fn caller_links_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "AND caller.repo_name IN $repo_names"
+    } else {
+        ""
+    };
+    format!(
+        "MATCH (caller:Entity)-[:CALLS]->(target:Entity)
+         WHERE target.uuid IN $target_uuids {repo_filter}
+         RETURN DISTINCT caller.uuid AS caller_uuid, target.uuid AS target_uuid
+         ORDER BY caller_uuid, target_uuid
+         LIMIT $limit"
+    )
 }
 
 /// Cipher for one tier of the reference-target resolution ladder used by
@@ -394,12 +445,52 @@ pub(crate) struct ResolvedSubgraphRoot {
     pub ranked: Vec<RootCandidate>,
 }
 
+/// Outcome of the reference-target resolution ladder used by
+/// [`GraphDbExt::find_references`].
+///
+/// `total` is the **pre-truncation** tier count: the tier Cypher carries no
+/// `LIMIT` clause, so it is the real number of entities the queried name
+/// resolved to. `targets` is capped at `max_targets` and is what relationship
+/// buckets are built from — consumers must treat bucket counts as partial
+/// whenever `truncated` is `true`.
+pub(crate) struct ResolvedTargets {
+    pub targets: Vec<TargetRow>,
+    pub tier: MatchTier,
+    pub truncated: bool,
+    pub total: usize,
+}
+
+/// Cap a resolved target list, preserving the true pre-truncation total.
+///
+/// Mirrors `finalize_nodes` in `query_subgraph.rs`: the length must be
+/// measured **before** `truncate`, otherwise downstream consumers report the
+/// sample size as the total (the v1.10.0 truncation-reporting bug).
+fn finalize_targets(
+    targets: Vec<TargetRow>,
+    tier: MatchTier,
+    max_targets: usize,
+) -> ResolvedTargets {
+    let total = targets.len();
+    let truncated = total > max_targets;
+    let mut targets = targets;
+    if truncated {
+        targets.truncate(max_targets);
+    }
+    ResolvedTargets {
+        targets,
+        tier,
+        truncated,
+        total,
+    }
+}
+
 impl GraphDb {
     async fn resolve_reference_targets(
         &self,
         name: &str,
         repo_names: &[String],
-    ) -> Result<(Vec<TargetRow>, MatchTier, bool)> {
+        max_targets: usize,
+    ) -> Result<ResolvedTargets> {
         let tiers = target_resolution_tiers(name);
 
         let repo_scoped = !repo_names.is_empty();
@@ -439,11 +530,7 @@ impl GraphDb {
             }
 
             if !targets.is_empty() {
-                let truncated = targets.len() > MAX_TARGETS;
-                if truncated {
-                    targets.truncate(MAX_TARGETS);
-                }
-                return Ok((targets, tier, truncated));
+                return Ok(finalize_targets(targets, tier, max_targets));
             }
         }
 
@@ -452,7 +539,12 @@ impl GraphDb {
         } else {
             MatchTier::ExactName
         };
-        Ok((Vec::new(), default_tier, false))
+        Ok(ResolvedTargets {
+            targets: Vec::new(),
+            tier: default_tier,
+            truncated: false,
+            total: 0,
+        })
     }
 
     /// Resolve a user-supplied entity name to exactly one root candidate,
@@ -570,6 +662,7 @@ pub trait QueryExt {
         &self,
         entity_name: &str,
         repo_names: &[String],
+        max_targets: usize,
     ) -> Result<serde_json::Value>;
     async fn find_callers(
         &self,
@@ -602,6 +695,29 @@ pub trait QueryExt {
         suffix_fragment: &str,
         repo_names: &[String],
     ) -> Result<serde_json::Value>;
+
+    /// Read-only file listing (see [`list_files_query`]): distinct
+    /// `(file_path, repo_name)` pairs with entity counts, ordered by
+    /// `(repo_name, file_path)`. `prefix` is the normalized repo-relative
+    /// directory prefix ("" = list everything); `limit` caps the row count.
+    async fn list_files(
+        &self,
+        prefix: &str,
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<serde_json::Value>;
+
+    /// Caller-recall bridge: `(caller_uuid, target_uuid)` CALL edges
+    /// crossing any of `target_uuids`, scoped to `repo_names` (empty =
+    /// all). `limit` caps the pair count. Used by `search_hybrid_context`
+    /// to add the callers of its top semantic hits to the candidate pool
+    /// and to weight callers by how many top roots they touch.
+    async fn find_caller_links(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, String)>>;
 }
 
 impl QueryExt for GraphDb {
@@ -681,6 +797,7 @@ impl QueryExt for GraphDb {
         &self,
         entity_name: &str,
         repo_names: &[String],
+        max_targets: usize,
     ) -> Result<serde_json::Value> {
         let mut results = serde_json::json!({
             "calls": [],
@@ -691,25 +808,30 @@ impl QueryExt for GraphDb {
             "overrides": []
         });
 
+        // Clamp the requested cap so a caller cannot push a huge scan silently.
+        let max_targets = max_targets.clamp(1, MAX_TARGETS_CEILING);
+
         // Stage 1: Resolve targets
-        let (targets, tier, truncated) = self
-            .resolve_reference_targets(entity_name, repo_names)
+        let resolved = self
+            .resolve_reference_targets(entity_name, repo_names, max_targets)
             .await?;
 
-        // Add the resolution info
+        // Add the resolution info — `total_targets` is the real pre-truncation
+        // entity count so downstream formatters can quantify truncation.
         results["resolution"] = serde_json::json!({
             "query": entity_name,
-            "tier": tier,
-            "fuzzy": matches!(tier, MatchTier::Fuzzy),
-            "truncated": truncated,
-            "targets": targets
+            "tier": resolved.tier,
+            "fuzzy": matches!(resolved.tier, MatchTier::Fuzzy),
+            "truncated": resolved.truncated,
+            "total_targets": resolved.total,
+            "targets": resolved.targets
         });
 
-        if targets.is_empty() {
+        if resolved.targets.is_empty() {
             return Ok(results);
         }
 
-        let target_uuids: Vec<String> = targets.iter().map(|t| t.uuid.clone()).collect();
+        let target_uuids: Vec<String> = resolved.targets.iter().map(|t| t.uuid.clone()).collect();
 
         // Stage 2: Query relationships
         let rel_types = [
@@ -919,6 +1041,44 @@ impl QueryExt for GraphDb {
         Ok(serde_json::json!(results))
     }
 
+    /// Caller-recall bridge: `(caller_uuid, target_uuid)` edges. One
+    /// bounded query; a failure surfaces to the caller, which treats the
+    /// bridge as best-effort.
+    async fn find_caller_links(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        if target_uuids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_str = caller_links_query(!repo_names.is_empty());
+        let mut q = query(&query_str)
+            .param("target_uuids", target_uuids.to_vec())
+            .param("limit", limit as i64);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for caller-recall bridge")?;
+
+        let mut links = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            if let (Ok(caller), Ok(target)) = (
+                row.get::<String>("caller_uuid"),
+                row.get::<String>("target_uuid"),
+            ) {
+                links.push((caller, target));
+            }
+        }
+        Ok(links)
+    }
+
     async fn find_files_by_suffix(
         &self,
         suffix_fragment: &str,
@@ -946,6 +1106,38 @@ impl QueryExt for GraphDb {
             results.push(serde_json::json!({
                 "file_path": row.get::<String>("file_path").ok(),
                 "repo_name": row.get::<String>("repo_name").ok(),
+            }));
+        }
+        Ok(serde_json::json!(results))
+    }
+
+    /// Read-only file listing (see [`list_files_query`]).
+    async fn list_files(
+        &self,
+        prefix: &str,
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<serde_json::Value> {
+        let query_str = list_files_query(!repo_names.is_empty());
+        let mut q = query(&query_str)
+            .param("prefix", prefix.to_string())
+            .param("limit", limit as i64);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for file listing")?;
+
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            results.push(serde_json::json!({
+                "file_path": row.get::<String>("file_path").ok(),
+                "repo_name": row.get::<String>("repo_name").ok(),
+                "entity_count": row.get::<i64>("entity_count").ok(),
             }));
         }
         Ok(serde_json::json!(results))
@@ -1011,7 +1203,9 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
 
-        let result = graph_db.find_references("nonexistent_entity", &[]).await;
+        let result = graph_db
+            .find_references("nonexistent_entity", &[], DEFAULT_MAX_TARGETS)
+            .await;
         assert!(result.is_ok());
         let json = result.unwrap();
         assert!(json.is_object());
@@ -1029,7 +1223,11 @@ mod tests {
             .expect("Failed to connect to Neo4j");
 
         let result = graph_db
-            .find_references("nonexistent_entity", &["test-repo".to_string()])
+            .find_references(
+                "nonexistent_entity",
+                &["test-repo".to_string()],
+                DEFAULT_MAX_TARGETS,
+            )
             .await;
         assert!(result.is_ok());
     }
@@ -1107,7 +1305,8 @@ mod tests {
     }
 
     use super::{
-        MatchTier, RootCandidate, TargetRow, find_callers_query, find_files_by_suffix_query,
+        DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, TargetRow,
+        caller_links_query, finalize_targets, find_callers_query, find_files_by_suffix_query,
         get_file_entities_query, get_file_outgoing_references_query, overridden_by_query,
         overrides_query, rank_root_candidates, reference_target_query, relationship_query,
         root_kind_rank, target_resolution_tiers,
@@ -1382,6 +1581,22 @@ mod tests {
         let query_str = get_file_entities_query(&[]);
         assert!(query_str.contains("MATCH (e:Entity {file_path: $file_path})"));
         assert!(!query_str.contains("repo_name"));
+    }
+
+    #[test]
+    fn caller_links_query_is_scoped_and_capped() {
+        let unscoped = caller_links_query(false);
+        assert!(unscoped.contains("-[:CALLS]->"));
+        assert!(unscoped.contains("target.uuid IN $target_uuids"));
+        assert!(
+            !unscoped.contains("caller.repo_name"),
+            "unscoped must not filter repo"
+        );
+        assert!(unscoped.contains("LIMIT $limit"));
+        assert!(unscoped.contains("target.uuid AS target_uuid"));
+
+        let scoped = caller_links_query(true);
+        assert!(scoped.contains("caller.repo_name IN $repo_names"));
     }
 
     #[test]
@@ -1693,5 +1908,69 @@ mod tests {
         let ranked = rank_root_candidates(vec![a, b]);
         assert_eq!(ranked[0].kind.as_deref(), Some("csharp_class"));
         assert_eq!(ranked[1].kind, None);
+    }
+
+    // ---- §Truncation quantification (v1.10.0) ----------------------------
+
+    fn dummy_targets(n: usize) -> Vec<TargetRow> {
+        (0..n)
+            .map(|i| TargetRow {
+                uuid: format!("uuid-{}", i),
+                name: "delete".to_string(),
+                fqn: format!("repo::module::delete_{}", i),
+                kind: "method".to_string(),
+                file_path: format!("src/file_{}.rs", i),
+                start_line: i as i64,
+                repo_name: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn finalize_targets_total_is_pre_truncation_count() {
+        // 40 rows capped at 25: `total` must report the real 40, not the
+        // sample size 25. This is the regression pinned by the v1.10.0 fix —
+        // measuring after `truncate` made the truncation notice read
+        // "25 targets matched; showing the first 25".
+        let resolved =
+            finalize_targets(dummy_targets(40), MatchTier::ExactName, DEFAULT_MAX_TARGETS);
+        assert_eq!(resolved.total, 40);
+        assert_eq!(resolved.targets.len(), DEFAULT_MAX_TARGETS);
+        assert!(resolved.truncated);
+        assert!(!resolved.targets.is_empty());
+    }
+
+    #[test]
+    fn finalize_targets_not_truncated_when_under_cap() {
+        let resolved =
+            finalize_targets(dummy_targets(10), MatchTier::ExactName, DEFAULT_MAX_TARGETS);
+        assert_eq!(resolved.total, 10);
+        assert_eq!(resolved.targets.len(), 10);
+        assert!(!resolved.truncated);
+    }
+
+    #[test]
+    fn finalize_targets_keeps_everything_when_cap_exceeds_total() {
+        let resolved = finalize_targets(dummy_targets(40), MatchTier::ExactName, 100);
+        assert_eq!(resolved.total, 40);
+        assert_eq!(resolved.targets.len(), 40);
+        assert!(!resolved.truncated);
+    }
+
+    #[test]
+    fn finalize_targets_tier_is_carried_through() {
+        let resolved =
+            finalize_targets(dummy_targets(5), MatchTier::FqnSuffix, DEFAULT_MAX_TARGETS);
+        assert!(matches!(resolved.tier, MatchTier::FqnSuffix));
+    }
+
+    #[test]
+    fn find_references_resolution_clamps_ceiling() {
+        // Pure assertion on the clamp expression used by find_references:
+        // requested caps above MAX_TARGETS_CEILING are bounded, and 0 / tiny
+        // values are bounded from below so the cap is always >= 1.
+        assert_eq!(600usize.clamp(1, MAX_TARGETS_CEILING), MAX_TARGETS_CEILING);
+        assert_eq!(0usize.clamp(1, MAX_TARGETS_CEILING), 1);
+        assert_eq!(25usize.clamp(1, MAX_TARGETS_CEILING), 25);
     }
 }

@@ -1,4 +1,28 @@
+use qdrant_client::qdrant::Condition;
 use uuid::Uuid;
+
+/// Build an **exact** keyword condition on a payload field.
+///
+/// Identifier-like payload fields (`repo_name`, `file_path`) MUST be matched
+/// with this helper and never with [`Condition::matches_text`]. The latter is a
+/// full-text match which, on a field carrying no full-text payload index,
+/// degenerates into a plain substring test: `matches_text("repo_name", "knot")`
+/// also matches `knot-server` and `knot-site`, and
+/// `matches_text("repo_name", "job-watch")` also matches `job-watch-ui`. Used
+/// as a delete filter, that silently wipes the vectors of every repository
+/// whose name merely *contains* the target name.
+pub(crate) fn exact_keyword_condition(key: &str, value: &str) -> Condition {
+    Condition::matches(key, value.to_string())
+}
+
+/// Build an exact "value in set" keyword condition (OR semantics) on a payload
+/// field. Single-element slices are narrowed to a plain keyword match.
+pub(crate) fn any_keyword_condition(key: &str, values: &[String]) -> Condition {
+    if let [only] = values {
+        return exact_keyword_condition(key, only);
+    }
+    Condition::matches(key, values.to_vec())
+}
 
 /// Fold a 128-bit UUID into a 64-bit Qdrant point ID via XOR.
 ///

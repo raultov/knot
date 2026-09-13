@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::db::graph::{GraphDb, QueryExt};
+use crate::db::graph::{DEFAULT_MAX_TARGETS, GraphDb, QueryExt};
 
 use crate::models::RepoScope;
 
@@ -17,13 +17,22 @@ use crate::cli_tools::format_file_line;
 use crate::cli_tools::resolution::ResolutionView;
 
 /// Main find_callers function called by both CLI and MCP
+///
+/// `max_targets` raises the resolution cap (default: [`DEFAULT_MAX_TARGETS`],
+/// hard ceiling: 500). `None` keeps the default — an explicit `Some(n)` is how
+/// callers opt in to the full impact set when the response reports a
+/// truncated target list.
 pub async fn run_find_callers(
     entity_name: &str,
     repo: &RepoScope,
     graph_db: &Arc<GraphDb>,
+    max_targets: Option<usize>,
 ) -> anyhow::Result<serde_json::Value> {
     let repo_names = repo.filter_names();
-    let references = graph_db.find_references(entity_name, &repo_names).await?;
+    let max_targets = max_targets.unwrap_or(DEFAULT_MAX_TARGETS);
+    let references = graph_db
+        .find_references(entity_name, &repo_names, max_targets)
+        .await?;
     Ok(references)
 }
 
@@ -59,12 +68,34 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         total_refs
     ));
 
+    // Whether the query resolved to more than one candidate. Homonym
+    // attribution must be driven by the *resolution*, not by how many
+    // targets happened to accumulate references: when 2 targets resolve
+    // and only 1 has callers, the reader still needs to know which one.
+    let mut multiple_targets = false;
+    if let Some(view) = ResolutionView::from_references(references) {
+        multiple_targets = view.count() > 1 || view.total_targets() > 1;
+
+        // When the target resolution was truncated, the per-bucket counts
+        // cover only the shown targets. State that explicitly (with the real
+        // totals) so a sample can never be mistaken for the complete set.
+        let caveat = view.partial_counts_caveat();
+        if !caveat.is_empty() {
+            output.push_str(&format!("> **{}**\n", caveat));
+            output.push_str("> Re-run with a fully qualified name, or raise `max_targets`, for the complete set.\n\n");
+        }
+    }
+
     for (key, label) in rel_types {
         if let Some(arr) = references.get(key).and_then(|v| v.as_array())
             && !arr.is_empty()
         {
             output.push_str(&format!("## {} ({})\n\n", label, arr.len()));
-            output.push_str(&format_relationship_bucket(entity_name, arr));
+            output.push_str(&format_relationship_bucket(
+                entity_name,
+                arr,
+                multiple_targets,
+            ));
         }
     }
 
@@ -103,18 +134,34 @@ fn format_resolution_markdown(references: &serde_json::Value) -> String {
     output
 }
 
-/// Render one relationship bucket, grouping callers by resolved target when
-/// the bucket spans more than a single target (homonym disambiguation).
+/// Render one relationship bucket, attributing each reference to the resolved
+/// target it points at.
+///
+/// The `### Target:` header is emitted when the bucket spans more than one
+/// target **or** when the query resolved to more than one target
+/// (`multiple_targets`). The second condition is what keeps attribution alive
+/// for homonyms where only one candidate has callers: grouping by bucket
+/// content alone collapses to a single group and silently drops the header,
+/// leaving the reader unable to tell which homonym is referenced.
+///
+/// Rows without target identity (`None` key) are never given a header — a
+/// fabricated `### Target: <query> at unknown` would attribute by bare name,
+/// which is precisely what the header exists to avoid. They sort first
+/// (`None < Some` under `Ord`) and render directly under the bucket heading.
 ///
 /// The grouping uses a `BTreeMap`, not a `HashMap`: iterating a `HashMap`
 /// yields the `### Target:` sections in a process-random order (SipHash keys
 /// are seeded per process), which made the rendered output non-reproducible
 /// across runs and across nodes serving the same graph. Sorting by the group
 /// key (target file path, then start line) keeps the output deterministic.
-fn format_relationship_bucket(entity_name: &str, arr: &[serde_json::Value]) -> String {
+fn format_relationship_bucket(
+    entity_name: &str,
+    arr: &[serde_json::Value],
+    multiple_targets: bool,
+) -> String {
     use std::collections::BTreeMap;
 
-    let mut grouped: BTreeMap<String, Vec<&serde_json::Value>> = BTreeMap::new();
+    let mut grouped: BTreeMap<Option<String>, Vec<&serde_json::Value>> = BTreeMap::new();
     for entity in arr {
         grouped
             .entry(target_group_key(entity))
@@ -122,37 +169,13 @@ fn format_relationship_bucket(entity_name: &str, arr: &[serde_json::Value]) -> S
             .push(entity);
     }
 
+    let show_targets = grouped.len() > 1 || multiple_targets;
     let mut output = String::new();
 
-    if grouped.len() == 1 {
-        for entity in arr {
-            output.push_str(&format_reference_entry(entity));
-        }
-        return output;
-    }
-
     for (target_key, entities) in grouped {
-        let first_entity = entities[0];
-        // Prefer target_fqn when available — qualified identifiers
-        // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
-        let target_name = json_target_name(first_entity, entity_name);
-        let target_repo = first_entity
-            .get("target_repo_name")
-            .and_then(|v| v.as_str());
-        output.push_str(&format!(
-            "### Target: `{}` at {}\n\n",
-            target_name,
-            format_file_line(&target_key, target_repo)
-        ));
-
-        if let Some(target_sig) = first_entity
-            .get("target_signature")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            output.push_str(&format!("Signature: `{}`\n\n", target_sig));
+        if let Some(target_key) = target_key.filter(|_| show_targets) {
+            output.push_str(&format_target_header(entities[0], entity_name, &target_key));
         }
-
         for entity in entities {
             output.push_str(&format_reference_entry(entity));
         }
@@ -161,16 +184,53 @@ fn format_relationship_bucket(entity_name: &str, arr: &[serde_json::Value]) -> S
     output
 }
 
-/// Grouping key identifying the target a reference points at.
-fn target_group_key(entity: &serde_json::Value) -> String {
-    let Some(target_file) = entity.get("target_file_path").and_then(|v| v.as_str()) else {
-        return "unknown".to_string();
-    };
+/// `### Target:` section header plus the target signature line.
+fn format_target_header(
+    first_entity: &serde_json::Value,
+    entity_name: &str,
+    target_key: &str,
+) -> String {
+    // Prefer target_fqn when available — qualified identifiers
+    // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
+    let target_name = json_target_name(first_entity, entity_name);
+    let target_repo = first_entity
+        .get("target_repo_name")
+        .and_then(|v| v.as_str());
 
-    match entity.get("target_start_line").and_then(|v| v.as_i64()) {
-        Some(target_line) => format!("{}:{}", target_file, target_line),
-        None => target_file.to_string(),
+    let mut output = format!(
+        "### Target: `{}` at {}\n\n",
+        target_name,
+        format_file_line(target_key, target_repo)
+    );
+
+    if let Some(target_sig) = first_entity
+        .get("target_signature")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        output.push_str(&format!("Signature: `{}`\n\n", target_sig));
     }
+
+    output
+}
+
+/// Grouping key identifying the target a reference points at.
+///
+/// `None` when the row carries no target identity — such a row cannot be
+/// attributed to a homonym and must never be rendered under a fabricated
+/// `### Target:` header.
+fn target_group_key(entity: &serde_json::Value) -> Option<String> {
+    let target_file = entity
+        .get("target_file_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+
+    Some(
+        match entity.get("target_start_line").and_then(|v| v.as_i64()) {
+            Some(target_line) => format!("{}:{}", target_file, target_line),
+            None => target_file.to_string(),
+        },
+    )
 }
 
 pub fn format_reference_entry(entity: &serde_json::Value) -> String {
@@ -667,5 +727,396 @@ mod tests {
                         ## Calls (function/method invocations) (1)\n\n\
                         - **`caller1`** (method) at `file1.java:10`\n\n";
         assert_eq!(formatted, expected);
+    }
+
+    // ---- §Truncation quantification (v1.10.0) ----------------------------
+
+    /// Fixture for the bug-report scenario: one resolution target (truncated
+    /// from a larger set) that accumulated 21 caller rows.
+    fn truncated_resolution_with_21_callers() -> serde_json::Value {
+        let calls: Vec<serde_json::Value> = (0..21)
+            .map(|i| {
+                json!({
+                    "name": format!("caller{}", i),
+                    "kind": "function",
+                    "file_path": format!("src/caller_{}.rs", i),
+                    "start_line": i,
+                })
+            })
+            .collect();
+        json!({
+            "calls": calls,
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "delete",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": true,
+                "total_targets": 112,
+                "targets": [
+                    {
+                        "uuid": "uuid-1",
+                        "name": "delete",
+                        "fqn": "repo::module::delete",
+                        "kind": "method",
+                        "file_path": "src/target.rs",
+                        "start_line": 1
+                    }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn format_partial_counts_caveat_is_empty_when_not_truncated() {
+        // No resolution key at all.
+        let bare = json!({
+            "calls": [{"name": "caller1", "kind": "method", "file_path": "f.rs", "start_line": 1}],
+            "extends": [],
+            "implements": [],
+            "references": []
+        });
+        let view = ResolutionView::from_references(&bare);
+        if let Some(view) = view {
+            assert_eq!(view.partial_counts_caveat(), "");
+        }
+
+        // Resolution present, complete.
+        let complete = json!({
+            "resolution": {
+                "tier": "exact_name",
+                "truncated": false,
+                "total_targets": 3,
+                "targets": [{"fqn": "A"}, {"fqn": "B"}, {"fqn": "C"}]
+            }
+        });
+        let view = ResolutionView::from_references(&complete).expect("resolution");
+        assert_eq!(view.partial_counts_caveat(), "");
+    }
+
+    #[test]
+    fn format_partial_counts_caveat_uses_true_total_not_sample_size() {
+        let references = json!({
+            "resolution": {
+                "tier": "exact_name",
+                "truncated": true,
+                "total_targets": 112,
+                // 1 shown target; the naive post-truncation count (25) or the
+                // shown count (1) must never leak in here.
+                "targets": [{"fqn": "A"}]
+            }
+        });
+        let view = ResolutionView::from_references(&references).expect("resolution");
+        assert_eq!(
+            view.partial_counts_caveat(),
+            "Counts below are partial — they cover only the 1 of 112 targets shown."
+        );
+    }
+
+    #[test]
+    fn format_renders_partial_counts_caveat_when_targets_truncated() {
+        // Regression for the v1.10.0 bug: `total_targets` was never emitted
+        // by the DB layer, so this shape was unreachable in production and
+        // bucket counts could read as the complete impact set.
+        let formatted = format_references_result("delete", &truncated_resolution_with_21_callers());
+
+        // The caveat must be machine-visible and quantified.
+        assert!(
+            formatted
+                .contains("Counts below are partial — they cover only the 1 of 112 targets shown."),
+            "got:\n{formatted}"
+        );
+        assert!(formatted.contains("Re-run with a fully qualified name, or raise `max_targets`"));
+    }
+
+    #[test]
+    fn format_bucket_counts_remain_samples_of_the_real_thing() {
+        // The bucket header states 21 (the rows actually fetched), and the
+        // caveat sits right above it quantifying the incompleteness — both
+        // in the same output so no reader can miss the distinction.
+        let formatted = format_references_result("delete", &truncated_resolution_with_21_callers());
+        assert!(formatted.contains("## Calls (function/method invocations) (21)"));
+        let caveat = formatted
+            .find("Counts below are partial")
+            .expect("caveat present");
+        let buckets = formatted.find("## Calls").expect("bucket header");
+        assert!(caveat < buckets, "caveat must precede the bucket counts");
+    }
+
+    #[test]
+    fn format_omits_partial_counts_caveat_when_not_truncated() {
+        let references = json!({
+            "calls": [
+                {"name": "caller1", "kind": "method", "file_path": "file1.java", "start_line": 10},
+                {"name": "caller2", "kind": "method", "file_path": "file2.java", "start_line": 20}
+            ],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "myMethod",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 1,
+                "targets": [{}]
+            }
+        });
+        let formatted = format_references_result("myMethod", &references);
+        assert!(!formatted.contains("Counts below are partial"));
+        assert!(!formatted.contains("Truncated"));
+    }
+
+    #[test]
+    fn format_no_references_with_truncated_resolution_still_discloses_truncation() {
+        // Truncated resolution but zero references land in the shown 25: the
+        // early-return branch must still be explicit about truncation.
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "delete",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": true,
+                "total_targets": 112,
+                "targets": []
+            }
+        });
+        let formatted = format_references_result("delete", &references);
+        assert!(formatted.contains("No references found"));
+        assert!(formatted.contains("**Truncated** — 112 targets matched; showing the first 0"));
+        // No partial-counts caveat here: there are no counts to qualify.
+        assert!(!formatted.contains("Counts below are partial"));
+    }
+
+    // ---- §Homonym attribution driven by the resolution, not the bucket ----
+
+    /// Two resolved homonyms, callers land on only one. The header must name
+    /// the referenced homonym — collapsing to the headerless single-group
+    /// form erased the attribution entirely.
+    #[test]
+    fn format_attributes_callers_when_only_one_homonym_has_them() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "handleClick",
+                    "kind": "function",
+                    "file_path": "src/channels/ChannelsPage.tsx",
+                    "start_line": 30,
+                    "target_fqn": "channels.ChannelsPage.onDelete",
+                    "target_name": "onDelete",
+                    "target_file_path": "src/channels/ChannelsPage.tsx",
+                    "target_start_line": 20,
+                    "target_signature": "function onDelete(channelId: string)"
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "onDelete",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 2,
+                "targets": [
+                    {
+                        "fqn": "channels.ChannelsPage.onDelete",
+                        "file_path": "src/channels/ChannelsPage.tsx",
+                        "start_line": 20
+                    },
+                    {
+                        "fqn": "profile.ProfilePage.onDelete",
+                        "file_path": "src/profile/ProfilePage.tsx",
+                        "start_line": 69
+                    }
+                ]
+            }
+        });
+
+        let formatted = format_references_result("onDelete", &references);
+
+        // The caller must be attributed to the homonym it actually calls.
+        assert!(
+            formatted.contains("### Target: `channels.ChannelsPage.onDelete`"),
+            "got:\n{formatted}"
+        );
+        assert!(formatted.contains("src/channels/ChannelsPage.tsx:20"));
+        assert!(formatted.contains("handleClick"));
+        // The callerless homonym must never be attributed any callers.
+        assert!(
+            !formatted.contains("### Target: `profile.ProfilePage.onDelete`"),
+            "callerless homonym must not be attributed:\n{formatted}"
+        );
+    }
+
+    /// Truncated resolution showing one target of many: the true total
+    /// (`total_targets`) alone is enough to force attribution.
+    #[test]
+    fn format_attributes_callers_when_resolution_truncated_to_one_shown() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1",
+                    "kind": "function",
+                    "file_path": "src/caller.rs",
+                    "start_line": 3,
+                    "target_fqn": "repo::module::delete",
+                    "target_name": "delete",
+                    "target_file_path": "src/target.rs",
+                    "target_start_line": 1
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "delete",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": true,
+                "total_targets": 112,
+                "targets": [
+                    {
+                        "fqn": "repo::module::delete",
+                        "file_path": "src/target.rs",
+                        "start_line": 1
+                    }
+                ]
+            }
+        });
+
+        let formatted = format_references_result("delete", &references);
+
+        assert!(
+            formatted.contains("### Target: `repo::module::delete`"),
+            "got:\n{formatted}"
+        );
+        assert!(formatted.contains("src/target.rs:1"));
+    }
+
+    /// A genuinely single-target resolution keeps the concise shape — the
+    /// footer of rule: header only when the resolution matched more than
+    /// one candidate. Complements the no-resolution-key case above.
+    #[test]
+    fn format_single_resolved_target_keeps_concise_form() {
+        let references = json!({
+            "calls": [
+                {
+                    "name": "caller1",
+                    "kind": "method",
+                    "file_path": "file1.java",
+                    "start_line": 10,
+                    "target_fqn": "myapp::Handler::myMethod",
+                    "target_name": "myMethod",
+                    "target_file_path": "src/Handler.java",
+                    "target_start_line": 42
+                },
+                {
+                    "name": "caller2",
+                    "kind": "method",
+                    "file_path": "file2.java",
+                    "start_line": 20,
+                    "target_fqn": "myapp::Handler::myMethod",
+                    "target_name": "myMethod",
+                    "target_file_path": "src/Handler.java",
+                    "target_start_line": 42
+                }
+            ],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "myMethod",
+                "tier": "exact_fqn",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 1,
+                "targets": [
+                    {
+                        "fqn": "myapp::Handler::myMethod",
+                        "file_path": "src/Handler.java",
+                        "start_line": 42
+                    }
+                ]
+            }
+        });
+
+        let formatted = format_references_result("myMethod", &references);
+
+        assert!(formatted.contains("Found 2 reference(s)"));
+        assert!(
+            !formatted.contains("### Target:"),
+            "single-target resolution must stay headerless:\n{formatted}"
+        );
+    }
+
+    /// The header condition applies to every relationship bucket, including
+    /// the mirrored `overrides` projection.
+    #[test]
+    fn format_attributes_every_relationship_bucket() {
+        let row = json!({
+            "name": "someCaller",
+            "kind": "method",
+            "file_path": "src/caller.java",
+            "start_line": 10,
+            "target_fqn": "com.acme.MyService.myMethod",
+            "target_name": "myMethod",
+            "target_file_path": "src/MyService.java",
+            "target_start_line": 42
+        });
+        let references = json!({
+            "calls": [row],
+            "extends": [row],
+            "implements": [row],
+            "references": [row],
+            "overridden_by": [row],
+            "overrides": [row],
+            "resolution": {
+                "query": "myMethod",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 2,
+                "targets": [
+                    {"fqn": "com.acme.MyService.myMethod"},
+                    {"fqn": "com.other.MyService.myMethod"}
+                ]
+            }
+        });
+
+        let formatted = format_references_result("myMethod", &references);
+
+        assert!(formatted.contains("Calls (function/method invocations)"));
+        assert!(formatted.contains("Extends (class inheritance)"));
+        assert!(formatted.contains("Implements (interface implementation)"));
+        assert!(formatted.contains("References (type annotations/usages)"));
+        assert!(formatted.contains("Overridden by (method implementations)"));
+        assert!(formatted.contains("Overrides (declared supertype methods)"));
+        assert_eq!(
+            formatted.matches("### Target:").count(),
+            6,
+            "every bucket must attribute its caller:\n{formatted}"
+        );
+    }
+
+    /// Rows without target identity must never receive a fabricated
+    /// `### Target: <query> at unknown` header, even when the resolution
+    /// resolved to many targets. Attribution by bare name is exactly what
+    /// the header exists to avoid.
+    #[test]
+    fn format_never_fabricates_target_header_without_identity() {
+        let formatted = format_references_result("delete", &truncated_resolution_with_21_callers());
+
+        assert!(
+            !formatted.contains("### Target:"),
+            "unattributable rows must stay headerless:\n{formatted}"
+        );
+        assert!(!formatted.contains("unknown"));
     }
 }

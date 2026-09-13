@@ -99,6 +99,24 @@ impl<'a> ResolutionView<'a> {
         )
     }
 
+    /// Caveat stating that the relationship-bucket counts cover only the
+    /// shown targets. Empty when the target list is complete, so callers can
+    /// unconditionally append the return value:
+    ///
+    /// ```text
+    /// Counts below are partial — they cover only the 25 of 112 targets shown.
+    /// ```
+    pub(crate) fn partial_counts_caveat(&self) -> String {
+        if !self.truncated {
+            return String::new();
+        }
+        format!(
+            "Counts below are partial — they cover only the {} of {} targets shown.",
+            self.count(),
+            self.total_targets()
+        )
+    }
+
     /// One `- \`fqn\` (kind) at \`file:line\`  (repo: name)` bullet per resolved target.
     pub(crate) fn target_bullets(&self) -> String {
         let mut out = String::new();
