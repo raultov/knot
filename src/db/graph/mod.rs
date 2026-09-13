@@ -18,7 +18,10 @@ mod utils;
 // Public re-exports so `crate::db::graph::MatchTier` / `RootCandidate` /
 // `rank_root_candidates` / `target_resolution_tiers` are addressable from
 // the models and other modules.
-pub use query::{MatchTier, RootCandidate, rank_root_candidates, target_resolution_tiers};
+pub use query::{
+    DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, rank_root_candidates,
+    target_resolution_tiers,
+};
 
 use neo4rs::Graph;
 
@@ -31,7 +34,7 @@ pub struct GraphDb {
 pub use connection::ConnectExt;
 pub use delete::DeleteExt;
 pub use query::QueryExt;
-pub use query_repo::RepoQueryExt;
+pub use query_repo::{RepoIdentity, RepoQueryExt};
 pub use query_subgraph::SubgraphQueryExt;
 pub use upsert::UpsertExt;
 

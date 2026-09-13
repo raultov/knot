@@ -7,15 +7,37 @@
 //! # Embedding text format
 //! ```text
 //! [<KIND>] <name>
-//! Signature: <signature>   ← omitted when None
-//! <docstring>              ← omitted when None
+//! Identifier: <tokenized name>        ← omitted for single-token names
+//! FQN: <fully qualified name>         ← omitted when it equals the name
+//! Decorators: <decorators>            ← omitted when none
+//! Signature: <signature>              ← omitted when None
+//! <docstring>                         ← omitted when None
+//! Implementation context: <comments>  ← omitted when none
+//! Calls: <tokenized outgoing names>   ← omitted when none (capped at 20)
 //! File: <file_path>:<start_line>
 //! ```
 //!
 //! Keeping the format consistent across runs is important: the same entity
 //! should always produce the same embedding so vector updates are idempotent.
+//!
+//! Recall contract: the embed text must share vocabulary with the
+//! natural-language queries that describe the entity's behaviour. Identifiers
+//! reach it both raw (name, FQN) and tokenized (`useChangePassword` → `use
+//! change password`), and the names of the callees in the entity's body are
+//! tokenized in a final `Calls:` section — a definition without a doc
+//! comment stays retrievable through what it does, as observable from its
+//! own body.
 
-use crate::models::{EntityKind, ParsedEntity};
+use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
+use crate::utils::identifiers::identifier_token_phrase;
+
+/// Maximum number of outgoing-reference names carried in the `Calls:`
+/// section of the embed text. Deliberately no content filter beyond
+/// dropping the entity's own name: short callee names (`new`, `use`, `map`)
+/// are almost uniformly distributed across entities, so embedding them is
+/// noise-neutral, and any length or deny-list heuristic would silently drop
+/// legitimate short identifiers (`use` for React hooks, `map`, `post`).
+const MAX_CALL_NAMES: usize = 20;
 
 /// Build the `embed_text` field for every entity in-place.
 ///
@@ -35,10 +57,27 @@ pub fn prepare_entities(entities: &mut [ParsedEntity]) {
 
 /// Construct the embedding text for a single entity.
 fn build_embed_text(entity: &ParsedEntity) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(8);
+    let mut parts: Vec<String> = Vec::with_capacity(10);
 
     // Header: kind + name
     parts.push(format!("[{}] {}", entity.kind, entity.name));
+
+    // Tokenized identifier: natural-language queries share vocabulary with
+    // the identifier's word components, not with its raw spelling.
+    let name_phrase = identifier_token_phrase(&entity.name);
+    if name_phrase != entity.name {
+        parts.push(format!("Identifier: {name_phrase}"));
+    }
+
+    // Fully qualified name: path/module components ("api auth login") make
+    // a definition retrievable through where it lives, too.
+    if !entity.fqn.is_empty() && entity.fqn != entity.name {
+        parts.push(format!("FQN: {}", entity.fqn));
+        let fqn_phrase = identifier_token_phrase(&entity.fqn);
+        if fqn_phrase != name_phrase {
+            parts.push(format!("Identifier: {fqn_phrase}"));
+        }
+    }
 
     // Optional decorators/annotations (framework metadata)
     if !entity.decorators.is_empty() {
@@ -82,16 +121,54 @@ fn build_embed_text(entity: &ParsedEntity) -> String {
         }
     }
 
+    // Outgoing references: the names called/referenced inside this entity's
+    // body, tokenized. For a definition without a doc comment this is the
+    // only behavioural vocabulary available.
+    let calls_section = calls_section_text(entity);
+    if !calls_section.is_empty() {
+        parts.push(format!("Calls: {calls_section}"));
+    }
+
     // Source location — helps distinguish identically-named entities
     parts.push(format!("File: {}:{}", entity.file_path, entity.start_line));
 
     parts.join("\n")
 }
 
+/// Collect the deduplicated, tokenized names this entity calls or refers to,
+/// in first-appearance order, capped at [`MAX_CALL_NAMES`]. The entity's
+/// own name is dropped (self-references add no recall). Empty when there is
+/// nothing to say.
+fn calls_section_text(entity: &ParsedEntity) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for intent in &entity.reference_intents {
+        if seen.len() >= MAX_CALL_NAMES {
+            break;
+        }
+        let name = match intent {
+            ReferenceIntent::Call { method, .. } => method.as_str(),
+            ReferenceIntent::TypeReference { type_name, .. } => type_name.as_str(),
+            ReferenceIntent::Extends { parent, .. } => parent.as_str(),
+            ReferenceIntent::Implements { interface, .. } => interface.as_str(),
+            _ => continue,
+        };
+        if name == entity.name || name.trim().is_empty() {
+            continue;
+        }
+        if !seen.contains(&name.to_string()) {
+            seen.push(name.to_string());
+        }
+    }
+    seen.iter()
+        .map(|n| identifier_token_phrase(n))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{EntityKind, ParsedEntity};
+    use crate::models::ParsedEntity;
 
     #[test]
     fn test_build_embed_text_minimal() {
@@ -433,5 +510,161 @@ mod tests {
         );
         let embed_text = build_embed_text(&entity);
         assert!(embed_text.contains("[groovy_property] config"));
+    }
+
+    /// BDD contract (recall bug): the embed text must carry the entity's
+    /// FQN so a definition is retrievable through the path components of
+    /// its fully qualified name, not only its short name.
+    #[test]
+    fn embed_text_includes_fqn() {
+        let entity = ParsedEntity::new(
+            "login",
+            EntityKind::RustFunction,
+            "jobwatch::api::auth::login",
+            None,
+            None,
+            "rust",
+            "src/api/auth.rs",
+            136,
+            160,
+            None,
+            "job-watch",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("jobwatch::api::auth::login"));
+    }
+
+    /// BDD contract (recall bug): multi-case identifiers must reach the
+    /// embed text in token form (`useChangePassword` → `use change
+    /// password`) so natural-language queries share vocabulary with the
+    /// vector without knowing the identifier's spelling.
+    #[test]
+    fn embed_text_includes_tokenized_identifier() {
+        let entity = ParsedEntity::new(
+            "useChangePassword",
+            EntityKind::Function,
+            "useChangePassword",
+            None,
+            None,
+            "typescript",
+            "src/api/authQueries.ts",
+            5,
+            12,
+            None,
+            "ui",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("Identifier: use change password"));
+        // snake_case stays transparent too.
+        let snake = ParsedEntity::new(
+            "verify_credentials_or_fail",
+            EntityKind::RustFunction,
+            "verify_credentials_or_fail",
+            None,
+            None,
+            "rust",
+            "src/api/auth.rs",
+            190,
+            200,
+            None,
+            "job-watch",
+        );
+        let embed_text = build_embed_text(&snake);
+        assert!(embed_text.contains("Identifier: verify credentials or fail"));
+    }
+
+    /// BDD contract (recall bug): the names of the callees in an entity's
+    /// body must reach the embed text tokenized, so a paraphrase describing
+    /// the behaviour ("authenticate user with email and password") shares
+    /// vocabulary with a definition whose behaviour is only observable
+    /// through its body.
+    #[test]
+    fn embed_text_includes_outgoing_call_names() {
+        let mut entity = ParsedEntity::new(
+            "login",
+            EntityKind::RustFunction,
+            "login",
+            None,
+            None,
+            "rust",
+            "src/api/auth.rs",
+            136,
+            160,
+            None,
+            "job-watch",
+        );
+        entity.reference_intents.push(ReferenceIntent::Call {
+            method: "normalize_email".to_string(),
+            receiver: None,
+            line: 1,
+            arg_count: None,
+        });
+        entity.reference_intents.push(ReferenceIntent::Call {
+            method: "new".to_string(),
+            receiver: None,
+            line: 2,
+            arg_count: None,
+        });
+        entity.reference_intents.push(ReferenceIntent::Call {
+            method: "useChangePassword".to_string(),
+            receiver: None,
+            line: 3,
+            arg_count: None,
+        });
+
+        let embed_text = build_embed_text(&entity);
+        assert!(embed_text.contains("Calls: normalize email, new, use change password"));
+    }
+
+    /// BDD contract: the embed text is a deterministic pure function of the
+    /// entity state, and the `Calls:` section keeps a stable size for
+    /// entities with many outgoing references.
+    #[test]
+    fn embed_text_is_deterministic_and_bounded() {
+        let build = |calls: usize| {
+            let mut entity = ParsedEntity::new(
+                "hub",
+                EntityKind::RustFunction,
+                "hub",
+                None,
+                None,
+                "rust",
+                "src/hub.rs",
+                1,
+                2,
+                None,
+                "r",
+            );
+            for i in 0..calls {
+                entity.reference_intents.push(ReferenceIntent::Call {
+                    method: if i == 0 {
+                        "hub".to_string() // self reference must be dropped
+                    } else {
+                        format!("callee_{i:03}")
+                    },
+                    receiver: None,
+                    line: i + 1,
+                    arg_count: None,
+                });
+            }
+            prepare_entities(std::slice::from_mut(&mut entity));
+            (entity.embed_text.clone(), entity)
+        };
+
+        let (first, _) = build(0);
+        let (second, _) = build(0);
+        assert_eq!(first, second, "same entity must embed identically");
+
+        let (many, _) = build(60);
+        let counted = many
+            .lines()
+            .find(|l| l.starts_with("Calls:"))
+            .expect("Calls section present");
+        let names = counted.trim_start_matches("Calls: ").split(", ").count();
+        assert_eq!(names, 20, "Calls section capped at 20 names");
+
+        // Self-name never enters the Calls section.
+        let (with_self, _) = build(3);
+        assert!(!with_self.contains("Calls: hub"));
     }
 }

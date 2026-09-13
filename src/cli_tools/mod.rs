@@ -8,16 +8,25 @@ pub mod deps;
 pub mod explore_file;
 pub mod find_callers;
 pub mod formatters;
+pub mod list_files;
 pub mod repos;
 pub(crate) mod resolution;
 pub mod search_hybrid_context;
 pub mod subgraph;
 
-pub use deps::{format_deps_output, run_deps};
+pub use deps::{
+    DEFAULT_MAX_DEPTH, DeclaredDependency, DeclaringConsumer, DepsDiagnostics, DepsDirection,
+    MAX_DEPTH_CEILING, collect_deps_diagnostics, format_deps_output,
+    format_deps_output_with_diagnostics, resolve_max_depth, run_deps,
+};
 pub use explore_file::{format_file_entities, run_explore_file};
 pub use find_callers::{format_reference_entry, format_references_result, run_find_callers};
+pub use list_files::{format_files_output, format_list_files_markdown, run_list_files};
 pub use repos::{format_repos_output, run_list_repos};
-pub use search_hybrid_context::{SearchContext, run_search_hybrid_context};
+pub use search_hybrid_context::{
+    DEFAULT_MAX_RESULTS, MAX_RESULTS_CEILING, ResolvedLimit, SearchContext, SearchFilters,
+    resolve_max_results, run_search_hybrid_context,
+};
 pub use subgraph::{DEFAULT_MAX_NODES, SubgraphQueryParams, run_get_subgraph};
 
 // --- JSON helper functions shared across CLI formatters ---

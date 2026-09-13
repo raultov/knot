@@ -494,23 +494,18 @@ fn handle_rust_capture<'a>(
     if let Some((entity_name, entity_kind, entity_line)) =
         rust::handle_rust_capture(name_or_intent, text, ctx.node)
     {
-        let rust_kind = entity_kind.clone();
         state.name = Some(entity_name);
         state.kind = Some(entity_kind);
         state.start_line = entity_line;
 
-        // For Rust type aliases, constants, and statics, the captured node is the
-        // identifier (type_identifier, identifier, identifier), but comments are
-        // preceding siblings of the parent entity node (type_item, const_item, static_item).
-        // Get the parent to properly extract preceding comments.
-        state.entity_node = if matches!(
-            rust_kind,
-            EntityKind::RustTypeAlias | EntityKind::RustConstant | EntityKind::RustStatic
-        ) {
-            ctx.node.parent()
-        } else {
-            Some(ctx.node)
-        };
+        // Rust captures point at the identifier (`function_item name:
+        // (identifier)`), but preceding `///` doc comments are siblings of
+        // the parent item, not of the identifier. Re-anchor every Rust
+        // entity kind to its parent item so the docstring upward pass can
+        // reach them (mirrors the Python handler); without this the
+        // entity's embed text carries no docstring and semantic search
+        // cannot find Rust definitions by behaviour.
+        state.entity_node = ctx.node.parent().or(Some(ctx.node));
     }
 }
 

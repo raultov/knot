@@ -133,7 +133,7 @@ pub struct RootResolution {
     /// Which tier of the resolution ladder produced the chosen root.
     pub tier: MatchTier,
     /// Number of candidates the winning tier yielded before ranking
-    /// (capped at `MAX_TARGETS` for fairness).
+    /// (capped at `DEFAULT_MAX_TARGETS` for fairness).
     pub total_candidates: usize,
     /// The candidate chosen as the root.
     pub chosen: RootCandidateLite,

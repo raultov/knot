@@ -16,16 +16,20 @@ pub(crate) fn extract_entities_json_config(
         Err(_) => return entities,
     };
 
-    // Detect package.json by checking for "name" + dependency fields
-    let is_package_json = value
-        .as_object()
-        .map(|obj| {
-            obj.contains_key("name")
-                && (obj.contains_key("dependencies")
-                    || obj.contains_key("devDependencies")
-                    || obj.contains_key("peerDependencies"))
-        })
-        .unwrap_or(false);
+    // package.json is identified by filename, not by content: a
+    // dependency-free library manifest must still yield the npm
+    // ProjectIdentity that cross-repo linking matches against. A usable
+    // `name` is still required — without it there is nothing to anchor the
+    // identity on, so the file falls back to the generic config walk.
+    let is_package_json = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        == Some("package.json")
+        && value
+            .as_object()
+            .and_then(|o| o.get("name"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|n| !n.is_empty());
 
     if is_package_json {
         extract_package_json(&value, file_path, repo_name, &mut entities);
@@ -322,6 +326,68 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("build_system: npm")
+        );
+    }
+
+    #[test]
+    fn test_package_json_without_dependencies_emits_project_identity() {
+        // D3 regression: a dependency-free library manifest must still yield
+        // the npm ProjectIdentity that cross-repo linking matches against.
+        // Detection is by filename, not by the presence of dependency keys.
+        let source = r#"{
+  "name": "@acme/ui-kit",
+  "version": "1.0.0",
+  "main": "index.js"
+}"#;
+        let entities = extract_entities_json_config(source, "package.json", "test-repo");
+
+        let identities: Vec<_> = entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::ProjectIdentity)
+            .collect();
+        assert_eq!(
+            identities.len(),
+            1,
+            "dependency-free package.json must emit one ProjectIdentity"
+        );
+        assert_eq!(identities[0].name, "@acme/ui-kit");
+        assert_eq!(identities[0].fqn, "npm:@acme/ui-kit");
+        assert!(
+            identities[0]
+                .signature
+                .as_ref()
+                .unwrap()
+                .contains("build_system: npm")
+        );
+    }
+
+    #[test]
+    fn test_non_package_json_named_file_is_not_treated_as_manifest() {
+        // Exactly the same content at a non-manifest path must NOT get the
+        // package.json special-casing (no ProjectIdentity emitted).
+        let source = r#"{"name": "@acme/ui-kit", "version": "1.0.0"}"#;
+        let entities = extract_entities_json_config(source, "/app/other.json", "test-repo");
+
+        assert!(
+            entities
+                .iter()
+                .all(|e| e.kind != EntityKind::ProjectIdentity),
+            "a plain .json file is a generic config, not a package manifest"
+        );
+    }
+
+    #[test]
+    fn test_package_json_without_name_falls_back_to_config_walk() {
+        // A package.json without a usable `name` cannot anchor an npm
+        // identity, so it is treated as a generic config (no npm:unknown).
+        let source = r#"{"version": "1.0.0"}"#;
+        let entities = extract_entities_json_config(source, "package.json", "test-repo");
+
+        assert!(
+            entities
+                .iter()
+                .all(|e| e.kind != EntityKind::ProjectIdentity),
+            "no ProjectIdentity should be synthesized for a nameless manifest"
         );
     }
 

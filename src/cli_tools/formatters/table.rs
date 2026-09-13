@@ -187,6 +187,10 @@ fn callers_resolution_header(entity_name: &str, references: &Value, total_refs: 
             view.total_targets(),
             view.count()
         ));
+        // Same guarantee as the Markdown formatter: bucket counts are only
+        // partial when the target list was truncated, and the reader must
+        // know it without inferring it.
+        out.push_str(&format!("{}\n", view.partial_counts_caveat()));
     }
 
     out
@@ -364,6 +368,50 @@ mod tests {
         let output = format_callers_table("MyEntity", &references);
         // Rule R3: intra-repo reference — the Target cell stays bare.
         assert!(!output.contains("MyEntity (repo:"), "got {output}");
+    }
+
+    #[test]
+    fn callers_table_truncated_resolution_states_shown_vs_total() {
+        // The truncated header must state the true pre-truncation total, not
+        // the shown count, and must carry the partial-counts caveat. The
+        // v1.10.0 bug: `total_targets` was never emitted, so this shape never
+        // reached the formatter in production.
+        let mut references = caller_references(
+            json!([{"name": "caller1", "kind": "method", "file_path": "f.rs", "start_line": 1}]),
+        );
+        references["resolution"] = json!({
+            "query": "delete",
+            "tier": "exact_name",
+            "truncated": true,
+            "total_targets": 112,
+            "targets": [{}]
+        });
+        let output = format_callers_table("delete", &references);
+        assert!(
+            output.contains("Truncated — 112 targets matched; showing first 1 by FQN."),
+            "got {output}"
+        );
+        assert!(
+            output
+                .contains("Counts below are partial — they cover only the 1 of 112 targets shown."),
+            "got {output}"
+        );
+    }
+
+    #[test]
+    fn callers_table_complete_resolution_has_no_partial_counts_caveat() {
+        let mut references = caller_references(
+            json!([{"name": "caller1", "kind": "method", "file_path": "f.rs", "start_line": 1}]),
+        );
+        references["resolution"] = json!({
+            "query": "MyEntity",
+            "tier": "exact_name",
+            "truncated": false,
+            "total_targets": 1,
+            "targets": [{}]
+        });
+        let output = format_callers_table("MyEntity", &references);
+        assert!(!output.contains("Counts below are partial"), "got {output}");
     }
 
     #[test]

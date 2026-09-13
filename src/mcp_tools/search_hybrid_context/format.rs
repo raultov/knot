@@ -77,14 +77,26 @@ pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
         output.push_str(&format!(
             "**Type Usage:** Referenced in {count} location(s)\n"
         ));
-        append_samples(entity, "type_usage_samples", "Sample usages:", &mut output);
+        append_samples(
+            entity,
+            "type_usage_samples",
+            "Sample usages",
+            count,
+            &mut output,
+        );
         output.push('\n');
     }
 
     // Show callers summary
     if let Some(count) = entity.get("caller_count").and_then(|v| v.as_i64()) {
         output.push_str(&format!("**Called by:** {count} location(s)\n"));
-        append_samples(entity, "caller_samples", "Sample callers:", &mut output);
+        append_samples(
+            entity,
+            "caller_samples",
+            "Sample callers",
+            count,
+            &mut output,
+        );
         output.push('\n');
     }
 
@@ -116,7 +128,20 @@ fn format_string_list(entity: &serde_json::Value, key: &str, title: &str) -> Str
 
 /// Appends a sample list block ("Sample usages:" / "Sample callers:") when
 /// the key holds a non-empty array.
-fn append_samples(entity: &serde_json::Value, key: &str, header: &str, output: &mut String) {
+///
+/// `header` carries the block title WITHOUT the trailing colon (added here).
+/// `total` is the true reference count the samples were drawn from. When the
+/// sample list is shorter than the total, the header is quantified —
+/// `Sample callers — showing 2 of 21 (truncated):` — so a sample can never be
+/// mistaken for the complete set. When the sample covers everything the
+/// header stays unchanged.
+fn append_samples(
+    entity: &serde_json::Value,
+    key: &str,
+    header: &str,
+    total: i64,
+    output: &mut String,
+) {
     let Some(samples) = entity
         .get(key)
         .and_then(|v| v.as_array())
@@ -124,8 +149,14 @@ fn append_samples(entity: &serde_json::Value, key: &str, header: &str, output: &
     else {
         return;
     };
-    output.push_str(header);
-    output.push('\n');
+    let shown = samples.len() as i64;
+    if shown < total {
+        output.push_str(&format!(
+            "{header} — showing {shown} of {total} (truncated):\n"
+        ));
+    } else {
+        output.push_str(&format!("{header}:\n"));
+    }
     for sample in samples {
         if let Some(s) = sample.as_str() {
             output.push_str(&format!("- {s}\n"));
@@ -256,7 +287,7 @@ mod tests {
         });
         let formatted = format_entity(&entity);
         assert!(formatted.contains("**Type Usage:** Referenced in 5 location(s)"));
-        assert!(formatted.contains("Sample usages:"));
+        assert!(formatted.contains("Sample usages — showing 2 of 5 (truncated):"));
         assert!(formatted.contains("usage1 in file1.java"));
     }
 
@@ -283,8 +314,52 @@ mod tests {
         });
         let formatted = format_entity(&entity);
         assert!(formatted.contains("**Called by:** 3 location(s)"));
-        assert!(formatted.contains("Sample callers:"));
+        // 2 samples out of 3 callers is a truncated sample — the notice must
+        // say so explicitly (v1.10.0).
+        assert!(formatted.contains("Sample callers — showing 2 of 3 (truncated):"));
         assert!(formatted.contains("caller1 in file1.java"));
+    }
+
+    #[test]
+    fn test_format_entity_caller_sample_covering_everything_has_no_notice() {
+        let entity = json!({
+            "name": "myMethod",
+            "kind": "method",
+            "caller_count": 2,
+            "caller_samples": ["caller1 in file1.java", "caller2 in file2.java"]
+        });
+        let formatted = format_entity(&entity);
+        assert!(formatted.contains("Sample callers:"));
+        assert!(!formatted.contains("truncated"));
+    }
+
+    #[test]
+    fn test_format_entity_many_callers_quantifies_sample() {
+        // The bug report scenario: a ubiquitous symbol with 21 callers whose
+        // 3-string sample read as if it were the complete set.
+        let entity = json!({
+            "name": "delete",
+            "kind": "method",
+            "caller_count": 21,
+            "caller_samples": [
+                "caller1 in a.java", "caller2 in b.java", "caller3 in c.java"
+            ]
+        });
+        let formatted = format_entity(&entity);
+        assert!(formatted.contains("**Called by:** 21 location(s)"));
+        assert!(formatted.contains("Sample callers — showing 3 of 21 (truncated):"));
+    }
+
+    #[test]
+    fn test_format_entity_type_usage_quantifies_sample() {
+        let entity = json!({
+            "name": "MyClass",
+            "kind": "class",
+            "type_usage_count": 21,
+            "type_usage_samples": ["u1 in f1.java"]
+        });
+        let formatted = format_entity(&entity);
+        assert!(formatted.contains("Sample usages — showing 1 of 21 (truncated):"));
     }
 
     #[test]

@@ -71,6 +71,7 @@ pub trait UpsertExt {
         artifact_id: &str,
         version: &str,
     ) -> Result<()>;
+    async fn upsert_repository_node(&self, repo_name: &str) -> Result<()>;
     async fn upsert_repo_dependency(&self, from_repo: &str, to_repo: &str) -> Result<()>;
 }
 impl UpsertExt for GraphDb {
@@ -288,6 +289,35 @@ impl UpsertExt for GraphDb {
             .await
             .context("Failed to upsert :Repository node")?;
         info!("Upserted :Repository node for '{repo_name}'");
+        Ok(())
+    }
+    /// Ensure the `:Repository` node exists without overwriting build-system
+    /// identity established by an earlier run. Used when the current batch
+    /// carries no `ProjectIdentity` (e.g. an incremental run that did not
+    /// re-parse the build manifest): the full `upsert_repository` would
+    /// otherwise reset `build_system`/`group_id`/`artifact_id`/`version` to
+    /// empty placeholders, making the repository permanently unmatchable by
+    /// `find_repository_by_artifact` until a manual `--clean`.
+    ///
+    /// `ON CREATE SET` initializes only genuinely-new nodes; already-stored
+    /// identities are left untouched.
+    async fn upsert_repository_node(&self, repo_name: &str) -> Result<()> {
+        info!("Ensuring :Repository node for '{repo_name}' (identity preserved)");
+        self.graph
+            .run(
+                query(
+                    "MERGE (r:Repository {name: $repo_name})
+                     ON CREATE SET r.build_system = 'none',
+                                   r.group_id = '',
+                                   r.artifact_id = '',
+                                   r.version = ''
+                     SET r.indexed_at = datetime()",
+                )
+                .param("repo_name", repo_name),
+            )
+            .await
+            .context("Failed to upsert :Repository node")?;
+        info!("Ensured :Repository node for '{repo_name}'");
         Ok(())
     }
     /// Create a DEPENDS_ON relationship between two repositories.

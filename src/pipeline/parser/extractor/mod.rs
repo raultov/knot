@@ -7,6 +7,19 @@ use crate::pipeline::parser::context::{ClassContext, extract_class_contexts};
 use crate::pipeline::parser::languages::java;
 use crate::pipeline::parser::utils::*;
 
+/// Deterministic richness of one match's captures: how much of an entity's
+/// real content (signature, docstring, decorators, inline comments) the
+/// match carried. Only used to order duplicate matches of the same identity
+/// before `dedup_by`, so the richest copy survives.
+fn entity_richness(e: &ParsedEntity) -> usize {
+    usize::from(e.signature.is_some())
+        + usize::from(e.docstring.is_some())
+        + e.decorators.len()
+        + e.inline_comments.len()
+        + usize::from(!e.reference_intents.is_empty())
+        + usize::from(!e.embed_text.is_empty())
+}
+
 mod captures;
 mod enrich;
 mod post_passes;
@@ -46,7 +59,6 @@ pub(crate) fn extract_entities(
         .collect();
 
     let mut entities: Vec<ParsedEntity> = Vec::new();
-
     // First pass: extract all class/interface names and their line ranges for context
     let mut class_contexts: Vec<ClassContext> = Vec::new();
     extract_class_contexts(tree.root_node(), source_bytes, &mut class_contexts);
@@ -96,12 +108,22 @@ pub(crate) fn extract_entities(
     }
 
     // Deduplication
+    //
+    // When duplicate matches exist (e.g. `rust.scm` alternates `function_item`
+    // into two patterns — one carrying `parameters: (parameters) @signature`,
+    // one fallback without), sort the copies of one identity so the *richest*
+    // match comes first: a match that captured the signature, the docstring
+    // and the decorators strictly carries more of the entity's real content
+    // than a bare name/line match. Without this tie-break, dedup silently
+    // keeps the thin copy and the signature never reaches `embed_text`.
     entities.sort_by(|a, b| {
         a.file_path
             .cmp(&b.file_path)
             .then(a.name.cmp(&b.name))
             .then(format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)))
             .then(a.start_line.cmp(&b.start_line))
+            .then(entity_richness(b).cmp(&entity_richness(a)))
+            .then(a.signature.is_some().cmp(&b.signature.is_some()))
     });
     entities.dedup_by(|a, b| {
         a.file_path == b.file_path

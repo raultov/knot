@@ -6,6 +6,7 @@ use tracing::info;
 
 use super::{VectorDb, utils};
 use crate::models::EmbeddedEntity;
+use crate::utils::identifiers::identifier_tokens;
 
 /// Extension trait for upsert and write operations.
 #[expect(
@@ -29,6 +30,10 @@ impl VectorUpsertExt for VectorDb {
                 let mut payload = Payload::new();
                 payload.insert("uuid", e.entity.uuid.to_string());
                 payload.insert("name", e.entity.name.clone());
+                // Lowercase tokens of the identifier so token-level lexical
+                // probes can match entities the query text shares words with
+                // without knowing the identifier's exact spelling.
+                payload.insert("name_tokens", identifier_tokens(&e.entity.name));
                 payload.insert("kind", e.entity.kind.to_string());
                 payload.insert("language", e.entity.language.clone());
                 payload.insert("repo_name", e.entity.repo_name.clone());

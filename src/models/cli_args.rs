@@ -22,13 +22,25 @@ pub enum Commands {
         /// Search query (e.g., 'user authentication', 'API error handling')
         query: String,
 
-        /// Maximum number of results to return (default: 5)
+        /// Maximum number of results to return (default: 5, max: 100;
+        /// larger values are clamped)
         #[arg(short, long, default_value = "5")]
         max_results: usize,
 
         /// Repository scope: one name, comma-separated list, or 'all'/'*'
         #[arg(short, long)]
         repo: Option<String>,
+
+        /// Optional entity-kind filter: exact kinds ('rust_function',
+        /// 'markdown_section', ...) or aliases ('definition', 'callable',
+        /// 'class', 'type'). Comma-separated for multiple values.
+        #[arg(short, long)]
+        kinds: Option<String>,
+
+        /// Optional path filter: repo-relative directory prefix ('src/api',
+        /// matched on a path boundary) or glob ('src/**/*_test.rs')
+        #[arg(short, long)]
+        path: Option<String>,
 
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
@@ -43,6 +55,11 @@ pub enum Commands {
         /// Repository scope: one name, comma-separated list, or 'all'/'*'
         #[arg(short, long)]
         repo: Option<String>,
+
+        /// Maximum number of resolved targets (default: 25, max: 500). Raise
+        /// when the response reports a truncated target list.
+        #[arg(short = 'm', long)]
+        max_targets: Option<usize>,
 
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
@@ -63,12 +80,30 @@ pub enum Commands {
         output: OutputFormat,
     },
 
+    /// List the indexed files of a repository (read-only), optionally narrowed
+    /// by a directory prefix or glob (`src/api`, `src/**/*_test.rs`)
+    Files {
+        /// Optional directory prefix or glob, repo-relative
+        #[arg(short, long)]
+        path: Option<String>,
+
+        /// Repository scope: one name, comma-separated list, or 'all'/'*'
+        #[arg(short, long)]
+        repo: Option<String>,
+
+        /// Output format (default: table)
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
+
     /// Show dependency graph for a repository (forward and reverse DEPENDS_ON edges)
     Deps {
         /// Repository name to show dependencies for
         repo_name: String,
 
-        /// Maximum depth for transitive dependencies (default: 3)
+        /// Maximum depth for transitive dependencies (default: 3, max: 10;
+        /// larger values are clamped).
+        /// Applies to --reverse too: it follows dependents transitively.
         #[arg(short, long, default_value = "3")]
         depth: u32,
 
@@ -154,6 +189,46 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parser_search_kinds_default_none() {
+        let args = vec!["knot", "search", "test"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Search { kinds, .. } => assert!(kinds.is_none()),
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_search_with_kinds_alias() {
+        let args = vec!["knot", "search", "test", "--kinds", "definition"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Search { kinds, .. } => {
+                assert_eq!(kinds, Some("definition".to_string()));
+            }
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_search_with_kinds_list() {
+        let args = vec![
+            "knot",
+            "search",
+            "test",
+            "--kinds",
+            "rust_function,markdown_section",
+        ];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Search { kinds, .. } => {
+                assert_eq!(kinds, Some("rust_function,markdown_section".to_string()));
+            }
+            _ => panic!("Expected Search command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parser_search_with_output_format() {
         let args = vec!["knot", "search", "test", "--output", "json"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
@@ -226,6 +301,33 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parser_callers_max_targets_defaults_to_none() {
+        // Absent flag → None → the shared core falls back to the
+        // 25-target default; the CLI must not pin its own default that could
+        // drift from the MCP tool.
+        let args = vec!["knot", "callers", "MyClass"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Callers { max_targets, .. } => {
+                assert_eq!(max_targets, None);
+            }
+            _ => panic!("Expected Callers command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_callers_with_max_targets() {
+        let args = vec!["knot", "callers", "MyClass", "--max-targets", "500"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Callers { max_targets, .. } => {
+                assert_eq!(max_targets, Some(500));
+            }
+            _ => panic!("Expected Callers command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parser_explore_command() {
         let args = vec!["knot", "explore", "src/main.java"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
@@ -246,6 +348,39 @@ mod tests {
                 assert_eq!(repo, Some("my-repo".to_string()));
             }
             _ => panic!("Expected Explore command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_files_defaults() {
+        let args = vec!["knot", "files"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Files { path, repo, .. } => {
+                assert_eq!(path, None);
+                assert_eq!(repo, None);
+            }
+            _ => panic!("Expected Files command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parser_files_with_path_and_repo() {
+        let args = vec![
+            "knot",
+            "files",
+            "--path",
+            "src/**/*_test.rs",
+            "--repo",
+            "my-repo",
+        ];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Files { path, repo, .. } => {
+                assert_eq!(path, Some("src/**/*_test.rs".to_string()));
+                assert_eq!(repo, Some("my-repo".to_string()));
+            }
+            _ => panic!("Expected Files command"),
         }
     }
 

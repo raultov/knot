@@ -28,10 +28,16 @@
 //! **Behavior & Return:**
 //! - Read-only graph traversal with no side effects.
 //! - Returns a JSON array of dependency repository names.
-//! - When `reverse: true`, returns repositories that depend ON the target.
-//! - Empty results mean no DEPENDS_ON relationships exist for that repo
-//!   (either it has no build dependencies declared, or dependent repos
-//!   haven't been indexed yet).
+//! - When `reverse: true`, returns repositories that depend ON the target
+//!   (transitive, up to `max_depth`).
+//! - Empty results are explained in the response text with a three-way
+//!   classification: the repository is not indexed; it declares no build
+//!   dependencies; it declares N dependencies of which some RESOLVE to an
+//!   indexed repository but have no DEPENDS_ON edge yet (stale graph —
+//!   listed with the resolved target and a re-index hint); or none of them
+//!   resolves (listed verbatim, uncapped). The reverse direction mirrors
+//!   this: consumers that declare the queried repository without an edge
+//!   are named instead of a blanket "no repositories depend on it".
 //!
 //! **Parameter Guidance:**
 //! - `repo_name` is required and must match the name used during indexing.
@@ -62,8 +68,12 @@ use crate::mcp_handler::KnotMcpHandler;
                    Use reverse mode for impact analysis before making breaking changes in shared libraries. \
                    \n\nBehaviour & Return: Read-only graph traversal with no side effects. \
                    Returns a JSON array of repository names. Empty results mean no DEPENDS_ON relationships exist for that repo. \
+                   Empty lookups are explained in the response text with a three-way classification: \
+                   declares-but-resolves-without-edge (stale graph, re-index hint), declares-but-nothing-resolves (not indexed), \
+                   or nothing declared; the reverse direction names consumers that declare the repo without an edge yet. \
                    \n\nParameter guidance: 'repo_name' is required and must match the name used during indexing. \
-                   'max_depth' defaults to 3 (1 = direct only). 'reverse' toggles between forward and reverse dependency lookup. \
+                   'max_depth' defaults to 3 (1 = direct only) and applies to both directions — in reverse mode it follows dependents transitively. \
+                   'reverse' toggles between forward and reverse dependency lookup. \
                    \n\nSupports all build systems indexed by knot: Maven, Gradle, Cargo, npm, NuGet (`.csproj` + Central Package Management via `Directory.Packages.props`). C# repos that previously reported `build_system: \"none\"` now report `\"nuget\"` on re-index; `knot-indexer --clean` is recommended for immediate effect.",
     read_only_hint = true,
     destructive_hint = false,
@@ -79,7 +89,7 @@ pub struct ListRepoDependenciesTool {
     )]
     pub repo_name: String,
     #[json_schema(
-        description = "Maximum depth for transitive dependency traversal (default: 3). Use 1 for direct dependencies only. Higher values follow chains deeper. Must be between 1 and 10.",
+        description = "Maximum depth for transitive dependency traversal (default: 3, max: 10). Use 1 for direct dependencies only. Requests above 10 are clamped to 10 (and below 1 to 1). Applies to both directions: with reverse=true it follows dependents transitively.",
         minimum = 1,
         maximum = 10,
         default = 3
@@ -110,7 +120,27 @@ impl ListRepoDependenciesTool {
                 CallToolError::from_message("Missing required 'repo_name' parameter".to_string())
             })?;
 
-        let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+        // Parse and enforce the advertised bound through the single shared
+        // resolver so the handler can never drift from the schema. A depth
+        // of 0 would also compile into invalid Cypher (`*1..0`).
+        let raw_depth: u64 = args
+            .get("max_depth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(cli_tools::DEFAULT_MAX_DEPTH as u64);
+        let requested_depth: u32 = raw_depth.min(u32::MAX as u64) as u32;
+        let max_depth = cli_tools::resolve_max_depth(requested_depth);
+        let depth_notice = if max_depth != requested_depth {
+            if requested_depth == 0 {
+                Some("> Note: `max_depth` was floored from 0 to the minimum of 1.\n".to_string())
+            } else {
+                Some(format!(
+                    "> Note: `max_depth` was clamped from {requested_depth} to the advertised maximum of {}.\n",
+                    cli_tools::MAX_DEPTH_CEILING
+                ))
+            }
+        } else {
+            None
+        };
 
         let reverse = args
             .get("reverse")
@@ -130,7 +160,28 @@ impl ListRepoDependenciesTool {
             .await
             .map_err(|e| CallToolError::from_message(format!("Query error: {e}")))?;
 
-        let formatted = cli_tools::format_deps_output(repo_name, reverse, &json_result);
+        // An empty result is explained honestly in the response text:
+        // dependencies declared but no indexed repo resolves, repo not
+        // indexed, or genuinely no declared dependencies. Never a bare
+        // "No dependencies found."
+        let diagnostics = if json_result.as_array().is_some_and(|a| a.is_empty()) {
+            cli_tools::collect_deps_diagnostics(repo_name, reverse, graph_db)
+                .await
+                .ok()
+        } else {
+            None
+        };
+
+        let mut formatted = cli_tools::format_deps_output_with_diagnostics(
+            repo_name,
+            reverse,
+            &json_result,
+            diagnostics.as_ref(),
+        );
+        if let Some(notice) = depth_notice {
+            formatted.push('\n');
+            formatted.push_str(&notice);
+        }
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(
@@ -140,5 +191,50 @@ impl ListRepoDependenciesTool {
             meta: None,
             structured_content: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli_tools::{DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING};
+
+    #[test]
+    fn schema_maximum_equals_enforced_ceiling() {
+        // Drift guard: the JSON Schema `maximum` advertised over MCP must
+        // equal the clamp the shared core actually enforces.
+        let tool = ListRepoDependenciesTool::tool();
+        let props = tool.input_schema.properties.unwrap();
+        let max_prop = props.get("max_depth").unwrap();
+        let maximum = max_prop.get("maximum").unwrap().as_i64().unwrap();
+        assert_eq!(maximum, MAX_DEPTH_CEILING as i64);
+    }
+
+    #[test]
+    fn schema_default_equals_default_constant() {
+        let tool = ListRepoDependenciesTool::tool();
+        let props = tool.input_schema.properties.unwrap();
+        let default = props
+            .get("max_depth")
+            .unwrap()
+            .get("default")
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        assert_eq!(default, DEFAULT_MAX_DEPTH as i64);
+    }
+
+    #[test]
+    fn max_depth_description_documents_clamping() {
+        let tool = ListRepoDependenciesTool::tool();
+        let props = tool.input_schema.properties.unwrap();
+        let desc = props
+            .get("max_depth")
+            .unwrap()
+            .get("description")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(desc.contains("clamped"));
     }
 }

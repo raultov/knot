@@ -130,21 +130,29 @@ async fn run_pipeline_inner(
     let files_to_parse = calculate_files_to_parse(added_files, modified_files);
     progress.set_total_files(files_to_parse.len() as u64);
 
-    if !files_to_parse.is_empty() {
+    let (mut resolution_entities, total_entities) = if files_to_parse.is_empty() {
+        (Vec::new(), 0)
+    } else {
         info!(
             "Will parse and index {} file(s) (added/modified)",
             files_to_parse.len()
         );
+        run_streaming_ingest(cfg, vector_db, graph_db, progress, &files_to_parse).await?
+    };
 
-        let (mut resolution_entities, total_entities) =
-            run_streaming_ingest(cfg, vector_db, graph_db, progress, &files_to_parse).await?;
+    // Stage 7: Relationship Resolution
+    // Cross-repo dependency linking: upsert Repository nodes and create DEPENDS_ON edges.
+    // Must run BEFORE relationship resolution so that auto-discovered dependencies
+    // are available for cross-repo call resolution.
+    //
+    // It must ALSO run on re-index runs with no modified files (empty batch),
+    // so that: (a) a freshly indexed library retroactively links already
+    // indexed consumers via the reverse sweep, and (b) an unchanged consumer
+    // links a newly indexed dependency. An empty batch is safe — linking
+    // unions the batch with the build dependencies persisted in Neo4j.
+    link_cross_repo_dependencies(&resolution_entities, graph_db, cfg).await?;
 
-        // Stage 7: Relationship Resolution
-        // Cross-repo dependency linking: upsert Repository nodes and create DEPENDS_ON edges.
-        // Must run BEFORE relationship resolution so that auto-discovered dependencies
-        // are available for cross-repo call resolution.
-        link_cross_repo_dependencies(&resolution_entities, graph_db, cfg).await?;
-
+    if !files_to_parse.is_empty() {
         let metrics =
             resolve_and_save_relationships(&mut resolution_entities, graph_db, cfg).await?;
 

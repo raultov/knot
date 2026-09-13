@@ -29,8 +29,12 @@ const STATE_FILE: &str = "index_state.json";
 /// Bumping this number forces a clean re-index because earlier versions
 /// produced FQNs that are incompatible with the current schema (e.g. Rust
 /// entities now carry crate-qualified FQNs introduced in v2, and
-/// `__fixture::`/`__loose::` prefixed FQNs for non-src files in v3).
-const CURRENT_STATE_VERSION: u32 = 4;
+/// `__fixture::`/`__loose::` prefixed FQNs for non-src files in v3)
+/// — or embeddings that are incomparable with the current ones (v5: the
+/// embed text now carries the FQN, the tokenized identifier and the
+/// tokenized outgoing call names, and every Rust entity keeps its
+/// signature, so vectors built by v4 and earlier must be rebuilt).
+const CURRENT_STATE_VERSION: u32 = 5;
 
 /// Returns the cache directory for fastembed models.
 /// Prioritizes the `KNOT_FASTEMBED_CACHE_DIR` environment variable.

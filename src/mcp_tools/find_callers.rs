@@ -36,9 +36,13 @@ use crate::mcp_tools::repo_scope_from_args;
                    \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References, Overridden by, Overrides) with exact file paths and line numbers. \
                    Each caller entry and each resolved target states its repository as `(repo: name)`, so rows are attributable when multiple repositories are in scope. \
                    For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
-                   When multiple entities with the same name exist (e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references. \
-                   Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
-                   \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
+                   When the query resolves to more than one entity with that name (homonyms, e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references — even when only one of the homonyms has callers. \
+                    Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
+                    \n\nTruncation & completeness: the queried name is first resolved to concrete targets (capped at 25 by default). \
+                    When more targets match than fit the cap, the response states 'Truncated — N targets matched; showing the first M by FQN' and \
+                    'Counts below are partial — they cover only the M of N targets shown', so bucket counts are never mistaken for the complete impact set. \
+                    Raise 'max_targets' (up to 500) to retrieve more targets when the notice reports truncation. \
+                    \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
                    \n\nSupports Java, Kotlin, C#, Rust, and TypeScript codebases.",
     read_only_hint = true,
     destructive_hint = false,
@@ -59,6 +63,13 @@ pub struct FindCallersTool {
         max_length = 255
     )]
     pub repo_name: Option<String>,
+    #[json_schema(
+        description = "Maximum number of resolved targets to include (default: 25, max: 500). Raise this when the response reports a truncated target list and you need the complete impact set.",
+        minimum = 1,
+        maximum = 500,
+        default = 25
+    )]
+    pub max_targets: Option<i64>,
 }
 
 impl FindCallersTool {
@@ -81,6 +92,11 @@ impl FindCallersTool {
 
         let repo = repo_scope_from_args(&args);
 
+        let max_targets = args
+            .get("max_targets")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.max(1) as usize);
+
         // Check if in offline mode
         if handler.graph_db.is_none() {
             return Err(CallToolError::from_message(
@@ -95,7 +111,7 @@ impl FindCallersTool {
             .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let json_result = cli_tools::run_find_callers(entity_name, &repo, graph_db)
+        let json_result = cli_tools::run_find_callers(entity_name, &repo, graph_db, max_targets)
             .await
             .map_err(|e| CallToolError::from_message(format!("Find callers failed: {}", e)))?;
 
@@ -127,6 +143,61 @@ mod tests {
         let props = schema.properties.unwrap();
         assert!(props.contains_key("entity_name"));
         assert!(props.contains_key("repo_name"));
+        // v1.10.0: opt-in full impact set.
+        assert!(props.contains_key("max_targets"));
+    }
+
+    #[test]
+    fn test_find_callers_max_targets_is_optional_with_defaults() {
+        let tool = FindCallersTool::tool();
+        let schema = tool.input_schema;
+        // Optional parameter — omitting it keeps the 25-target default.
+        assert!(!schema.required.contains(&"max_targets".to_string()));
+        let props = schema.properties.unwrap();
+        let max_prop = props.get("max_targets").unwrap();
+        let desc = max_prop.get("description").unwrap().as_str().unwrap();
+        assert_eq!(
+            desc,
+            "Maximum number of resolved targets to include (default: 25, max: 500). Raise this when the response reports a truncated target list and you need the complete impact set."
+        );
+        let maximum = max_prop.get("maximum").unwrap().as_i64().unwrap();
+        // Drift guard: the advertised ceiling must equal the bound the DB
+        // layer actually clamps against.
+        assert_eq!(maximum, crate::db::graph::MAX_TARGETS_CEILING as i64);
+    }
+
+    #[test]
+    fn test_find_callers_description_documents_truncation_contract() {
+        let tool = FindCallersTool::tool();
+        let desc = tool.description.unwrap();
+        assert!(desc.contains("Truncation & completeness"));
+        assert!(desc.contains("Counts below are partial"));
+        assert!(desc.contains("Raise 'max_targets' (up to 500)"));
+    }
+
+    #[test]
+    fn test_max_targets_defaults_to_none_when_absent() {
+        // Mirrors the parse in `handle`: absent parameter → None → the shared
+        // core applies DEFAULT_MAX_TARGETS (25).
+        let args = serde_json::json!({"entity_name": "delete"});
+        let max_targets = args
+            .get("max_targets")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.max(1) as usize);
+        assert_eq!(max_targets, None);
+    }
+
+    #[test]
+    fn test_max_targets_zero_is_bounded_from_below() {
+        // A bogus `max_targets: 0` must not disable the cap (0 would mean
+        // "no targets at all"); clamped to >= 1 here and to the ceiling in
+        // the db layer.
+        let args = serde_json::json!({"entity_name": "delete", "max_targets": 0});
+        let max_targets = args
+            .get("max_targets")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.max(1) as usize);
+        assert_eq!(max_targets, Some(1));
     }
 
     #[test]

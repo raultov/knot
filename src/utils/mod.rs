@@ -1,5 +1,7 @@
 //! Utility helpers: logging initialization and miscellaneous functions.
 
+pub mod identifiers;
+
 use anyhow::{Context, Result};
 use std::io::{IsTerminal, Write};
 use tracing_subscriber::{EnvFilter, fmt};

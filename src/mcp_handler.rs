@@ -16,7 +16,7 @@ use crate::db::{
     vector::{VectorConnectExt, VectorDb},
 };
 use crate::mcp_tools::{
-    explore_file::ExploreFileTool, find_callers::FindCallersTool,
+    explore_file::ExploreFileTool, find_callers::FindCallersTool, list_files::ListFilesTool,
     list_repo_dependencies::ListRepoDependenciesTool, list_repositories::ListRepositoriesTool,
     search_hybrid_context::SearchHybridContextTool,
 };
@@ -91,6 +91,7 @@ impl KnotMcpHandler {
             SearchHybridContextTool::tool(),
             FindCallersTool::tool(),
             ExploreFileTool::tool(),
+            ListFilesTool::tool(),
             ListRepoDependenciesTool::tool(),
             ListRepositoriesTool::tool(),
         ]
@@ -115,6 +116,7 @@ impl KnotMcpHandler {
             "search_hybrid_context" => SearchHybridContextTool::handle(params, self).await,
             "find_callers" => FindCallersTool::handle(params, self).await,
             "explore_file" => ExploreFileTool::handle(params, self).await,
+            "list_files" => ListFilesTool::handle(params, self).await,
             "list_repo_dependencies" => ListRepoDependenciesTool::handle(params, self).await,
             "list_repositories" => ListRepositoriesTool::handle(params, self).await,
             _ => Err(CallToolError::unknown_tool(params.name)),
@@ -252,10 +254,11 @@ mod tests {
 
     // --- Runtime-free MCP tool surface (KnotMcpHandler::tools / ::dispatch) ---
 
-    const EXPECTED_TOOLS: [&str; 5] = [
+    const EXPECTED_TOOLS: [&str; 6] = [
         "search_hybrid_context",
         "find_callers",
         "explore_file",
+        "list_files",
         "list_repo_dependencies",
         "list_repositories",
     ];

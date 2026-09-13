@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 use knot::{
     cli_tools,
     config::{Config, OutputFormat},
-    db::{graph::ConnectExt, vector::VectorConnectExt},
+    db::{
+        graph::{ConnectExt, GraphDb},
+        vector::VectorConnectExt,
+    },
     models::{Cli, Commands, RepoScope},
     pipeline::embed::Embedder,
     utils,
@@ -44,13 +47,20 @@ async fn main() -> anyhow::Result<()> {
             query,
             max_results,
             repo,
+            kinds,
+            path,
             output,
         } => {
+            report_search_clamp(max_results);
             let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
             let json_result = cli_tools::run_search_hybrid_context(
                 &query,
                 max_results,
                 &target_repo,
+                cli_tools::SearchFilters {
+                    kinds: kinds.as_deref(),
+                    path: path.as_deref(),
+                },
                 &cli_tools::SearchContext {
                     vector_db: &vector_db,
                     graph_db: &graph_db,
@@ -65,11 +75,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Callers {
             entity_name,
             repo,
+            max_targets,
             output,
         } => {
             let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
             let json_result =
-                cli_tools::run_find_callers(&entity_name, &target_repo, &graph_db).await?;
+                cli_tools::run_find_callers(&entity_name, &target_repo, &graph_db, max_targets)
+                    .await?;
             let formatted = utils::format_callers_output(&entity_name, json_result, output);
             utils::print_with_pager(&formatted);
         }
@@ -86,26 +98,21 @@ async fn main() -> anyhow::Result<()> {
             utils::print_with_pager(&formatted);
         }
 
+        Commands::Files { path, repo, output } => {
+            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
+            let json_result =
+                cli_tools::run_list_files(path.as_deref(), &target_repo, &graph_db).await?;
+            let formatted = cli_tools::format_files_output(&json_result, output);
+            utils::print_with_pager(&formatted);
+        }
+
         Commands::Deps {
             repo_name,
             depth,
             reverse,
             output,
         } => {
-            let json_result = cli_tools::run_deps(&repo_name, depth, reverse, &graph_db).await?;
-            match output {
-                OutputFormat::Json => {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json_result).unwrap_or_default()
-                    );
-                }
-                OutputFormat::Table | OutputFormat::Markdown => {
-                    let formatted =
-                        cli_tools::format_deps_output(&repo_name, reverse, &json_result);
-                    utils::print_with_pager(&formatted);
-                }
-            }
+            run_deps_command(&repo_name, depth, reverse, output, &graph_db).await?;
         }
 
         Commands::Repos { filter, output } => {
@@ -122,6 +129,45 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run the `deps` subcommand: query the graph, then render JSON (API contract,
+/// never annotated with diagnostics) or the human-readable form in which an
+/// empty result is explained honestly (declared-but-unindexed,
+/// resolves-but-no-edge-yet, repo not indexed, nothing declared) — never a
+/// bare, misleading "No dependencies found."
+async fn run_deps_command(
+    repo_name: &str,
+    depth: u32,
+    reverse: bool,
+    output: OutputFormat,
+    graph_db: &Arc<GraphDb>,
+) -> anyhow::Result<()> {
+    report_depth_clamp(depth, reverse);
+    let json_result = cli_tools::run_deps(repo_name, depth, reverse, graph_db).await?;
+    match output {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_result).unwrap_or_default()
+            );
+        }
+        OutputFormat::Table | OutputFormat::Markdown => {
+            let diagnostics = if json_result.as_array().is_some_and(|a| a.is_empty()) {
+                Some(cli_tools::collect_deps_diagnostics(repo_name, reverse, graph_db).await?)
+            } else {
+                None
+            };
+            let formatted = cli_tools::format_deps_output_with_diagnostics(
+                repo_name,
+                reverse,
+                &json_result,
+                diagnostics.as_ref(),
+            );
+            utils::print_with_pager(&formatted);
+        }
+    }
+    Ok(())
+}
+
 /// Build a [`RepoScope`] from the parsed `--repo` flag and the configured default.
 ///
 /// When the flag is present, [`RepoScope::parse`] owns splitting on `,` and the
@@ -131,6 +177,28 @@ async fn main() -> anyhow::Result<()> {
 fn build_repo_scope(repo: Option<&str>, default: &str) -> RepoScope {
     repo.map(RepoScope::parse)
         .unwrap_or_else(|| RepoScope::One(default.to_string()))
+}
+
+/// Print a warning on stderr when the requested search result count falls
+/// outside the advertised `1..=MAX_RESULTS_CEILING` bound. stderr keeps
+/// stdout a clean payload for `--output json` consumers.
+fn report_search_clamp(max_results: usize) {
+    let resolved = cli_tools::resolve_max_results(max_results);
+    if let Some(notice) = resolved.notice() {
+        eprintln!("{}", notice.trim_end());
+    }
+}
+
+/// Same for the deps `--depth` bound.
+fn report_depth_clamp(depth: u32, reverse: bool) {
+    let resolved = cli_tools::resolve_max_depth(depth);
+    if resolved != depth {
+        let word = if depth == 0 { "floored" } else { "clamped" };
+        eprintln!(
+            "Note: --depth was {word} from {depth} to {resolved} (bound applies to {} traversal).",
+            if reverse { "reverse" } else { "forward" }
+        );
+    }
 }
 
 #[cfg(test)]
