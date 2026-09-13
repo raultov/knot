@@ -1,12 +1,12 @@
 # Multi-Language Roadmap for Knot
 
-This document tracks the language and capability expansion of `knot` beyond the original Java/TypeScript/JavaScript/Kotlin/Rust/HTML/CSS/SCSS foundation. Phases 8-16 are all delivered; the Current State section below reflects v1.8.0.
+This document tracks the language and capability expansion of `knot` beyond the original Java/TypeScript/JavaScript/Kotlin/Rust/HTML/CSS/SCSS foundation. Phases 8-16 are all delivered; the Current State section below reflects v1.9.5.
 
 ---
 
 ## Overview
 
-**Current State (v1.8.0):**
+**Current State (v1.9.5):**
 - Java (v1.3.6), Kotlin, TypeScript/TSX, JavaScript/Node.js, Rust, Python, Groovy, C/C++, C# (v1.7.0), HTML, CSS, SCSS support
 - C# (v1.7.0): 16 `CSharp*` entity kinds, namespace-qualified FQNs (`<namespace>.<Type>.<member>`), `OVERRIDES` linking beyond the JVM, XML doc comments, and attributes
 - Markdown (v1.4.9): `MarkdownDocument` (one per `.md`/`.markdown` file) and `MarkdownSection` (one per ATX heading H1–H6) with section bodies embedded for full semantic search over docs
@@ -314,6 +314,17 @@ Enable `knot` to target multiple repositories in a single query across `search_h
 ---
 
 ## Changelog
+
+### v1.9.5 - Bound Enforcement, Recall, Ranking, List Files, Path Filters
+- ✅ **Feat(bounds)**: Enforced bounds across CLI & MCP for `search_hybrid_context.max_results` (1–100) and `list_repo_dependencies.max_depth` (1–10).
+- ✅ **Feat(files)**: Added `list_files` read-only file enumeration MCP tool & `knot files` CLI subcommand.
+- ✅ **Feat(search)**: Added `path` directory prefix / glob filter on `search_hybrid_context` and CLI `knot search`.
+- ✅ **Feat(recall)**: Enhanced embed text carrying FQN, identifier tokens, and call names; added token-level lexical probe & caller-recall bridge.
+- ✅ **Feat(ranking)**: Re-ranked candidates so definition entities outrank prose, tests, and config; added optional `kinds` filter.
+- ✅ **Fix(deps)**: Enhanced `knot deps` empty-result diagnostics and made reverse lookups transitive while honoring `--depth`.
+- ✅ **Fix(callers/npm)**: Fixed homonym target attribution bug for callerless homonyms in `find_callers`; made npm cross-repo linking bidirectional with persistent repository identity.
+- ✅ **Feat(ui)**: Added explicit, quantified truncation notices in `find_callers` and `search_hybrid_context`.
+- ✅ **Fix(db)**: Fixed Qdrant delete filter substring bug preventing sibling repository deletion and made `find_callers` target ordering deterministic.
 
 ### v1.8.0 - Repository Scope Selection
 - ✅ **Feat(scope)**: Multi-repository scope selection for `search_hybrid_context`, `find_callers`, `explore_file` and CLI commands `--repo/-r`.
