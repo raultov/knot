@@ -5,6 +5,49 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.6
+
+- **Fixed**: `find_callers` fuzzy target resolution no longer surfaces
+  documentation/config/build/infra metadata as resolved targets. Target
+  resolution is code-only by default (`markdown_section`, `config_property`,
+  `build_dependency`, `cargo_package`, `cargo_feature`, `project_identity`,
+  `k8s_*`, `helm_*` … can never be presented as "Resolved to N targets").
+  `knot callers cargo` no longer fills the list with Cargo.toml metadata.
+  Every non-code match is *disclosed* (`Non-code matches hidden — N entities …`)
+  instead of silently dropped; `kinds=all` restores the unfiltered view and an
+  explicit allow-list scopes it. New optional `kinds` parameter on both the
+  CLI (`knot callers … --kinds`) and the MCP tool.
+- **Fixed**: fuzzy matching is case-insensitive — `find_callers hikari` now
+  matches `Hikari`-named artifacts (exact tiers stay exact).
+- **Fixed**: 11 relationship types the pipeline produces were never queried by
+  `find_references` and thus never shown by `find_callers`: `MACRO_CALLS`,
+  `REFERENCES_DOM`, `USES_CSS_CLASS`, `IMPORTS_SCRIPT`, `IMPORTS_STYLESHEET`,
+  `USES_BACKEND`, `USES_PROBE`, `USES_ACL`, `INCLUDES`, `IMPORTS_VMOD`,
+  `DECLARED_UNUSED` — a macro crate reporting "This entity may be unused"
+  while its call sites existed. Buckets are now filled from a single
+  multi-labelled query (also fewer Neo4j round-trips); the outgoing-reference
+  query of `explore_file` gained the same edge types. `CONTAINS` (containment)
+  and `DEPENDS_ON` (repository-level, served by `knot deps`) stay excluded,
+  and `GENERIC_BOUND` was never built by the pipeline — noted as dead enum
+  variant.
+- **Fixed (JS parser)**: the `dom.element_id` / `css.class_name` captures of
+  `javascript.scm` fire on the string argument alone, so the per-match
+  mechanism could never attach them to an entity and the graph received zero
+  `REFERENCES_DOM` / `USES_CSS_CLASS` edges (#web). A new JavaScript post
+  pass (`collect_dom_css_references`) detects `getElementById` /
+  `querySelector*` / `classList.*` / `className =` call sites from the AST
+  and attaches the intents to the enclosing entity (or the synthetic
+  `<module>` for top-level statements).
+- **Fixed**: `explore_file` no longer returns "No entities found in this file"
+  for a path that is not in the index. Two honest outcomes: no indexed file
+  matched (with suffix-fallback candidates listed as "Did you mean" when
+  available), or explicitly "file indexed, zero entities". The JSON payload
+  carries `file_matched: bool` for programmatic consumers.
+- Shared entity-kind taxonomy module (`cli_tools::kinds`) shared by
+  `search_hybrid_context` ranking and the `find_callers` kind scope.
+
+---
+
 ## v1.9.5
 
 - Search `max_results` (1–100) and Deps `max_depth` (1–10) bound enforcement across CLI & MCP.
