@@ -253,15 +253,28 @@ Find who calls it and what it might depend on.
 
 ## Troubleshooting
 
-### "No entities found in file"
+### "No indexed file matched"
 
-**Cause:** File path is incorrect or file doesn't contain entities (config files, etc.)
+**Cause:** The path does not resolve to any indexed file, or the file exists
+in the codebase but contains no indexed entities (knot does not index a
+per-file node, so those two states are indistinguishable from the graph —
+the wording says so instead of claiming emptiness)
 
 **Solutions:**
+- When the answer lists `Did you mean` candidates, retry with the proposed path
+- Try the bare filename: `knot explore "Cargo.toml"` uses the suffix fallback
 - Verify file path is correct (relative to repository root)
-- Ensure it's a source file (not a config, JSON, or other non-code file)
-- Try using absolute path: `knot explore "src/main/java/com/app/Service.java"`
+- Ensure the repository is re-indexed (`knot-indexer`)
 - Check repository name: Use `--repo my-repo` if exploring a different repository
+- The JSON payload carries `file_matched: true/false` for programmatic use
+
+### "No entities found in this file" for an *indexed* file
+
+**Cause:** File contains only non-entity content (e.g. a pure CSS or empty file)
+
+**Solutions:**
+- If the response lists `ambiguous_path_candidates`, use them
+- Confirm with `knot files --path <dir>` which files are indexed
 
 ### "File not found" or connection errors
 

@@ -366,6 +366,10 @@ knot callers "LoginService" --repo all
 ```
 Find all code that references a specific entity (dead code detection, impact analysis, call chains). Whenever the query resolves to more than one target sharing that name, results are automatically grouped by target (`### Target: <fqn> at <file>:<line>`) with file locations and signatures — including when only one of the homonyms has callers.
 
+Target resolution is **code-only by default**: documentation, configuration, build-system and Kubernetes/Helm entities (`markdown_section`, `config_property`, `build_dependency`, `cargo_package`, `project_identity`, `k8s_*`, `helm_*`, …) can never be presented as resolved targets. When the filter removes matches the response discloses them (`Non-code matches hidden — N entities …`) and names the fix (`kinds=all` to include them). A fuzzy query like `cargo` no longer fills the target list with `Cargo.toml` metadata. Fuzzy matching is also **case-insensitive**, so `hikari` finds `Hikari`-named artifacts. Override the scope with `--kinds all` / MCP `kinds:"all"`, or pass an explicit allow-list (`--kinds callable`, `--kinds build_dependency`).
+
+The buckets cover every edge type the pipeline produces: Calls, Extends, Implements, References, **Macro calls** (Rust `MACRO_CALLS`), **DOM references** (JS → HTML element id), **CSS class usage** (JS → CSS class), script/stylesheet imports, the VCL edges (uses backend/probe/acl, includes, VMOD imports, declared-unused) plus Overridden by / Overrides — so `init_vec`'s macro call sites and `app-container`'s JS manipulators now show up instead of a false "may be unused".
+
 Every caller entry is **self-labeling**: the owning repository is printed next to each row as `(repo: <name>)` — in the CLI table, the Markdown answer, and the resolution block — so rows stay attributable when the scope spans multiple repositories:
 
 ```markdown

@@ -22,6 +22,51 @@ Find all places where a specific entity is used, referenced, extended, or implem
   - Accepts a single name (`my-repo`), a comma-separated list (`"repo-a,repo-b"`), or the sentinel `all`/`*` (every indexed repo); MCP also accepts a JSON array `["repo-a", "repo-b"]`
   - Use when working with multiple indexed repositories
 
+- **`--kinds <spec>`**: Entity-kind scope for target resolution (optional; MCP `kinds`)
+  - Default: **code-only** — documentation, configuration, build-system and
+    Kubernetes/Helm entities (`markdown_section`, `config_property`,
+    `build_dependency`, `cargo_package`, `cargo_feature`, `project_identity`,
+    `k8s_*`, `helm_*`, …) can never be presented as resolved targets, so a
+    fuzzy query like `cargo` never fills the list with `Cargo.toml` metadata
+  - When the filter removes matches, the response discloses them
+    (`Non-code matches hidden — N entities …`) and names the opt-in; matches
+    are never silently dropped or silently shown
+  - `all`/`*` disables filtering; anything else is an allow-list of exact
+    kinds or aliases (`callable`, `class`, `config`, `docs`,
+    `rust_function`, …), comma-separated
+  - `resolution.kind_filter` in the JSON states which scope applied
+    (`code_default`, `any`, `explicit`)
+
+- **`--max-targets <n>`** (optional; MCP `max_targets`): raises the target cap
+  when the response reports truncation (max 500)
+
+## Relationship buckets
+
+Every edge type the pipeline produces is consulted:
+
+| Bucket | Edge | Meaning |
+|---|---|---|
+| Calls | `CALLS` | function/method invocations |
+| Extends | `EXTENDS` | class inheritance |
+| Implements | `IMPLEMENTS` | interface implementation |
+| References | `REFERENCES` | type annotations/usages |
+| Macro calls | `MACRO_CALLS` | Rust macro invocation sites |
+| DOM references | `REFERENCES_DOM` | JS → HTML element id |
+| CSS class usage | `USES_CSS_CLASS` | JS → CSS class |
+| Script imports | `IMPORTS_SCRIPT` | HTML → JS file |
+| Stylesheet imports | `IMPORTS_STYLESHEET` | HTML → CSS file |
+| Backend usage | `USES_BACKEND` | VCL → backend |
+| Probe usage | `USES_PROBE` | VCL → probe |
+| ACL usage | `USES_ACL` | VCL → ACL |
+| File includes | `INCLUDES` | VCL file inclusion |
+| VMOD imports | `IMPORTS_VMOD` | VCL → VMOD |
+| Declared unused | `DECLARED_UNUSED` | VCL intentional exemption |
+| Overridden by | `OVERRIDES` (reversed) | subtype method implementations |
+| Overrides | `OVERRIDES` | supertype methods implemented |
+
+`CONTAINS` (containment) and `DEPENDS_ON` (repository-level, use `knot deps`)
+are intentionally excluded.
+
 ## Output Format
 
 Results are grouped by relationship type:
@@ -322,10 +367,12 @@ knot callers "UserModel" --repo android
 
 ### "No references found" but you know it's used
 
-**Cause:** Entity name may not match exactly (case-sensitive), or it's referenced via reflection/strings
+**Cause:** name mismatch, reference via reflection/strings, or the edge type
+was previously untracked (macro calls, DOM/CSS usage — all consulted now)
 
 **Solutions:**
-- Try different capitalization: `userService` vs `UserService`
+- Exact tiers are case-sensitive: try `userService` vs `UserService`; fuzzy
+  matching is case-insensitive and needs ≥ 4 characters
 - Try the full qualified name if applicable
 - Search instead: `knot search "uses this entity"`
 - Check for string references: `knot search "handleRequest"` (in strings)
@@ -347,6 +394,8 @@ knot callers "UserModel" --repo android
 - Use signature fragments for methods: `knot callers "handleUser(Request"` instead of `knot callers "User"`
 - For classes, consider searching semantically instead: `knot search "user data model"`
 - Add parameters to disambiguate: `knot callers "process(PaymentRequest"`
+- Non-code matches (docs/config/build) are hidden by default; if you actually
+  were chasing a build artifact, rerun with `--kinds all`
 
 ### Connection errors
 

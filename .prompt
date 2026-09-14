@@ -43,7 +43,9 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 - "What breaks if I modify this function?"
 - "Find all references to `DatabaseService`"
 
-**Matching Precedence:** Exact FQN (`Namespace.Type.member` or `crate::mod::Type::member`) → FQN Suffix (`Type.member`) → Exact Name → Signature Prefix (`accept(List`) → Fuzzy Substring.
+**Matching Precedence:** Exact FQN (`Namespace.Type.member` or `crate::mod::Type::member`) → FQN Suffix (`Type.member`) → Exact Name → Signature Prefix (`accept(List`) → Fuzzy Substring (case-insensitive).
+
+**Entity-kind scope:** target resolution is code-only by default — docs/config/build/infra metadata can never be presented as resolved targets. When matches are hidden the response says so (`Non-code matches hidden…`); pass `kinds: "all"` to disable the scope, or a comma-separated allow-list of kinds/aliases.
 
 **Repo attribution:** Every caller entry and resolved target states its repository as `(repo: name)` — use it to attribute calls across multi-repository dependencies.
 
