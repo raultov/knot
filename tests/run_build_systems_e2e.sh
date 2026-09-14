@@ -452,6 +452,91 @@ else
     exit 1
 fi
 
+# ---- find_callers kind-scope tests (v1.9.6 bug fix regression) ----
+#
+# Fuzzy resolution used to present Cargo.toml / pom.xml / build.gradle
+# metadata as resolved targets of an impact-analysis question. The default
+# code-only kind scope must keep that noise out of the target list AND
+# disclose what it hid; `kinds=all` re-enables the old view; the fuzzy
+# predicate must be case-insensitive ("LOG4J" finds log4j).
+
+# Test 19a: default scope hides non-code targets and discloses them (CLI)
+echo ""
+echo "Test 19: find_callers log4j default scope hides build metadata (CLI)..."
+KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" \
+CLI_CALLERS=$(cargo run --release --bin knot -- callers "log4j" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$CLI_CALLERS" | grep -q "(build_dependency)"; then
+    echo -e "${RED}✗ find_callers still surfaces build_dependency by default${NC}"
+    exit 1
+fi
+if echo "$CLI_CALLERS" | grep -q "Non-code matches hidden"; then
+    echo -e "${GREEN}✓ find_callers log4j default scope hides and discloses metadata (CLI)${NC}"
+else
+    echo -e "${RED}✗ find_callers disclosure missing${NC}"
+    exit 1
+fi
+
+# Test 20: kinds opt-in returns the hidden metadata (CLI)
+echo ""
+echo "Test 20: find_callers log4j --kinds all returns build dependencies (CLI)..."
+CLI_CALLERS=$(cargo run --release --bin knot -- callers "log4j" -r "$REPO_NAME" --kinds all -o markdown 2>/dev/null)
+
+if echo "$CLI_CALLERS" | grep -q "(build_dependency)"; then
+    echo -e "${GREEN}✓ find_callers log4j --kinds all surfaces build dependencies (CLI)${NC}"
+else
+    echo -e "${RED}✗ find_callers kinds=all lost the build dependencies${NC}"
+    exit 1
+fi
+
+# Test 21: fuzzy matching is case-insensitive (CLI)
+echo ""
+echo "Test 21: find_callers LOG4J matches log4j like Hikari-style casing (CLI)..."
+CLI_CALLERS_UPPER=$(cargo run --release --bin knot -- callers "LOG4J" -r "$REPO_NAME" --kinds all -o markdown 2>/dev/null)
+
+if echo "$CLI_CALLERS_UPPER" | grep -q "(build_dependency)"; then
+    echo -e "${GREEN}✓ find_callers LOG4J matches lowercased log4j (case-insensitive fuzzy)${NC}"
+else
+    echo -e "${RED}✗ find_callers fuzzy is still case-sensitive${NC}"
+    exit 1
+fi
+
+# Test 22: MCP parity for the kind-scope behaviour
+echo ""
+echo "Test 22: find_callers log4j kind scope MCP parity..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"log4j\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+# The Markdown disclosure bolds its headline (`**Non-code matches hidden** — N`);
+# strip the emphasis characters so the count parse is format-agnostic.
+MCP_HIDDEN_COUNT=$(echo "$MCP_RESPONSE" | sed 's/\*//g' | grep -o "Non-code matches hidden — [0-9]*" | head -1 | grep -o "[0-9]*$")
+# MCP returns the same Markdown the CLI renders (shared formatter): a target
+# bullet reads "`...` (build_dependency) at `pom.xml:1`", while the hidden
+# disclosure names the kind as unbracketed prose — the parenthesised form
+# discriminates a bucket row from the disclosure.
+MCP_HAS_BUILD=$(echo "$MCP_RESPONSE" | grep -q "(build_dependency)" && echo yes || echo no)
+
+if [ "$MCP_HAS_BUILD" = "no" ] && [ -n "$MCP_HIDDEN_COUNT" ] && [ "$MCP_HIDDEN_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}✓ MCP find_callers hides metadata and reports hidden_non_code=$MCP_HIDDEN_COUNT${NC}"
+else
+    echo -e "${RED}✗ MCP find_callers kind-scope parity failed (has_build=$MCP_HAS_BUILD hidden=$MCP_HIDDEN_COUNT)${NC}"
+    exit 1
+fi
+
+# Test 23: MCP kinds=all opt-in parity
+echo ""
+echo "Test 23: find_callers log4j kinds=all MCP parity..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"log4j\",\"repo_name\":\"$REPO_NAME\",\"kinds\":\"all\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+if echo "$MCP_RESPONSE" | grep -q "build_dependency"; then
+    echo -e "${GREEN}✓ MCP find_callers kinds=all surfaces build dependencies${NC}"
+else
+    echo -e "${RED}✗ MCP find_callers kinds=all did not surface build dependencies${NC}"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Build Systems E2E tests passed!${NC}"

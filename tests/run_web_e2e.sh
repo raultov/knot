@@ -353,6 +353,53 @@ else
     exit 1
 fi
 
+# Test 9: find_callers REFERENCES_DOM bucket (never-consulted-bucket regression)
+# Before the fix, find_callers on an HTML id reported "may be unused" even
+# though the graph carries REFERENCES_DOM edges from the JS manipulator.
+echo ""
+echo "Test 8b: find_callers lists 'app-container' DOM references..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"app-container\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "app-container" -o markdown 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -qi "DOM references" && echo "$CLI_RESPONSE" | grep -qi "DOM references"; then
+    echo -e "${GREEN}✓ find_callers surfaces REFERENCES_DOM edges for app-container (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ REFERENCES_DOM bucket missing from find_callers for app-container${NC}"
+    echo "$CLI_RESPONSE" | head -30
+    exit 1
+fi
+
+# Test 8c: find_callers USES_CSS_CLASS bucket
+#
+# Asserted on 'btn-disabled' — declared in exactly one stylesheet
+# (spa_app.css). A class like 'btn-primary' (declared in 4 style files) is
+# intentionally NOT resolvable: multiple css_class candidates with no
+# context are skipped as ambiguous rather than guessed, and that contract
+# must stay intact.
+echo ""
+echo "Test 8c: find_callers lists 'btn-disabled' CSS class usage..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"btn-disabled\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "btn-disabled" -o markdown 2>/dev/null)
+
+if echo "$CLI_RESPONSE" | grep -qi "CSS class usage" && echo "$CLI_RESPONSE" | grep -q "btn-disabled"
+then
+    echo -e "${GREEN}✓ find_callers surfaces USES_CSS_CLASS edges for btn-disabled (CLI)${NC}"
+else
+    echo -e "${RED}✗ USES_CSS_CLASS bucket missing from find_callers for btn-disabled${NC}"
+    echo "$CLI_RESPONSE" | head -30
+    exit 1
+fi
+
+if echo "$MCP_RESPONSE" | grep -qi "CSS class usage" && echo "$MCP_RESPONSE" | grep -q "btn-disabled"
+then
+    echo -e "${GREEN}✓ MCP parity for USES_CSS_CLASS bucket (btn-disabled)${NC}"
+else
+    echo -e "${RED}✗ MCP parity missing for btn-disabled CSS bucket${NC}"
+    exit 1
+fi
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"

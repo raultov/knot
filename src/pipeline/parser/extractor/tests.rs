@@ -253,7 +253,7 @@ fn test_extract_entities_rust_doc_comment_reaches_docstring() {
     // Regression: Rust captures point at the identifier; the docstring
     // upward pass must re-anchor to the parent item or `///` docs never
     // reach the docstring (and therefore the embed text), leaving Rust
-    // definitions unfindable by behaviour.
+    // definitions unfindable by behavior.
     let source = concat!(
         "/// Authenticates a user with email and password.\n",
         "pub fn login(email: &str, password: &str) -> bool { true }\n",
@@ -964,13 +964,31 @@ fn test_extract_dom_references_and_css_class_usage() {
     assert!(result.is_ok());
     let entities = result.unwrap();
 
-    // Should extract the function and potentially DOM/CSS references
     assert!(!entities.is_empty(), "Should extract function definition");
 
-    // Check if any entity has DOM or CSS references
-    let has_references = entities.iter().any(|e| !e.reference_intents.is_empty());
-    // It's ok if no references are captured in unit tests; the E2E tests validate this
-    let _ = has_references;
+    // Regression: DOM/CSS call sites must attach to *some* indexed entity
+    // (the containment winner — in this single-line fixture both the `app`
+    // constant and `initApp` span line 1). Before the
+    // `collect_dom_css_references` post pass the intents were dropped
+    // entirely by the per-match mechanism.
+    assert!(
+        entities.iter().any(|e| e
+            .reference_intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::DomElementReference { element_id, .. } if element_id == "app-container"))),
+        "DomElementReference for app-container must reach an entity, got {:?}",
+        entities
+            .iter()
+            .flat_map(|e| e.reference_intents.iter())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        entities.iter().any(|e| e
+            .reference_intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::CssClassUsage { class_name, .. } if class_name == "active"))),
+        "CssClassUsage for active must reach an entity"
+    );
 }
 
 #[test]
@@ -993,8 +1011,26 @@ fn test_extract_css_class_usage_in_function() {
     // Should extract the function definition
     assert!(!entities.is_empty(), "Should extract toggleClass function");
 
-    // The E2E tests validate that CSS class references are properly captured
-    // Unit tests here focus on basic extraction
+    let toggle = entities
+        .iter()
+        .find(|e| e.name == "toggleClass")
+        .expect("toggleClass extracted");
+    assert!(
+        toggle
+            .reference_intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::CssClassUsage { class_name, .. } if class_name == "btn-primary")),
+        "classList.add('btn-primary') must surface: {:?}",
+        toggle.reference_intents
+    );
+    assert!(
+        toggle
+            .reference_intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::CssClassUsage { class_name, .. } if class_name == "active")),
+        "className assignment must surface: {:?}",
+        toggle.reference_intents
+    );
 }
 
 #[test]

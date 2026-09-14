@@ -501,6 +501,26 @@ else
     echo -e "${YELLOW}⚠ Macro invocation println not found (may be expected - external macro)${NC}"
 fi
 
+# Test 22b: MACRO_CALLS edge reaches find_callers (never-consulted-bucket regression)
+# The sample defines `macro_rules! init_vec` and invokes it on lines 151/210;
+# before the fix find_callers reported "This entity may be unused" despite
+# those MACRO_CALLS edges existing in the graph.
+echo ""
+echo "Test 22b: find_callers lists init_vec macro call sites (MACRO_CALLS bucket)..."
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "init_vec" -r "$REPO_NAME" -o markdown 2>/dev/null)
+
+if echo "$CLI_RESPONSE" | grep -q "Macro calls" && echo "$CLI_RESPONSE" | grep -q "sample.rs"; then
+    if echo "$CLI_RESPONSE" | grep -q "This entity may be unused"; then
+        echo -e "${RED}✗ Macro call sites found but 'may be unused' still claimed${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ find_callers surfaces MACRO_CALLS edges for init_vec${NC}"
+else
+    echo -e "${RED}✗ MACRO_CALLS edges missing from find_callers output${NC}"
+    echo "$CLI_RESPONSE" | head -30
+    exit 1
+fi
+
 # Test 23: Rust use/import capture — find_callers for BracedTrait
 echo ""
 echo "Test 23: Verifying Rust use statement capture — find_callers for BracedTrait..."
