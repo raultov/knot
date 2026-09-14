@@ -99,7 +99,8 @@ pub fn target_resolution_tiers(name: &str) -> Vec<(MatchTier, &'static str)> {
     if name.len() >= MIN_FUZZY_LEN {
         tiers.push((
             MatchTier::Fuzzy,
-            "target.fqn CONTAINS $name OR (target.name + COALESCE(target.signature, '')) CONTAINS $name",
+            "toLower(target.fqn) CONTAINS $name_lower \
+             OR toLower(target.name + COALESCE(target.signature, '')) CONTAINS $name_lower",
         ));
     }
 
@@ -197,7 +198,19 @@ pub fn rank_root_candidates(mut candidates: Vec<RootCandidate>) -> Vec<RootCandi
     candidates
 }
 
-pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
+/// Relationship types the `find_references` buckets cover in a single
+/// round-trip, via `type(r)` in the projection.
+///
+/// Produced-and-consumed edges only: `CONTAINS` (containment, not use) and
+/// `DEPENDS_ON` (repository level, served by `knot deps`) are deliberately
+/// absent, and `GENERIC_BOUND` is never built by the pipeline.
+pub fn find_references_rel_labels() -> &'static str {
+    "CALLS|EXTENDS|IMPLEMENTS|REFERENCES|MACRO_CALLS|REFERENCES_DOM|USES_CSS_CLASS\
+     |IMPORTS_SCRIPT|IMPORTS_STYLESHEET|USES_BACKEND|USES_PROBE|USES_ACL\
+     |INCLUDES|IMPORTS_VMOD|DECLARED_UNUSED"
+}
+
+pub fn relationship_query(rel_labels: &str, repo_scoped: bool) -> String {
     let repo_filter = if repo_scoped {
         "WHERE target.repo_name IN $repo_names AND target.uuid IN $target_uuids"
     } else {
@@ -205,9 +218,10 @@ pub fn relationship_query(rel_label: &str, repo_scoped: bool) -> String {
     };
 
     format!(
-        "MATCH (entity:Entity)-[:{rel_label}]->(target:Entity)
+        "MATCH (entity:Entity)-[r:{rel_labels}]->(target:Entity)
          {repo_filter}
-         RETURN entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+         RETURN type(r) AS rel_type,
+                entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                 entity.repo_name AS repo_name,
                 target.name AS target_name, target.fqn AS target_fqn,
                 target.file_path AS target_file_path,
@@ -308,9 +322,14 @@ pub fn get_file_entities_query(repo_names: &[String]) -> String {
 }
 
 pub fn get_file_outgoing_references_query(repo_names: &[String]) -> String {
+    // The outgoing-reference edge set mirrors `find_references_rel_labels`
+    // minus the file-level IMPORTS/INCLUDES/DECLARED_UNUSED edges, whose
+    // targets are file containers rather than the definitions this section
+    // lists (IMPORTS_SCRIPT/IMPORTS_STYLESHEET reach `explore` through
+    // their own pipeline instead).
     if repo_names.len() == 1 {
         "MATCH (src:Entity {file_path: $file_path, repo_name: $repo_name})
-              -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+              -[r:CALLS|EXTENDS|IMPLEMENTS|REFERENCES|MACRO_CALLS|REFERENCES_DOM|USES_CSS_CLASS|USES_BACKEND|USES_PROBE|USES_ACL]->
               (dst:Entity)
          WHERE dst.file_path <> $file_path OR NOT dst.repo_name IN $repo_names
          RETURN type(r) AS rel,
@@ -322,7 +341,7 @@ pub fn get_file_outgoing_references_query(repo_names: &[String]) -> String {
             .to_string()
     } else if repo_names.len() > 1 {
         "MATCH (src:Entity)
-              -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+              -[r:CALLS|EXTENDS|IMPLEMENTS|REFERENCES|MACRO_CALLS|REFERENCES_DOM|USES_CSS_CLASS|USES_BACKEND|USES_PROBE|USES_ACL]->
               (dst:Entity)
          WHERE src.file_path = $file_path AND src.repo_name IN $repo_names
            AND (dst.file_path <> $file_path OR NOT dst.repo_name IN $repo_names)
@@ -335,7 +354,7 @@ pub fn get_file_outgoing_references_query(repo_names: &[String]) -> String {
             .to_string()
     } else {
         "MATCH (src:Entity {file_path: $file_path})
-              -[r:REFERENCES|CALLS|EXTENDS|IMPLEMENTS]->
+              -[r:CALLS|EXTENDS|IMPLEMENTS|REFERENCES|MACRO_CALLS|REFERENCES_DOM|USES_CSS_CLASS|USES_BACKEND|USES_PROBE|USES_ACL]->
               (dst:Entity)
          WHERE dst.file_path <> $file_path
          RETURN type(r) AS rel,
@@ -453,11 +472,17 @@ pub(crate) struct ResolvedSubgraphRoot {
 /// resolved to. `targets` is capped at `max_targets` and is what relationship
 /// buckets are built from — consumers must treat bucket counts as partial
 /// whenever `truncated` is `true`.
+///
+/// `hidden_non_code` / `hidden_kinds` count the matched entities excluded by
+/// the kind filter ([`crate::cli_tools::kinds::KindFilter`]) so the response
+/// can disclose them instead of presenting a silently narrowed view.
 pub(crate) struct ResolvedTargets {
     pub targets: Vec<TargetRow>,
     pub tier: MatchTier,
     pub truncated: bool,
     pub total: usize,
+    pub hidden_non_code: usize,
+    pub hidden_kinds: Vec<String>,
 }
 
 /// Cap a resolved target list, preserving the true pre-truncation total.
@@ -481,7 +506,56 @@ fn finalize_targets(
         tier,
         truncated,
         total,
+        hidden_non_code: 0,
+        hidden_kinds: Vec::new(),
     }
+}
+
+/// Maximum number of distinct hidden kinds named in the disclosure; the
+/// full picture is always recoverable via `kinds=all`.
+const HIDDEN_KINDS_DISCLOSURE_CAP: usize = 6;
+
+/// Split resolved target rows into `(allowed, hidden)` under `filter`.
+///
+/// Free function so the partition contract is unit-testable without a
+/// database: the ladder treats "every row hidden" the same as "no rows"
+/// (it keeps walking tiers), and callers need the hidden side only for the
+/// disclosure message.
+fn partition_by_kind(
+    rows: Vec<TargetRow>,
+    filter: &crate::cli_tools::kinds::KindFilter,
+) -> (Vec<TargetRow>, Vec<TargetRow>) {
+    let mut allowed = Vec::new();
+    let mut hidden = Vec::new();
+    for row in rows {
+        if filter.allows(&row.kind) {
+            allowed.push(row);
+        } else {
+            hidden.push(row);
+        }
+    }
+    (allowed, hidden)
+}
+
+/// Fold one tier's hidden rows into the accumulated disclosure state:
+/// deduplicating by `uuid` (a row may match in several tiers) and keeping
+/// the distinct kind list sorted and capped for rendering.
+fn fold_hidden(
+    hidden_rows: Vec<TargetRow>,
+    hidden_uuids: &mut std::collections::HashSet<String>,
+    hidden_kinds: &mut Vec<String>,
+) -> usize {
+    let mut newly_hidden = 0usize;
+    for row in hidden_rows {
+        if hidden_uuids.insert(row.uuid.clone()) {
+            newly_hidden += 1;
+        }
+        if !hidden_kinds.contains(&row.kind) {
+            hidden_kinds.push(row.kind.clone());
+        }
+    }
+    hidden_kinds.sort();
+    newly_hidden
 }
 
 impl GraphDb {
@@ -490,15 +564,28 @@ impl GraphDb {
         name: &str,
         repo_names: &[String],
         max_targets: usize,
+        kind_filter: &crate::cli_tools::kinds::KindFilter,
     ) -> Result<ResolvedTargets> {
         let tiers = target_resolution_tiers(name);
 
         let repo_scoped = !repo_names.is_empty();
 
+        // Hidden rows accumulate across tiers, deduplicated by uuid: a row
+        // may match in ExactName and again in Fuzzy when an earlier tier
+        // produced no *allowed* hits and the ladder kept walking.
+        let mut hidden_uuids = std::collections::HashSet::new();
+        let mut hidden_kinds: Vec<String> = Vec::new();
+        let mut hidden_non_code = 0usize;
+
         for (tier, predicate) in tiers {
             let query_str = reference_target_query(predicate, repo_scoped);
 
-            let mut q = query(&query_str).param("name", name);
+            // `name_lower` is only consumed by the Fuzzy tier's predicate;
+            // binding it on every tier keeps the call sites uniform (an
+            // unused query parameter is harmless in neo4rs).
+            let mut q = query(&query_str)
+                .param("name", name)
+                .param("name_lower", name.to_lowercase());
             if repo_scoped {
                 q = q.param("repo_names", repo_names.to_vec());
             }
@@ -529,9 +616,23 @@ impl GraphDb {
                 });
             }
 
-            if !targets.is_empty() {
-                return Ok(finalize_targets(targets, tier, max_targets));
+            if targets.is_empty() {
+                continue;
             }
+
+            let (allowed, hidden) = partition_by_kind(targets, kind_filter);
+            hidden_non_code += fold_hidden(hidden, &mut hidden_uuids, &mut hidden_kinds);
+
+            if !allowed.is_empty() {
+                let mut resolved = finalize_targets(allowed, tier, max_targets);
+                resolved.hidden_non_code = hidden_non_code;
+                hidden_kinds.truncate(HIDDEN_KINDS_DISCLOSURE_CAP);
+                resolved.hidden_kinds = hidden_kinds;
+                return Ok(resolved);
+            }
+            // Every hit of this tier was filtered out: keep walking the
+            // ladder — an all-metadata tier must not shadow a code hit in
+            // a later tier.
         }
 
         let default_tier = if name.len() >= MIN_FUZZY_LEN {
@@ -544,6 +645,12 @@ impl GraphDb {
             tier: default_tier,
             truncated: false,
             total: 0,
+            hidden_non_code,
+            hidden_kinds: {
+                let mut kinds = hidden_kinds;
+                kinds.truncate(HIDDEN_KINDS_DISCLOSURE_CAP);
+                kinds
+            },
         })
     }
 
@@ -579,6 +686,10 @@ impl GraphDb {
 
             let q = query(&query_str)
                 .param("name", name)
+                // Unused by every tier except Fuzzy, whose predicate matches
+                // on the lowercased form; binding it unconditionally keeps
+                // this call site in lockstep with `resolve_reference_targets`.
+                .param("name_lower", name.to_lowercase())
                 .param("repo_name", repo_name);
 
             let mut rows = self.graph.execute(q).await.context(format!(
@@ -663,6 +774,7 @@ pub trait QueryExt {
         entity_name: &str,
         repo_names: &[String],
         max_targets: usize,
+        kinds: Option<&str>,
     ) -> Result<serde_json::Value>;
     async fn find_callers(
         &self,
@@ -791,19 +903,40 @@ impl QueryExt for GraphDb {
         Ok(serde_json::json!(results))
     }
 
-    /// Find all entities that reference a given entity via any relationship type (CALLS, EXTENDS, IMPLEMENTS, REFERENCES).
-    /// Returns results grouped by relationship type.
+    /// Find all entities that reference a given entity via any produced
+    /// relationship type (see [`find_references_rel_labels`]). Returns
+    /// results grouped by relationship type.
+    ///
+    /// `kinds` scopes the target resolution (`None` = default code-kind
+    /// filter, `all` = no filtering, otherwise an alias/exact-kind list —
+    /// see [`crate::cli_tools::kinds::KindFilter`]).
     async fn find_references(
         &self,
         entity_name: &str,
         repo_names: &[String],
         max_targets: usize,
+        kinds: Option<&str>,
     ) -> Result<serde_json::Value> {
+        let kind_filter = crate::cli_tools::kinds::KindFilter::parse(kinds);
+        // Every bucket the multi-label query can produce is pre-initialized;
+        // empty ones stay as `[]` so the wire shape is stable (formatters
+        // and tests rely on the keys existing).
         let mut results = serde_json::json!({
             "calls": [],
             "extends": [],
             "implements": [],
             "references": [],
+            "macro_calls": [],
+            "references_dom": [],
+            "uses_css_class": [],
+            "imports_script": [],
+            "imports_stylesheet": [],
+            "uses_backend": [],
+            "uses_probe": [],
+            "uses_acl": [],
+            "includes": [],
+            "imports_vmod": [],
+            "declared_unused": [],
             "overridden_by": [],
             "overrides": []
         });
@@ -813,17 +946,21 @@ impl QueryExt for GraphDb {
 
         // Stage 1: Resolve targets
         let resolved = self
-            .resolve_reference_targets(entity_name, repo_names, max_targets)
+            .resolve_reference_targets(entity_name, repo_names, max_targets, &kind_filter)
             .await?;
 
         // Add the resolution info — `total_targets` is the real pre-truncation
-        // entity count so downstream formatters can quantify truncation.
+        // entity count so downstream formatters can quantify truncation; the
+        // kind-filter fields disclose what the filter removed.
         results["resolution"] = serde_json::json!({
             "query": entity_name,
             "tier": resolved.tier,
             "fuzzy": matches!(resolved.tier, MatchTier::Fuzzy),
             "truncated": resolved.truncated,
             "total_targets": resolved.total,
+            "kind_filter": kind_filter.wire_label(),
+            "hidden_non_code": resolved.hidden_non_code,
+            "hidden_kinds": resolved.hidden_kinds,
             "targets": resolved.targets
         });
 
@@ -833,23 +970,14 @@ impl QueryExt for GraphDb {
 
         let target_uuids: Vec<String> = resolved.targets.iter().map(|t| t.uuid.clone()).collect();
 
-        // Stage 2: Query relationships
-        let rel_types = [
-            ("CALLS", "calls"),
-            ("EXTENDS", "extends"),
-            ("IMPLEMENTS", "implements"),
-            ("REFERENCES", "references"),
-        ];
-
-        for (rel_label, result_key) in rel_types {
-            let query_str = relationship_query(rel_label, !repo_names.is_empty());
-            let rows = self
-                .collect_reference_rows(&query_str, &target_uuids, repo_names, rel_label)
-                .await?;
-            if let Some(arr) = results.get_mut(result_key) {
-                *arr = serde_json::json!(rows);
-            }
-        }
+        // Stage 2: one labelled multi-relationship query instead of one
+        // round-trip per bucket. The global `ORDER BY` remains the intra-bucket
+        // order; the stable partition below preserves it per bucket.
+        let query_str = relationship_query(find_references_rel_labels(), !repo_names.is_empty());
+        let rows = self
+            .collect_reference_rows(&query_str, &target_uuids, repo_names, "references")
+            .await?;
+        partition_reference_rows(&rows, &mut results);
 
         // Stage 3: OVERRIDES buckets
         for (result_key, query_str) in [
@@ -1041,44 +1169,6 @@ impl QueryExt for GraphDb {
         Ok(serde_json::json!(results))
     }
 
-    /// Caller-recall bridge: `(caller_uuid, target_uuid)` edges. One
-    /// bounded query; a failure surfaces to the caller, which treats the
-    /// bridge as best-effort.
-    async fn find_caller_links(
-        &self,
-        target_uuids: &[String],
-        repo_names: &[String],
-        limit: usize,
-    ) -> Result<Vec<(String, String)>> {
-        if target_uuids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let query_str = caller_links_query(!repo_names.is_empty());
-        let mut q = query(&query_str)
-            .param("target_uuids", target_uuids.to_vec())
-            .param("limit", limit as i64);
-        if !repo_names.is_empty() {
-            q = q.param("repo_names", repo_names.to_vec());
-        }
-
-        let mut rows = self
-            .graph
-            .execute(q)
-            .await
-            .context("Failed to query Neo4j for caller-recall bridge")?;
-
-        let mut links = Vec::new();
-        while let Ok(Some(row)) = rows.next().await {
-            if let (Ok(caller), Ok(target)) = (
-                row.get::<String>("caller_uuid"),
-                row.get::<String>("target_uuid"),
-            ) {
-                links.push((caller, target));
-            }
-        }
-        Ok(links)
-    }
-
     async fn find_files_by_suffix(
         &self,
         suffix_fragment: &str,
@@ -1142,6 +1232,44 @@ impl QueryExt for GraphDb {
         }
         Ok(serde_json::json!(results))
     }
+
+    /// Caller-recall bridge: `(caller_uuid, target_uuid)` edges. One
+    /// bounded query; a failure surfaces to the caller, which treats the
+    /// bridge as best-effort.
+    async fn find_caller_links(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        if target_uuids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_str = caller_links_query(!repo_names.is_empty());
+        let mut q = query(&query_str)
+            .param("target_uuids", target_uuids.to_vec())
+            .param("limit", limit as i64);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for caller-recall bridge")?;
+
+        let mut links = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            if let (Ok(caller), Ok(target)) = (
+                row.get::<String>("caller_uuid"),
+                row.get::<String>("target_uuid"),
+            ) {
+                links.push((caller, target));
+            }
+        }
+        Ok(links)
+    }
 }
 
 fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
@@ -1158,7 +1286,61 @@ fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
         "target_start_line": row.get::<i64>("target_start_line").ok(),
         "target_signature": row.get::<String>("target_signature").ok(),
         "target_repo_name": row.get::<String>("target_repo_name").ok(),
+        // Present only in the multi-label reference query; absent (from the
+        // old single-label shape without the rel alias) it maps to `None`,
+        // which the partition falls back to `references` for.
+        "rel_type": row.get::<String>("rel_type").ok(),
     })
+}
+
+/// Bucket-key mapping from a Cypher relationship label to the JSON result
+/// key `find_references` fills. Rows from the multi-label query land here;
+/// `OVERRIDES` rows need nothing here — the `overridden_by` / `overrides`
+/// buckets come from their own mirrored queries (Stage 3).
+fn reference_bucket_key(rel_type: &str) -> Option<&'static str> {
+    match rel_type {
+        "CALLS" => Some("calls"),
+        "EXTENDS" => Some("extends"),
+        "IMPLEMENTS" => Some("implements"),
+        "REFERENCES" => Some("references"),
+        "MACRO_CALLS" => Some("macro_calls"),
+        "REFERENCES_DOM" => Some("references_dom"),
+        "USES_CSS_CLASS" => Some("uses_css_class"),
+        "IMPORTS_SCRIPT" => Some("imports_script"),
+        "IMPORTS_STYLESHEET" => Some("imports_stylesheet"),
+        "USES_BACKEND" => Some("uses_backend"),
+        "USES_PROBE" => Some("uses_probe"),
+        "USES_ACL" => Some("uses_acl"),
+        "INCLUDES" => Some("includes"),
+        "IMPORTS_VMOD" => Some("imports_vmod"),
+        "DECLARED_UNUSED" => Some("declared_unused"),
+        _ => None,
+    }
+}
+
+/// Distribute multi-label reference rows into the result buckets.
+///
+/// Deliberately a **stable** partition: the Cypher carries a global
+/// `ORDER BY target.fqn, entity.file_path, entity.start_line`, and walking
+/// the rows in query order while appending preserves that per-bucket order
+/// exactly — the determinism contract the v1.9.4 fix pinned.
+///
+/// Rows lacking `rel_type` (legacy single-label wire shape) fall back to
+/// `references`; rows with an unknown `rel_type` are skipped rather than
+/// misfiled.
+fn partition_reference_rows(rows: &[serde_json::Value], results: &mut serde_json::Value) {
+    for row in rows {
+        let bucket = match row.get("rel_type").and_then(|v| v.as_str()) {
+            None => "references",
+            Some(rel_type) => match reference_bucket_key(rel_type) {
+                Some(bucket) => bucket,
+                None => continue,
+            },
+        };
+        if let Some(arr) = results.get_mut(bucket).and_then(|v| v.as_array_mut()) {
+            arr.push(row.clone());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1204,7 +1386,7 @@ mod tests {
             .expect("Failed to connect to Neo4j");
 
         let result = graph_db
-            .find_references("nonexistent_entity", &[], DEFAULT_MAX_TARGETS)
+            .find_references("nonexistent_entity", &[], DEFAULT_MAX_TARGETS, None)
             .await;
         assert!(result.is_ok());
         let json = result.unwrap();
@@ -1227,6 +1409,7 @@ mod tests {
                 "nonexistent_entity",
                 &["test-repo".to_string()],
                 DEFAULT_MAX_TARGETS,
+                None,
             )
             .await;
         assert!(result.is_ok());
@@ -1307,9 +1490,10 @@ mod tests {
     use super::{
         DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, TargetRow,
         caller_links_query, finalize_targets, find_callers_query, find_files_by_suffix_query,
-        get_file_entities_query, get_file_outgoing_references_query, overridden_by_query,
-        overrides_query, rank_root_candidates, reference_target_query, relationship_query,
-        root_kind_rank, target_resolution_tiers,
+        find_references_rel_labels, fold_hidden, get_file_entities_query,
+        get_file_outgoing_references_query, overridden_by_query, overrides_query,
+        partition_by_kind, partition_reference_rows, rank_root_candidates, reference_bucket_key,
+        reference_target_query, relationship_query, root_kind_rank, target_resolution_tiers,
     };
 
     #[test]
@@ -1415,6 +1599,241 @@ mod tests {
         let query_str = relationship_query("CALLS", true);
         assert!(query_str.contains("target.repo_name IN $repo_names"));
         assert!(query_str.contains("target.uuid IN $target_uuids"));
+    }
+
+    // ---- §Kind-filtered resolution + multi-label reference query ----------
+
+    use crate::cli_tools::kinds::KindFilter;
+
+    fn target_row(uuid: &str, kind: &str) -> TargetRow {
+        TargetRow {
+            uuid: uuid.to_string(),
+            name: uuid.to_string(),
+            fqn: format!("repo::{uuid}"),
+            kind: kind.to_string(),
+            file_path: "f.rs".to_string(),
+            start_line: 1,
+            repo_name: "repo".to_string(),
+        }
+    }
+
+    #[test]
+    fn fuzzy_tier_predicate_is_case_insensitive_and_param_bound() {
+        let tiers = target_resolution_tiers("hikari");
+        let (_, fuzzy) = tiers
+            .iter()
+            .find(|(t, _)| *t == MatchTier::Fuzzy)
+            .expect("fuzzy tier for 6-char name");
+        assert!(fuzzy.contains("toLower("));
+        assert!(fuzzy.contains("$name_lower"));
+        // The raw case-sensitive form must be gone.
+        assert!(!fuzzy.contains("target.fqn CONTAINS $name "));
+        assert!(!fuzzy.contains(") CONTAINS $name OR"));
+    }
+
+    #[test]
+    fn exact_tiers_keep_case_sensitive_exactness() {
+        let tiers = target_resolution_tiers("Hikari");
+        for (tier, pred) in &tiers {
+            if matches!(
+                tier,
+                MatchTier::ExactFqn | MatchTier::FqnSuffix | MatchTier::ExactName
+            ) {
+                assert!(
+                    pred.contains("$name"),
+                    "exact tier {tier:?} must match the raw name"
+                );
+                assert!(!pred.contains("toLower"));
+            }
+        }
+    }
+
+    #[test]
+    fn partition_by_kind_separates_code_from_metadata() {
+        let rows = vec![
+            target_row("u1", "rust_function"),
+            target_row("u2", "build_dependency"),
+            target_row("u3", "markdown_section"),
+            target_row("u4", "html_id"),
+            target_row("u5", "vcl_backend"),
+        ];
+        let default = KindFilter::parse(None);
+        let (allowed, hidden) = partition_by_kind(rows, &default);
+        let names: Vec<&str> = allowed.iter().map(|r| r.uuid.as_str()).collect();
+        assert_eq!(names, vec!["u1", "u4", "u5"]);
+        assert_eq!(hidden.len(), 2);
+    }
+
+    #[test]
+    fn partition_by_kind_honours_any_filter() {
+        let rows = vec![
+            target_row("u1", "rust_function"),
+            target_row("u2", "build_dependency"),
+        ];
+        let any = KindFilter::parse(Some("all"));
+        let (allowed, hidden) = partition_by_kind(rows, &any);
+        assert_eq!(allowed.len(), 2);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn fold_hidden_dedupes_by_uuid_and_collects_sorted_kinds() {
+        let mut uuids = std::collections::HashSet::new();
+        let mut kinds: Vec<String> = Vec::new();
+        let n1 = fold_hidden(
+            vec![
+                target_row("u1", "build_dependency"),
+                target_row("u2", "markdown_section"),
+            ],
+            &mut uuids,
+            &mut kinds,
+        );
+        // Same row seen again in a later tier (uuid duplicate), new kind.
+        let n2 = fold_hidden(
+            vec![
+                target_row("u1", "build_dependency"),
+                target_row("u3", "cargo_feature"),
+            ],
+            &mut uuids,
+            &mut kinds,
+        );
+        assert_eq!(n1, 2);
+        assert_eq!(n2, 1, "the repeated uuid must not recount");
+        assert_eq!(
+            kinds,
+            vec!["build_dependency", "cargo_feature", "markdown_section"]
+        );
+    }
+
+    #[test]
+    fn rel_label_list_covers_every_produced_edge_type() {
+        let labels = find_references_rel_labels();
+        for label in [
+            "CALLS",
+            "EXTENDS",
+            "IMPLEMENTS",
+            "REFERENCES",
+            "MACRO_CALLS",
+            "REFERENCES_DOM",
+            "USES_CSS_CLASS",
+            "IMPORTS_SCRIPT",
+            "IMPORTS_STYLESHEET",
+            "USES_BACKEND",
+            "USES_PROBE",
+            "USES_ACL",
+            "INCLUDES",
+            "IMPORTS_VMOD",
+            "DECLARED_UNUSED",
+        ] {
+            assert!(labels.contains(label), "{label} missing from {labels}");
+        }
+        // Deliberately excluded edge types.
+        assert!(!labels.contains("CONTAINS"));
+        assert!(!labels.contains("DEPENDS_ON"));
+        assert!(!labels.contains("OVERRIDES"));
+    }
+
+    #[test]
+    fn relationship_query_projects_rel_type() {
+        let query_str = relationship_query(find_references_rel_labels(), false);
+        assert!(query_str.contains("type(r) AS rel_type"));
+        assert!(query_str.contains("|MACRO_CALLS"));
+        assert!(query_str.contains("ORDER BY target.fqn"));
+    }
+
+    #[test]
+    fn parse_reference_row_carries_rel_type() {
+        // parse_reference_row needs a real neo4rs::Row to run; the mapping
+        // it feeds is what this test pins. Every produced label maps to its
+        // own bucket; unknown labels are skipped by the partition.
+        assert_eq!(reference_bucket_key("CALLS"), Some("calls"));
+        assert_eq!(reference_bucket_key("EXTENDS"), Some("extends"));
+        assert_eq!(reference_bucket_key("IMPLEMENTS"), Some("implements"));
+        assert_eq!(reference_bucket_key("REFERENCES"), Some("references"));
+        assert_eq!(reference_bucket_key("MACRO_CALLS"), Some("macro_calls"));
+        assert_eq!(
+            reference_bucket_key("REFERENCES_DOM"),
+            Some("references_dom")
+        );
+        assert_eq!(
+            reference_bucket_key("USES_CSS_CLASS"),
+            Some("uses_css_class")
+        );
+        assert_eq!(
+            reference_bucket_key("IMPORTS_SCRIPT"),
+            Some("imports_script")
+        );
+        assert_eq!(
+            reference_bucket_key("IMPORTS_STYLESHEET"),
+            Some("imports_stylesheet")
+        );
+        assert_eq!(reference_bucket_key("USES_BACKEND"), Some("uses_backend"));
+        assert_eq!(reference_bucket_key("INCLUDES"), Some("includes"));
+        assert_eq!(
+            reference_bucket_key("DECLARED_UNUSED"),
+            Some("declared_unused")
+        );
+        assert_eq!(reference_bucket_key("CONTAINS"), None);
+        assert_eq!(reference_bucket_key("DEPENDS_ON"), None);
+    }
+
+    #[test]
+    fn partition_reference_rows_is_order_preserving_per_bucket() {
+        // The Cypher returns rows globally ordered; the per-bucket order
+        // must be the order of arrival (v1.9.4 determinism contract).
+        let rows: Vec<serde_json::Value> = [
+            ("REFERENCES", "a"),
+            ("MACRO_CALLS", "b1"),
+            ("MACRO_CALLS", "b2"),
+            ("REFERENCES", "c"),
+            ("REFERENCES_DOM", "d"),
+        ]
+        .iter()
+        .map(|(rel, name)| {
+            serde_json::json!({"rel_type": rel, "name": name, "file_path": "f.rs", "start_line": 1})
+        })
+        .collect();
+
+        let mut results = serde_json::json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "macro_calls": [],
+            "references_dom": [],
+        });
+        partition_reference_rows(&rows, &mut results);
+
+        let calls: Vec<&str> = results["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.get("name").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(calls, vec!["a", "c"], "bucket keeps arrival order");
+
+        let macros: Vec<&str> = results["macro_calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.get("name").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(macros, vec!["b1", "b2"]);
+        assert_eq!(results["references_dom"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn partition_reference_rows_falls_back_for_legacy_rows() {
+        // Pre-fix rows carry no rel_type; they were REFERENCES-only.
+        let rows = vec![serde_json::json!({"name": "a", "file_path": "f.rs"})];
+        let mut results = serde_json::json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+        });
+        partition_reference_rows(&rows, &mut results);
+        assert_eq!(results["references"].as_array().unwrap().len(), 1);
     }
 
     #[test]

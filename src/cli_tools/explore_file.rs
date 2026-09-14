@@ -146,6 +146,19 @@ pub async fn run_explore_file(
         }
     }
 
+    // Explicit three-state signal for programmatic consumers
+    // (MCP/HTTP callers): `false` distinguishes "no indexed file matched
+    // the path" from "file indexed but carries zero code entities" without
+    // parsing the prose.
+    if let serde_json::Value::Object(map) = &mut result {
+        let file_matched = !(entities_empty
+            && map
+                .get("ambiguous_path_candidates")
+                .and_then(|v| v.as_array())
+                .is_none_or(Vec::is_empty));
+        map.insert("file_matched".to_string(), serde_json::json!(file_matched));
+    }
+
     Ok((normalized_path, result))
 }
 
@@ -168,8 +181,41 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
         .cloned()
         .unwrap_or_default();
 
+    // Three separable outcomes (§ of the not-found honesty contract):
+    //   entities found            — render them.
+    //   zero entities, but the
+    //   suffix fallback *found*   — the path is close to an indexed file;
+    //   candidate paths             say so and offer the candidates.
+    //   zero entities, zero
+    //   candidates                — no indexed file matched the path; never
+    //                               claim it exists but is empty (knot does
+    //                               not index a per-file node, so "exists
+    //                               with zero entities" and "does not
+    //                               exist" are indistinguishable from the
+    //                               graph — the wording must not pretend
+    //                               otherwise).
     if entities.is_empty() && outgoing_refs.is_empty() && ambiguous_candidates.is_empty() {
-        output.push_str("No entities found in this file.\n");
+        output.push_str(&format!(
+            "No indexed file matched `{}`. The path may not exist, may not be \
+             indexed, or may contain no indexed entities.",
+            file_path
+        ));
+        if !file_path.trim().is_empty() {
+            output.push_str(
+                " A suffix-based lookup (`knot files` or the bare filename) may still find it.\n",
+            );
+        } else {
+            output.push('\n');
+        }
+        return output;
+    }
+
+    if entities.is_empty() && outgoing_refs.is_empty() && !ambiguous_candidates.is_empty() {
+        output.push_str(&format!(
+            "No indexed file matched `{}` exactly. Did you mean:\n",
+            file_path
+        ));
+        append_ambiguous_candidates(&mut output, &ambiguous_candidates);
         return output;
     }
 
@@ -559,9 +605,58 @@ mod tests {
 
     #[test]
     fn test_format_file_entities_empty() {
-        let entities = json!([]);
-        let formatted = format_file_entities("src/main.java", &entities);
-        assert!(formatted.contains("No entities found in this file"));
+        // No candidates: the honest not-found wording, not a claim that the
+        // file exists but is empty.
+        let result = json!({
+            "entities": [],
+            "outgoing_references": [],
+            "file_matched": false
+        });
+        let formatted = format_file_entities("src/main.java", &result);
+        assert!(
+            formatted.contains("No indexed file matched `src/main.java`"),
+            "got: {formatted}"
+        );
+        assert!(formatted.contains("may not exist, may not be indexed"));
+        assert!(!formatted.contains("Did you mean"));
+    }
+
+    #[test]
+    fn test_format_file_entities_miss_with_candidates_says_so() {
+        let result = json!({
+            "entities": [],
+            "outgoing_references": [],
+            "file_matched": false,
+            "ambiguous_path_candidates": [
+                {"file_path": "src/api/main.java", "repo_name": "app"}
+            ]
+        });
+        let formatted = format_file_entities("main.java", &result);
+        assert!(
+            formatted.contains("No indexed file matched `main.java` exactly"),
+            "got: {formatted}"
+        );
+        assert!(formatted.contains("Did you mean"));
+        assert!(formatted.contains("src/api/main.java"));
+    }
+
+    #[test]
+    fn test_format_file_entities_zero_entities_with_no_candidates_is_not_found() {
+        // Documented edge: a file_matched=true shape with zero entities AND
+        // zero candidates cannot come from run_explore_file (a file is in
+        // the index iff it carries entities), and prose-wise the formatter
+        // must keep the not-found wording rather than claim existence.
+        let result = json!({
+            "entities": [],
+            "outgoing_references": [],
+            "file_matched": true
+        });
+        let formatted = format_file_entities("src/empty.rs", &result);
+        assert!(
+            formatted.contains("No indexed file matched `src/empty.rs`"),
+            "got: {formatted}"
+        );
+        assert!(!formatted.contains("Did you mean"));
     }
 
     #[test]

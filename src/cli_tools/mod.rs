@@ -8,6 +8,7 @@ pub mod deps;
 pub mod explore_file;
 pub mod find_callers;
 pub mod formatters;
+pub mod kinds;
 pub mod list_files;
 pub mod repos;
 pub(crate) mod resolution;

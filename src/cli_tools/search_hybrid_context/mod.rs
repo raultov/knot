@@ -262,7 +262,10 @@ async fn enrich_with_relationships(
         for entity in entities.iter_mut() {
             if let Some(name) = entity.get("name").and_then(|v| v.as_str())
                 && let Ok(references) = graph_db
-                    .find_references(name, &repo_names, DEFAULT_MAX_TARGETS)
+                    // `kinds=all`: the call-site enrichment must keep seeing
+                    // every reference edge regardless of the search's own
+                    // kind filter semantics.
+                    .find_references(name, &repo_names, DEFAULT_MAX_TARGETS, Some("all"))
                     .await
             {
                 enrich_single_entity(entity, &references);
@@ -307,13 +310,7 @@ pub(crate) struct CandidatePool<'a> {
 impl CandidatePool<'_> {
     pub async fn collect(self) -> Vec<serde_json::Value> {
         let mut vector_hits: Vec<serde_json::Value> = Vec::new();
-        for result in self.search_results {
-            if let Some(uuid) = result.get("uuid").and_then(|v| v.as_str())
-                && self.seen_uuids.insert(uuid.to_string())
-            {
-                vector_hits.push(result.clone());
-            }
-        }
+        merge_hits(self.search_results, self.seen_uuids, &mut vector_hits);
 
         let probe_hits = name_probe_hits(
             self.vector,
@@ -430,7 +427,7 @@ async fn name_probe_hits(
 /// Roots are the highest-cosine vector hits ([`TOP_ROOTS`] capped); their
 /// callers (in-repo, capped at 12) are scored against the query vector in
 /// one Qdrant round-trip and returned as full candidate rows with their
-/// true cosine. Skips prose and test-path roots — a markdown section has
+/// true cosine. Skips prose and test-path roots — a Markdown section has
 /// no callers and a test's callers are other tests. Failures collapse to
 /// an empty list; the search continues without the bridge.
 pub(crate) struct CallerBridge<'a> {
@@ -534,7 +531,7 @@ impl CallerBridge<'_> {
 }
 
 /// How many top vector hits seed the caller-recall bridge. Three roots are
-/// enough to cover the helpers a behavioural paraphrase ranks first (its
+/// enough to cover the helpers a behavioral paraphrase ranks first (its
 /// shared caller usually calls two or three of them) while keeping the
 /// Neo4j fan-in bounded.
 const TOP_ROOTS: usize = 3;
@@ -544,11 +541,7 @@ fn push_if_unique(
     seen_uuids: &mut HashSet<String>,
     combined: &mut Vec<serde_json::Value>,
 ) {
-    if let Some(uuid) = entity.get("uuid").and_then(|v| v.as_str())
-        && seen_uuids.insert(uuid.to_string())
-    {
-        combined.push(entity.clone());
-    }
+    merge_hits(std::slice::from_ref(entity), seen_uuids, combined);
 }
 
 pub(crate) fn extract_subclass_names(extends_arr: &[serde_json::Value]) -> Vec<String> {

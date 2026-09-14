@@ -114,6 +114,15 @@ pub(crate) fn run_post_passes<'a>(
         );
     }
 
+    // Fifth pass: DOM element references and CSS class usages
+    // (`getElementById`, `classList.add/…`, `className = '…'`). The query
+    // captures fire on the string argument alone, so the per-match mechanism
+    // cannot attach them; this post pass re-collects the call sites and
+    // feeds the REFERENCES_DOM / USES_CSS_CLASS edges.
+    if lang_name == "javascript" {
+        javascript::collect_dom_css_references(tree_root, source_bytes, entities);
+    }
+
     // Sixth pass: extract alias metadata (require/import → module path)
     if lang_name == "javascript" {
         // Set default_export on <module> entity from module.exports = X

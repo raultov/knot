@@ -61,6 +61,58 @@ pub fn format_search_table(results: &Value) -> String {
     table.to_string()
 }
 
+/// One relationship-bucket row in the callers table.
+///
+/// Extracted from [`format_callers_table`] to keep that function within
+/// clippy's line budget; behavior unchanged (v1.8.1 repo-attribution rules
+/// included).
+fn add_caller_table_row(
+    table: &mut Table,
+    entity: &Value,
+    entity_name: &str,
+    label: &str,
+    label_color: Color,
+) {
+    // Prefer target_fqn when available (qualified identifiers
+    // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
+    let target = json_target_name(entity, entity_name);
+    let caller_name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
+    let caller_repo = entity
+        .get("repo_name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let caller = match caller_repo {
+        Some(repo) => format!("{caller_name} (repo: {repo})"),
+        None => caller_name.to_string(),
+    };
+    // Reference repo attribution (v1.8.1), rule R3: the
+    // Target column repeats once per row, so it is labeled only for
+    // genuine cross-repo references to avoid doubling the noise.
+    let target_repo = entity
+        .get("target_repo_name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let target_cell = match target_repo {
+        Some(target_repo) if Some(target_repo) != caller_repo => {
+            format!("{target} (repo: {target_repo})")
+        }
+        _ => target,
+    };
+    let file = entity
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let line = json_line_number(entity);
+
+    table.add_row(vec![
+        Cell::new(label).fg(label_color),
+        Cell::new(target_cell).fg(Color::Magenta),
+        Cell::new(caller),
+        Cell::new(file),
+        Cell::new(line).set_alignment(CellAlignment::Right),
+    ]);
+}
+
 pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::DynamicFullWidth);
@@ -83,6 +135,19 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
         ("extends", "Extends", Color::Yellow),
         ("implements", "Implements", Color::Cyan),
         ("references", "References", Color::Magenta),
+        ("macro_calls", "Macro calls", Color::Blue),
+        ("references_dom", "DOM refs", Color::Green),
+        ("uses_css_class", "CSS class", Color::Green),
+        ("imports_script", "Script import", Color::Green),
+        ("imports_stylesheet", "Stylesheet import", Color::Green),
+        ("uses_backend", "VCL backend", Color::Green),
+        ("uses_probe", "VCL probe", Color::Green),
+        ("uses_acl", "VCL acl", Color::Green),
+        ("includes", "VCL include", Color::Green),
+        ("imports_vmod", "VMOD import", Color::Green),
+        ("declared_unused", "Declared unused", Color::Green),
+        ("overridden_by", "Overridden by", Color::Yellow),
+        ("overrides", "Overrides", Color::Cyan),
     ];
 
     for (key, label, label_color) in rel_types {
@@ -91,53 +156,36 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
         };
         for entity in arr {
             total_refs += 1;
-            // Prefer target_fqn when available (qualified identifiers
-            // disambiguate homonyms like `WidgetA::new` vs `WidgetB::new`).
-            let target = json_target_name(entity, entity_name);
-            let caller_name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-            let caller_repo = entity
-                .get("repo_name")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
-            let caller = match caller_repo {
-                Some(repo) => format!("{caller_name} (repo: {repo})"),
-                None => caller_name.to_string(),
-            };
-            // Reference repo attribution (v1.8.1), rule R3: the
-            // Target column repeats once per row, so it is labeled only for
-            // genuine cross-repo references to avoid doubling the noise.
-            let target_repo = entity
-                .get("target_repo_name")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
-            let target_cell = match target_repo {
-                Some(target_repo) if Some(target_repo) != caller_repo => {
-                    format!("{target} (repo: {target_repo})")
-                }
-                _ => target,
-            };
-            let file = entity
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
-            let line = json_line_number(entity);
-
-            table.add_row(vec![
-                Cell::new(label).fg(label_color),
-                Cell::new(target_cell).fg(Color::Magenta),
-                Cell::new(caller),
-                Cell::new(file),
-                Cell::new(line).set_alignment(CellAlignment::Right),
-            ]);
+            add_caller_table_row(&mut table, entity, entity_name, label, label_color);
         }
     }
 
     if total_refs == 0 {
         let mut no_ref_msg = callers_resolution_detail(references);
-        no_ref_msg.push_str(&format!(
-            "No references found for `{}`. This entity may be unused.\n",
-            entity_name
-        ));
+        // Markdown parity: three honest outcomes keyed on the resolution,
+        // legacy wording when there is no parseable resolution block.
+        let outcome = match ResolutionView::from_references(references) {
+            Some(view) if view.count() > 0 || view.total_targets() > 0 => "unused",
+            Some(view) if view.hidden_non_code() > 0 => "hidden_only",
+            Some(_) => "not_found",
+            None => "legacy",
+        };
+        match outcome {
+            "unused" | "legacy" => no_ref_msg.push_str(&format!(
+                "No references found for `{}`. This entity may be unused.\n",
+                entity_name
+            )),
+            "hidden_only" => no_ref_msg.push_str(&format!(
+                "No code entity matched `{}` — see the NOTE above; the name only hit \
+                 documentation/config/build metadata.\n",
+                entity_name
+            )),
+            _ => no_ref_msg.push_str(&format!(
+                "No entity named `{}` was found in the indexed scope. Check the spelling, \
+                 the repository scope (--repo), or search semantically first.\n",
+                entity_name
+            )),
+        }
         return no_ref_msg;
     }
 
@@ -161,6 +209,13 @@ fn callers_resolution_detail(references: &Value) -> String {
             "WARNING: Fuzzy match — no entity matched `{}` exactly.\n\n",
             view.query()
         ));
+    }
+
+    // Markdown parity: the hidden-matches disclosure has to reach the table
+    // output too, or CLI table readers would see a silently narrowed view.
+    let hidden = view.hidden_notice(false);
+    if !hidden.is_empty() {
+        out.push_str(&format!("NOTE: {hidden}\n\n"));
     }
 
     out
@@ -191,6 +246,11 @@ fn callers_resolution_header(entity_name: &str, references: &Value, total_refs: 
         // partial when the target list was truncated, and the reader must
         // know it without inferring it.
         out.push_str(&format!("{}\n", view.partial_counts_caveat()));
+    }
+
+    let hidden = view.hidden_notice(false);
+    if !hidden.is_empty() {
+        out.push_str(&format!("NOTE: {hidden}\n"));
     }
 
     out

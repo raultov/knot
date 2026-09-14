@@ -22,16 +22,23 @@ use crate::cli_tools::resolution::ResolutionView;
 /// hard ceiling: 500). `None` keeps the default — an explicit `Some(n)` is how
 /// callers opt in to the full impact set when the response reports a
 /// truncated target list.
+///
+/// `kinds` scopes the entity kinds the query may resolve against
+/// ([`crate::cli_tools::kinds::KindFilter`]): `None` keeps the default
+/// code-only scope (documentation/config/build metadata can never be
+/// presented as resolved targets), `all` disables filtering, and any other
+/// spec is an explicit alias/exact-kind list.
 pub async fn run_find_callers(
     entity_name: &str,
     repo: &RepoScope,
     graph_db: &Arc<GraphDb>,
     max_targets: Option<usize>,
+    kinds: Option<&str>,
 ) -> anyhow::Result<serde_json::Value> {
     let repo_names = repo.filter_names();
     let max_targets = max_targets.unwrap_or(DEFAULT_MAX_TARGETS);
     let references = graph_db
-        .find_references(entity_name, &repo_names, max_targets)
+        .find_references(entity_name, &repo_names, max_targets, kinds)
         .await?;
     Ok(references)
 }
@@ -40,11 +47,26 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
     let mut output = format!("# References to `{}`\n\n", entity_name);
     output.push_str(&format_resolution_markdown(references));
 
+    // Every relationship type the pipeline produces (see
+    // `find_references_rel_labels`) plus the two OVERRIDES projections.
+    // Empty buckets are skipped by the loop below, so repositories without
+    // web/VCL/macro edges render exactly as before.
     let rel_types = [
         ("calls", "Calls (function/method invocations)"),
         ("extends", "Extends (class inheritance)"),
         ("implements", "Implements (interface implementation)"),
         ("references", "References (type annotations/usages)"),
+        ("macro_calls", "Macro calls (macro invocations)"),
+        ("references_dom", "DOM references (JS → HTML element id)"),
+        ("uses_css_class", "CSS class usage (JS → CSS class)"),
+        ("imports_script", "Script imports (HTML → JS file)"),
+        ("imports_stylesheet", "Stylesheet imports (HTML → CSS file)"),
+        ("uses_backend", "Backend usage (VCL)"),
+        ("uses_probe", "Probe usage (VCL)"),
+        ("uses_acl", "ACL usage (VCL)"),
+        ("includes", "File includes (VCL)"),
+        ("imports_vmod", "VMOD imports (VCL)"),
+        ("declared_unused", "Declared unused (VCL)"),
         ("overridden_by", "Overridden by (method implementations)"),
         ("overrides", "Overrides (declared supertype methods)"),
     ];
@@ -56,10 +78,37 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         .sum();
 
     if total_refs == 0 {
-        output.push_str(&format!(
-            "No references found for `{}`. This entity may be unused.\n",
-            entity_name
-        ));
+        // Three honest outcomes instead of a blanket "may be unused":
+        //   targets > 0              — entity exists in scope; unused so far.
+        //   targets = 0, hidden > 0  — only filtered metadata matched; say so.
+        //   targets = 0, hidden = 0  — the name matched nothing at all.
+        // A missing/unparseable `resolution` key (old wire shape) cannot
+        // distinguish these, so it keeps the legacy wording unchanged.
+        match ResolutionView::from_references(references) {
+            // A truncated resolution may show zero targets while the true
+            // total is large; the name still matched something in scope.
+            Some(view) if view.count() > 0 || view.total_targets() > 0 => {
+                output.push_str(&format!(
+                    "No references found for `{}`. This entity may be unused.\n",
+                    entity_name
+                ))
+            }
+            Some(view) if view.hidden_non_code() > 0 => output.push_str(&format!(
+                "No code entity matched `{}` — see the disclosure above; the name only \
+                 hit documentation/config/build metadata.\n",
+                entity_name
+            )),
+            Some(_) => output.push_str(&format!(
+                "No entity named `{}` was found in the indexed scope. \
+                 Check the spelling, the repository scope (`--repo`), or search \
+                 semantically with `search_hybrid_context` first.\n",
+                entity_name
+            )),
+            None => output.push_str(&format!(
+                "No references found for `{}`. This entity may be unused.\n",
+                entity_name
+            )),
+        }
         return output;
     }
 
@@ -129,6 +178,21 @@ fn format_resolution_markdown(references: &serde_json::Value) -> String {
             view.total_targets(),
             view.count()
         ));
+    }
+
+    let hidden = view.hidden_notice(true);
+    if !hidden.is_empty() {
+        // The Markdown variant already carries its own `**bold**` headline.
+        output.push_str(&format!("> {hidden}\n\n"));
+    }
+
+    // When the caller overrode the default code-only scope, state it — an
+    // empty-looking target list must be explainable by the reader.
+    if view.count() == 0 && view.kind_filter() == "explicit" {
+        output.push_str(
+            "> Scope: an explicit `kinds` allow-list was applied; empty resolution means no \
+             matching entity of those kinds exists in scope.\n\n",
+        );
     }
 
     output
@@ -1118,5 +1182,201 @@ mod tests {
             "unattributable rows must stay headerless:\n{formatted}"
         );
         assert!(!formatted.contains("unknown"));
+    }
+
+    // ---- §Kind-filter disclosure (kind-filtered fuzzy targets) ------------
+
+    /// Fixture for the reported bug: a fuzzy query that resolved to a large
+    /// set of documentation/build entities, all filtered out by the default
+    /// code-kind scope, leaving zero code targets.
+    fn all_hidden_resolution() -> serde_json::Value {
+        json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "cargo",
+                "tier": "fuzzy",
+                "fuzzy": true,
+                "truncated": false,
+                "total_targets": 0,
+                "kind_filter": "code_default",
+                "hidden_non_code": 93,
+                "hidden_kinds": [
+                    "build_dependency",
+                    "cargo_feature",
+                    "cargo_package",
+                    "markdown_section",
+                    "project_identity"
+                ],
+                "targets": []
+            }
+        })
+    }
+
+    #[test]
+    fn format_discloses_hidden_non_code_matches() {
+        let formatted = format_references_result("cargo", &all_hidden_resolution());
+
+        assert!(
+            formatted.contains("**Non-code matches hidden** — 93 entities matched `cargo`"),
+            "got:\n{formatted}"
+        );
+        assert!(formatted.contains("build_dependency"));
+        assert!(formatted.contains("markdown_section"));
+        assert!(formatted.contains("kinds=all"));
+        // The blanket "may be unused" claim must not survive a hidden-only
+        // resolution: it would read as if a real, dead code entity resolved.
+        assert!(
+            !formatted.contains("This entity may be unused"),
+            "got:\n{formatted}"
+        );
+        // And it must not claim the entity was never found at all.
+        assert!(!formatted.contains("No entity named"));
+    }
+
+    #[test]
+    fn format_zero_targets_zero_hidden_says_not_found() {
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "no_such_thing",
+                "tier": "fuzzy",
+                "fuzzy": true,
+                "truncated": false,
+                "total_targets": 0,
+                "kind_filter": "code_default",
+                "hidden_non_code": 0,
+                "hidden_kinds": [],
+                "targets": []
+            }
+        });
+        let formatted = format_references_result("no_such_thing", &references);
+
+        assert!(
+            formatted.contains("No entity named `no_such_thing` was found in the indexed scope"),
+            "got:\n{formatted}"
+        );
+        assert!(!formatted.contains("This entity may be unused"));
+        assert!(!formatted.contains("Non-code matches hidden"));
+    }
+
+    #[test]
+    fn format_keeps_unused_wording_when_code_target_resolved() {
+        // Exactly one code target, zero references: the original dead-code
+        // wording is still the correct one.
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "legacy_fn",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 1,
+                "kind_filter": "code_default",
+                "hidden_non_code": 0,
+                "hidden_kinds": [],
+                "targets": [
+                    {"fqn": "app::legacy_fn", "name": "legacy_fn", "kind": "rust_function"}
+                ]
+            }
+        });
+        let formatted = format_references_result("legacy_fn", &references);
+
+        assert!(formatted.contains("No references found for `legacy_fn`"));
+        assert!(formatted.contains("This entity may be unused"));
+        assert!(!formatted.contains("Non-code matches hidden"));
+        assert!(!formatted.contains("No entity named"));
+    }
+
+    #[test]
+    fn format_omits_hidden_notice_when_none_hidden() {
+        let references = json!({
+            "calls": [{"name": "caller1", "kind": "method", "file_path": "file1.java", "start_line": 10}],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "resolution": {
+                "query": "myMethod",
+                "tier": "exact_name",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 1,
+                "kind_filter": "code_default",
+                "hidden_non_code": 0,
+                "hidden_kinds": [],
+                "targets": [{"fqn": "app.myMethod"}]
+            }
+        });
+        let formatted = format_references_result("myMethod", &references);
+
+        assert!(!formatted.contains("Non-code matches hidden"));
+    }
+
+    #[test]
+    fn format_renders_extended_relationship_buckets() {
+        // Regression coverage for the never-consulted edge types: the
+        // formatter must render (and count) the new buckets.
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "macro_calls": [
+                {"name": "main", "kind": "rust_function", "file_path": "sample.rs", "start_line": 145}
+            ],
+            "references_dom": [
+                {"name": "submitBtn", "kind": "rust_function", "file_path": "ui.js", "start_line": 12}
+            ],
+            "uses_css_class": [],
+            "imports_script": [],
+            "imports_stylesheet": [],
+            "uses_backend": [],
+            "uses_probe": [],
+            "uses_acl": [],
+            "includes": [],
+            "imports_vmod": [],
+            "declared_unused": [],
+            "overridden_by": [],
+            "overrides": []
+        });
+        let formatted = format_references_result("init_vec", &references);
+
+        assert!(formatted.contains("Macro calls (macro invocations)"));
+        assert!(formatted.contains("DOM references (JS → HTML element id)"));
+        // Empty buckets are intentionally not rendered.
+        assert!(!formatted.contains("CSS class usage"));
+        assert!(formatted.contains("Found 2 reference(s)"));
+        assert!(formatted.contains("submitBtn"));
+
+        // CSS-class usage over an html_id target: both are *code* kinds and
+        // must keep rendering under the default filter.
+        let references = json!({
+            "calls": [],
+            "extends": [],
+            "implements": [],
+            "references": [],
+            "references_dom": [
+                {"name": "main", "kind": "rust_function", "file_path": "ui.js", "start_line": 3}
+            ],
+            "macro_calls": [],
+            "imports_script": [],
+            "imports_stylesheet": [],
+            "uses_backend": [],
+            "uses_probe": [],
+            "uses_acl": [],
+            "includes": [],
+            "imports_vmod": [],
+            "declared_unused": [],
+        });
+        let formatted = format_references_result("copybutton__status", &references);
+        assert!(formatted.contains("DOM references"));
     }
 }

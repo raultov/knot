@@ -73,6 +73,83 @@ pub(crate) fn resolve_non_call_reference(
     )
 }
 
+/// Web-reference resolution: DOM element ids (`REFERENCES_DOM`) and CSS
+/// class usages (`USES_CSS_CLASS`) must resolve against their exact kind —
+/// [`EntityKind::HtmlId`] for a `getElementById('x')` and
+/// [`EntityKind::CssClass`] for a class usage — instead of the plain ladder.
+///
+/// Rationale: a file frequently declares the same bare name as both an html
+/// id and a CSS class; the plain ladder then sees two candidates, no context
+/// disambiguates them, and the edge dies as "ambiguous". The intent already
+/// *knows* which kind it targets, so the candidate set is restricted to that
+/// kind up front, and an empty filtered set means NO edge rather than a
+/// guess (a DOM lookup never points at a CSS class).
+///
+/// (7 args like its [`resolve_non_call_reference_typed`] sibling — clippy
+/// expectation below, shape dictated by the shared lookup maps.)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirror of resolve_non_call_reference_typed's lookup-map signature"
+)]
+pub(crate) fn resolve_web_reference(
+    name: &str,
+    preferred: EntityKind,
+    source_file: &str,
+    name_to_uuids: &HashMap<String, Vec<Uuid>>,
+    uuid_to_file: &HashMap<Uuid, String>,
+    uuid_to_kind: Option<&HashMap<Uuid, EntityKind>>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    let Some(all_candidates) = name_to_uuids.get(name) else {
+        metrics
+            .references_unresolved
+            .fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+
+    let candidate_uuids: Vec<Uuid> = match uuid_to_kind {
+        Some(kinds) => all_candidates
+            .iter()
+            .filter(|u| kinds.get(*u).is_some_and(|k| *k == preferred))
+            .copied()
+            .collect(),
+        // Without kind knowledge the intent cannot be safely resolved:
+        // counting it as unresolved (not ambiguous) keeps the contract that
+        // a wrong-kind edge is never created.
+        None => Vec::new(),
+    };
+
+    match candidate_uuids.as_slice() {
+        [] => {
+            metrics
+                .references_unresolved
+                .fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        [only] => {
+            metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+            Some(*only)
+        }
+        _ => {
+            if let Some(same_file_uuid) =
+                find_entity_in_same_file(&candidate_uuids, source_file, uuid_to_file)
+            {
+                metrics.references_resolved.fetch_add(1, Ordering::Relaxed);
+                return Some(same_file_uuid);
+            }
+            debug!(
+                name = name,
+                kind = preferred.to_string(),
+                "Ambiguous web reference skipped"
+            );
+            metrics
+                .references_ambiguous_skipped
+                .fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
 /// Type-aware variant of [`resolve_non_call_reference`]: when
 /// `type_targets_only` is set, candidates are first filtered to type-like
 /// kinds (see [`is_type_like`]) before the disambiguation ladder runs.
@@ -231,6 +308,66 @@ mod tests {
     use super::super::test_utils::*;
     use crate::models::{EntityKind, ReferenceIntent, RelationshipType};
     use crate::pipeline::ingest::resolve::resolve_reference_intents;
+
+    /// The reported web-reference ambiguity: the same bare name exists as an
+    /// html id and as a CSS class; a `DomElementReference` must resolve to
+    /// the html_id and a `CssClassUsage` to the css_class — neither may
+    /// guess, and neither must die as ambiguous.
+    #[test]
+    fn test_web_reference_resolves_by_exact_kind() {
+        let html_id = mock_resolution_entity_with_kind(
+            "app-container",
+            "#app-container",
+            None,
+            "app.html",
+            EntityKind::HtmlId,
+        );
+        let css_class = mock_resolution_entity_with_kind(
+            "app-container",
+            ".app-container",
+            None,
+            "app.css",
+            EntityKind::CssClass,
+        );
+        let html_id_uuid = html_id.uuid;
+        let css_uuid = css_class.uuid;
+
+        let mut js_user = mock_resolution_entity_with_kind(
+            "toggleLook",
+            "app::toggleLook",
+            None,
+            "app.js",
+            EntityKind::RustFunction,
+        );
+        js_user.reference_intents = vec![
+            ReferenceIntent::DomElementReference {
+                element_id: "app-container".to_string(),
+                line: 5,
+            },
+            ReferenceIntent::CssClassUsage {
+                class_name: "app-container".to_string(),
+                line: 6,
+            },
+        ];
+
+        let mut entities = vec![html_id, css_class, js_user];
+        resolve_reference_intents(&mut entities);
+
+        let user = entities.last().expect("entity");
+        assert!(
+            user.relationships
+                .contains(&(html_id_uuid, RelationshipType::ReferencesDOM)),
+            "DOM intent must resolve to the html_id, got {:?}",
+            user.relationships
+        );
+        assert!(
+            user.relationships
+                .contains(&(css_uuid, RelationshipType::UsesCSSClass)),
+            "CSS intent must resolve to the css_class, got {:?}",
+            user.relationships
+        );
+        assert_eq!(user.relationships.len(), 2);
+    }
 
     #[test]
     fn test_resolve_inheritance() {

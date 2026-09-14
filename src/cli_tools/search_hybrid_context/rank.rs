@@ -61,7 +61,7 @@ const EXACT_NAME_BOOST: f32 = 0.30;
 
 /// Boost per top semantic root a candidate CALLS (see
 /// [`CALLER_ROOT_MAX`] and [`is_test_path`]). Graph evidence: a natural
-/// language query ranks the helpers of the behaviour it names, and the
+/// language query ranks the helpers of the behavior it names, and the
 /// production entry point is usually their shared caller (`login` calls
 /// `normalize_email`, `verify_credentials_or_fail`, `generate_token` in
 /// job-watch). Applied only to callables above the test-path penalty — a
@@ -75,98 +75,12 @@ const CALLER_ROOT_MAX: usize = 3;
 /// scaled by the matched-token ratio.
 const TOKEN_OVERLAP_WEIGHT: f32 = 0.08;
 
-/// Wire-format (`EntityKind::Display`) strings of definition kinds that
-/// describe behavior. Must stay in lockstep with `src/models/entity.rs`.
-const CALLABLE_KINDS: &[&str] = &[
-    // Generic (language-agnostic Display forms)
-    "function",
-    "method",
-    // Kotlin
-    "kotlin_function",
-    "kotlin_method",
-    // Rust
-    "rust_function",
-    "rust_method",
-    "rust_macro_def",
-    // Python
-    "python_function",
-    "python_method",
-    // C / C++
-    "c_function",
-    "cpp_method",
-    "macro_definition",
-    // C#
-    "csharp_method",
-    "csharp_constructor",
-    "csharp_local_function",
-    "csharp_operator",
-    "csharp_indexer",
-    // Groovy
-    "groovy_method",
-    "groovy_function",
-    // Stylesheets / Varnish
-    "scss_function",
-    "scss_mixin",
-    "vcl_subroutine",
-    "vcl_builtin_sub",
-    "vcc_function",
-    "vcc_method",
-];
-
-/// Wire-format strings of type-declaration kinds.
-const TYPE_KINDS: &[&str] = &[
-    // Generic
-    "class",
-    "interface",
-    "enum",
-    // Kotlin
-    "kotlin_class",
-    "kotlin_interface",
-    "kotlin_object",
-    "kotlin_companion_object",
-    "kotlin_enum",
-    // Rust
-    "rust_struct",
-    "rust_enum",
-    "rust_union",
-    "rust_trait",
-    "rust_type_alias",
-    // Python
-    "python_class",
-    // C / C++
-    "c_struct",
-    "cpp_class",
-    // Groovy
-    "groovy_class",
-    "groovy_interface",
-    "groovy_trait",
-    "groovy_enum",
-    // C#
-    "csharp_class",
-    "csharp_interface",
-    "csharp_struct",
-    "csharp_record",
-    "csharp_enum",
-    "csharp_delegate",
-];
-
+use crate::cli_tools::kinds::{CALLABLE_KINDS, CONFIG_BUILD_KINDS, TYPE_KINDS};
 /// Prose kinds whose embeds are long natural-language bodies.
-const PROSE_KINDS: &[&str] = &["markdown_section", "markdown_document"];
-
-/// Configuration and build-system kinds.
-const CONFIG_BUILD_KINDS: &[&str] = &[
-    "config_property",
-    "build_dependency",
-    "build_plugin",
-    "build_task",
-    "pipeline_stage",
-    "pipeline_step",
-    "cargo_package",
-    "cargo_feature",
-    "workspace_member",
-    "project_identity",
-    "helm_value",
-];
+/// Shared taxonomy lives in [`crate::cli_tools::kinds`]; imported here (plus
+/// `rank::parse_kinds` / `rank::kinds_allow` re-exports used by `mod.rs`) so
+/// the ranker and the kind filters can never drift apart.
+pub(crate) use crate::cli_tools::kinds::{PROSE_KINDS, kinds_allow, parse_kinds};
 
 /// Query words that carry no identifier meaning. Deliberately small: words
 /// like `get` or `user` are meaningful identifier fragments.
@@ -371,65 +285,6 @@ pub fn rerank(entities: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::
         .into_iter()
         .map(|(_, _, _, _, entity)| entity)
         .collect()
-}
-
-/// Expand a user-supplied kind filter into concrete wire-format kinds.
-///
-/// Accepted aliases (case-insensitive, comma-separated input):
-/// - `definition` — every callable and type kind
-/// - `callable` / `function` / `method` — every callable kind
-/// - `class` / `type` / `struct` — every type kind
-/// - anything else — treated as an exact wire-format kind
-///   (`rust_function`, `markdown_section`, …)
-///
-/// Order is preserved and duplicates removed so the generated Qdrant filter
-/// is deterministic.
-pub fn expand_kinds(specs: &[&str]) -> Vec<String> {
-    let mut expanded: Vec<String> = Vec::new();
-    for spec in specs {
-        let alias = spec.trim().to_lowercase();
-        if alias.is_empty() {
-            continue;
-        }
-        let bucket: Vec<&str> = match alias.as_str() {
-            "definition" | "definitions" => CALLABLE_KINDS
-                .iter()
-                .chain(TYPE_KINDS.iter())
-                .copied()
-                .collect(),
-            "callable" | "callables" | "function" | "functions" | "method" | "methods" => {
-                CALLABLE_KINDS.to_vec()
-            }
-            "class" | "classes" | "type" | "types" | "struct" | "structs" => TYPE_KINDS.to_vec(),
-            exact => vec![exact],
-        };
-        for kind in bucket {
-            if !expanded.contains(&kind.to_string()) {
-                expanded.push(kind.to_string());
-            }
-        }
-    }
-    expanded
-}
-
-/// Parse the raw `kinds` parameter (CLI `--kinds`, MCP `kinds`) into the
-/// expanded wire-format kind list. `None`/empty → empty list (no filtering).
-pub fn parse_kinds(raw: Option<&str>) -> Vec<String> {
-    let Some(raw) = raw else {
-        return Vec::new();
-    };
-    let specs: Vec<&str> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    expand_kinds(&specs)
-}
-
-/// Whether an entity passes an (already expanded) kind filter.
-/// An empty filter allows everything.
-pub fn kinds_allow(expanded: &[String], kind: &str) -> bool {
-    expanded.is_empty() || expanded.iter().any(|k| k == kind)
 }
 
 /// Whether an entity passes the search's optional path filter.
@@ -815,45 +670,6 @@ mod tests {
             "query",
         );
         assert_eq!(ranked.len(), 2);
-    }
-
-    // --- kinds ---
-
-    #[test]
-    fn expand_kinds_definition_includes_callables_and_types() {
-        let expanded = expand_kinds(&["definition"]);
-        assert!(expanded.contains(&"rust_function".to_string()));
-        assert!(expanded.contains(&"method".to_string()));
-        assert!(expanded.contains(&"class".to_string()));
-        assert!(expanded.contains(&"rust_struct".to_string()));
-        assert!(!expanded.contains(&"markdown_section".to_string()));
-        assert!(!expanded.contains(&"config_property".to_string()));
-    }
-
-    #[test]
-    fn expand_kinds_alias_and_exact_mix_dedup() {
-        let expanded = expand_kinds(&["callable", "rust_function", "markdown_section"]);
-        // `callable` already covers rust_function; no duplicate.
-        assert_eq!(expanded.iter().filter(|k| *k == "rust_function").count(), 1);
-        assert!(expanded.contains(&"markdown_section".to_string()));
-    }
-
-    #[test]
-    fn parse_kinds_splits_and_trims() {
-        let expanded = parse_kinds(Some(" definition , markdown_section "));
-        assert!(expanded.contains(&"rust_function".to_string()));
-        assert!(expanded.contains(&"markdown_section".to_string()));
-        assert!(parse_kinds(None).is_empty());
-        assert!(parse_kinds(Some("")).is_empty());
-        assert!(parse_kinds(Some(" , ")).is_empty());
-    }
-
-    #[test]
-    fn kinds_allow_empty_filter_allows_all() {
-        assert!(kinds_allow(&[], "markdown_section"));
-        let expanded = expand_kinds(&["definition"]);
-        assert!(kinds_allow(&expanded, "rust_function"));
-        assert!(!kinds_allow(&expanded, "markdown_section"));
     }
 
     // --- candidate_limit ---

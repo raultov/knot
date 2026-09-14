@@ -33,10 +33,8 @@ async fn main() -> anyhow::Result<()> {
             .await?,
     );
 
-    let graph_db = Arc::new(
-        knot::db::graph::GraphDb::connect(&cfg.neo4j_uri, &cfg.neo4j_user, &cfg.neo4j_password)
-            .await?,
-    );
+    let graph_db =
+        Arc::new(GraphDb::connect(&cfg.neo4j_uri, &cfg.neo4j_user, &cfg.neo4j_password).await?);
 
     let embedder = Arc::new(Mutex::new(Embedder::init(
         knot::pipeline::state::fastembed_cache_dir(&cfg.repo_path),
@@ -76,12 +74,18 @@ async fn main() -> anyhow::Result<()> {
             entity_name,
             repo,
             max_targets,
+            kinds,
             output,
         } => {
             let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
-            let json_result =
-                cli_tools::run_find_callers(&entity_name, &target_repo, &graph_db, max_targets)
-                    .await?;
+            let json_result = cli_tools::run_find_callers(
+                &entity_name,
+                &target_repo,
+                &graph_db,
+                max_targets,
+                kinds.as_deref(),
+            )
+            .await?;
             let formatted = utils::format_callers_output(&entity_name, json_result, output);
             utils::print_with_pager(&formatted);
         }

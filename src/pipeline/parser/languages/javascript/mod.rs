@@ -24,7 +24,7 @@ mod refs;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use dom_css::handle_dom_css_capture;
+pub(crate) use dom_css::{collect_dom_css_references, handle_dom_css_capture};
 pub(crate) use imports::{
     collect_import_intents_javascript, extract_require_module_path, scan_module_exports_target,
 };

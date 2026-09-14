@@ -335,11 +335,11 @@ fn resolve_intent(
             RelationshipType::References,
         ),
         ReferenceIntent::DomElementReference { element_id, .. } => (
-            resolve_plain(element_id, entity, ctx, metrics),
+            resolve_web_reference(element_id, EntityKind::HtmlId, entity, ctx, metrics),
             RelationshipType::ReferencesDOM,
         ),
         ReferenceIntent::CssClassUsage { class_name, .. } => (
-            resolve_plain(class_name, entity, ctx, metrics),
+            resolve_web_reference(class_name, EntityKind::CssClass, entity, ctx, metrics),
             RelationshipType::UsesCSSClass,
         ),
         ReferenceIntent::HtmlFileImport { file_path, .. } => (
@@ -413,6 +413,28 @@ fn resolve_plain(
         ctx.name_to_uuids,
         ctx.uuid_to_file,
         ctx.uuid_to_fqn,
+        metrics,
+    )
+}
+
+/// Web-reference resolution (REFERENCES_DOM / USES_CSS_CLASS): routed to the
+/// kind-exact resolver — the intent already names the exact kind it targets,
+/// so the plain ambiguity-prone ladder must not run (see
+/// [`non_calls::resolve_web_reference`]).
+fn resolve_web_reference(
+    name: &str,
+    preferred: EntityKind,
+    entity: &ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+    metrics: &RunMetrics,
+) -> Option<Uuid> {
+    non_calls::resolve_web_reference(
+        name,
+        preferred,
+        &entity.file_path,
+        ctx.name_to_uuids,
+        ctx.uuid_to_file,
+        ctx.uuid_to_kind,
         metrics,
     )
 }

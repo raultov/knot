@@ -37,8 +37,13 @@ use crate::mcp_tools::repo_scope_from_args;
                    Each caller entry and each resolved target states its repository as `(repo: name)`, so rows are attributable when multiple repositories are in scope. \
                    For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
                    When the query resolves to more than one entity with that name (homonyms, e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references — even when only one of the homonyms has callers. \
-                    Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
-                    \n\nTruncation & completeness: the queried name is first resolved to concrete targets (capped at 25 by default). \
+                     Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
+                     \n\nEntity-kind scope: target resolution is code-only by default — documentation, configuration, build-system and Kubernetes/Helm metadata (markdown_section, config_property, build_dependency, cargo_package, project_identity, k8s_*, helm_*, …) can never be presented as resolved targets. \
+                     When the filter removed matches, the response says so ('Non-code matches hidden — N entities …'), never silently. \
+                     Pass kinds='all' (or '*') to disable the filter, or a comma-separated allow-list of exact kinds/aliases ('callable', 'config', 'docs', 'rust_function', 'build_dependency', …) to scope resolution explicitly. \
+                     The response's resolution.kind_filter field states which scope applied ('code_default', 'any', 'explicit'). \
+                     \n\nRelationship coverage: the buckets cover every edge type the pipeline produces — Calls, Extends, Implements, References, Macro calls (MACRO_CALLS), DOM references (JS → HTML id), CSS class usage (JS → CSS class), script/stylesheet imports, and the VCL edges (uses backend/probe/acl, includes, imports vmod, declared-unused) — plus Overridden by / Overrides. \
+                     \n\nTruncation & completeness: the queried name is first resolved to concrete targets (capped at 25 by default). \
                     When more targets match than fit the cap, the response states 'Truncated — N targets matched; showing the first M by FQN' and \
                     'Counts below are partial — they cover only the M of N targets shown', so bucket counts are never mistaken for the complete impact set. \
                     Raise 'max_targets' (up to 500) to retrieve more targets when the notice reports truncation. \
@@ -70,6 +75,12 @@ pub struct FindCallersTool {
         default = 25
     )]
     pub max_targets: Option<i64>,
+    #[json_schema(
+        description = "Optional entity-kind scope for target resolution. Omit for the default code-only scope (docs/config/build metadata are hidden from the target list and the response discloses them). Use 'all' (or '*') to disable filtering, or a comma-separated allow-list of exact kinds or aliases ('callable', 'class', 'config', 'docs', 'rust_function', 'build_dependency', ...).",
+        min_length = 1,
+        max_length = 1024
+    )]
+    pub kinds: Option<String>,
 }
 
 impl FindCallersTool {
@@ -96,6 +107,7 @@ impl FindCallersTool {
             .get("max_targets")
             .and_then(|v| v.as_i64())
             .map(|v| v.max(1) as usize);
+        let kinds = args.get("kinds").and_then(|v| v.as_str());
 
         // Check if in offline mode
         if handler.graph_db.is_none() {
@@ -111,9 +123,10 @@ impl FindCallersTool {
             .ok_or_else(|| CallToolError::from_message("Graph DB not available".to_string()))?;
 
         // Call the shared CLI tool logic
-        let json_result = cli_tools::run_find_callers(entity_name, &repo, graph_db, max_targets)
-            .await
-            .map_err(|e| CallToolError::from_message(format!("Find callers failed: {}", e)))?;
+        let json_result =
+            cli_tools::run_find_callers(entity_name, &repo, graph_db, max_targets, kinds)
+                .await
+                .map_err(|e| CallToolError::from_message(format!("Find callers failed: {}", e)))?;
 
         let formatted = cli_tools::format_references_result(entity_name, &json_result);
 
@@ -145,6 +158,32 @@ mod tests {
         assert!(props.contains_key("repo_name"));
         // v1.10.0: opt-in full impact set.
         assert!(props.contains_key("max_targets"));
+        // v1.9.6: optional entity-kind scope for target resolution.
+        assert!(props.contains_key("kinds"));
+        assert!(!schema.required.contains(&"kinds".to_string()));
+    }
+
+    #[test]
+    fn test_find_callers_kinds_param_documents_default_scope() {
+        let tool = FindCallersTool::tool();
+        let props = tool.input_schema.properties.unwrap();
+        let kinds_prop = props.get("kinds").unwrap();
+        let desc = kinds_prop.get("description").unwrap().as_str().unwrap();
+        assert!(desc.contains("code-only"), "got: {desc}");
+        assert!(desc.contains("'all'"));
+    }
+
+    #[test]
+    fn test_find_callers_description_documents_kind_scope_and_edge_coverage() {
+        let tool = FindCallersTool::tool();
+        let desc = tool.description.unwrap();
+        assert!(desc.contains("Entity-kind scope"));
+        assert!(desc.contains("code-only by default"));
+        assert!(desc.contains("Non-code matches hidden"));
+        assert!(desc.contains("Relationship coverage"));
+        assert!(desc.contains("Macro calls"));
+        assert!(desc.contains("DOM references"));
+        assert!(desc.contains("CSS class usage"));
     }
 
     #[test]

@@ -20,6 +20,9 @@ pub(crate) struct ResolutionView<'a> {
     fuzzy: bool,
     truncated: bool,
     total_targets: i64,
+    kind_filter: &'a str,
+    hidden_kinds: Vec<&'a str>,
+    hidden_non_code: i64,
 }
 
 impl<'a> ResolutionView<'a> {
@@ -52,6 +55,21 @@ impl<'a> ResolutionView<'a> {
                 .get("total_targets")
                 .and_then(Value::as_i64)
                 .unwrap_or(count),
+            // Older indexes/Knot-server responses predate the kind-filter
+            // disclosure; absent fields degrade to "nothing was hidden".
+            kind_filter: resolution
+                .get("kind_filter")
+                .and_then(Value::as_str)
+                .unwrap_or("code_default"),
+            hidden_kinds: resolution
+                .get("hidden_kinds")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default(),
+            hidden_non_code: resolution
+                .get("hidden_non_code")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
         })
     }
 
@@ -73,6 +91,61 @@ impl<'a> ResolutionView<'a> {
 
     pub(crate) fn total_targets(&self) -> i64 {
         self.total_targets
+    }
+
+    /// How many matched entities the kind filter removed (`0` when the
+    /// resolution block predates the disclosure or nothing was hidden).
+    pub(crate) fn hidden_non_code(&self) -> i64 {
+        self.hidden_non_code
+    }
+
+    /// Stable `resolution.kind_filter` label (`code_default` / `any` /
+    /// `explicit`).
+    pub(crate) fn kind_filter(&self) -> &'a str {
+        self.kind_filter
+    }
+
+    /// Shared wording for the hidden-matches disclosure. Empty when there is
+    /// nothing to disclose, so callers can unconditionally append the return
+    /// value. `markdown` toggles the styling: `**emphasis**` and backticked
+    /// option names for the Markdown answer, bare text for the CLI table.
+    /// A single parameterized helper so the two renderers cannot drift
+    /// (extracted after `cargo dupes` flagged the copy pair).
+    pub(crate) fn hidden_notice(&self, markdown: bool) -> String {
+        if self.hidden_non_code <= 0 {
+            return String::new();
+        }
+        let entity_word = if self.hidden_non_code == 1 {
+            "entity"
+        } else {
+            "entities"
+        };
+        let kinds = if self.hidden_kinds.is_empty() {
+            "non-code kinds".to_string()
+        } else if self.hidden_kinds.len() == 1 {
+            format!("kind {}", self.hidden_kinds[0])
+        } else {
+            format!("kinds {}", self.hidden_kinds.join(", "))
+        };
+        if markdown {
+            format!(
+                "**Non-code matches hidden** — {n} {entity_word} matched `{q}` but are \
+                 documentation/config/build metadata ({kinds}), not code definitions. \
+                 Pass `kinds=all` to include them, or a specific kind \
+                 (e.g. `kinds=build_dependency`) to narrow explicitly.",
+                n = self.hidden_non_code,
+                q = self.query,
+            )
+        } else {
+            format!(
+                "Non-code matches hidden — {n} {entity_word} matched `{q}` but are \
+                 documentation/config/build metadata ({kinds}), not code definitions. \
+                 Pass kinds=all to include them, or a specific kind \
+                 (e.g. kinds=build_dependency) to narrow explicitly.",
+                n = self.hidden_non_code,
+                q = self.query,
+            )
+        }
     }
 
     /// Human-readable label for the match tier.
@@ -279,5 +352,61 @@ mod tests {
         let view = ResolutionView::from_references(&refs).expect("resolution");
         assert!(view.is_truncated());
         assert_eq!(view.total_targets(), 112);
+    }
+
+    // ---- kind-filter disclosure ----
+
+    fn hidden_resolution(n: i64, kinds: &[&str]) -> Value {
+        json!({
+            "resolution": {
+                "query": "cargo",
+                "tier": "fuzzy",
+                "truncated": false,
+                "total_targets": 0,
+                "kind_filter": "code_default",
+                "hidden_non_code": n,
+                "hidden_kinds": kinds,
+                "targets": []
+            }
+        })
+    }
+
+    #[test]
+    fn resolution_view_defaults_hidden_fields_when_absent() {
+        // Pre-fix wire shape: no kind-filter fields at all.
+        let refs = sample();
+        let view = ResolutionView::from_references(&refs).expect("resolution");
+        assert_eq!(view.hidden_non_code(), 0);
+        assert_eq!(view.kind_filter(), "code_default");
+        assert_eq!(view.hidden_notice(true), "");
+        assert_eq!(view.hidden_notice(false), "");
+    }
+
+    #[test]
+    fn hidden_notice_names_the_kinds_and_how_to_opt_in() {
+        let refs = hidden_resolution(93, &["build_dependency", "cargo_package"]);
+        let view = ResolutionView::from_references(&refs).expect("resolution");
+        let markdown = view.hidden_notice(true);
+        assert!(markdown.contains("**Non-code matches hidden** — 93 entities matched `cargo`"));
+        assert!(markdown.contains("build_dependency, cargo_package"));
+        assert!(markdown.contains("kinds=all"));
+        assert!(!markdown.contains("may be unused"));
+
+        let plain = view.hidden_notice(false);
+        assert!(plain.contains("Non-code matches hidden — 93"));
+        assert!(!plain.contains("**"));
+    }
+
+    #[test]
+    fn hidden_notice_singularizes_and_handles_empty_kinds() {
+        let refs = hidden_resolution(1, &[]);
+        let view = ResolutionView::from_references(&refs).expect("res");
+        assert!(view.hidden_notice(true).contains("1 entity matched"));
+        assert!(view.hidden_notice(true).contains("(non-code kinds)"));
+
+        let refs = hidden_resolution(2, &["md_section"]);
+        let view = ResolutionView::from_references(&refs).expect("res");
+        assert!(view.hidden_notice(true).contains("2 entities matched"));
+        assert!(view.hidden_notice(true).contains("kind md_section"));
     }
 }

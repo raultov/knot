@@ -61,6 +61,13 @@ pub enum Commands {
         #[arg(short = 'm', long)]
         max_targets: Option<usize>,
 
+        /// Optional entity-kind filter for target resolution: 'all'/'*' to
+        /// disable the default code-only scope (docs/config/build metadata
+        /// stay hidden by default), or exact kinds/aliases ('callable',
+        /// 'config', 'rust_function', ...) comma-separated for more values.
+        #[arg(short = 'k', long)]
+        kinds: Option<String>,
+
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
@@ -131,6 +138,48 @@ pub enum Commands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cli_parser_callers_command_with_kinds() {
+        let args = vec!["knot", "callers", "Hikari", "--kinds", "all"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Callers {
+                entity_name, kinds, ..
+            } => {
+                assert_eq!(entity_name, "Hikari");
+                assert_eq!(kinds.as_deref(), Some("all"));
+            }
+            _ => panic!("Expected Callers command"),
+        }
+
+        // Absent `--kinds` keeps the None default (code-only scope).
+        let args = vec!["knot", "callers", "Hikari"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Callers {
+                entity_name,
+                kinds,
+                max_targets,
+                ..
+            } => {
+                assert_eq!(entity_name, "Hikari");
+                assert_eq!(kinds, None);
+                assert_eq!(max_targets, None);
+            }
+            _ => panic!("Expected Callers command"),
+        }
+
+        // `-k` short flag and explicit kind lists parse too.
+        let args = vec!["knot", "callers", "X", "-k", "build_dependency,callable"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI");
+        match cli.command {
+            Commands::Callers { kinds, .. } => {
+                assert_eq!(kinds.as_deref(), Some("build_dependency,callable"));
+            }
+            _ => panic!("Expected Callers command"),
+        }
+    }
 
     #[test]
     fn test_cli_parser_search_command() {
