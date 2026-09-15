@@ -354,7 +354,11 @@ Find code entities by meaning, class names, docstrings, or comments.
 Ranking is kind-aware: function/method/class/struct definitions outrank
 markdown docs, test files, config properties and build-dependency entities
 for natural-language queries, and callers/helpers are shown as context
-attached to a definition — never as substitutes. Use `--kinds` to narrow the
+attached to a definition — never as substitutes. The shared entry point of
+the highest-ranked helpers outranks those helpers, and an entity merely
+named after a generic verb (`find`, `get`, `create`, `build`, `acquire`, …)
+does not win on the bare verb unless its container (FQN) corroborates the
+query. Use `--kinds` to narrow the
 result types (aliases: `definition`, `callable`, `class`/`type`/`struct`, or
 exact kinds like `rust_function`).
 

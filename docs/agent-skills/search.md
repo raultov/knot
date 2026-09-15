@@ -46,6 +46,13 @@ at or near the top:
 
 - Definitions (callables and types) outrank markdown docs, test files,
   config properties and build-dependency entities.
+- The **shared entry point** of the highest-ranked helpers outranks those
+  helpers: a paraphrase ranks the helpers of the behaviour it names, and
+  graph coverage at search time promotes their common caller above them.
+- An entity merely named after a generic verb/noun (`find`, `get`,
+  `create`, `build`, `acquire`, `borrow`, `current`, …) does not win on the
+  bare verb; the full name boost requires a second query token in the
+  entity's container context (FQN).
 - A method can outrank its own container when the query names it
   (`LookupMaps::build` beats `LookupMaps` for "build lookup maps").
 - An identifier the query literally names is probed by exact name and can
