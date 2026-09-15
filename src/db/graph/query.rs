@@ -431,6 +431,50 @@ pub fn caller_links_query(repo_scoped: bool) -> String {
     )
 }
 
+/// Per-entity row of the re-rank's root-set coverage annotation
+/// ([`QueryExt::fetch_root_coverage`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootCoverage {
+    /// Entity the row annotates (the Qdrant↔Neo4j bridge key).
+    pub uuid: String,
+    /// Fully qualified name of the entity (`""` when the node predates FQN
+    /// attribution). Absent from the Qdrant payload, so the search pipeline
+    /// must fetch it here for the generic-name guard in `rank`.
+    pub fqn: String,
+    /// How many of the top semantic roots the entity calls directly.
+    pub direct_roots: usize,
+    /// How many top roots the entity reaches through exactly one helper
+    /// (`(e)-[:CALLS]->(helper)-[:CALLS]->(root)`), *excluding* roots it
+    /// already calls directly — transitive coverage never double counts.
+    pub transitive_roots: usize,
+}
+
+/// Cipher for the re-rank's root-set coverage annotation. Both patterns are
+/// anchored on the indexed `uuid` at *both* ends, so the expansion is driven
+/// by `$pool_uuids`/`$root_uuids` (the caller caps both) rather than by the
+/// graph's fan-out: depth is fixed at 2 hops and every `collect` is bounded
+/// by the root set, never by the caller's in-degree.
+pub fn root_coverage_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "AND e.repo_name IN $repo_names"
+    } else {
+        ""
+    };
+    format!(
+        "MATCH (e:Entity)
+         WHERE e.uuid IN $pool_uuids {repo_filter}
+         OPTIONAL MATCH (e)-[:CALLS]->(d:Entity) WHERE d.uuid IN $root_uuids
+         WITH e, collect(DISTINCT d.uuid) AS direct
+         OPTIONAL MATCH (e)-[:CALLS]->(:Entity)-[:CALLS]->(t:Entity)
+           WHERE t.uuid IN $root_uuids AND NOT t.uuid IN direct
+         WITH e, direct, collect(DISTINCT t.uuid) AS indirect
+         RETURN e.uuid AS uuid, e.fqn AS fqn,
+                size(direct) AS direct_roots, size(indirect) AS transitive_roots
+         ORDER BY uuid
+         LIMIT $limit"
+    )
+}
+
 /// Cipher for one tier of the reference-target resolution ladder used by
 /// `resolve_reference_targets`. `predicate` is the post-`WHERE` match
 /// expression produced by `target_resolution_tiers` (e.g.
@@ -830,6 +874,20 @@ pub trait QueryExt {
         repo_names: &[String],
         limit: usize,
     ) -> Result<Vec<(String, String)>>;
+
+    /// Root-set coverage annotation for the `search_hybrid_context` re-rank:
+    /// for each pool UUID, its FQN plus how many of the top semantic roots it
+    /// calls directly (`(e)-[:CALLS]->(root)`) and through exactly one helper
+    /// (`(e)-[:CALLS]->(helper)-[:CALLS]->(root)`, excluding direct ones).
+    /// `limit` caps the returned row count. One bounded round trip replaces
+    /// both the per-row FQN lookup and the old bridge-side caller counting.
+    async fn fetch_root_coverage(
+        &self,
+        pool_uuids: &[String],
+        root_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<RootCoverage>>;
 }
 
 impl QueryExt for GraphDb {
@@ -1270,6 +1328,53 @@ impl QueryExt for GraphDb {
         }
         Ok(links)
     }
+
+    /// Root-set coverage annotation (see trait docs). One bounded query; a
+    /// failure surfaces to the caller, which treats the annotation as
+    /// best-effort and keeps the un-annotated pool.
+    async fn fetch_root_coverage(
+        &self,
+        pool_uuids: &[String],
+        root_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<RootCoverage>> {
+        if pool_uuids.is_empty() || root_uuids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_str = root_coverage_query(!repo_names.is_empty());
+        let mut q = query(&query_str)
+            .param("pool_uuids", pool_uuids.to_vec())
+            .param("root_uuids", root_uuids.to_vec())
+            .param("limit", limit as i64);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for root-set coverage")?;
+
+        let mut coverage = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            if let (Ok(uuid), Ok(fqn), Ok(direct), Ok(transitive)) = (
+                row.get::<String>("uuid"),
+                row.get::<String>("fqn"),
+                row.get::<i64>("direct_roots"),
+                row.get::<i64>("transitive_roots"),
+            ) {
+                coverage.push(RootCoverage {
+                    uuid,
+                    fqn,
+                    direct_roots: direct.max(0) as usize,
+                    transitive_roots: transitive.max(0) as usize,
+                });
+            }
+        }
+        Ok(coverage)
+    }
 }
 
 fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
@@ -1493,7 +1598,8 @@ mod tests {
         find_references_rel_labels, fold_hidden, get_file_entities_query,
         get_file_outgoing_references_query, overridden_by_query, overrides_query,
         partition_by_kind, partition_reference_rows, rank_root_candidates, reference_bucket_key,
-        reference_target_query, relationship_query, root_kind_rank, target_resolution_tiers,
+        reference_target_query, relationship_query, root_coverage_query, root_kind_rank,
+        target_resolution_tiers,
     };
 
     #[test]
@@ -2016,6 +2122,29 @@ mod tests {
 
         let scoped = caller_links_query(true);
         assert!(scoped.contains("caller.repo_name IN $repo_names"));
+    }
+
+    #[test]
+    fn root_coverage_query_is_anchored_scoped_and_capped() {
+        let unscoped = root_coverage_query(false);
+        // Both hop patterns present, each anchored on the fixed root set.
+        assert!(unscoped.contains("WHERE e.uuid IN $pool_uuids"));
+        assert!(unscoped.contains("(e)-[:CALLS]->(d:Entity) WHERE d.uuid IN $root_uuids"));
+        assert!(unscoped.contains("(e)-[:CALLS]->(:Entity)-[:CALLS]->(t:Entity)"));
+        // Transitive coverage excludes roots already covered directly.
+        assert!(unscoped.contains("NOT t.uuid IN direct"));
+        assert!(unscoped.contains("AS direct_roots"));
+        assert!(unscoped.contains("AS transitive_roots"));
+        // Deterministic truncation.
+        assert!(unscoped.contains("ORDER BY uuid"));
+        assert!(unscoped.contains("LIMIT $limit"));
+        assert!(
+            !unscoped.contains("$repo_names"),
+            "unscoped must not reference the repo filter"
+        );
+
+        let scoped = root_coverage_query(true);
+        assert!(scoped.contains("e.repo_name IN $repo_names"));
     }
 
     #[test]

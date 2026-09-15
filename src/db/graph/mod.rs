@@ -19,8 +19,8 @@ mod utils;
 // `rank_root_candidates` / `target_resolution_tiers` are addressable from
 // the models and other modules.
 pub use query::{
-    DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, rank_root_candidates,
-    target_resolution_tiers,
+    DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, RootCoverage,
+    rank_root_candidates, target_resolution_tiers,
 };
 
 use neo4rs::Graph;

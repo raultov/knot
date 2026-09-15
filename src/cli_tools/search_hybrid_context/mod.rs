@@ -322,7 +322,7 @@ impl CandidatePool<'_> {
         .await;
         merge_hits(&probe_hits, self.seen_uuids, &mut vector_hits);
 
-        let bridge = CallerBridge {
+        let (bridge, top_roots) = CallerBridge {
             vector: self.vector,
             search_results: self.search_results,
             seen_uuids: self.seen_uuids,
@@ -333,6 +333,13 @@ impl CandidatePool<'_> {
         .run(self.candidate_limit)
         .await;
         merge_hits(&bridge, self.seen_uuids, &mut vector_hits);
+
+        // Root-set coverage + FQN for the *whole* pool — cosine hits (the
+        // entry point is usually among them), probe hits and bridge hits
+        // alike. This is what makes the re-rank's caller-root signal reach
+        // entities the direct search already returned; the bridge alone
+        // never annotated those.
+        annotate_root_coverage(&mut vector_hits, &top_roots, self.repo_names, self.ctx).await;
         vector_hits
     }
 }
@@ -425,11 +432,18 @@ async fn name_probe_hits(
 /// Caller-recall bridge over the top semantic hits.
 ///
 /// Roots are the highest-cosine vector hits ([`TOP_ROOTS`] capped); their
-/// callers (in-repo, capped at 12) are scored against the query vector in
-/// one Qdrant round-trip and returned as full candidate rows with their
-/// true cosine. Skips prose and test-path roots — a Markdown section has
-/// no callers and a test's callers are other tests. Failures collapse to
-/// an empty list; the search continues without the bridge.
+/// callers (in-repo, capped at [`CALLER_LINK_LIMIT`] Cypher rows) are scored
+/// against the query vector in one Qdrant round-trip and returned as full
+/// candidate rows with their true cosine. The bridge is **pure recall**: it
+/// only adds unseen callers to the pool; the scoring signal (how many top
+/// roots each candidate calls, directly or through one helper) is attached
+/// to *every* pool row afterwards by [`annotate_root_coverage`], including
+/// cosine hits the bridge never fetched (the entry point is usually already
+/// in the cosine pool itself).
+///
+/// Skips prose and test-path roots — a Markdown section has no callers and
+/// a test's callers are other tests. Failures collapse to an empty list;
+/// the search continues without the bridge.
 pub(crate) struct CallerBridge<'a> {
     /// Query embedding.
     pub vector: &'a [f32],
@@ -446,12 +460,13 @@ pub(crate) struct CallerBridge<'a> {
 }
 
 impl CallerBridge<'_> {
-    /// Cap by the remaining pool capacity so the bridge can never displace
-    /// what the direct search already gathered. Each fetched hit is
-    /// annotated with `caller_roots` — how many of the top semantic roots
-    /// it calls — so [`rank::final_score_annotated`] can add the root
-    /// boost.
-    pub async fn run(&self, pool_cap: usize) -> Vec<serde_json::Value> {
+    /// Return `(bridge_hits, seeded_roots)`. `seeded_roots` is the UUID list
+    /// the coverage annotation needs; `bridge_hits` is capped by the
+    /// remaining pool capacity so the bridge can never displace what the
+    /// direct search already gathered. Every hit is a genuine caller of at
+    /// least one seeded root (the annotation pass re-checks nothing — the
+    /// retain below already did).
+    pub async fn run(&self, pool_cap: usize) -> (Vec<serde_json::Value>, Vec<String>) {
         let top_roots: Vec<String> = self
             .search_results
             .iter()
@@ -465,33 +480,28 @@ impl CallerBridge<'_> {
             .map(String::from)
             .collect();
         if top_roots.is_empty() {
-            return Vec::new();
+            return (Vec::new(), top_roots);
         }
 
         let links = self
             .ctx
             .graph_db
-            .find_caller_links(&top_roots, self.repo_names, 48)
+            .find_caller_links(&top_roots, self.repo_names, CALLER_LINK_LIMIT)
             .await
             .unwrap_or_default();
         if links.is_empty() {
-            return Vec::new();
+            return (Vec::new(), top_roots);
         }
 
-        let mut roots_per_caller: std::collections::HashMap<String, HashSet<String>> =
-            std::collections::HashMap::new();
-        let mut caller_uuids: Vec<String> = Vec::new();
-        for (caller, target) in &links {
-            if !self.seen_uuids.contains(caller) && !caller_uuids.contains(caller) {
-                caller_uuids.push(caller.clone());
-            }
-            roots_per_caller
-                .entry(caller.clone())
-                .or_default()
-                .insert(target.clone());
-        }
-        if caller_uuids.is_empty() {
-            return Vec::new();
+        let caller_uuids: HashSet<String> =
+            links.iter().map(|(caller, _)| caller.clone()).collect();
+        let fetch_list: Vec<String> = caller_uuids
+            .iter()
+            .filter(|u| !self.seen_uuids.contains(*u))
+            .cloned()
+            .collect();
+        if fetch_list.is_empty() {
+            return (Vec::new(), top_roots);
         }
 
         let mut hits = self
@@ -499,7 +509,7 @@ impl CallerBridge<'_> {
             .vector_db
             .search_by_uuids(UuidProbe {
                 vector: self.vector,
-                uuids: &caller_uuids,
+                uuids: &fetch_list,
                 repo_names: self.repo_names,
                 kinds: self.expanded_kinds,
                 limit: pool_cap,
@@ -507,34 +517,149 @@ impl CallerBridge<'_> {
             .await
             .unwrap_or_default();
 
-        let to_roots: Vec<String> = top_roots.clone();
-        let roots_map = &roots_per_caller;
-        for hit in &mut hits {
-            if let Some(uuid) = hit.get("uuid").and_then(|v| v.as_str()) {
-                let count = roots_map
-                    .get(uuid)
-                    .map(|targets| targets.iter().filter(|t| to_roots.contains(*t)).count())
-                    .unwrap_or(0);
-                if let Some(obj) = hit.as_object_mut() {
-                    obj.insert("caller_roots".to_string(), json!(count));
-                }
-            }
-        }
+        // Keep only rows that are genuine callers of a seeded root — Qdrant
+        // keyword matching can return a point whose payload `uuid` differs
+        // in case, and an annotated boost must always rest on real CALL
+        // edges.
         hits.retain(|hit| {
-            hit.get("caller_roots")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0)
-                > 0
+            hit.get("uuid")
+                .and_then(|v| v.as_str())
+                .is_some_and(|u| caller_uuids.contains(u))
         });
-        hits
+        (hits, top_roots)
     }
 }
 
-/// How many top vector hits seed the caller-recall bridge. Three roots are
-/// enough to cover the helpers a behavioral paraphrase ranks first (its
-/// shared caller usually calls two or three of them) while keeping the
-/// Neo4j fan-in bounded.
-const TOP_ROOTS: usize = 3;
+/// Annotate every pool candidate with the graph evidence the re-rank needs:
+/// its FQN (absent from the Qdrant payload, required by the generic-name
+/// guard in [`rank`]) and how many of the top semantic roots it calls
+/// directly / through exactly one helper ([`rank::root_coverage_boost`]
+/// turns both counts into the root-set signal). One bounded round trip.
+///
+/// Best effort: a failed round trip leaves the pool unannotated and the
+/// search proceeds on cosine + kind + lexical alone.
+async fn annotate_root_coverage(
+    pool: &mut [serde_json::Value],
+    top_roots: &[String],
+    repo_names: &[String],
+    ctx: &SearchContext<'_>,
+) {
+    if pool.is_empty() || top_roots.is_empty() {
+        return;
+    }
+    let pool_uuids: Vec<String> = pool
+        .iter()
+        .filter_map(|hit| hit.get("uuid").and_then(|v| v.as_str()))
+        .map(String::from)
+        .collect();
+    if pool_uuids.is_empty() {
+        return;
+    }
+    let coverage = ctx
+        .graph_db
+        .fetch_root_coverage(&pool_uuids, top_roots, repo_names, pool_uuids.len())
+        .await
+        .unwrap_or_default();
+    if coverage.is_empty() {
+        return;
+    }
+    let by_uuid: std::collections::HashMap<&str, &crate::db::graph::RootCoverage> = coverage
+        .iter()
+        .map(|row| (row.uuid.as_str(), row))
+        .collect();
+
+    // Who calls whom *inside the pool* shadows the coverage signal: a
+    // candidate whose pool caller covers at least the same root set is an
+    // internal step of that caller, so its provenance is redundant — the
+    // boost is halved ([`rank::ORCHESTRATOR_STEP_ATTENUATION`]). Only a
+    // production caller reassigns provenance: a test calling the same
+    // helpers must not take the entry point's boost away (the test-path
+    // guard of the coverage boost applies to the caller too).
+    let pool_meta: std::collections::HashMap<&str, (&str, &str)> = pool
+        .iter()
+        .filter_map(|hit| {
+            Some((
+                hit.get("uuid")?.as_str()?,
+                (hit.get("kind")?.as_str()?, hit.get("file_path")?.as_str()?),
+            ))
+        })
+        .collect();
+    let in_pool: HashSet<&str> = pool_uuids.iter().map(String::as_str).collect();
+    let mut superseded: HashSet<String> = HashSet::new();
+    if let Ok(links) = ctx
+        .graph_db
+        .find_caller_links(&pool_uuids, repo_names, pool_uuids.len() * 16)
+        .await
+    {
+        for (caller, callee) in links.iter().filter(|(caller, callee)| {
+            in_pool.contains(caller.as_str())
+                && in_pool.contains(callee.as_str())
+                && caller != callee
+        }) {
+            let (Some(caller_cov), Some(callee_cov)) =
+                (by_uuid.get(caller.as_str()), by_uuid.get(callee.as_str()))
+            else {
+                continue;
+            };
+            let caller_production =
+                pool_meta
+                    .get(caller.as_str())
+                    .is_some_and(|(kind, file_path)| {
+                        rank::kind_boost(kind) >= 0.0 && !rank::is_test_path(file_path)
+                    });
+            if caller_production && caller_cov.direct_roots >= callee_cov.direct_roots {
+                superseded.insert(callee.clone());
+            }
+        }
+    }
+
+    for hit in pool.iter_mut() {
+        let uuid = hit.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
+        let Some(row) = by_uuid.get(uuid) else {
+            continue;
+        };
+        let superseded_here = superseded.contains(uuid);
+        let Some(obj) = hit.as_object_mut() else {
+            continue;
+        };
+        // The pool already carries a `fqn` when the row came from a channel
+        // that enriched it from the graph; only fill the Qdrant gap.
+        obj.entry("fqn")
+            .or_insert_with(|| serde_json::json!(row.fqn));
+        obj.insert(
+            "caller_roots".to_string(),
+            serde_json::json!(row.direct_roots),
+        );
+        obj.insert(
+            "caller_roots_transitive".to_string(),
+            serde_json::json!(row.transitive_roots),
+        );
+        obj.insert(
+            "caller_root_total".to_string(),
+            serde_json::json!(top_roots.len()),
+        );
+        obj.insert(
+            "caller_superseded".to_string(),
+            serde_json::json!(superseded_here),
+        );
+    }
+}
+
+/// How many top vector hits seed the caller-recall bridge. Eight roots
+/// cover the helpers a behavioral paraphrase ranks first even when its
+/// shared caller's strongest helpers rank 4th–8th in pure cosine order
+/// (three were not enough: the entry point then entered the pool with zero
+/// coverage evidence). Seeding is capped by the pool window via `min` at
+/// the call site (each seed must map to a real bridge request), and the
+/// Neo4j fan-in stays bounded by [`CALLER_LINK_LIMIT`] on the Cypher side.
+const TOP_ROOTS: usize = 8;
+
+/// Neo4j row budget for the caller-recall bridge. Scaled with the widened
+/// seed so a popular root cannot eat the whole pair list: the Cypher's
+/// `ORDER BY caller_uuid, target_uuid LIMIT $limit` truncates by UUID
+/// string, and a root followed by 30 callers would otherwise starve every
+/// root sorted after it.
+const CALLER_LINK_LIMIT: usize = TOP_ROOTS * 32;
 
 fn push_if_unique(
     entity: &serde_json::Value,
