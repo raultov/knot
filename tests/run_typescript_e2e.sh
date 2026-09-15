@@ -406,22 +406,37 @@ else
     exit 1
 fi
 
-# Test: Embed-text recall — a hook with no doc comment whose behaviour is
-# only observable through its body must still surface first for the
-# natural-language paraphrase of what it does, ahead of the prose-rich
-# constants in the same file.
+# Test: Embed-text recall — the doc-less hook's paraphrase ranks the
+# behaviour's call chain. Under root-set coverage (v1.9.7) the paraphrase
+# "change password current user" promotes `submitChangePassword`, the
+# orchestrator calling the three top-ranked helpers, to #1, and the
+# hook itself (`useChangePassword`, which delegates to it) must still
+# surface at #2 — the "entry point ≤ 2" contract. (Historically the hook
+# ranked #1 only while the caller-root bridge silently skipped every
+# entity the cosine pool already returned, i.e. while coverage was dead.)
 echo ""
-echo "Test: embedding recall — 'change password current user me hook' ranks useChangePassword first..."
+echo "Test: embedding recall — 'change password current user me hook' ranks submitChangePassword #1 and useChangePassword #2..."
 MCP_FIRST=$(echo '{"jsonrpc":"2.0","id":900,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"change password current user me hook","max_results":10,"repo_name":"typescript_e2e_test_repo"}}}' \
     | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
       KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" \
       cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 MCP_FIRST_NAME=$(echo "$MCP_FIRST" | grep -o '## `[^`]*`' | head -1)
+MCP_SECOND_NAME=$(echo "$MCP_FIRST" | grep -o '## `[^`]*`' | head -2 | tail -1)
 
-if echo "$MCP_FIRST_NAME" | grep -q 'useChangePassword'; then
-    echo -e "${GREEN}✓ Recall: useChangePassword ranks first for its paraphrase${NC}"
+if echo "$MCP_FIRST_NAME" | grep -q 'submitChangePassword'
+then
+    echo -e "${GREEN}✓ Recall: submitChangePassword (root-coverage orchestrator) ranks #1${NC}"
 else
-    echo -e "${RED}✗ Recall: expected useChangePassword first, got: $MCP_FIRST_NAME${NC}"
+    echo -e "${RED}✗ Recall: expected submitChangePassword first, got: $MCP_FIRST_NAME${NC}"
+    echo "Response was: $MCP_FIRST"
+    exit 1
+fi
+
+if echo "$MCP_SECOND_NAME" | grep -q 'useChangePassword'
+then
+    echo -e "${GREEN}✓ Recall: doc-less hook useChangePassword stays within position 2${NC}"
+else
+    echo -e "${RED}✗ Recall: expected useChangePassword second, got: $MCP_SECOND_NAME${NC}"
     echo "Response was: $MCP_FIRST"
     exit 1
 fi

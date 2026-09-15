@@ -3,8 +3,13 @@
  * the reported failure mode: `useChangePassword` has no doc comment, so its
  * behaviour is only observable through the API call in its body, while the
  * surrounding constants carry prose rich in "change / password / user"
- * vocabulary. The suite asserts that `useChangePassword` ranks first for
- * the paraphrase "change password current user me hook".
+ * vocabulary.
+ *
+ * For the paraphrase "change password current user me hook" the ranking
+ * contract (v1.9.7) promotes `submitChangePassword` — the orchestrator that
+ * calls the top-ranked helpers `run` / `clearSession` /
+ * `postSelfChangePassword` — to #1 via root-set coverage, and requires the
+ * hook itself to stay within position 2 (the "entry point ≤ 2" rule).
  */
 
 /**
