@@ -5,6 +5,51 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.7
+
+- **Fixed**: entry-point recall for loose paraphrases in `search_hybrid_context`.
+  For a natural-language query that shares no tokens with a definition's
+  name, the definition previously ranked 3rd–4th — or dropped out of the
+  top-6 entirely — behind its own helpers, constants, long docstrings or
+  prose; an entity merely *named* after a generic verb in the query
+  (`ToolRegistry.Find` for "find who invokes…", `SuspendResumeLock.acquire`
+  for "acquire a client…", `ConcurrentBag.borrow` for "borrow a
+  connection…") could take #1. Query-time only; no re-indexing.
+- **Root cause 1 (silent coverage void)**: `CandidatePool::collect` hashed
+  every cosine hit into `seen_uuids` *before* the caller-recall bridge ran,
+  and `CallerBridge::run` skipped any caller already in that set — so
+  `caller_roots` was only ever annotated on entities the vector search had
+  NOT returned. The shared entry point of the top-ranked helpers (which the
+  cosine pool does return) received exactly `0.0` root evidence. The bridge
+  is now pure recall, and a new bounded Neo4j query
+  (`QueryExt::fetch_root_coverage`, depth fixed at 2 hops, both patterns
+  anchored on UUID sets) annotates the whole pool: FQN (absent from the
+  Qdrant payload and needed by the generic-verb guard), direct root
+  coverage and helper-hop coverage.
+- **Root cause 2**: seed too narrow for the wide ladder. `TOP_ROOTS` was 3;
+  the entry point's strongest helpers often ranked 4th–8th in pure cosine
+  — widening to 8 (capped by the pool window) gives the coverage signal its
+  full root set, with the caller-link Cypher budget scaled accordingly.
+  Scoring rewards root-set *coverage* over raw counts: weights per root
+  (saturating at 3), an entry-point signature bonus at ≥ 2 distinct roots,
+  a transitive term for orchestration-through-one-helper, and a
+  covered-fraction tie-break ("2 of 3 beats 1 of 5"), halved when a pool
+  caller covers a superset of the same root set (internal steps of an outer
+  orchestrator must not ride the signature).
+- **Root cause 3**: `EXACT_NAME_BOOST` (0.30) paid the full boost to any
+  entity whose whole name equals a *generic* query verb/noun. The boost is
+  now attenuated (0.08) unless the entity's FQN corroborates a second query
+  token — which is exactly why `LookupMaps::build` and
+  `ChatClient.create` keep full strength. No re-indexing: the FQN is
+  fetched at query time by the same coverage annotation.
+- Performance: one search now costs up to 2 extra bounded Neo4j round
+  trips; the E2E benchmark medians stay under 200 ms total per search.
+- TypeScript E2E fixture expectations updated to the corrected contract
+  (`submitChangePassword` — the orchestrator calling the three top-ranked
+  helpers — ranks #1; the doc-less hook `useChangePassword` stays within
+  position 2). Historically the hook ranked #1 only while the caller-root
+  bridge silently skipped every entity the cosine pool already returned.
+
 ## v1.9.6
 
 - **Fixed**: `find_callers` fuzzy target resolution no longer surfaces
