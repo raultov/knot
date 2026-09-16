@@ -5,6 +5,98 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.9.8
+
+- **Fixed**: residual entry-point recall failures after the v1.9.7 fix — the
+  cases where the ranker was promised the right inputs but the search
+  **pipeline** did not produce them. The v1.9.7 unit regressions fed the
+  ranker corrected annotations by construction; five of the seven reported
+  rows were therefore still failing live (measured with
+  `RUST_LOG=search_hybrid_context::rank=debug` before the fix: knot
+  `run_search_hybrid_context` and C# `GetCallersAsync` absent from the
+  whole pool, TS `screenshot` swept out by neutral-kind helpers, Java
+  `getConnection` at pool #9 behind config accessors, JS `login` halved by
+  its own UI wrapper). Query-time only; no re-indexing.
+- **Definition channel**: the cosine window is not proportional to its
+  candidate *mix*. On documentation-heavy repositories (indexing-prose
+  repos ran as high as 85% Markdown rows) the scanned window filled with
+  Markdown before a single definition entered, leaving the root-set seed
+  (`TOP_ROOTS = 8`) nothing but two trivial roots and the entry-point
+  signal dead — the v1.9.7 fix silently weakened exactly where it was
+  needed. `CandidatePool::collect` now runs a second bounded Qdrant pass
+  excluding all non-code kinds (`PROSE` + `CONFIG_BUILD` + `K8S_HELM`
+  deny-list, exported as `kinds::non_code_kinds()`); skipped when the
+  caller's `kinds` filter is already code-only (identical query) or
+  docs-only (a documentation-scoped search must never be shadowed by a
+  code channel).
+- **Root seed = union of channels**: the bridge seed was the raw cosine
+  order, so config accessors and prose outranked the behavioral helpers a
+  paraphrase actually names. Seeds are now selected by cosine order from
+  the *merged* pool (cosine ∪ definition channels) with a probe back-fill
+  capped at [`PROBE_ROOTS_MAX = 3`], so a lexically plausible but
+  unverified near-lock helper cannot crowd out the verified roots.
+- **Caller bridge, depth 2**: a new bounded Cypher
+  (`caller_links_depth2_query`) recalls callers-of-callers
+  (`(caller)-[:CALLS]->(helper)-[:CALLS]->(root)`) when the direct
+  round left pool capacity unused — entry points reaching a top root
+  through exactly one helper now surface at all. The Cypher stays anchored
+  on the seed UUID set at both ends (no fan-out-driven expansion) and the
+  Neo4j row budget is `TOP_ROOTS * 16`.
+- **Neutral-kind behavioral boost**: a definition the taxonomy scores
+  neutral (`constant`, …) whose graph node orchestrates ≥ 2 outgoing CALLS
+  edges earns +0.10 — language-agnostic (kind neutrality + call degree;
+  nothing per-language or per-kind). Reason it must exist (measured,
+  chrome-devtools-mcp): a TypeScript MCP tool is
+  `export const screenshot = defineTool({...})` — neutral kind, zero
+  boost — yet it held the *highest code cosine* of its window and was
+  swept below a method helper purely on the callables' kind advantage.
+  Prose/config/test kinds and sub-degree nodes never take the boost.
+- **Provenance strictly better, not equal-or-bigger**: the coverage boost
+  can only be attenuated by a production caller that covers *strictly
+  more* roots AND carries the entry-point signature itself (≥ 2 distinct
+  roots). Previously an equal-coverage caller halved the boost (job-watch-ui:
+  the `LoginPage` view displacing the `login` function it calls), and any
+  single-rung caller claimed provenance.
+- **Name-prefix contract scoped to definitions**: prose, config/build and
+  k8s/helm *prefix hits* no longer take leading slots the ranker never
+  gave them (measured: a Markdown section titled exactly `take screenshot`
+  ranked #1 before the re-rank ran). They enter the candidate pool with
+  their true cosine and compete under the standard kind-aware re-rank;
+  documentation-only topics (no competing definition) still surface their
+  best section — provenance changed, not reachability (new Markdown E2E
+  case). Test-path prefix hits keep their slot: the demotion is a
+  metadata decision, and re-applying the test-path penalty there would
+  punish legitimate fixtures living under `tests/…`-named trees (the web
+  E2E fixture `test_angular.html` is the measured case); the structural
+  test-path gates inside the re-rank are unchanged.
+- **Name/token probe widened to 48 results**: at 24 the probe's lexical
+  set truncated before deep-cosine interface *implementations*
+  (csharp-code-map `GetCallersAsync` in `QueryEngine`), so only the
+  interface declaration (zero CALLS edges) ever entered the pool.
+- **Coverage rows now carry `out_degree`** (a third quantity in the same
+  bounded round trip): the total outgoing CALLS degree of the entity, the
+  input of the neutral-kind boost.
+- **Diagnostic provenance**: every pool row is tagged with its recall
+  channel (`cosine`/`definition`/`probe`/`bridge`) and the rank trace
+  exposes `channel` + `out_degree`; the internal marker is stripped before
+  results leave the search.
+- **`tests/run_rank_recall_live.sh`** (opt-in, NOT part of
+  `run_all_e2e_fast.sh`): measures the reported rows' positions against a
+  *live* indexed knot instance (skipped cleanly when credentials/repositories
+  are absent). This is the harness that exposed that the previous E2E
+ /unit fixtures could pass while the live index failed: unit regressions
+  validate the ranker given correct inputs; the live harness validates the
+  pipeline produces them.
+- **Documented limits measured, not fixed**: two reported rows remain
+  unreached and are recorded here with their numeric evidence — Rust knot
+  `run_search_hybrid_context` and C# `QueryEngine.GetCallersAsync` under
+  `find who invokes…` are both outside the cosine window and have no
+  call-path to the seeded roots; the entities' indexed docstrings are
+  decorative (`─── Name ───`) or absent. Closing them requires an
+  *indexing-time* change (inheriting a container/module docstring when the
+  entity's own is empty or decorative), deliberately out of scope for a
+  query-time fix.
+
 ## v1.9.7
 
 - **Fixed**: entry-point recall for loose paraphrases in `search_hybrid_context`.
