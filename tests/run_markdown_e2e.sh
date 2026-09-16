@@ -350,6 +350,35 @@ else
 fi
 
 
+# Test 7: documentation-only topics survive the prefix-demotion contract.
+# This repo indexes NO definitions; the search prefix channel used to
+# auto-slot sections into the leading positions before the ranker ran.
+# Under the current contract a Markdown section *demoted from the prefix
+# channel into the pool* must still land at #1 when there is no competing
+# definition (documentation-only topic guardrail) — demotion changes
+# provenance, not reachability.
+echo ""
+echo "Test 7: documentation-only topics still surface their best section at #1..."
+
+# "user guide" matches GUIDE.md's H1 title exactly (an exact prefix hit);
+# the routing must survive: the title-matching section stays first.
+MCP_REQUEST='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"user guide","repo_name":"markdown_e2e_test_repo","max_results":5}}}'
+MCP_RESPONSE=$(echo "$MCP_REQUEST" \
+    | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+      KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" \
+      cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+MCP_FIRST_NAME=$(echo "$MCP_RESPONSE" | grep -o '## `[^`]*`' | head -1)
+
+if echo "$MCP_RESPONSE" | grep -q "markdown_section" && echo "$MCP_FIRST_NAME" | grep -q "User Guide"; then
+    echo -e "${GREEN}✓ docs-only query: exact title match still returns User Guide first (demotion is provenance-only)${NC}"
+else
+    echo -e "${RED}✗ documentation-only topic lost its section / added noise: $MCP_FIRST_NAME${NC}"
+    echo "Response: $MCP_RESPONSE"
+    exit 1
+fi
+
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"

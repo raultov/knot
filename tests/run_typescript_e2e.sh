@@ -456,6 +456,59 @@ else
     exit 1
 fi
 
+# Test: entry-point recall — a tool defined as an object `constant`
+# (`tools_def.ts` fixture) must outrank a **Markdown section attributed
+# with the same literal title** for a paraphrase query, because the
+# name-exact probe carries the definition into the pool with its full
+# lexical exact-name boost while prose takes the prose penalty. The prose
+# must still be surfaced in the result list (documentation use case).
+echo ""
+echo "Test: tool definition beats its same-titled Markdown section..."
+MCP_TOOL=$(echo '{"jsonrpc":"2.0","id":902,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"tool that takes a screenshot of the visible page as an image","max_results":10,"repo_name":"typescript_e2e_test_repo"}}}' \
+    | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+      KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" \
+      cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_ORDERS=$(echo "$MCP_TOOL" | grep -o '## `[^`]*`')
+MCP_TOOL_NAME=$(echo "$MCP_ORDERS" | head -1)
+MCP_DOC_POS=$(echo "$MCP_ORDERS" | grep -n "take screenshot" | head -1 | cut -d: -f1 || true)
+
+if echo "$MCP_TOOL_NAME" | grep -q 'screenshot'; then
+    echo -e "${GREEN}✓ Recall: tool definition constant outranks same-titled prose${NC}"
+else
+    echo -e "${RED}✗ Recall: expected a screenshot tool definition first, got: $MCP_TOOL_NAME${NC}"
+    echo "Response was: $MCP_TOOL"
+    exit 1
+fi
+
+# The tool name carries 'screenshot' but not 'takes a screenshot', so this
+# guard differs from a verbatim prefix search: the tool must win it on
+# cosine + lexical overlap, not on a name-prefix slot.
+MCP_TRACK_ORDER_ANDpresence() { :; }
+if [ -n "$MCP_DOC_POS" ] && [ "$MCP_DOC_POS" -gt 1 ]; then
+    echo -e "${GREEN}  ✓ same-titled Markdown section still ranked in the results (position ${MCP_DOC_POS}; documented topic surfaces)${NC}"
+else
+    echo -e "${RED}✗ Markdown section vanished from the search results (must still surface)${NC}"
+    echo "Response was: $MCP_TOOL"
+    exit 1
+fi
+
+# Debug-and-document guardrail: a documentation-scoped search
+# (kinds=markdown_section) keeps its section as #1 — the definition
+# channel skips docs-only filters entirely.
+MCP_DOC=$(echo '{"jsonrpc":"2.0","id":903,"method":"tools/call","params":{"name":"search_hybrid_context","arguments":{"query":"take screenshot","max_results":5,"repo_name":"typescript_e2e_test_repo","kinds":"markdown_section"}}}' \
+    | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+      KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" \
+      cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+MCP_DOC_NAME=$(echo "$MCP_DOC" | grep -o '## `[^`]*`' | head -1)
+
+if echo "$MCP_DOC_NAME" | grep -q "take screenshot"; then
+    echo -e "${GREEN}  ✓ documentation-scoped search keeps its own section first${NC}"
+else
+    echo -e "${RED}✗ documentation-only topics: kinds=markdown_section broke${NC}"
+    echo "Response was: $MCP_DOC"
+    exit 1
+fi
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
