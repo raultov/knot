@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn repo_filter_agrees_with_search_repo_filter() {
         let names = vec!["knot-site".to_string()];
-        let search_filter = crate::db::vector::search::build_search_filter(&names, &[])
+        let search_filter = crate::db::vector::search::build_search_filter(&names, &[], &[])
             .expect("non-empty scope yields a filter");
         assert_eq!(repo_filter("knot-site"), search_filter);
     }

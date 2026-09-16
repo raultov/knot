@@ -24,7 +24,7 @@ pub struct VectorDb {
 // Re-export traits so they're available with VectorDb imports
 pub use connection::VectorConnectExt;
 pub use delete::VectorDeleteExt;
-pub use search::{ExactNameProbe, UuidProbe, VectorSearchExt};
+pub use search::{ExactNameProbe, KindScopeSearch, UuidProbe, VectorSearchExt};
 pub use upsert::VectorUpsertExt;
 
 #[cfg(test)]

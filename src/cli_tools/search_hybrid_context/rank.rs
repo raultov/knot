@@ -81,6 +81,23 @@ const EXACT_NAME_BOOST: f32 = 0.30;
 /// `ChatClient.create` cases at full strength.
 const GENERIC_EXACT_NAME_BOOST: f32 = 0.08;
 
+/// Boost for neutral kinds whose graph node orchestrates >=
+/// [`NEUTRAL_BEHAVIORAL_OUT_DEGREE`] outgoing CALLS edges. Language-agnostic
+/// by construction — it reads kind neutrality plus call-graph degree,
+/// nothing else. Reason it must exist (measured, chrome-devtools-mcp):
+/// a TypeScript MCP tool is `export const screenshot = defineTool({...})`, so
+/// its kind (`constant`) takes [`kind_boost`] == 0 despite being the
+/// behaviour a natural-language query names; a same-repo *method* helper
+/// then outranks it purely on the callables' kind advantage while the tool
+/// holds the highest cosine of all code rows.
+const NEUTRAL_BEHAVIORAL_BOOST: f32 = 0.10;
+
+/// Outgoing CALLS degree a neutral kind needs to count as behavioral.
+/// Two calls minimum: a bare constant referencing one thing is not
+/// behavior, but a definition directing two calls is street-level
+/// orchestration no matter the wire kind.
+const NEUTRAL_BEHAVIORAL_OUT_DEGREE: usize = 2;
+
 /// Query words that do identify an entity when the entity's whole name
 /// equals them. Deliberately set to code-generic verbs/nouns: anything
 /// specific (`authenticate`, `screenshot`, `login`) stays out, and a
@@ -139,7 +156,7 @@ const ROOT_FRACTION_WEIGHT: f32 = 0.05;
 const ROOT_BOOST_MAX: f32 = 0.55;
 
 /// Attenuation applied to the coverage boost when another pool candidate
-/// CALLS this entity and covers at least the same root set (`covers ⊇`).
+/// CALLS this entity and covers a *strictly greater* root set
 /// Such a candidate is an internal step of an outer orchestrator — the
 /// entry-point provenance belongs to the caller, and ranking both at full
 /// strength would let one nested helper (`run`, a closure inside
@@ -369,6 +386,8 @@ pub fn lexical_boost_in_context(query: &str, name: &str, context: Option<&str>) 
 /// Row fields the scorer reads, bundled to stay within clippy's arity
 /// threshold ([`final_score`]). `context` is the entity's FQN when the pool
 /// annotation supplied one — the exact-name guard's corroboration input.
+/// `out_degree` is the graph's outgoing CALLS count for the entity, the
+/// input of the neutral-kind behavioral boost; `0` when un-annotated.
 pub struct Candidate<'a> {
     /// Entity name (the lexical-boost input).
     pub name: &'a str,
@@ -378,6 +397,8 @@ pub struct Candidate<'a> {
     pub file_path: &'a str,
     /// Container context (FQN) or `None` when unavailable.
     pub context: Option<&'a str>,
+    /// Outgoing CALLS degree measured by the pool annotation.
+    pub out_degree: usize,
 }
 
 /// Final ranking score for one candidate.
@@ -387,8 +408,19 @@ pub fn final_score(cosine: f32, query: &str, candidate: Candidate<'_>) -> f32 {
         file_path,
         name,
         context,
+        out_degree,
     } = candidate;
     let mut score = cosine + kind_boost(kind) + lexical_boost_in_context(query, name, context);
+    // Neutral kinds that orchestrate calls are behavior the taxonomy did
+    // not name (TS MCP tools, top-level TS modules); prosa/config/test
+    // kinds pay penalties and can never take the boost, and a sub-degree
+    // node stays cosmetic.
+    if kind_boost(kind) == 0.0
+        && out_degree >= NEUTRAL_BEHAVIORAL_OUT_DEGREE
+        && !is_test_path(file_path)
+    {
+        score += NEUTRAL_BEHAVIORAL_BOOST;
+    }
     if is_test_path(file_path) {
         score += TEST_PATH_PENALTY;
     }
@@ -449,6 +481,18 @@ pub fn rerank(entities: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::
                 .get("caller_superseded")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            // Diagnostic provenance: which recall channel surfaced the row
+            // (`cosine` / `definition` / `probe` / `bridge` / `prefix`,
+            // attached by the pool's `merge_hits`). Absent → plain cosine.
+            let channel = entity
+                .get(super::CHANNEL_FIELD)
+                .and_then(|v| v.as_str())
+                .unwrap_or("cosine");
+            let out_degree = entity
+                .get("caller_out_degree")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .max(0) as usize;
             let score = final_score(
                 cosine,
                 query,
@@ -457,6 +501,7 @@ pub fn rerank(entities: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::
                     file_path: &file_path,
                     name,
                     context: Some(fqn),
+                    out_degree,
                 },
             ) + root_coverage_boost(
                 kind,
@@ -473,6 +518,8 @@ pub fn rerank(entities: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::
                 score = score,
                 cosine = cosine,
                 kind = kind, name = name, fqn = fqn,
+                channel = channel,
+                out_degree = out_degree,
                 direct = direct_roots, transitive = transitive_roots,
                 total_roots = total_roots,
                 superseded = superseded_by_caller,
@@ -656,6 +703,7 @@ mod tests {
                 file_path: "src/a.rs",
                 name: "entryPoint",
                 context: Some("app::A::entryPoint"),
+                out_degree: 0,
             },
         ) + root_coverage_boost(
             "function",
@@ -675,6 +723,7 @@ mod tests {
                 file_path: "src/b.rs",
                 name: "helperOne",
                 context: Some("app::B::helperOne"),
+                out_degree: 0,
             },
         ) + root_coverage_boost(
             "function",
@@ -1286,6 +1335,17 @@ mod tests {
     // cosine band and root coverage as the live index showed it); the
     // assertion pins the expected entry point at position 1. These were
     // failing before the root-set coverage + generic-name guard fix.
+    //
+    // Scope note (v1.9.7): the fixtures *feed the ranker directly*, i.e.
+    // each row supplies the graph annotation (`caller_roots`, …) as an
+    // input. Whether the live pipeline actually supplies those inputs —
+    // the pool/seed/bridge side — is validated by the two complementary
+    // layers: the pipeline unit tests of `super`/`mod.rs` (definition
+    // channel, seed union, depth-2 bridge, prefix demotion) and the
+    // opt-in live harness `tests/run_rank_recall_live.sh`, which measures
+    // the full pipeline against real indexed repositories. A unit test
+    // here passing does not imply the live pipeline produces the same
+    // annotation; that separation is deliberate and documented.
 
     /// Rust / job-watch. Paraphrase shares no tokens with `login`
     /// (`caller_roots` previously never reached cosine-pool rows).
@@ -1559,6 +1619,149 @@ mod tests {
             "find matching nodes by lookup",
         );
         assert_regression_first(&ranked, "resolve");
+    }
+
+    // --- neutral-kind behavioral boost (C1) ---
+
+    /// Measured regression (chrome-devtools-mcp, `capture the current view
+    /// as an image`): the `screenshot` tool is `export const … = defineTool`
+    /// so its kind scores neutral, but it holds the highest code cosine of
+    /// the window (0.376 vs the method helper's 0.295) and orchestrates 16
+    /// outgoing CALLS. Once the neutral-kind boost is in, it must top the
+    /// callable helper.
+    #[test]
+    fn neutral_kind_with_call_edges_outranks_lower_cosine_callable() {
+        let ranked = rerank(
+            vec![
+                json!({"uuid": "1", "name": "getScreenRecorder", "kind": "method",
+                       "fqn": "McpContext.getScreenRecorder",
+                       "file_path": "src/McpContext.ts", "start_line": 411, "score": 0.295}),
+                json!({"uuid": "2", "name": "screenshot", "kind": "constant",
+                       "fqn": "screenshot",
+                       "file_path": "src/tools/screenshot.ts", "start_line": 21, "score": 0.376,
+                       "caller_out_degree": 16}),
+            ],
+            "capture the current view as an image",
+        );
+        assert_eq!(ranked[0]["name"], "screenshot", "order got {ranked:?}");
+    }
+
+    /// Prose/config/test candidates must never take the boost, whatever
+    /// their call-edge degree (they should not gain outgoing CALLS edges in
+    /// the graph at all, but the boost's own gate stays closed for
+    /// defense-in-depth).
+    #[test]
+    fn neutral_boost_never_rescues_prose_config_or_tests() {
+        let query = "capture anything";
+        let boosted = |kind: &str, path: &str| {
+            final_score(
+                0.30,
+                query,
+                Candidate {
+                    name: "x",
+                    kind,
+                    file_path: path,
+                    context: None,
+                    out_degree: 20,
+                },
+            )
+        };
+        let bare = final_score(
+            0.30,
+            query,
+            Candidate {
+                name: "x",
+                kind: "markdown_section",
+                file_path: "docs/a.md",
+                context: None,
+                out_degree: 0,
+            },
+        );
+        // Prose: penalty, no boost.
+        assert_eq!(boosted("markdown_section", "docs/a.md"), bare);
+        // Config: penalty, no boost.
+        let config_bare = final_score(
+            0.30,
+            query,
+            Candidate {
+                name: "x",
+                kind: "config_property",
+                file_path: "config/a.yml",
+                context: None,
+                out_degree: 0,
+            },
+        );
+        assert_eq!(boosted("config_property", "config/a.yml"), config_bare);
+        // Test path: the boost gate is closed (the kind is a callable, so
+        // the neutral branch never opened) — cosine + callable + penalty.
+        assert_eq!(
+            boosted("rust_function", "tests/foo_test.rs"),
+            0.30 + CALLABLE_BOOST + TEST_PATH_PENALTY
+        );
+    }
+
+    #[test]
+    fn neutral_boost_requires_minimum_out_degree() {
+        // Out-degree 1 stays cosmetic: one call is not orchestration.
+        let one = final_score(
+            0.40,
+            "anything at all",
+            Candidate {
+                kind: "constant",
+                file_path: "src/a.ts",
+                name: "k",
+                context: None,
+                out_degree: 1,
+            },
+        );
+        let zero = final_score(
+            0.40,
+            "anything at all",
+            Candidate {
+                kind: "constant",
+                file_path: "src/a.ts",
+                name: "k",
+                context: None,
+                out_degree: 0,
+            },
+        );
+        assert_eq!(one, zero);
+        // At the threshold the boost lands exactly once.
+        let two = final_score(
+            0.40,
+            "anything at all",
+            Candidate {
+                kind: "constant",
+                file_path: "src/a.ts",
+                name: "k",
+                context: None,
+                out_degree: 2,
+            },
+        );
+        assert!((two - (one + NEUTRAL_BEHAVIORAL_BOOST)).abs() < 1e-6);
+    }
+
+    /// C# regression-scope sanity: an interface declaration (kind boost via
+    /// taxonomy, but zero out-degree from the graph) must not ride the
+    /// neutral-kind boost — an interface cannot CALL anything.
+    #[test]
+    fn neutral_boost_applies_only_to_neutral_kinds() {
+        let callable = final_score(
+            0.40,
+            "q",
+            Candidate {
+                kind: "csharp_method",
+                file_path: "src/A.cs",
+                name: "M",
+                context: None,
+                out_degree: 10,
+            },
+        );
+        assert_eq!(
+            callable,
+            0.40 + CALLABLE_BOOST,
+            "callable kinds keep their own boost and never overlay the neutral one"
+        );
     }
 
     /// Sanity helper: position of a name in a ranked list, verified at #1.

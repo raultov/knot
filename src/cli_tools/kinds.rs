@@ -134,6 +134,26 @@ pub fn is_non_code_kind(kind: &str) -> bool {
         || K8S_HELM_KINDS.contains(&kind)
 }
 
+/// The full non-code deny-list as concrete wire-format kinds, deduplicated
+/// in first-occurrence order (`helm_value` lives in both the config/build
+/// and the K8s/Helm tables). Deterministic by construction — the list feeds
+/// the Qdrant `must_not` filter of the search definition channel, where a
+/// keyword match must serialize identically between runs.
+pub fn non_code_kinds() -> Vec<String> {
+    let mut kinds: Vec<String> = Vec::new();
+    for kind in PROSE_KINDS
+        .iter()
+        .chain(CONFIG_BUILD_KINDS.iter())
+        .chain(K8S_HELM_KINDS.iter())
+    {
+        let kind = kind.to_string();
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
 // ---------------------------------------------------------------------------
 // Alias expansion (shared with search_hybrid_context's `kinds` parameter)
 // ---------------------------------------------------------------------------

@@ -5,9 +5,15 @@ use qdrant_client::qdrant::{Condition, Filter, SearchPoints, WithPayloadSelector
 use super::{VectorDb, utils};
 
 /// Build the Qdrant payload filter for a search: repo scope and optional
-/// entity-kind filter, both as exact keyword `must` conditions.
-/// Empty slices are omitted; a filter with no conditions is `None`.
-pub(crate) fn build_search_filter(repo_names: &[String], kinds: &[String]) -> Option<Filter> {
+/// entity-kind filter as exact keyword `must` conditions, plus an optional
+/// kind **exclusion** list as `must_not` (the search definition channel
+/// uses it to drop prose / config / infra embeddings from a cosine pass).
+/// Empty slices are omitted; a filter with no conditions at all is `None`.
+pub(crate) fn build_search_filter(
+    repo_names: &[String],
+    kinds: &[String],
+    exclude_kinds: &[String],
+) -> Option<Filter> {
     let mut must = Vec::new();
     if !repo_names.is_empty() {
         must.push(utils::any_keyword_condition("repo_name", repo_names));
@@ -15,11 +21,17 @@ pub(crate) fn build_search_filter(repo_names: &[String], kinds: &[String]) -> Op
     if !kinds.is_empty() {
         must.push(utils::any_keyword_condition("kind", kinds));
     }
-    if must.is_empty() {
-        None
-    } else {
-        Some(Filter::must(must))
+    let must_not = (!exclude_kinds.is_empty())
+        .then(|| vec![utils::any_keyword_condition("kind", exclude_kinds)]);
+    if must.is_empty() && must_not.is_none() {
+        return None;
     }
+    Some(Filter {
+        must,
+        must_not: must_not.unwrap_or_default(),
+        should: Vec::new(),
+        min_should: None,
+    })
 }
 
 /// Build the name-exact probe filter: one `must` arm whose `should` group
@@ -84,6 +96,22 @@ pub struct ExactNameProbe<'a> {
     pub kinds: &'a [String],
 }
 
+/// Parameters for a kind-scoped cosine search with an optional exclusion —
+/// bundled in one struct to keep [`VectorSearchExt::search_excluding_kinds`]
+/// within clippy's arity threshold.
+pub struct KindScopeSearch<'a> {
+    /// Query embedding.
+    pub vector: &'a [f32],
+    /// Maximum number of hits to return.
+    pub limit: usize,
+    /// Repository scope (empty = all repositories).
+    pub repo_names: &'a [String],
+    /// Wire-format entity kinds to restrict hits to (empty = all kinds).
+    pub kinds: &'a [String],
+    /// Wire-format entity kinds to exclude (`must_not`); empty = none.
+    pub exclude_kinds: &'a [String],
+}
+
 /// Extension trait for query and search operations.
 #[expect(
     async_fn_in_trait,
@@ -102,6 +130,18 @@ pub trait VectorSearchExt {
         limit: usize,
         repo_names: &[String],
         kinds: &[String],
+    ) -> Result<Vec<serde_json::Value>>;
+
+    /// Search restricted to entities whose *payload kind* is neither in
+    /// `request.kinds` (when non-empty) nor in `request.exclude_kinds`.
+    /// `search` delegates here with no exclusions; `search_hybrid_context`
+    /// runs this as a second cosine pass that excludes prose / config /
+    /// infra kinds, so a documentation-heavy repository still fills the
+    /// candidate pool with the code definitions a natural-language query
+    /// is looking for.
+    async fn search_excluding_kinds(
+        &self,
+        request: KindScopeSearch<'_>,
     ) -> Result<Vec<serde_json::Value>>;
 
     /// Search restricted to entities whose payload `name` exactly matches
@@ -191,8 +231,23 @@ impl VectorSearchExt for VectorDb {
         repo_names: &[String],
         kinds: &[String],
     ) -> Result<Vec<serde_json::Value>> {
-        let filter = build_search_filter(repo_names, kinds);
-        scored_search(self, vector, limit, filter).await
+        self.search_excluding_kinds(KindScopeSearch {
+            vector,
+            limit,
+            repo_names,
+            kinds,
+            exclude_kinds: &[],
+        })
+        .await
+    }
+
+    /// Definition-channel search (see trait docs).
+    async fn search_excluding_kinds(
+        &self,
+        request: KindScopeSearch<'_>,
+    ) -> Result<Vec<serde_json::Value>> {
+        let filter = build_search_filter(request.repo_names, request.kinds, request.exclude_kinds);
+        scored_search(self, request.vector, request.limit, filter).await
     }
 
     /// Name-exact probe search (see trait docs).
@@ -229,11 +284,7 @@ mod tests {
         values.iter().map(|s| (*s).to_string()).collect()
     }
 
-    fn assert_keyword_condition(
-        cond: &qdrant_client::qdrant::Condition,
-        key: &str,
-        expected: &[&str],
-    ) {
+    fn assert_keyword_condition(cond: &Condition, key: &str, expected: &[&str]) {
         match &cond.condition_one_of {
             Some(qdrant_client::qdrant::condition::ConditionOneOf::Field(field_cond)) => {
                 assert_eq!(field_cond.key, key);
@@ -317,12 +368,13 @@ mod tests {
 
     #[test]
     fn build_search_filter_empty_is_none() {
-        assert!(build_search_filter(&[], &[]).is_none());
+        assert!(build_search_filter(&[], &[], &[]).is_none());
     }
 
     #[test]
     fn build_search_filter_repo_only_single_keyword() {
-        let filter = build_search_filter(&repo_names(&["a"]), &[]).expect("filter should be Some");
+        let filter =
+            build_search_filter(&repo_names(&["a"]), &[], &[]).expect("filter should be Some");
         assert_eq!(filter.must.len(), 1);
         assert_keyword_condition(&filter.must[0], "repo_name", &["a"]);
     }
@@ -330,14 +382,14 @@ mod tests {
     #[test]
     fn build_search_filter_repo_multi_keywords_preserves_order() {
         let filter =
-            build_search_filter(&repo_names(&["b", "a"]), &[]).expect("filter should be Some");
+            build_search_filter(&repo_names(&["b", "a"]), &[], &[]).expect("filter should be Some");
         assert_eq!(filter.must.len(), 1);
         assert_keyword_condition(&filter.must[0], "repo_name", &["b", "a"]);
     }
 
     #[test]
     fn build_search_filter_kinds_only() {
-        let filter = build_search_filter(&[], &repo_names(&["rust_function", "method"]))
+        let filter = build_search_filter(&[], &repo_names(&["rust_function", "method"]), &[])
             .expect("filter should be Some");
         assert_eq!(filter.must.len(), 1);
         assert_keyword_condition(&filter.must[0], "kind", &["rust_function", "method"]);
@@ -345,11 +397,45 @@ mod tests {
 
     #[test]
     fn build_search_filter_repo_and_kinds_combined() {
-        let filter = build_search_filter(&repo_names(&["r"]), &repo_names(&["class"]))
+        let filter = build_search_filter(&repo_names(&["r"]), &repo_names(&["class"]), &[])
             .expect("filter should be Some");
         assert_eq!(filter.must.len(), 2);
         assert_keyword_condition(&filter.must[0], "repo_name", &["r"]);
         assert_keyword_condition(&filter.must[1], "kind", &["class"]);
+    }
+
+    // --- kind exclusion (search definition channel) ---
+
+    #[test]
+    fn build_search_filter_exclusion_is_must_not() {
+        let filter = build_search_filter(
+            &[],
+            &[],
+            &repo_names(&["markdown_section", "markdown_document"]),
+        )
+        .expect("exclusion alone yields a filter");
+        assert!(filter.must.is_empty());
+        assert_eq!(filter.must_not.len(), 1);
+        assert_keyword_condition(
+            &filter.must_not[0],
+            "kind",
+            &["markdown_section", "markdown_document"],
+        );
+    }
+
+    #[test]
+    fn build_search_filter_exclusion_combines_with_must() {
+        let filter = build_search_filter(&repo_names(&["r"]), &[], &repo_names(&["class"]))
+            .expect("filter should be Some");
+        assert_eq!(filter.must.len(), 1);
+        assert_eq!(filter.must_not.len(), 1);
+        assert_keyword_condition(&filter.must[0], "repo_name", &["r"]);
+        assert_keyword_condition(&filter.must_not[0], "kind", &["class"]);
+    }
+
+    #[test]
+    fn build_search_filter_all_empty_is_none() {
+        assert!(build_search_filter(&[], &[], &[]).is_none());
     }
 
     // --- build_probe_filter (token-level lexical recall) ---

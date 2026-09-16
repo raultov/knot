@@ -447,6 +447,11 @@ pub struct RootCoverage {
     /// (`(e)-[:CALLS]->(helper)-[:CALLS]->(root)`), *excluding* roots it
     /// already calls directly — transitive coverage never double counts.
     pub transitive_roots: usize,
+    /// Total outgoing CALLS degree of the entity, independent of the root
+    /// set. Consumed by `rank`'s neutral-kind behavior boost: a kind the
+    /// taxonomy scores neutral (`constant`…) whose node orchestrates ≥ 2
+    /// calls is behavior, not a bare constant.
+    pub out_degree: usize,
 }
 
 /// Cipher for the re-rank's root-set coverage annotation. Both patterns are
@@ -468,9 +473,34 @@ pub fn root_coverage_query(repo_scoped: bool) -> String {
          OPTIONAL MATCH (e)-[:CALLS]->(:Entity)-[:CALLS]->(t:Entity)
            WHERE t.uuid IN $root_uuids AND NOT t.uuid IN direct
          WITH e, direct, collect(DISTINCT t.uuid) AS indirect
+         OPTIONAL MATCH (e)-[:CALLS]->(o:Entity)
+         WITH e, direct, indirect, count(DISTINCT o) AS out_degree
          RETURN e.uuid AS uuid, e.fqn AS fqn,
-                size(direct) AS direct_roots, size(indirect) AS transitive_roots
+                size(direct) AS direct_roots, size(indirect) AS transitive_roots,
+                out_degree
          ORDER BY uuid
+         LIMIT $limit"
+    )
+}
+
+/// Cipher for the two-hop caller-recall bridge: callers of the callers of
+/// `target_uuids` (entry points that reach a top semantic root through
+/// exactly one helper). Anchored on `$target_uuids` at both ends so the
+/// expansion is driven by the caller's seed cap, never by graph fan-out;
+/// `caller.uuid IN $target_uuids` is excluded because one-hop callers are
+/// already fetched by [`caller_links_query`].
+pub fn caller_links_depth2_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "AND caller.repo_name IN $repo_names"
+    } else {
+        ""
+    };
+    format!(
+        "MATCH (caller:Entity)-[:CALLS]->(helper:Entity)-[:CALLS]->(target:Entity)
+         WHERE target.uuid IN $target_uuids
+           AND NOT caller.uuid IN $target_uuids {repo_filter}
+         RETURN DISTINCT caller.uuid AS caller_uuid, target.uuid AS target_uuid
+         ORDER BY caller_uuid, target_uuid
          LIMIT $limit"
     )
 }
@@ -603,6 +633,51 @@ fn fold_hidden(
 }
 
 impl GraphDb {
+    /// Shared Cypher execution for both caller-bridge depths (`depth2`
+    /// selects `caller_links_depth2_query` over `caller_links_query`).
+    /// Inherent implementation helper behind [`QueryExt::find_caller_links`]
+    /// and [`QueryExt::find_caller_links_depth2`]; not part of the trait.
+    async fn find_caller_links_depth2_matching(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+        depth2: bool,
+    ) -> Result<Vec<(String, String)>> {
+        if target_uuids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_str = if depth2 {
+            caller_links_depth2_query(!repo_names.is_empty())
+        } else {
+            caller_links_query(!repo_names.is_empty())
+        };
+        let mut q = query(&query_str)
+            .param("target_uuids", target_uuids.to_vec())
+            .param("limit", limit as i64);
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
+        }
+
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query Neo4j for caller-recall bridge")?;
+
+        let mut links = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            match (
+                row.get::<String>("caller_uuid"),
+                row.get::<String>("target_uuid"),
+            ) {
+                (Ok(caller), Ok(target)) => links.push((caller, target)),
+                _ => continue,
+            }
+        }
+        Ok(links)
+    }
+
     async fn resolve_reference_targets(
         &self,
         name: &str,
@@ -869,6 +944,18 @@ pub trait QueryExt {
     /// to add the callers of its top semantic hits to the candidate pool
     /// and to weight callers by how many top roots they touch.
     async fn find_caller_links(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, String)>>;
+
+    /// Two-hop variant of [`find_caller_links`]: callers of the callers of
+    /// `target_uuids` (`(caller)-[:CALLS]->(helper)-[:CALLS]->(target)`).
+    /// Recalls entry points that reach a top semantic root through exactly
+    /// one helper when no direct caller was seeded; `limit` caps the pair
+    /// count the same way.
+    async fn find_caller_links_depth2(
         &self,
         target_uuids: &[String],
         repo_names: &[String],
@@ -1300,33 +1387,19 @@ impl QueryExt for GraphDb {
         repo_names: &[String],
         limit: usize,
     ) -> Result<Vec<(String, String)>> {
-        if target_uuids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let query_str = caller_links_query(!repo_names.is_empty());
-        let mut q = query(&query_str)
-            .param("target_uuids", target_uuids.to_vec())
-            .param("limit", limit as i64);
-        if !repo_names.is_empty() {
-            q = q.param("repo_names", repo_names.to_vec());
-        }
-
-        let mut rows = self
-            .graph
-            .execute(q)
+        self.find_caller_links_depth2_matching(target_uuids, repo_names, limit, false)
             .await
-            .context("Failed to query Neo4j for caller-recall bridge")?;
+    }
 
-        let mut links = Vec::new();
-        while let Ok(Some(row)) = rows.next().await {
-            if let (Ok(caller), Ok(target)) = (
-                row.get::<String>("caller_uuid"),
-                row.get::<String>("target_uuid"),
-            ) {
-                links.push((caller, target));
-            }
-        }
-        Ok(links)
+    /// Two-hop caller-recall bridge (see trait docs).
+    async fn find_caller_links_depth2(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        self.find_caller_links_depth2_matching(target_uuids, repo_names, limit, true)
+            .await
     }
 
     /// Root-set coverage annotation (see trait docs). One bounded query; a
@@ -1359,17 +1432,19 @@ impl QueryExt for GraphDb {
 
         let mut coverage = Vec::new();
         while let Ok(Some(row)) = rows.next().await {
-            if let (Ok(uuid), Ok(fqn), Ok(direct), Ok(transitive)) = (
+            if let (Ok(uuid), Ok(fqn), Ok(direct), Ok(transitive), Ok(out_degree)) = (
                 row.get::<String>("uuid"),
                 row.get::<String>("fqn"),
                 row.get::<i64>("direct_roots"),
                 row.get::<i64>("transitive_roots"),
+                row.get::<i64>("out_degree"),
             ) {
                 coverage.push(RootCoverage {
                     uuid,
                     fqn,
                     direct_roots: direct.max(0) as usize,
                     transitive_roots: transitive.max(0) as usize,
+                    out_degree: out_degree.max(0) as usize,
                 });
             }
         }
@@ -1594,12 +1669,12 @@ mod tests {
 
     use super::{
         DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, TargetRow,
-        caller_links_query, finalize_targets, find_callers_query, find_files_by_suffix_query,
-        find_references_rel_labels, fold_hidden, get_file_entities_query,
-        get_file_outgoing_references_query, overridden_by_query, overrides_query,
-        partition_by_kind, partition_reference_rows, rank_root_candidates, reference_bucket_key,
-        reference_target_query, relationship_query, root_coverage_query, root_kind_rank,
-        target_resolution_tiers,
+        caller_links_depth2_query, caller_links_query, finalize_targets, find_callers_query,
+        find_files_by_suffix_query, find_references_rel_labels, fold_hidden,
+        get_file_entities_query, get_file_outgoing_references_query, overridden_by_query,
+        overrides_query, partition_by_kind, partition_reference_rows, rank_root_candidates,
+        reference_bucket_key, reference_target_query, relationship_query, root_coverage_query,
+        root_kind_rank, target_resolution_tiers,
     };
 
     #[test]
@@ -2145,6 +2220,32 @@ mod tests {
 
         let scoped = root_coverage_query(true);
         assert!(scoped.contains("e.repo_name IN $repo_names"));
+        // The coverage row now carries the neutral-kind behavior boost's
+        // input: the total outgoing CALLS degree.
+        assert!(unscoped.contains("out_degree"));
+    }
+
+    #[test]
+    fn caller_links_depth2_query_is_anchored_two_hopped_and_capped() {
+        let unscoped = caller_links_depth2_query(false);
+        // Two hops, anchored on the fixed seed at both ends.
+        assert!(unscoped.contains("WHERE target.uuid IN $target_uuids"));
+        assert!(
+            unscoped
+                .contains("(caller:Entity)-[:CALLS]->(helper:Entity)-[:CALLS]->(target:Entity)")
+        );
+        // One-hop callers are fetched by the depth-1 query; no overlap.
+        assert!(unscoped.contains("NOT caller.uuid IN $target_uuids"));
+        // Bounded, no path-varargs expansion.
+        assert!(unscoped.contains("DISTINCT"));
+        assert!(unscoped.contains("LIMIT $limit"));
+        assert!(
+            !unscoped.contains("$repo_names"),
+            "unscoped must not reference the repo filter"
+        );
+
+        let scoped = caller_links_depth2_query(true);
+        assert!(scoped.contains("caller.repo_name IN $repo_names"));
     }
 
     #[test]
