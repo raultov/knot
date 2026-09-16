@@ -597,6 +597,43 @@ Result: All auth-related code, signatures, docstrings, and dependencies
 - Architectural pattern discovery
 - Full dependency context
 
+**Search ranking contract (kind-aware re-rank, query-time only):**
+
+1. **Definition channel** — alongside the plain cosine scan, a second
+   bounded Qdrant pass excluding all non-code kinds guarantees code
+   definitions enter the candidate pool even on documentation-heavy
+   repositories (a prose-saturated cosine window once left the
+   entry-point signal dead). An explicit documentation-scoped search
+   (`kinds=markdown_section`, …) never sees the code channel.
+2. **Recall channels in one pool** — cosine hits, the definition channel,
+   the name/token probe (identifiers the query literally names) and the
+   caller-recall bridge (callers of the top semantic roots — seeded from
+   the *union* of channels, depth 1 + depth 2 in the call graph) all
+   merge into one deduplicated pool before ranking.
+3. **Kinds** — callables outrank type declarations, which outrank prose
+   and config/build/infra; test paths carry an additional penalty. A
+   neutral kind (`constant`, …) whose graph node orchestrates ≥ 2
+   outgoing CALLS edges earns a boost: a TypeScript MCP tool is
+   `export const x = defineTool({...})`, and behavior is not the
+   wiring's kind. Prose/config/test never take structural boosts.
+4. **Entry-point signal** — how many of the top semantic roots a
+   candidate calls, directly or through one helper, attributed to the
+   caller covering a *strictly greater* root set with the full
+   entry-point signature (≥ 2 distinct roots).
+5. **Name-prefix contract is definition-only** — a query matching an
+   entity's *name* keeps leading slots only for definition kinds; prose,
+   config/build and k8s/helm prefix hits are demoted into the pool and
+   ranked on their own cosine (documentation-only topics with no
+   competing definition still surface their best section). Test paths
+   keep their slot but stay penalized inside the re-rank.
+6. **Determinism** — ties break on `(file_path, start_line, uuid)`; the
+   CLI (`knot search`) and the MCP tool share the same core
+   (`run_search_hybrid_context`).
+
+Live-index verification of the reported recall regression set runs via the
+opt-in harness `tests/run_rank_recall_live.sh` (requires indexed
+repositories; skipped otherwise).
+
 #### Tool 2: `find_callers`
 **Find who calls a specific function**
 

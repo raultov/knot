@@ -44,11 +44,18 @@ Results are **kind-aware**. For a natural-language query describing a
 behaviour, the entity's own definition (function/method/class/struct) ranks
 at or near the top:
 
-- Definitions (callables and types) outrank markdown docs, test files,
-  config properties and build-dependency entities.
+- **Definitions (callables and types) outrank markdown docs, test files,
+  config properties and build-dependency entities.** A neutral kind
+  (`constant`, …) whose node orchestrates ≥ 2 outgoing calls in the graph
+  also counts as behavior (TypeScript MCP tools are `export const …`).
+- Definitions reach the pool even on documentation-heavy repositories: a
+  second scan excludes all non-code kinds (a documentation-scoped search
+  via `--kinds markdown_section` skips that code channel).
 - The **shared entry point** of the highest-ranked helpers outranks those
   helpers: a paraphrase ranks the helpers of the behaviour it names, and
-  graph coverage at search time promotes their common caller above them.
+  graph coverage at search time promotes their common caller above them
+  (measured in the call graph one and two hops deep, seeded from the union
+  of the semantic and lexical channels).
 - An entity merely named after a generic verb/noun (`find`, `get`,
   `create`, `build`, `acquire`, `borrow`, `current`, …) does not win on the
   bare verb; the full name boost requires a second query token in the
@@ -56,7 +63,12 @@ at or near the top:
 - A method can outrank its own container when the query names it
   (`LookupMaps::build` beats `LookupMaps` for "build lookup maps").
 - An identifier the query literally names is probed by exact name and can
-  surface even when its pure similarity rank is deep.
+  surface even when its pure similarity rank is deep (the probe fetches
+  definitions and their deep-cosine lexical relatives alike).
+- A query whose tokens match an entity's *name* keeps leading slots only
+  for definitions; prose and config/build name hits are demoted into the
+  candidate pool and ranked on their own cosine — documentation-only
+  topics (no competing definition) still surface their best section.
 - Callers and helpers appear as **context attached to** a definition
   (caller samples, subclasses, implementers) — never as substitutes that
   displace it.

@@ -155,6 +155,18 @@ Scripts in `tests/`:
 
 **Critical**: E2E tests clean up Docker containers between suites (see `run_all_e2e_fast.sh` lines 36-42).
 
+### Live-Index Rank-Recall Harness (opt-in)
+`tests/run_rank_recall_live.sh`:
+- NOT part of `run_all_e2e_fast.sh`; it measures the search ranking
+  contract against a **live, already-indexed** knot instance (the
+  developer's own Qdrant/Neo4j and indexed repositories).
+- Skips with exit 0 when `KNOT_NEO4J_PASSWORD` / the release binary /
+  `python3` / the listed repositories are missing — it never fails a
+  Docker-less run.
+- Run it whenever a change touches `search_hybrid_context` ranking or
+  recall; rows marked `must` fail the run, rows marked `info` only report
+  measured positions (documented-unreachable cases included by design).
+
 ### Running Specific Test
 ```bash
 # Single language (rebuilds binaries if needed)
