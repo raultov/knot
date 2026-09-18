@@ -814,8 +814,8 @@ Priority (highest to lowest): CLI flags > environment variables > `.env` file.
 | `KNOT_NEO4J_URI`           | `--neo4j-uri`              | `bolt://localhost:7687`     | Neo4j Bolt URI                                           |
 | `KNOT_NEO4J_USER`          | `--neo4j-user`             | `neo4j`                     | Neo4j username                                           |
 | `KNOT_NEO4J_PASSWORD`      | `--neo4j-password`         | *(required)*                | Neo4j password                                           |
-| `KNOT_EMBED_MODEL`         | `--embed-model`            | `AllMiniLML6V2`             | Embedding model (`AllMiniLML6V2`, `BGESmallENV15`, `BGEBaseENV15`, `MultilingualE5Small`, `JinaEmbeddingsV2BaseCode`, `NomicEmbedTextV15`) |
-| `KNOT_EMBED_DIM`           | `--embed-dim`              | `384`                       | Embedding vector dimension (validated against selected model) |
+| `KNOT_EMBED_MODEL`         | `--embed-model`            | `BGEBaseENV15`              | Embedding model (`AllMiniLML6V2`, `BGESmallENV15`, `BGEBaseENV15`, `MultilingualE5Small`, `JinaEmbeddingsV2BaseCode`, `NomicEmbedTextV15`) |
+| `KNOT_EMBED_DIM`           | `--embed-dim`              | `768`                       | Embedding vector dimension (validated against selected model) |
 | `KNOT_BATCH_SIZE`          | `--batch-size`             | `128`                       | Entities per batch                                       |
 | `KNOT_CLEAN`               | `--clean`                  | `false`                     | Force full re-index (delete all existing data)           |
 | `KNOT_CUSTOM_CA_CERTS`     | `--custom-ca-certs`       | *(none)*                    | Path to CA certificate bundle for corporate SSL proxies  |
@@ -828,13 +828,24 @@ Priority (highest to lowest): CLI flags > environment variables > `.env` file.
 
 `knot` supports selecting alternative embedding models via `KNOT_EMBED_MODEL` or `--embed-model`:
 
-- `AllMiniLML6V2` (384-dim, default) — Fast, lightweight, symmetric sentence model.
-- `BGESmallENV15` (384-dim) / `BGEBaseENV15` (768-dim) — BAAI BGE v1.5 asymmetric models with query instruction prefix.
+- `BGEBaseENV15` (768-dim, **default**) — BAAI BGE v1.5 asymmetric model. Strongest measured semantic recall of the supported models; requires a 768-dim Qdrant collection.
+- `AllMiniLML6V2` (384-dim) — Fast, lightweight, symmetric sentence model (the historical default).
+- `BGESmallENV15` (384-dim) — BAAI BGE v1.5, lighter 384-dim sibling of the default.
 - `MultilingualE5Small` (384-dim) — intfloat E5 multilingual model with `query: `/`passage: ` prefixes.
 - `JinaEmbeddingsV2BaseCode` (768-dim) — Code-aware model for programming language & NL alignment.
 - `NomicEmbedTextV15` (768-dim) — Nomic v1.5 model with `search_query: `/`search_document: ` prefixes.
 
-> **Note:** Changing the embedding model invalidates all existing vector embeddings. A full re-index (`knot-indexer --clean`) is required, and `KNOT_EMBED_DIM` must match the model's native vector dimension.
+`search_hybrid_context` re-ranks **independently of the model's cosine scale**: each candidate pool is normalized before the boosts are applied, so switching model does not require re-tuning the ranker.
+
+> **Note:** Changing the embedding model invalidates all existing vector embeddings. A full re-index (`knot-indexer --clean`) is required, and `KNOT_EMBED_DIM` must match the model's native vector dimension. **Changing the dimension** (384 ↔ 768, e.g. the default `AllMiniLML6V2` → `BGEBaseENV15`) additionally requires recreating the Qdrant collection, because a collection's dimension is fixed at creation:
+>
+> ```bash
+> # Recreate the collection at the new dimension, then re-index every repository:
+> curl -X DELETE "http://localhost:6333/collections/knot_entities"
+> KNOT_REPO_PATH=/path/to/repo KNOT_REPO_NAME=my-repo knot-indexer --clean
+> ```
+>
+> If `KNOT_EMBED_DIM` is set in your environment from an earlier setup, update it (`768`) or unset it — the default now matches `BGEBaseENV15`. A stale value aborts startup with a message naming both dimensions.
 
 ---
 

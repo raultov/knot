@@ -27,12 +27,22 @@ use std::str::FromStr;
 
 use fastembed::EmbeddingModel;
 
-/// Default embedding model (name form of [`EmbeddingModel::AllMiniLML6V2`]).
+/// Default embedding model (name form of [`EmbeddingModel::BGEBaseENV15`]).
 ///
-/// Flipping this constant is a measured decision, not a code change: until
-/// the workstream-B measurements justify it, the default keeps the
-/// historical model so existing indexes stay queryable without env tweaks.
-pub const DEFAULT_EMBED_MODEL: &str = "AllMiniLML6V2";
+/// Flipping this constant is a measured decision, not a code change. It was
+/// flipped from `AllMiniLML6V2` once the ranker stopped depending on the
+/// model's cosine scale: `search_hybrid_context` normalizes each candidate
+/// pool before scoring
+/// ([`crate::cli_tools::search_hybrid_context::rank`]), so the boost
+/// constants are no longer calibrated to one model's band — the property
+/// that had blocked the adoption.
+///
+/// BGE-base is 768-dimensional, unlike the historical 384: adopting it
+/// **requires recreating the Qdrant collection** at 768 and re-indexing
+/// every repository, and it changes the `KNOT_EMBED_DIM` default. The
+/// index-state bump (`crate::pipeline::state`, v7) forces the re-index on
+/// the database of record.
+pub const DEFAULT_EMBED_MODEL: &str = "BGEBaseENV15";
 
 /// BAAI's bge-*-en-v1.5 query-side instruction. The model card specifies it
 /// for the *query* only — passages are embedded unprefixed.
@@ -249,11 +259,18 @@ mod tests {
     }
 
     #[test]
-    fn default_model_is_parseable_and_symmetric() {
+    fn default_model_is_bge_base_768_with_query_prefix() {
         let choice = EmbedModelChoice::from_str(DEFAULT_EMBED_MODEL).expect("default known");
-        assert_eq!(choice.model, EmbeddingModel::AllMiniLML6V2);
-        assert_eq!(choice.dim, 384);
-        assert_eq!(choice.query_prefix, "");
+        assert_eq!(choice.model, EmbeddingModel::BGEBaseENV15);
+        // 768 dims: adopting the default requires a Qdrant collection
+        // recreation and a full re-index (pinned against
+        // `IndexerCli`/`McpCli` defaults by `config`'s drift guard).
+        assert_eq!(choice.dim, 768);
+        // The default is asymmetric: the query side MUST carry BAAI's
+        // instruction, the passage side must not. A regression here is
+        // silent — same dimensions, degraded recall — so it is pinned.
+        assert_eq!(choice.query_prefix, BGE_QUERY_PREFIX);
+        assert_eq!(choice.passage_prefix, "");
     }
 
     // The `from_env` override branch is deliberately NOT unit-tested:

@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.11.0
+
+- **Mandatory Re-index (State v7)**: `IndexState` bumped from v6 to **v7** because the default embedding model changed. Older indexes are incompatible and force `knot-indexer --clean`.
+- **New default embedding model: `BGEBaseENV15`** (768-dim, asymmetric). The default moves from `AllMiniLML6V2` (384-dim) after the ranker became scale-invariant (below). BGE-base is 768-dimensional, so adopting it **requires recreating the Qdrant collection at 768** and re-indexing every repository; `KNOT_EMBED_DIM`'s default is now `768`. Every other supported model stays selectable via `KNOT_EMBED_MODEL`.
+- **Scale-invariant re-ranking (`search_hybrid_context`)**: raw cosine is now min–max normalized **within the candidate pool** before any boost is added (`rank::normalize_pool_cosines`), and every kind/lexical/coverage constant is applied in that normalized `[0, 1]` unit (`SEMANTIC_WEIGHT = 0.40`, the measured mean pool span the constants were calibrated against). This removes the old dependency on one model's cosine band — the blocker that previously made a model swap regress the baselines. Degenerate pools (single candidate, zero variance, missing cosine) fall back deterministically with no NaN.
+- **Root-coverage provenance re-graded**: a nested step whose pool caller covers a strictly better root set is now credited at transitive grade rather than receiving a flat ×0.5 of the full entry-point boost. The old halving was calibrated to raw cosine and no longer sufficed once the semantic term was normalized (it let `run` inside `submitChangePassword` displace `useChangePassword` in the TypeScript E2E). Model-agnostic, no per-model constant.
+- **Rank trace exposes `cosine_norm`**: `RUST_LOG=search_hybrid_context::rank=debug` now logs both the raw `cosine` (the harnesses read it) and the normalized `cosine_norm` the score is built from, so a lost row can be attributed to semantic recall or to scoring.
+- **Adoption trade-off (measured, documented)**: the full BGE-base live run is recorded in `docs/measurements/entrypoint_cosine_v1_11_bgebase.md`. Every residual target row improved its cosine rank (7→5, 8→1, 250→66, 14→4) and 3 of the 4 `must` baselines rank #1. One baseline remains a **ranking** residual — `authenticate user with email and password` (job-watch) finishes at #6 because BGE-base promotes inline `#[cfg(test)]` helpers in `src/` and the ranker cannot see them (`is_test_context` is not in the Qdrant payload). Under `AllMiniLML6V2` the same ranker puts `login` at #1.
+
+---
+
 ## v1.10.0
 
 - **Mandatory Re-index (State v6)**: `IndexState` bumped from v5 to **v6**. Embed text schema now leads with a natural-language role sentence (`<identifier_phrase>: <first_sentence(docstring)>` or `<identifier_phrase> — calls <top_callee_names>`). Older indexes are incompatible and force `knot-indexer --clean`.

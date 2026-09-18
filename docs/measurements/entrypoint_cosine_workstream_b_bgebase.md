@@ -1,3 +1,7 @@
+> **Superseded.** Measured with the pre-v1.11.0 raw-cosine ranker on a partial
+> index. The shipped v1.11.0 measurement (scale-invariant ranker, full
+> BGE-base re-index) is `entrypoint_cosine_v1_11_bgebase.md`.
+
 | Query | Repo | Target | Target cosine | Window cutoff (@400) | Cosine rank | Final rank | Source |
 |---|---|---|---|---|---|---|---|
 | find relevant code by meaning across the repository | knot | run_search_hybrid_context | 0.5814* | 0.5928 | absent | ABSENT* | path-probe |

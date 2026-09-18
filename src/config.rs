@@ -68,7 +68,7 @@ pub struct IndexerCli {
     pub custom_queries_path: Option<String>,
 
     /// Embedding model dimension (must match the deployed fastembed model).
-    #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384)]
+    #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 768)]
     pub embed_dim: u64,
 
     /// Embedding model to embed entities and queries with. Changing it
@@ -174,7 +174,7 @@ pub struct McpCli {
     pub neo4j_password: Option<String>,
 
     /// Embedding model dimension (must match the deployed fastembed model).
-    #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384, hide = true)]
+    #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 768, hide = true)]
     pub embed_dim: u64,
 
     /// Embedding model to embed entities and queries with. Changing it
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(cli.repo_path, Some("/tmp/repo".to_string()));
         assert_eq!(cli.neo4j_password, Some("secret".to_string()));
         assert_eq!(cli.qdrant_url, "http://localhost:6334"); // default
-        assert_eq!(cli.embed_dim, 384); // default
+        assert_eq!(cli.embed_dim, 768); // default
     }
 
     #[test]
@@ -985,7 +985,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
-            embed_model: "AllMiniLML6V2".to_string(),
+            embed_model: crate::pipeline::embed::DEFAULT_EMBED_MODEL.to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
@@ -1099,7 +1099,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
-            embed_model: "AllMiniLML6V2".to_string(),
+            embed_model: crate::pipeline::embed::DEFAULT_EMBED_MODEL.to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
@@ -1161,7 +1161,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
-            embed_model: "AllMiniLML6V2".to_string(),
+            embed_model: crate::pipeline::embed::DEFAULT_EMBED_MODEL.to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
@@ -1190,7 +1190,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
-            embed_model: "AllMiniLML6V2".to_string(),
+            embed_model: crate::pipeline::embed::DEFAULT_EMBED_MODEL.to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,

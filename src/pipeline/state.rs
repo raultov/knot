@@ -40,7 +40,16 @@ const STATE_FILE: &str = "index_state.json";
 /// names for doc-less callables) and the embedding model is configurable
 /// via `KNOT_EMBED_MODEL`. Vectors built by v5 and earlier are
 /// incomparable and must be rebuilt.
-const CURRENT_STATE_VERSION: u32 = 6;
+///
+/// v7: the default embedding model changed from `AllMiniLML6V2` to
+/// `BGEBaseENV15` (`crate::pipeline::embed::DEFAULT_EMBED_MODEL`), from 384
+/// to 768 dimensions. The dimension change is caught by Qdrant, but a
+/// same-dimension model switch would produce **no error** at all — only
+/// silently degraded recall, new-model query vectors searching old-model
+/// passages. The version bump catches both and forces
+/// `knot-indexer --clean`; a dimension change additionally requires
+/// recreating the Qdrant collection at 768.
+const CURRENT_STATE_VERSION: u32 = 7;
 
 /// Returns the cache directory for fastembed models.
 /// Prioritizes the `KNOT_FASTEMBED_CACHE_DIR` environment variable.

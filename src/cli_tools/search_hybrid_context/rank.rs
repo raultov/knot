@@ -155,21 +155,101 @@ const ROOT_FRACTION_WEIGHT: f32 = 0.05;
 /// band as the candidates it displaces.
 const ROOT_BOOST_MAX: f32 = 0.55;
 
-/// Attenuation applied to the coverage boost when another pool candidate
-/// CALLS this entity and covers a *strictly greater* root set
-/// Such a candidate is an internal step of an outer orchestrator — the
-/// entry-point provenance belongs to the caller, and ranking both at full
-/// strength would let one nested helper (`run`, a closure inside
+/// Coverage grade of a candidate whose root set another pool candidate
+/// *calls into* and covers strictly better: such a candidate is an internal
+/// step of an outer orchestrator, so its roots are credited at
+/// [`ROOT_TRANSITIVE_WEIGHT`] — the same grade as roots reached through a
+/// helper — instead of at the direct ladder.
+///
+/// The entry-point provenance belongs to the caller. Ranking both at full
+/// strength let one nested helper (`run`, a closure inside
 /// `submitChangePassword` that calls two of the three roots the wrapper
 /// also reaches) ride the same signature up past the documentation-light
-/// definition. Halved, not zeroed: the step still outranked the plain
-/// helpers it sits among. Test-path callers are excluded from the check —
-/// only a production caller reassigns provenance.
-const ORCHESTRATOR_STEP_ATTENUATION: f32 = 0.5;
+/// definition. Downgraded, not zeroed: the step still outranks the plain
+/// helpers it sits among, it simply cannot claim the direct-coverage
+/// ladder or the entry-point [`ROOT_SET_BONUS`] it did not originate.
+///
+/// Previously expressed as a flat ×0.5 of the assembled boost. That was
+/// calibrated against raw cosine: once the semantic term is pool-normalized
+/// ([`normalize_pool_cosines`]) a halved entry-point signature still
+/// outweighed the definition it displaced in every pool narrower than the
+/// old calibration — measured on the TypeScript E2E fixture under both
+/// `AllMiniLML6V2` and `BGESmallENV15`. Grading the provenance instead of
+/// scaling the total keeps the rule commensurate with the normalized unit
+/// and free of any per-model constant.
+///
+/// Test-path callers are excluded from the check — only a production caller
+/// reassigns provenance.
+fn superseded_step_boost(direct: usize, transitive: usize) -> f32 {
+    (direct + transitive).clamp(0, ROOT_TRANSITIVE_CAP) as f32 / ROOT_TRANSITIVE_CAP as f32
+        * ROOT_TRANSITIVE_WEIGHT
+}
 
 /// Weight for partial token overlap between the query and the identifier,
 /// scaled by the matched-token ratio.
 const TOKEN_OVERLAP_WEIGHT: f32 = 0.08;
+
+/// Weight of the pool-normalized semantic term ([`normalize_pool_cosines`])
+/// in [`final_score`] — the unit every boost constant above is expressed
+/// against.
+///
+/// Raw cosine cannot carry that role: each embedding model produces its own
+/// band and its own *semantic separation*, so absolute boosts of 0.1–0.3
+/// tuned on one model overwhelm the similarity signal on another (measured:
+/// `MultilingualE5Small` puts the correct hit 0.02 from its runner-up,
+/// `BGESmallENV15` 0.25 span vs `AllMiniLML6V2` 0.40). Normalizing the pool
+/// to `[0, 1]` and weighting it here fixes the boost-to-semantics ratio for
+/// every model.
+///
+/// The value is the mean min–max span of the candidate pool measured over
+/// the seven benchmark queries of `tests/measure_entrypoint_cosine.sh` on a
+/// live `AllMiniLML6V2` index (0.299–0.464, mean 0.40) — i.e. the scale the
+/// constants above were historically calibrated against. Keeping it here
+/// makes the re-rank model-agnostic *without* re-tuning every boost.
+const SEMANTIC_WEIGHT: f32 = 0.40;
+
+/// Pool spread below which the normalization is degenerate (every candidate
+/// carries the same cosine): the semantic term collapses to zero instead of
+/// dividing by ~0.
+const SEM_EPSILON: f32 = 1e-6;
+
+/// Normalize a candidate pool's raw cosines into the `[0, 1]` semantic unit
+/// [`final_score`] scores in.
+///
+/// Min–max over the pool: an affine transform, so two pools identical in
+/// ordering *and relative gaps* normalize to identical values whatever band
+/// the model emits. Relative gaps are kept (rather than replaced by rank
+/// positions) because the boost constants encode "this evidence is worth X
+/// cosine"; flattening the gaps would turn the ranker into "boosts first,
+/// similarity as tie-break".
+///
+/// Degenerate inputs are defined, never NaN:
+/// - fewer than two candidates, or no usable cosine at all → all zero
+///   (nothing to order semantically; the boosts and the `(file_path,
+///   start_line, uuid)` tie-break decide);
+/// - zero spread (`max - min <= SEM_EPSILON`) → all zero, boosts still
+///   applied, so a definition never ties with prose just because their
+///   cosines matched;
+/// - a missing or non-finite cosine → the pool minimum, so a row that
+///   entered through a non-cosine recall channel cannot be pushed below a
+///   pool whose true minimum is well above zero.
+pub(crate) fn normalize_pool_cosines(cosines: &[Option<f32>]) -> Vec<f32> {
+    let usable = |c: &Option<f32>| c.filter(|v| v.is_finite());
+    let mut present = cosines.iter().filter_map(usable);
+    let Some(first) = present.next() else {
+        return vec![0.0; cosines.len()];
+    };
+    let (min, max) = present.fold((first, first), |(lo, hi), c| (lo.min(c), hi.max(c)));
+
+    let span = max - min;
+    if cosines.len() < 2 || span <= SEM_EPSILON {
+        return vec![0.0; cosines.len()];
+    }
+    cosines
+        .iter()
+        .map(|c| ((usable(c).unwrap_or(min) - min) / span).clamp(0.0, 1.0))
+        .collect()
+}
 
 use crate::cli_tools::kinds::{CALLABLE_KINDS, CONFIG_BUILD_KINDS, TYPE_KINDS};
 /// Prose kinds whose embeds are long natural-language bodies.
@@ -317,6 +397,9 @@ fn root_coverage_boost(kind: &str, file_path: &str, coverage: Coverage) -> f32 {
     if kind_boost(kind) < 0.0 || is_test_path(file_path) {
         return 0.0;
     }
+    if superseded_by_caller {
+        return superseded_step_boost(direct, transitive);
+    }
     let covered = direct.clamp(0, ROOT_COVERAGE_CAP) as f32 / ROOT_COVERAGE_CAP as f32;
     let mut boost = covered * ROOT_COVERAGE_WEIGHT;
     if direct >= 2 {
@@ -328,9 +411,6 @@ fn root_coverage_boost(kind: &str, file_path: &str, coverage: Coverage) -> f32 {
     // direct count cannot keep nudging the score past the bound.
     boost += direct.clamp(0, ROOT_COVERAGE_CAP) as f32 / total_roots.max(1) as f32
         * ROOT_FRACTION_WEIGHT;
-    if superseded_by_caller {
-        boost *= ORCHESTRATOR_STEP_ATTENUATION;
-    }
     boost.min(ROOT_BOOST_MAX)
 }
 
@@ -402,7 +482,12 @@ pub struct Candidate<'a> {
 }
 
 /// Final ranking score for one candidate.
-pub fn final_score(cosine: f32, query: &str, candidate: Candidate<'_>) -> f32 {
+///
+/// `sem` is the **pool-normalized** semantic term produced by
+/// [`normalize_pool_cosines`], not a raw cosine: every boost below is
+/// expressed against [`SEMANTIC_WEIGHT`] × `[0, 1]`, which is what makes
+/// the ranking independent of the embedding model's cosine scale.
+pub fn final_score(sem: f32, query: &str, candidate: Candidate<'_>) -> f32 {
     let Candidate {
         kind,
         file_path,
@@ -410,7 +495,8 @@ pub fn final_score(cosine: f32, query: &str, candidate: Candidate<'_>) -> f32 {
         context,
         out_degree,
     } = candidate;
-    let mut score = cosine + kind_boost(kind) + lexical_boost_in_context(query, name, context);
+    let mut score =
+        SEMANTIC_WEIGHT * sem + kind_boost(kind) + lexical_boost_in_context(query, name, context);
     // Neutral kinds that orchestrate calls are behavior the taxonomy did
     // not name (TS MCP tools, top-level TS modules); prosa/config/test
     // kinds pay penalties and can never take the boost, and a sub-degree
@@ -441,91 +527,20 @@ pub fn final_score(cosine: f32, query: &str, candidate: Candidate<'_>) -> f32 {
 /// sink below scored hits, which keeps the name-match contract intact —
 /// callers prepend those separately.
 pub fn rerank(entities: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::Value> {
+    // One parse pass: the pool normalization and the scoring pass must read
+    // exactly the same view of every row.
+    let facts: Vec<RowFacts> = entities.iter().map(row_facts).collect();
+    let cosines: Vec<Option<f32>> = facts.iter().map(|f| f.cosine).collect();
+    let sems = normalize_pool_cosines(&cosines);
+
     let mut scored: Vec<(f32, String, i64, String, serde_json::Value)> = entities
         .into_iter()
-        .map(|entity| {
-            let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let file_path = entity
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let fqn = entity.get("fqn").and_then(|v| v.as_str()).unwrap_or("");
-            let start_line = entity
-                .get("start_line")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let uuid = entity
-                .get("uuid")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let cosine = entity.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            let direct_roots = entity
-                .get("caller_roots")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0)
-                .max(0) as usize;
-            let transitive_roots = entity
-                .get("caller_roots_transitive")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0)
-                .max(0) as usize;
-            let total_roots = entity
-                .get("caller_root_total")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0)
-                .max(0) as usize;
-            let superseded_by_caller = entity
-                .get("caller_superseded")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            // Diagnostic provenance: which recall channel surfaced the row
-            // (`cosine` / `definition` / `probe` / `bridge` / `prefix`,
-            // attached by the pool's `merge_hits`). Absent → plain cosine.
-            let channel = entity
-                .get(super::CHANNEL_FIELD)
-                .and_then(|v| v.as_str())
-                .unwrap_or("cosine");
-            let out_degree = entity
-                .get("caller_out_degree")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0)
-                .max(0) as usize;
-            let score = final_score(
-                cosine,
-                query,
-                Candidate {
-                    kind,
-                    file_path: &file_path,
-                    name,
-                    context: Some(fqn),
-                    out_degree,
-                },
-            ) + root_coverage_boost(
-                kind,
-                &file_path,
-                Coverage {
-                    direct: direct_roots,
-                    transitive: transitive_roots,
-                    total_roots,
-                    superseded_by_caller,
-                },
-            );
-            tracing::debug!(
-                target: "search_hybrid_context::rank",
-                score = score,
-                cosine = cosine,
-                kind = kind, name = name, fqn = fqn,
-                channel = channel,
-                out_degree = out_degree,
-                direct = direct_roots, transitive = transitive_roots,
-                total_roots = total_roots,
-                superseded = superseded_by_caller,
-                "ranked"
-            );
-            (score, file_path, start_line, uuid, entity)
+        .zip(facts)
+        .zip(sems)
+        .map(|((entity, facts), sem)| {
+            let score = score_row(&facts, sem, query);
+            trace_ranked(&facts, sem, score);
+            (score, facts.file_path, facts.start_line, facts.uuid, entity)
         })
         .collect();
 
@@ -541,6 +556,114 @@ pub fn rerank(entities: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::
         .into_iter()
         .map(|(_, _, _, _, entity)| entity)
         .collect()
+}
+
+/// Everything [`rerank`] reads off one pool row, parsed once.
+struct RowFacts {
+    name: String,
+    kind: String,
+    file_path: String,
+    fqn: String,
+    start_line: i64,
+    uuid: String,
+    /// Raw cosine, `None` when the row carries no `score` field (a
+    /// graph-side hit merged before ranking). Normalized to the pool
+    /// minimum rather than to zero — see [`normalize_pool_cosines`].
+    cosine: Option<f32>,
+    direct_roots: usize,
+    transitive_roots: usize,
+    total_roots: usize,
+    superseded_by_caller: bool,
+    out_degree: usize,
+    /// Diagnostic provenance: which recall channel surfaced the row
+    /// (`cosine` / `definition` / `probe` / `bridge` / `prefix`, attached by
+    /// the pool's `merge_hits`). Absent → plain cosine.
+    channel: String,
+}
+
+/// Read one pool row's ranking inputs out of its JSON payload.
+fn row_facts(entity: &serde_json::Value) -> RowFacts {
+    let string_field = |key: &str| {
+        entity
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let count_field =
+        |key: &str| entity.get(key).and_then(|v| v.as_i64()).unwrap_or(0).max(0) as usize;
+    RowFacts {
+        name: string_field("name"),
+        kind: string_field("kind"),
+        file_path: string_field("file_path"),
+        fqn: string_field("fqn"),
+        start_line: entity
+            .get("start_line")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        uuid: string_field("uuid"),
+        cosine: entity
+            .get("score")
+            .and_then(|v| v.as_f64())
+            .map(|c| c as f32),
+        direct_roots: count_field("caller_roots"),
+        transitive_roots: count_field("caller_roots_transitive"),
+        total_roots: count_field("caller_root_total"),
+        superseded_by_caller: entity
+            .get("caller_superseded")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        out_degree: count_field("caller_out_degree"),
+        channel: entity
+            .get(super::CHANNEL_FIELD)
+            .and_then(|v| v.as_str())
+            .unwrap_or("cosine")
+            .to_string(),
+    }
+}
+
+/// Score one row from its normalized semantic term and its annotations.
+fn score_row(facts: &RowFacts, sem: f32, query: &str) -> f32 {
+    final_score(
+        sem,
+        query,
+        Candidate {
+            kind: &facts.kind,
+            file_path: &facts.file_path,
+            name: &facts.name,
+            context: Some(&facts.fqn),
+            out_degree: facts.out_degree,
+        },
+    ) + root_coverage_boost(
+        &facts.kind,
+        &facts.file_path,
+        Coverage {
+            direct: facts.direct_roots,
+            transitive: facts.transitive_roots,
+            total_roots: facts.total_roots,
+            superseded_by_caller: facts.superseded_by_caller,
+        },
+    )
+}
+
+/// Rank trace for one row. `cosine` stays the raw model output (the
+/// cosine-window harnesses read it) and `cosine_norm` exposes the
+/// pool-normalized term the score is actually built from, so a lost row can
+/// be attributed to semantic recall or to scoring.
+fn trace_ranked(facts: &RowFacts, sem: f32, score: f32) {
+    tracing::debug!(
+        target: "search_hybrid_context::rank",
+        score = score,
+        cosine = facts.cosine.unwrap_or(0.0),
+        cosine_norm = sem,
+        kind = facts.kind, name = facts.name, fqn = facts.fqn,
+        channel = facts.channel,
+        out_degree = facts.out_degree,
+        direct = facts.direct_roots, transitive = facts.transitive_roots,
+        total_roots = facts.total_roots,
+        superseded = facts.superseded_by_caller,
+        "ranked"
+    );
 }
 
 /// Whether an entity passes the search's optional path filter.
@@ -615,6 +738,50 @@ pub fn dedup_by_identity(entities: Vec<serde_json::Value>) -> Vec<serde_json::Va
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Extend a fixture pool so its cosine spread matches a live candidate
+    /// pool's, and return it ready for [`rerank`].
+    ///
+    /// `rerank` always scores a *pool*: [`candidate_limit`] fetches 24–400
+    /// rows, so the window reaches far below the handful of rows a
+    /// regression fixture names (measured with
+    /// `tests/measure_entrypoint_cosine.sh` on a live `AllMiniLML6V2` index,
+    /// seven benchmark queries: the pool's min–max span is 0.299–0.464,
+    /// mean 0.40 — the value of [`SEMANTIC_WEIGHT`]). A fixture holding only
+    /// the head of that window would hand [`normalize_pool_cosines`] a
+    /// several-fold stretched span and score its rows in a unit no live
+    /// search produces.
+    ///
+    /// The appended row is inert — neutral kind, no annotation, no token in
+    /// common with any query — and sits at the pool floor, so it cannot
+    /// displace anything. With the span pinned to [`SEMANTIC_WEIGHT`] the
+    /// normalized score reduces to `cosine + boosts` shifted by a constant,
+    /// i.e. these fixtures keep testing the *ranking rule* exactly as they
+    /// did before the pool normalization existed, and the scale invariance
+    /// itself is pinned by the dedicated band tests below.
+    fn ranked_pool(rows: Vec<serde_json::Value>, query: &str) -> Vec<serde_json::Value> {
+        rerank(with_pool_tail(rows), query)
+    }
+
+    fn with_pool_tail(mut rows: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+        let cosine_of =
+            |row: &serde_json::Value| row.get("score").and_then(|v| v.as_f64()).map(|c| c as f32);
+        let cosines: Vec<f32> = rows.iter().filter_map(cosine_of).collect();
+        let Some(max) = cosines.iter().copied().reduce(f32::max) else {
+            return rows;
+        };
+        let min = cosines.iter().copied().fold(max, f32::min);
+        let floor = max - SEMANTIC_WEIGHT;
+        if floor < min {
+            rows.push(json!({
+                "uuid": "pool-tail", "name": "zzz_inert_tail", "kind": "rust_impl",
+                "fqn": "inert::zzz_inert_tail",
+                "file_path": "src/zzz_inert_tail.rs", "start_line": 1,
+                "score": floor
+            }));
+        }
+        rows
+    }
 
     // --- root_coverage_boost ---
 
@@ -803,10 +970,12 @@ mod tests {
     #[test]
     fn root_coverage_orchestration_step_attenuated_when_caller_covers_superset() {
         // A nested step whose pool caller covers at least the same root set
-        // must not ride the entry-point signature at full strength: the
-        // halved score stays below the doc-light definition it displaced
-        // (measured: run 0.316-cosine × full boost 0.39 > use 0.519-cosine
-        // + 0; halved it falls back under).
+        // must not ride the entry-point signature: its roots are credited at
+        // transitive grade ([`superseded_step_boost`]), so it stays below
+        // the doc-light definition it displaced while remaining above the
+        // plain helpers it sits among (measured on the TypeScript E2E
+        // fixture: `run` inside `submitChangePassword` vs the doc-less
+        // `useChangePassword` hook).
         let step = root_coverage_boost(
             "function",
             "src/hooks.ts",
@@ -837,9 +1006,21 @@ mod tests {
                 superseded_by_caller: false,
             },
         );
-        assert!((step - plain * ORCHESTRATOR_STEP_ATTENUATION).abs() < 1e-5);
-        assert!(step < plain, "attenuation must lower the boost");
+        assert!((step - superseded_step_boost(2, 0)).abs() < 1e-5);
+        assert!(step < plain, "the downgrade must lower the boost");
+        assert!(step > 0.0, "downgraded, not zeroed");
         assert!(outer > plain, "outer orchestrator keeps the full boost");
+        // The step never earns the entry-point set bonus, whatever it
+        // reaches: two directly-covered roots grade the same as two reached
+        // through a helper.
+        assert!(
+            (superseded_step_boost(2, 0) - superseded_step_boost(0, 2)).abs() < 1e-6,
+            "superseded provenance must ignore the direct/transitive split"
+        );
+        assert!(
+            superseded_step_boost(3, 3) <= ROOT_TRANSITIVE_WEIGHT,
+            "the downgraded grade saturates at the transitive weight"
+        );
     }
 
     #[test]
@@ -915,7 +1096,7 @@ mod tests {
                    "file_path": "src/api/auth.rs", "start_line": 30, "score": 0.62,
                    "caller_roots": 2, "caller_roots_transitive": 1, "caller_root_total": 8}),
         ];
-        let ranked = rerank(candidates, "authenticate user with email and password");
+        let ranked = ranked_pool(candidates, "authenticate user with email and password");
         assert_eq!(ranked[0]["name"], "login", "test path must stay below");
         assert_eq!(ranked[1]["name"], "test_login_success");
     }
@@ -940,7 +1121,7 @@ mod tests {
                    "file_path": "src/api/admin.rs", "start_line": 12, "score": 0.26,
                    "caller_roots": 1}),
         ];
-        let ranked = rerank(candidates, "authenticate user with email and password");
+        let ranked = ranked_pool(candidates, "authenticate user with email and password");
         let names: Vec<&str> = ranked
             .iter()
             .filter_map(|e| e.get("name").and_then(|v| v.as_str()))
@@ -1103,9 +1284,18 @@ mod tests {
 
     #[test]
     fn rerank_promotes_definition_over_prose_test_and_helper() {
-        // The bug report scenario: Markdown, a test file, a helper and a
-        // caller all out-cosine the definition; the re-rank must put `login`
-        // first anyway.
+        // The bug report scenario: Markdown and a test file out-cosine the
+        // definition, and two production helpers sit right below it; the
+        // re-rank must put `login` first anyway.
+        //
+        // `normalize_email` sits at 0.57, not 0.60: at 0.60 its cosine
+        // deficit against `login` (0.02) exactly cancelled its own lexical
+        // boost (`email` matches 1 of the 4 query tokens, 0.08 × 1/4 =
+        // 0.02), leaving the two rows tied to the last bit and the "first"
+        // slot decided by floating-point noise rather than by the ranking
+        // rule. The scenario is unchanged — the helper still ranks right
+        // behind the definition — but the assertion now rests on a real
+        // margin.
         let candidates = vec![
             json!({"uuid": "1", "name": "setup", "kind": "markdown_section",
                    "file_path": "docs/AUTH.md", "start_line": 1, "score": 0.82}),
@@ -1114,11 +1304,11 @@ mod tests {
             json!({"uuid": "3", "name": "handle_login", "kind": "rust_function",
                    "file_path": "src/routes.rs", "start_line": 20, "score": 0.58}),
             json!({"uuid": "4", "name": "normalize_email", "kind": "rust_function",
-                   "file_path": "src/util.rs", "start_line": 5, "score": 0.60}),
+                   "file_path": "src/util.rs", "start_line": 5, "score": 0.57}),
             json!({"uuid": "5", "name": "login", "kind": "rust_function",
                    "file_path": "src/auth.rs", "start_line": 30, "score": 0.62}),
         ];
-        let ranked = rerank(candidates, "authenticate user with email and password");
+        let ranked = ranked_pool(candidates, "authenticate user with email and password");
         assert_eq!(ranked[0]["name"], "login", "definition must rank first");
         // Prose and the test file must fall below every production callable.
         let names: Vec<&str> = ranked
@@ -1147,7 +1337,7 @@ mod tests {
             json!({"uuid": "3", "name": "login", "kind": "rust_function",
                    "file_path": "src/auth.rs", "start_line": 30, "score": 0.52}),
         ];
-        let ranked = rerank(candidates, "authenticate user with email and password");
+        let ranked = ranked_pool(candidates, "authenticate user with email and password");
         assert_eq!(ranked[0]["name"], "login");
         assert_eq!(ranked[1]["name"], "test_login_success");
         assert_eq!(ranked[2]["name"], "setup");
@@ -1169,7 +1359,7 @@ mod tests {
                    "fqn": "knot::pipeline::ingest::resolve::LookupMaps::build",
                    "file_path": "src/resolve/mod.rs", "start_line": 144, "score": 0.58}),
         ];
-        let ranked = rerank(candidates, "build lookup maps for reference resolution");
+        let ranked = ranked_pool(candidates, "build lookup maps for reference resolution");
         assert_eq!(ranked[0]["name"], "build");
     }
 
@@ -1182,7 +1372,7 @@ mod tests {
             json!({"uuid": "2", "name": "shutdown", "kind": "method",
                    "file_path": "src/Pool.java", "start_line": 40, "score": 0.87}),
         ];
-        let ranked = rerank(candidates, "evict a connection from the pool");
+        let ranked = ranked_pool(candidates, "evict a connection from the pool");
         assert_eq!(ranked[0]["name"], "evictConnection");
         assert_eq!(ranked[1]["name"], "shutdown");
     }
@@ -1193,7 +1383,7 @@ mod tests {
                        "file_path": "src/a.rs", "start_line": 1, "score": 0.5});
         let b = json!({"uuid": "bbb", "name": "foo", "kind": "function",
                        "file_path": "src/a.rs", "start_line": 1, "score": 0.5});
-        let ranked = rerank(vec![b.clone(), a.clone()], "foo");
+        let ranked = ranked_pool(vec![b.clone(), a.clone()], "foo");
         assert_eq!(ranked[0]["uuid"], "aaa");
         assert_eq!(ranked[1]["uuid"], "bbb");
     }
@@ -1351,7 +1541,7 @@ mod tests {
     /// (`caller_roots` previously never reached cosine-pool rows).
     #[test]
     fn regression_rust_job_watch_login() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "ensure_account_eligible", "name": "ensure_account_eligible", "kind": "rust_function",
                        "fqn": "app::ensure_account_eligible",
@@ -1379,7 +1569,7 @@ mod tests {
     /// helpers, and the entry point must surface from deep cosine at all.
     #[test]
     fn regression_rust_knot_run_search_hybrid_context() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "find_repo_dependents", "name": "find_repo_dependents", "kind": "rust_function",
                        "fqn": "app::find_repo_dependents",
@@ -1409,7 +1599,7 @@ mod tests {
     /// the top roots directly.
     #[test]
     fn regression_java_hikari_get_connection_borrow() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "borrow", "kind": "method",
                        "fqn": "com.zaxxer.hikari.util.ConcurrentBag.borrow",
@@ -1439,7 +1629,7 @@ mod tests {
     /// `acquire` (a lock helper) must not displace the pool's entry point.
     #[test]
     fn regression_java_hikari_get_connection_acquire() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "acquire", "kind": "method",
                        "fqn": "com.zaxxer.hikari.util.SuspendResumeLock.acquire",
@@ -1465,7 +1655,7 @@ mod tests {
     /// `ChatClient.create` corroborates the container via chat+client.
     #[test]
     fn regression_java_spring_ai_chat_client_create() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "create", "kind": "method",
                        "fqn": "org.springframework.ai.chat.client.ChatClient.create",
@@ -1485,7 +1675,7 @@ mod tests {
     /// unrelated `ToolRegistry.Find`; the entry point must win on coverage.
     #[test]
     fn regression_csharp_get_callers_async_find() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "Find", "kind": "csharp_method",
                        "fqn": "CodeMap.Mcp.ToolRegistry.Find",
@@ -1510,7 +1700,7 @@ mod tests {
     /// C# / csharp-code-map, second row: `get` is generic too.
     #[test]
     fn regression_csharp_get_callers_async_get() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "GetSymbolAsync", "kind": "csharp_method",
                        "fqn": "CodeMap.Core.Interfaces.ISymbolStore.GetSymbolAsync",
@@ -1533,7 +1723,7 @@ mod tests {
     /// bury the tool definition.
     #[test]
     fn regression_ts_screenshot_capture_view() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "current", "kind": "constant",
                        "file_path": "src/TextSnapshot.ts", "start_line": 32, "score": 0.61}),
@@ -1557,7 +1747,7 @@ mod tests {
     /// tool, not the Markdown section that shares its title verbatim.
     #[test]
     fn regression_ts_screenshot_take_screenshot() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "take screenshot",
                        "kind": "markdown_section",
@@ -1577,7 +1767,7 @@ mod tests {
     /// the `Session` machinery it operates on.
     #[test]
     fn regression_js_job_watch_ui_login() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "Session", "kind": "class",
                        "file_path": "src/lib/session.js", "start_line": 18, "score": 0.60}),
@@ -1602,7 +1792,7 @@ mod tests {
     /// on the live index).
     #[test]
     fn rerank_entry_point_beats_generic_verb_leaf() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "find_matching_nodes", "kind": "rust_function",
                        "fqn": "app::find_matching_nodes",
@@ -1631,7 +1821,7 @@ mod tests {
     /// callable helper.
     #[test]
     fn neutral_kind_with_call_edges_outranks_lower_cosine_callable() {
-        let ranked = rerank(
+        let ranked = ranked_pool(
             vec![
                 json!({"uuid": "1", "name": "getScreenRecorder", "kind": "method",
                        "fqn": "McpContext.getScreenRecorder",
@@ -1696,7 +1886,7 @@ mod tests {
         // the neutral branch never opened) — cosine + callable + penalty.
         assert_eq!(
             boosted("rust_function", "tests/foo_test.rs"),
-            0.30 + CALLABLE_BOOST + TEST_PATH_PENALTY
+            SEMANTIC_WEIGHT * 0.30 + CALLABLE_BOOST + TEST_PATH_PENALTY
         );
     }
 
@@ -1759,7 +1949,7 @@ mod tests {
         );
         assert_eq!(
             callable,
-            0.40 + CALLABLE_BOOST,
+            SEMANTIC_WEIGHT * 0.40 + CALLABLE_BOOST,
             "callable kinds keep their own boost and never overlay the neutral one"
         );
     }
@@ -1775,6 +1965,279 @@ mod tests {
             Some(&expected),
             "expected {expected} at position 1, got order {names:?}"
         );
+    }
+
+    // --- pool normalization (scale-invariant scoring) ---
+
+    #[test]
+    fn normalizer_maps_pool_to_unit_range() {
+        let sems = normalize_pool_cosines(&[Some(0.1), Some(0.2), Some(0.3)]);
+        assert!((sems[0] - 0.0).abs() < 1e-6, "{sems:?}");
+        assert!((sems[1] - 0.5).abs() < 1e-6, "{sems:?}");
+        assert!((sems[2] - 1.0).abs() < 1e-6, "{sems:?}");
+    }
+
+    #[test]
+    fn normalizer_flat_pool_is_zero_without_nan() {
+        let sems = normalize_pool_cosines(&[Some(0.5), Some(0.5), Some(0.5)]);
+        assert_eq!(sems, vec![0.0, 0.0, 0.0]);
+        assert!(sems.iter().all(|s| s.is_finite()), "no NaN on a flat pool");
+    }
+
+    #[test]
+    fn normalizer_single_candidate_is_zero() {
+        assert_eq!(normalize_pool_cosines(&[Some(0.7)]), vec![0.0]);
+    }
+
+    #[test]
+    fn normalizer_empty_pool_is_empty() {
+        assert!(normalize_pool_cosines(&[]).is_empty());
+    }
+
+    #[test]
+    fn normalizer_missing_cosine_is_pool_minimum() {
+        // A row without a `score` field must not be treated as cosine 0 in a
+        // pool whose true minimum is 0.2 — it takes the pool minimum.
+        let sems = normalize_pool_cosines(&[Some(0.4), None, Some(0.2)]);
+        assert!((sems[0] - 1.0).abs() < 1e-6, "{sems:?}");
+        assert!((sems[1] - 0.0).abs() < 1e-6, "{sems:?}");
+        assert!((sems[2] - 0.0).abs() < 1e-6, "{sems:?}");
+        // Non-finite values are treated the same way.
+        let with_inf = normalize_pool_cosines(&[Some(0.4), Some(f32::INFINITY), Some(0.2)]);
+        assert!(with_inf.iter().all(|s| s.is_finite()), "{with_inf:?}");
+        assert!((with_inf[1] - 0.0).abs() < 1e-6, "{with_inf:?}");
+    }
+
+    #[test]
+    fn normalizer_is_affine_invariant() {
+        // The scale-invariance mechanism: two pools identical in ordering and
+        // relative gaps normalize to the same values whatever their band.
+        let base = [Some(0.24), Some(0.31), Some(0.40), Some(0.53)];
+        for (scale, offset) in [(0.25_f32, 0.55_f32), (3.0, -0.10), (0.1, 0.81)] {
+            let shifted: Vec<Option<f32>> = base
+                .iter()
+                .map(|c| c.map(|v| (v - 0.24) / 0.29 * scale + offset))
+                .collect();
+            let a = normalize_pool_cosines(&base);
+            let b = normalize_pool_cosines(&shifted);
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() < 1e-5, "affine drift: {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn normalizer_clamps_outliers_into_unit_range() {
+        let sems =
+            normalize_pool_cosines(&[Some(0.99), Some(0.31), Some(0.30), Some(0.29), Some(-0.42)]);
+        assert!(
+            sems.iter().all(|s| (0.0..=1.0).contains(s)),
+            "out of range: {sems:?}"
+        );
+        assert!((sems[0] - 1.0).abs() < 1e-6, "{sems:?}");
+        assert!((sems[4] - 0.0).abs() < 1e-6, "{sems:?}");
+    }
+
+    #[test]
+    fn normalizer_is_deterministic() {
+        let pool = [Some(0.31), None, Some(0.52), Some(0.41), Some(0.52)];
+        assert_eq!(normalize_pool_cosines(&pool), normalize_pool_cosines(&pool));
+    }
+
+    // --- scale invariance of the whole re-rank ---
+
+    /// The Workstream-B contract (PLAN §7 gherkin): two candidate pools
+    /// identical in ordering and relative gaps must rank identically,
+    /// however different their cosine bands.
+    #[test]
+    fn rerank_order_is_invariant_to_cosine_scale() {
+        let rows = |cosines: [f32; 6]| {
+            vec![
+                json!({"uuid": "1", "name": "setup", "kind": "markdown_section",
+                       "file_path": "docs/AUTH.md", "start_line": 1, "score": cosines[0]}),
+                json!({"uuid": "2", "name": "test_login_success", "kind": "rust_function",
+                       "file_path": "tests/login_test.rs", "start_line": 10, "score": cosines[1]}),
+                json!({"uuid": "3", "name": "handle_login", "kind": "rust_function",
+                       "fqn": "app::routes::handle_login",
+                       "file_path": "src/routes.rs", "start_line": 20, "score": cosines[2]}),
+                json!({"uuid": "4", "name": "normalize_email", "kind": "rust_function",
+                       "fqn": "app::util::normalize_email",
+                       "file_path": "src/util.rs", "start_line": 5, "score": cosines[3]}),
+                json!({"uuid": "5", "name": "login", "kind": "rust_function",
+                       "fqn": "app::auth::login",
+                       "file_path": "src/auth.rs", "start_line": 30, "score": cosines[4],
+                       "caller_roots": 2, "caller_roots_transitive": 1,
+                       "caller_root_total": 8}),
+                json!({"uuid": "6", "name": "AuthConfig", "kind": "rust_struct",
+                       "fqn": "app::auth::AuthConfig",
+                       "file_path": "src/auth.rs", "start_line": 12, "score": cosines[5]}),
+            ]
+        };
+        let order = |ranked: Vec<serde_json::Value>| -> Vec<String> {
+            ranked
+                .iter()
+                .filter_map(|e| e.get("name").and_then(|v| v.as_str()))
+                .map(String::from)
+                .collect()
+        };
+        let query = "authenticate user with email and password";
+        // MiniLM band …
+        let wide = order(rerank(rows([0.53, 0.47, 0.38, 0.41, 0.43, 0.24]), query));
+        // … and the same pool squeezed into E5's ~0.07-wide band.
+        let narrow = order(rerank(
+            rows([0.53, 0.47, 0.38, 0.41, 0.43, 0.24].map(|c| (c - 0.24) / 0.29 * 0.07 + 0.81)),
+            query,
+        ));
+        assert_eq!(wide, narrow, "ranking must not depend on the cosine band");
+    }
+
+    /// Unit-level stand-in for the live model matrix: the measured cosine
+    /// band of every supported embedding model
+    /// ([`crate::pipeline::embed::EmbedModelChoice::supported`], bands from
+    /// `docs/measurements/entrypoint_cosine_comparison.md`) is applied to
+    /// the two `must` baseline shapes. A live matrix would need one full
+    /// re-index per model (and a Qdrant collection recreation for the
+    /// 768-dim ones), so the *mechanism* is proven here and the live
+    /// harness runs on the adopted model only.
+    #[test]
+    fn rerank_baselines_hold_across_every_supported_model_band() {
+        // (model, low, high) — the measured raw-cosine band of each model.
+        const BANDS: &[(&str, f32, f32)] = &[
+            ("AllMiniLML6V2", 0.24, 0.53),
+            ("BGESmallENV15", 0.54, 0.80),
+            ("BGEBaseENV15", 0.44, 0.77),
+            ("MultilingualE5Small", 0.81, 0.88),
+            ("JinaEmbeddingsV2BaseCode", 0.15, 0.69),
+            ("NomicEmbedTextV15", 0.55, 0.74),
+        ];
+        // Relative positions inside the band (1.0 = top of the band), taken
+        // from the live traces: the entry point never holds the top cosine.
+        for (model, low, high) in BANDS {
+            let at = |fraction: f32| low + (high - low) * fraction;
+
+            // Baseline 1 — HikariCP "borrow a connection from the pool".
+            // Deliberately NOT `ranked_pool`: these fixtures *are* the pool
+            // geometry under test (each row placed inside the model's own
+            // measured band), so no synthetic tail may reshape them.
+            let ranked = rerank(
+                vec![
+                    json!({"uuid": "1", "name": "borrow", "kind": "method",
+                           "fqn": "com.zaxxer.hikari.util.ConcurrentBag.borrow",
+                           "file_path": "src/main/java/com/zaxxer/hikari/util/ConcurrentBag.java",
+                           "start_line": 312, "score": at(1.0)}),
+                    json!({"uuid": "2", "name": "isConnectionAlive", "kind": "method",
+                           "fqn": "com.zaxxer.hikari.pool.PoolBase.isConnectionAlive",
+                           "file_path": "src/main/java/com/zaxxer/hikari/pool/PoolBase.java",
+                           "start_line": 288, "score": at(0.93)}),
+                    json!({"uuid": "3", "name": "releaseConnection", "kind": "method",
+                           "fqn": "com.zaxxer.hikari.pool.HikariPool.releaseConnection",
+                           "file_path": "src/main/java/com/zaxxer/hikari/pool/HikariPool.java",
+                           "start_line": 292, "score": at(0.90)}),
+                    json!({"uuid": "4", "name": "getConnection", "kind": "method",
+                           "fqn": "com.zaxxer.hikari.pool.HikariPool.getConnection",
+                           "file_path": "src/main/java/com/zaxxer/hikari/pool/HikariPool.java",
+                           "start_line": 239, "score": at(0.76),
+                           "caller_roots": 3, "caller_roots_transitive": 0,
+                           "caller_root_total": 8}),
+                    json!({"uuid": "5", "name": "connection pooling", "kind": "markdown_section",
+                           "fqn": "README.md::connection pooling",
+                           "file_path": "README.md", "start_line": 4, "score": at(0.83)}),
+                    json!({"uuid": "6", "name": "testConnectionBorrow", "kind": "method",
+                           "fqn": "com.zaxxer.hikari.pool.TestConnections.testConnectionBorrow",
+                           "file_path": "src/test/java/com/zaxxer/hikari/pool/TestConnections.java",
+                           "start_line": 61, "score": at(0.88)}),
+                ],
+                "borrow a connection from the pool",
+            );
+            let names: Vec<&str> = ranked
+                .iter()
+                .filter_map(|e| e.get("name").and_then(|v| v.as_str()))
+                .collect();
+            assert_eq!(
+                names.first(),
+                Some(&"getConnection"),
+                "{model} band ({low}..{high}) broke the HikariCP baseline: {names:?}"
+            );
+
+            // Baseline 2 — job-watch "authenticate user with email and password".
+            let ranked = rerank(
+                vec![
+                    json!({"uuid": "1", "name": "normalize_email", "kind": "rust_function",
+                           "fqn": "jobwatch::auth::credentials::normalize_email",
+                           "file_path": "src/auth/credentials.rs", "start_line": 71,
+                           "score": at(1.0)}),
+                    json!({"uuid": "2", "name": "verify_password", "kind": "rust_function",
+                           "fqn": "jobwatch::auth::credentials::verify_password",
+                           "file_path": "src/auth/credentials.rs", "start_line": 41,
+                           "score": at(0.94)}),
+                    json!({"uuid": "3", "name": "test_login_success", "kind": "rust_function",
+                           "fqn": "tests::login::test_login_success",
+                           "file_path": "tests/login_test.rs", "start_line": 10,
+                           "score": at(0.90)}),
+                    json!({"uuid": "4", "name": "login", "kind": "rust_function",
+                           "fqn": "jobwatch::api::auth::login",
+                           "file_path": "src/api/auth.rs", "start_line": 136,
+                           "score": at(0.72),
+                           "caller_roots": 3, "caller_roots_transitive": 1,
+                           "caller_root_total": 8}),
+                    json!({"uuid": "5", "name": "create_user", "kind": "rust_function",
+                           "fqn": "jobwatch::api::admin::create_user",
+                           "file_path": "src/api/admin.rs", "start_line": 44,
+                           "score": at(0.86), "caller_roots": 1,
+                           "caller_root_total": 8}),
+                ],
+                "authenticate user with email and password",
+            );
+            let names: Vec<&str> = ranked
+                .iter()
+                .filter_map(|e| e.get("name").and_then(|v| v.as_str()))
+                .collect();
+            assert_eq!(
+                names.first(),
+                Some(&"login"),
+                "{model} band ({low}..{high}) broke the job-watch baseline: {names:?}"
+            );
+        }
+    }
+
+    /// The measured failure mode a model swap produces (§ "The blocker"):
+    /// when a model's band compresses, a fixed boost outweighs the whole
+    /// semantic span and the kind taxonomy decides the ranking on its own.
+    /// Shape from chrome-devtools-mcp "capture the current view as an
+    /// image": the tool is a neutral-kind `constant` holding the top cosine
+    /// of the window, the competitor a callable helper at the bottom of it.
+    /// Raw cosine ranks the tool first only while the band is wider than
+    /// [`CALLABLE_BOOST`] — under `MultilingualE5Small` (~0.07) it is not.
+    #[test]
+    fn rerank_compressed_band_does_not_let_boosts_outrank_semantics() {
+        const BANDS: &[(&str, f32, f32)] = &[
+            ("AllMiniLML6V2", 0.24, 0.53),
+            ("BGESmallENV15", 0.54, 0.80),
+            ("BGEBaseENV15", 0.44, 0.77),
+            ("MultilingualE5Small", 0.81, 0.88),
+            ("JinaEmbeddingsV2BaseCode", 0.15, 0.69),
+            ("NomicEmbedTextV15", 0.55, 0.74),
+        ];
+        for (model, low, high) in BANDS {
+            // The band IS the fixture here — no synthetic pool tail.
+            let ranked = rerank(
+                vec![
+                    json!({"uuid": "1", "name": "getScreenRecorder", "kind": "method",
+                           "fqn": "McpContext.getScreenRecorder",
+                           "file_path": "src/McpContext.ts", "start_line": 411,
+                           "score": low}),
+                    json!({"uuid": "2", "name": "screenshot", "kind": "constant",
+                           "fqn": "screenshot",
+                           "file_path": "src/tools/screenshot.ts", "start_line": 21,
+                           "score": high}),
+                ],
+                "capture the current view as an image",
+            );
+            assert_eq!(
+                ranked[0]["name"], "screenshot",
+                "{model} band ({low}..{high}): the kind boost swallowed the semantic span"
+            );
+        }
     }
 
     // --- dedup_by_identity ---

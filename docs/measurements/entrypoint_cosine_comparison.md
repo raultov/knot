@@ -17,6 +17,14 @@ This document summarizes the empirical evaluation of five candidate embedding mo
 | `capture the current view` | #1 | ✅1 | ✅1 | ❌2 | ✅1 | ✅1 | ✅1 | ❌2 |
 | **`must` rows failing** | | **0** | **0** | **3** | **1** | **1** | **3** | **2** |
 
+> **Superseded (v1.11.0).** The table below measured the **raw-cosine**
+> ranker, whose additive boosts were calibrated to MiniLM's band — the
+> blocker this document identified. That blocker is fixed in v1.11.0
+> (pool-normalized, scale-invariant scoring) and the default is now
+> `BGEBaseENV15`. The v1.11.0 measurement is
+> `entrypoint_cosine_v1_11_bgebase.md`; the table below is kept as the
+> evidence that motivated the work.
+
 ## Findings & Key Takeaways
 
 1. **Workstream A (`embed_text` role sentence) is a pure gain:**
@@ -29,6 +37,7 @@ This document summarizes the empirical evaluation of five candidate embedding mo
    - However, because `rank::final_score` uses additive boosts calibrated to MiniLM's scale (0.24-0.53), models with compressed high-cosine ranges (0.50-0.87) cause baseline regressions.
    - For instance, Jina-code achieves rank 1 on query embedding for `borrow a connection` (cosine 0.6620), but `HikariDataSource.getConnection` outranks `HikariPool.getConnection` due to wrapper call structure.
 
-3. **Conclusion:**
-   - Default stays `AllMiniLML6V2` to ensure 100% baseline compatibility out-of-the-box.
-   - Full multi-model support is shipped as an opt-in via `KNOT_EMBED_MODEL` (with automatic prefix management and dimension validation).
+3. **Conclusion (as of v1.10.0):**
+   - Default stayed `AllMiniLML6V2` to ensure 100% baseline compatibility out-of-the-box.
+   - Full multi-model support shipped as an opt-in via `KNOT_EMBED_MODEL` (with automatic prefix management and dimension validation).
+   - **Superseded in v1.11.0:** the scale-invariant ranker removes the boost-calibration blocker, and the default moved to `BGEBaseENV15`. See `entrypoint_cosine_v1_11_bgebase.md`.

@@ -1,3 +1,9 @@
+> **BGE-small was measured and rejected.** With the v1.11.0 scale-invariant
+> ranker it still fails 3 of 4 `must` baselines live — its cosine
+> neighbourhood for `borrow a connection` is eviction methods, so the entry
+> point loses both cosine position and root coverage. The adopted default is
+> `BGEBaseENV15`; see `entrypoint_cosine_v1_11_bgebase.md`.
+
 | Query | Repo | Target | Target cosine | Window cutoff (@400) | Cosine rank | Final rank | Source |
 |---|---|---|---|---|---|---|---|
 | find relevant code by meaning across the repository | knot | run_search_hybrid_context | 0.6417 | 0.6440 | 423 | ABSENT | direct |

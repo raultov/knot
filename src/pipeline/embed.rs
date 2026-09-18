@@ -4,10 +4,10 @@
 //! `embed_text` of every [`ParsedEntity`] into a high-dimensional vector.
 //!
 //! The model is selectable via `KNOT_EMBED_MODEL` (see [`model`]); the
-//! default is `AllMiniLML6V2` (384-dim, fast, symmetric). For
-//! instruction-aware models, knot applies the asymmetric retrieval prefixes
-//! itself — see the `model` module doc for why (fastembed 6 embeds texts
-//! verbatim).
+//! default is `BGEBaseENV15` (768-dim, asymmetric — the query carries
+//! BAAI's instruction prefix, the passage does not). For instruction-aware
+//! models, knot applies the asymmetric retrieval prefixes itself — see the
+//! `model` module doc for why (fastembed 6 embeds texts verbatim).
 //!
 //! All entities are embedded in a single batched call to maximize throughput.
 
@@ -53,9 +53,10 @@ impl Embedder {
     /// Signature kept binary-compatible for library consumers (knot-server
     /// holds `Embedder::init(cache_dir)` from the published crate).
     ///
-    /// On first run this will download the ONNX model weights (~23 MB for
-    /// AllMiniLML6V2, ~130 MB for BGESmallENV15) and cache them locally.
-    /// Subsequent runs load from cache.
+    /// On first run this will download the ONNX model weights (~440 MB for
+    /// the default BGEBaseENV15, ~130 MB for BGESmallENV15, ~23 MB for
+    /// AllMiniLML6V2) and cache them locally. Subsequent runs load from
+    /// cache.
     pub fn init(cache_dir: std::path::PathBuf) -> Result<Self> {
         let choice = EmbedModelChoice::from_env()
             .map_err(|e| anyhow::anyhow!("Invalid KNOT_EMBED_MODEL: {e}"))?;
