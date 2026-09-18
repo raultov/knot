@@ -34,7 +34,13 @@ const STATE_FILE: &str = "index_state.json";
 /// embed text now carries the FQN, the tokenized identifier and the
 /// tokenized outgoing call names, and every Rust entity keeps its
 /// signature, so vectors built by v4 and earlier must be rebuilt).
-const CURRENT_STATE_VERSION: u32 = 5;
+///
+/// v6: the embed text now leads with a natural-language role sentence
+/// (identifier phrase + first docstring sentence, or the outgoing call
+/// names for doc-less callables) and the embedding model is configurable
+/// via `KNOT_EMBED_MODEL`. Vectors built by v5 and earlier are
+/// incomparable and must be rebuilt.
+const CURRENT_STATE_VERSION: u32 = 6;
 
 /// Returns the cache directory for fastembed models.
 /// Prioritizes the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
