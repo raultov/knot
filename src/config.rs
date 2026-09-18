@@ -70,6 +70,13 @@ pub struct IndexerCli {
     /// Embedding model dimension (must match the deployed fastembed model).
     #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384)]
     pub embed_dim: u64,
+
+    /// Embedding model to embed entities and queries with. Changing it
+    /// invalidates every stored vector — a full re-index (`--clean`) AND a
+    /// matching `KNOT_EMBED_DIM` are required.
+    #[arg(long, env = "KNOT_EMBED_MODEL", default_value_t = default_embed_model())]
+    pub embed_model: String,
+
     #[arg(
         long,
         env = "KNOT_EMBEDDER_RESET_INTERVAL",
@@ -169,6 +176,17 @@ pub struct McpCli {
     /// Embedding model dimension (must match the deployed fastembed model).
     #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 384, hide = true)]
     pub embed_dim: u64,
+
+    /// Embedding model to embed entities and queries with. Changing it
+    /// invalidates every stored vector — a full re-index (`--clean`) AND a
+    /// matching `KNOT_EMBED_DIM` are required.
+    #[arg(
+        long,
+        env = "KNOT_EMBED_MODEL",
+        default_value_t = default_embed_model(),
+        hide = true
+    )]
+    pub embed_model: String,
     #[arg(
         long,
         env = "KNOT_EMBEDDER_RESET_INTERVAL",
@@ -201,6 +219,7 @@ pub struct Config {
     pub neo4j_password: String,
     pub custom_queries_path: Option<String>,
     pub embed_dim: u64,
+    pub embed_model: String,
     pub embedder_reset_interval: usize,
     pub batch_size: usize,
     pub clean: bool,
@@ -212,6 +231,36 @@ pub struct Config {
     pub ingest_concurrency: usize,
     pub rayon_threads: Option<usize>,
     pub include_config_files: bool,
+}
+
+/// clap `default_value_t` cannot interpolate a const `&str` from another
+/// module directly, so this thin wrapper pins the default in one place.
+fn default_embed_model() -> String {
+    crate::pipeline::embed::DEFAULT_EMBED_MODEL.to_owned()
+}
+
+/// Validate the model/dimension pair: the configured `KNOT_EMBED_DIM` must
+/// equal the selected model's native dimension.
+///
+/// This turns a confusing mid-request Qdrant "wrong vector size" failure
+/// into a startup error naming both numbers. Note the dimensions CAN
+/// legitimately agree (two different 384-dim models are both 384) — a same-
+/// dimension model switch is caught by the index-state version bump instead
+/// (`state::CURRENT_STATE_VERSION`), not here.
+fn validate_embed_pair(embed_model: &str, embed_dim: u64) -> Result<()> {
+    use std::str::FromStr;
+    let choice = crate::pipeline::embed::EmbedModelChoice::from_str(embed_model)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if choice.dim != embed_dim {
+        anyhow::bail!(
+            "KNOT_EMBED_DIM ({embed_dim}) does not match the selected embedding model \
+             '{embed_model}' (native dimension {native}). \
+             Set KNOT_EMBED_DIM to {native}, or unset it and re-run. Changing the model \
+             also requires a full re-index (knot-indexer --clean).",
+            native = choice.dim
+        );
+    }
+    Ok(())
 }
 
 /// Returns the path where knot's `.env` file should be located.
@@ -304,11 +353,12 @@ impl Config {
     /// Load configuration for the indexer binary (knot-indexer).
     /// Parses IndexerCli and includes all indexing-specific options.
     pub fn load_indexer() -> Result<Self> {
-        Self::load_env_and_parse(IndexerCli::parse).map(
+        Self::load_env_and_parse(IndexerCli::parse).and_then(
             |(cli, repo_path, repo_name, neo4j_password)| {
+                validate_embed_pair(&cli.embed_model, cli.embed_dim)?;
                 let dependency_repos = parse_dependencies(cli.dependencies.as_ref());
 
-                Self {
+                Ok(Self {
                     repo_path,
                     repo_name,
                     qdrant_url: cli.qdrant_url,
@@ -318,6 +368,7 @@ impl Config {
                     neo4j_password,
                     custom_queries_path: cli.custom_queries_path,
                     embed_dim: cli.embed_dim,
+                    embed_model: cli.embed_model,
                     embedder_reset_interval: cli.embedder_reset_interval,
                     batch_size: cli.batch_size,
                     clean: cli.clean,
@@ -329,7 +380,7 @@ impl Config {
                     ingest_concurrency: cli.ingest_concurrency,
                     rayon_threads: cli.rayon_threads,
                     include_config_files: cli.include_config_files,
-                }
+                })
             },
         )
     }
@@ -337,28 +388,32 @@ impl Config {
     /// Load configuration for the MCP server binary (knot-mcp).
     /// Parses McpCli and only includes MCP-relevant options.
     pub fn load_mcp() -> Result<Self> {
-        Self::load_env_and_parse(McpCli::parse).map(
-            |(cli, repo_path, repo_name, neo4j_password)| Self {
-                repo_path,
-                repo_name,
-                qdrant_url: cli.qdrant_url,
-                qdrant_collection: cli.qdrant_collection,
-                neo4j_uri: cli.neo4j_uri,
-                neo4j_user: cli.neo4j_user,
-                neo4j_password,
-                custom_queries_path: None,
-                embed_dim: cli.embed_dim,
-                embedder_reset_interval: cli.embedder_reset_interval,
-                batch_size: 0,
-                clean: false,
-                dependency_repos: Vec::new(),
-                watch: false,
-                dry_run: cli.dry_run,
-                custom_ca_certs: cli.custom_ca_certs,
-                output_format: OutputFormat::Markdown,
-                ingest_concurrency: 4,
-                rayon_threads: None,
-                include_config_files: false,
+        Self::load_env_and_parse(McpCli::parse).and_then(
+            |(cli, repo_path, repo_name, neo4j_password)| {
+                validate_embed_pair(&cli.embed_model, cli.embed_dim)?;
+                Ok(Self {
+                    repo_path,
+                    repo_name,
+                    qdrant_url: cli.qdrant_url,
+                    qdrant_collection: cli.qdrant_collection,
+                    neo4j_uri: cli.neo4j_uri,
+                    neo4j_user: cli.neo4j_user,
+                    neo4j_password,
+                    custom_queries_path: None,
+                    embed_dim: cli.embed_dim,
+                    embed_model: cli.embed_model,
+                    embedder_reset_interval: cli.embedder_reset_interval,
+                    batch_size: 0,
+                    clean: false,
+                    dependency_repos: Vec::new(),
+                    watch: false,
+                    dry_run: cli.dry_run,
+                    custom_ca_certs: cli.custom_ca_certs,
+                    output_format: OutputFormat::Markdown,
+                    ingest_concurrency: 4,
+                    rayon_threads: None,
+                    include_config_files: false,
+                })
             },
         )
     }
@@ -384,6 +439,8 @@ impl Config {
 
         let repo_name = resolve_repo_name(cli.repo_name(), &repo_path);
 
+        validate_embed_pair(&cli.embed_model, cli.embed_dim)?;
+
         Ok(Self {
             repo_path,
             repo_name,
@@ -394,6 +451,7 @@ impl Config {
             neo4j_password,
             custom_queries_path: None,
             embed_dim: cli.embed_dim,
+            embed_model: cli.embed_model,
             embedder_reset_interval: cli.embedder_reset_interval,
             batch_size: 0,
             clean: false,
@@ -475,6 +533,52 @@ mod tests {
     use std::fs;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn default_model_dim_matches_embed_dim_clap_default() {
+        use std::str::FromStr;
+        let choice = crate::pipeline::embed::EmbedModelChoice::from_str(
+            crate::pipeline::embed::DEFAULT_EMBED_MODEL,
+        )
+        .expect("DEFAULT_EMBED_MODEL must be a valid model name");
+
+        // Parse default arguments for IndexerCli to inspect embed_dim default
+        let cli = IndexerCli::try_parse_from(["knot-indexer"]).expect("IndexerCli default parse");
+
+        assert_eq!(
+            choice.dim, cli.embed_dim,
+            "DEFAULT_EMBED_MODEL dimension ({}) must equal IndexerCli default embed_dim ({})",
+            choice.dim, cli.embed_dim
+        );
+    }
+
+    #[test]
+    fn validate_embed_pair_accepts_matching_dim() {
+        assert!(validate_embed_pair("AllMiniLML6V2", 384).is_ok());
+        assert!(validate_embed_pair("BGESmallEnv15", 384).is_ok());
+        assert!(validate_embed_pair("JinaEmbeddingsV2BaseCode", 768).is_ok());
+    }
+
+    #[test]
+    fn validate_embed_pair_rejects_dim_mismatch_with_numbers() {
+        let err = validate_embed_pair("NomicEmbedTextV15", 384).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("768"), "must name the native dim: {msg}");
+        assert!(msg.contains("384"), "must name the configured dim: {msg}");
+        assert!(
+            msg.contains("--clean"),
+            "must point at the mandatory re-index: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_embed_pair_rejects_unknown_model() {
+        let err = validate_embed_pair("gpt99", 384).unwrap_err();
+        assert!(
+            err.to_string().contains("Unknown embedding model 'gpt99'"),
+            "{err}"
+        );
+    }
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -881,6 +985,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embed_model: "AllMiniLML6V2".to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
@@ -994,6 +1099,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embed_model: "AllMiniLML6V2".to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
@@ -1055,6 +1161,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embed_model: "AllMiniLML6V2".to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,
@@ -1083,6 +1190,7 @@ mod tests {
             neo4j_password: "secret".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embed_model: "AllMiniLML6V2".to_string(),
             embedder_reset_interval: 500,
             batch_size: 64,
             clean: false,

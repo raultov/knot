@@ -3,7 +3,12 @@
 //! Uses the `fastembed` crate (pure-Rust ONNX inference) to embed the
 //! `embed_text` of every [`ParsedEntity`] into a high-dimensional vector.
 //!
-//! The default model is `AllMiniLML6V2` (384-dim, fast, good quality).
+//! The model is selectable via `KNOT_EMBED_MODEL` (see [`model`]); the
+//! default is `AllMiniLML6V2` (384-dim, fast, symmetric). For
+//! instruction-aware models, knot applies the asymmetric retrieval prefixes
+//! itself — see the `model` module doc for why (fastembed 6 embeds texts
+//! verbatim).
+//!
 //! All entities are embedded in a single batched call to maximize throughput.
 
 use anyhow::Result;
@@ -13,15 +18,17 @@ use crate::models::{EmbeddedEntity, ParsedEntity};
 
 use anyhow::Context;
 
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{InitOptions, TextEmbedding};
 
-/// Embedding model used when no override is configured.
-const DEFAULT_MODEL: EmbeddingModel = EmbeddingModel::AllMiniLML6V2;
+pub mod model;
+
+pub use model::{DEFAULT_EMBED_MODEL, EmbedModelChoice};
 
 /// Wrapper around the fastembed [`TextEmbedding`] model.
 pub struct Embedder {
     model: TextEmbedding,
     cache_dir: std::path::PathBuf,
+    choice: EmbedModelChoice,
 }
 
 impl Embedder {
@@ -31,7 +38,7 @@ impl Embedder {
 
     pub fn reinit(&mut self) -> Result<()> {
         let fresh = TextEmbedding::try_new(
-            InitOptions::new(DEFAULT_MODEL)
+            InitOptions::new(self.choice.model.clone())
                 .with_cache_dir(self.cache_dir.clone())
                 .with_show_download_progress(false),
         )
@@ -40,27 +47,54 @@ impl Embedder {
         Ok(())
     }
 
-    /// Initialize the embedding model.
+    /// Initialize the embedding model resolved from the environment
+    /// (`KNOT_EMBED_MODEL`, defaulting to `DEFAULT_EMBED_MODEL`).
+    ///
+    /// Signature kept binary-compatible for library consumers (knot-server
+    /// holds `Embedder::init(cache_dir)` from the published crate).
     ///
     /// On first run this will download the ONNX model weights (~23 MB for
-    /// AllMiniLML6V2) and cache them locally. Subsequent runs load from cache.
+    /// AllMiniLML6V2, ~130 MB for BGESmallENV15) and cache them locally.
+    /// Subsequent runs load from cache.
     pub fn init(cache_dir: std::path::PathBuf) -> Result<Self> {
+        let choice = EmbedModelChoice::from_env()
+            .map_err(|e| anyhow::anyhow!("Invalid KNOT_EMBED_MODEL: {e}"))?;
+        Self::init_with_model(cache_dir, choice)
+    }
+
+    /// Initialize with an explicit model choice (used by tests and callers
+    /// that already resolved configuration).
+    pub fn init_with_model(
+        cache_dir: std::path::PathBuf,
+        choice: EmbedModelChoice,
+    ) -> Result<Self> {
         info!(
-            "Initialising fastembed model ({DEFAULT_MODEL:?}) in {}…",
+            "Initialising fastembed model ({} dim {}) in {}…",
+            choice.model,
+            choice.dim,
             cache_dir.display()
         );
 
         std::fs::create_dir_all(&cache_dir).context("Failed to create fastembed cache dir")?;
 
         let model = TextEmbedding::try_new(
-            InitOptions::new(DEFAULT_MODEL)
+            InitOptions::new(choice.model.clone())
                 .with_cache_dir(cache_dir.clone())
                 .with_show_download_progress(true),
         )
         .context("Failed to initialise fastembed TextEmbedding model")?;
 
         info!("Embedding model ready");
-        Ok(Self { model, cache_dir })
+        Ok(Self {
+            model,
+            cache_dir,
+            choice,
+        })
+    }
+
+    /// The resolved model's native vector dimension (for config validation).
+    pub fn dim(&self) -> u64 {
+        self.choice.dim
     }
 
     /// Embed a batch of [`ParsedEntity`] records and return [`EmbeddedEntity`] values.
@@ -77,7 +111,20 @@ impl Embedder {
         }
 
         let repo_name = entities[0].repo_name.clone();
-        let texts: Vec<&str> = entities.iter().map(|e| e.embed_text.as_str()).collect();
+
+        // Passages carry the model's passage prefix; symmetric models keep
+        // the texts byte-identical to the pre-change embed_text so existing
+        // vector semantics are untouched.
+        let passages: Vec<String>;
+        let texts: Vec<&str> = if self.choice.passage_prefix.is_empty() {
+            entities.iter().map(|e| e.embed_text.as_str()).collect()
+        } else {
+            passages = entities
+                .iter()
+                .map(|e| format!("{}{}", self.choice.passage_prefix, e.embed_text))
+                .collect();
+            passages.iter().map(String::as_str).collect()
+        };
 
         info!(
             "[{repo_name}] Embedding {} entities (batch_size={})…",
@@ -112,10 +159,21 @@ impl Embedder {
     /// Embed a single text query and return the vector.
     ///
     /// This is used by the MCP server for runtime query embedding.
+    ///
+    /// For asymmetric models the query carries the model's query prefix
+    /// (`query: `, `Represent this sentence…`, `search_query: `). fastembed
+    /// 6 has no `query_embed` API — `TextEmbedding::embed` passes texts
+    /// through verbatim — so the prefix is applied here.
     pub fn embed_query(&mut self, query: &str) -> Result<Vec<f32>> {
+        let text = if self.choice.query_prefix.is_empty() {
+            query.to_owned()
+        } else {
+            format!("{}{}", self.choice.query_prefix, query)
+        };
+
         let vectors = self
             .model
-            .embed(vec![query], Some(1))
+            .embed(vec![&text], Some(1))
             .context("fastembed query embedding failed")?;
 
         vectors
@@ -129,6 +187,7 @@ impl Embedder {
 mod tests {
     use super::*;
     use crate::models::{EntityKind, ParsedEntity};
+    use std::str::FromStr;
 
     #[ignore = "Downloads ONNX model (~23MB) and requires significant memory/CPU"]
     #[test]
@@ -171,6 +230,48 @@ mod tests {
             .expect("Failed to embed query");
 
         assert_eq!(vector.len(), 384);
+    }
+
+    /// Asymmetric-prefix proof: for BGE the query embeds with the
+    /// instruction prefix and the passage without it, so identical input
+    /// text takes two different vectors. Pinned here (behind the ignore)
+    /// because the prefix band is glued into `embed_query`/`embed`.
+    #[ignore = "Downloads the BGESmallENV15 ONNX model and requires network"]
+    #[test]
+    fn bge_query_and_passage_vectors_differ_by_prefix() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let choice = EmbedModelChoice::from_str("BGESmallENV15").expect("known model");
+        assert_eq!(choice.passage_prefix, "", "BGE recipe: query-side only");
+        let mut embedder =
+            Embedder::init_with_model(temp_dir.path().to_path_buf(), choice).expect("BGE init");
+
+        let query_a = embedder.embed_query("acquire a connection").unwrap();
+        // Same text passed as a "passage" via the indexed-text path: build a
+        // minimal entity whose embed_text is the same string.
+        let mut entity = ParsedEntity::new(
+            "get_connection",
+            EntityKind::RustFunction,
+            "get_connection",
+            None,
+            None,
+            "rust",
+            "src/db.rs",
+            1,
+            5,
+            None,
+            "test",
+        );
+        entity.embed_text = "acquire a connection".to_string();
+        let embedded = embedder.embed(vec![entity], 1).expect("passage embed");
+        let passage_vec = &embedded[0].vector;
+
+        let query_b = embedder.embed_query("acquire a connection").unwrap();
+        assert_eq!(query_a.len(), 384);
+        assert_eq!(query_a, query_b, "query prefix must be deterministic");
+        assert_ne!(
+            query_a, *passage_vec,
+            "BGE query vector must differ from the same text embedded as a passage"
+        );
     }
 }
 

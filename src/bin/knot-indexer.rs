@@ -86,6 +86,7 @@ mod tests {
             neo4j_password: "password".to_string(),
             custom_queries_path: None,
             embed_dim: 384,
+            embed_model: "AllMiniLML6V2".to_string(),
             embedder_reset_interval: 0,
             batch_size: 64,
             clean: true,
