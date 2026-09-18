@@ -6,6 +6,9 @@
 //!
 //! # Embedding text format
 //! ```text
+//! <identifier_phrase>: <first docstring sentence>   ← natural-language role
+//!   — or, for a doc-less callable with outgoing calls:
+//! <identifier_phrase> — calls <tokenized callee names> (max 6)
 //! [<KIND>] <name>
 //! Identifier: <tokenized name>        ← omitted for single-token names
 //! FQN: <fully qualified name>         ← omitted when it equals the name
@@ -21,7 +24,11 @@
 //! should always produce the same embedding so vector updates are idempotent.
 //!
 //! Recall contract: the embed text must share vocabulary with the
-//! natural-language queries that describe the entity's behaviour. Identifiers
+//! natural-language queries that describe the entity's behaviour. The FIRST
+//! line is a plain natural-language role sentence (identifier phrase plus
+//! the docstring's first sentence, or the outgoing call names for doc-less
+//! callables) so the model's strongest signal is behavioural vocabulary —
+//! truncation eats structural fields before it eats the role. Identifiers
 //! reach it both raw (name, FQN) and tokenized (`useChangePassword` → `use
 //! change password`), and the names of the callees in the entity's body are
 //! tokenized in a final `Calls:` section — a definition without a doc
@@ -30,6 +37,19 @@
 
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::utils::identifiers::identifier_token_phrase;
+
+/// Maximum characters carried from the docstring's first sentence into the
+/// role line. Bounded so the natural-language lead cannot itself push the
+/// structural fields past the model's token budget (all current 384-dim
+/// models truncate at 512 tokens; the role line and the kind/name header
+/// must survive even when everything after them is clipped).
+const ROLE_SENTENCE_MAX_CHARS: usize = 200;
+
+/// Outgoing call names used to describe a doc-less entity's behaviour in
+/// the role line. Shorter than the `Calls:` section (`MAX_CALL_NAMES`):
+/// the role line is prose-shaped and a comma list of 20 identifiers stops
+/// reading like a sentence.
+const ROLE_CALL_NAMES: usize = 6;
 
 /// Maximum number of outgoing-reference names carried in the `Calls:`
 /// section of the embed text. Deliberately no content filter beyond
@@ -57,7 +77,13 @@ pub fn prepare_entities(entities: &mut [ParsedEntity]) {
 
 /// Construct the embedding text for a single entity.
 fn build_embed_text(entity: &ParsedEntity) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(10);
+    let mut parts: Vec<String> = Vec::with_capacity(11);
+
+    // Role line FIRST: the natural-language lead is what the model sees
+    // before truncation removes anything. All downstream model families
+    // clip at their token budget keeping the front of the text, so the
+    // behavioural sentence must precede structural noise.
+    parts.push(role_sentence(entity));
 
     // Header: kind + name
     parts.push(format!("[{}] {}", entity.kind, entity.name));
@@ -136,13 +162,12 @@ fn build_embed_text(entity: &ParsedEntity) -> String {
 }
 
 /// Collect the deduplicated, tokenized names this entity calls or refers to,
-/// in first-appearance order, capped at [`MAX_CALL_NAMES`]. The entity's
-/// own name is dropped (self-references add no recall). Empty when there is
-/// nothing to say.
-fn calls_section_text(entity: &ParsedEntity) -> String {
+/// in first-appearance order, capped at `cap`. The entity's own name is
+/// dropped (self-references add no recall).
+fn call_names(entity: &ParsedEntity, cap: usize) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for intent in &entity.reference_intents {
-        if seen.len() >= MAX_CALL_NAMES {
+        if seen.len() >= cap {
             break;
         }
         let name = match intent {
@@ -161,8 +186,105 @@ fn calls_section_text(entity: &ParsedEntity) -> String {
     }
     seen.iter()
         .map(|n| identifier_token_phrase(n))
+        .filter(|phrase| !phrase.is_empty())
+        .collect()
+}
+
+/// The `Calls:` section body: deduplicated tokenized call names, capped at
+/// [`MAX_CALL_NAMES`].
+fn calls_section_text(entity: &ParsedEntity) -> String {
+    call_names(entity, MAX_CALL_NAMES).join(", ")
+}
+
+// --- role line (natural-language lead of the embed text) ---------------------
+
+/// Strip the comment markers a docstring collector may have carried verbatim
+/// (`///`, `/**`, `*/`, `*`, `//`, `#`, `\"\"\"` …), collapse whitespace and
+/// return the prose. Deterministic and language-agnostic: the same line
+/// rule set applies to every language's comment syntax.
+fn strip_comment_markers(doc: &str) -> String {
+    doc.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            // `trim_start_matches` peels repeated leading markers per line,
+            // so `///`, `* *`, `*/` and `/*` all become empty or prose.
+            let peeled = line
+                .trim()
+                .trim_start_matches(['/', '*', '-', '#', '"', '\'', '>', '<']);
+            peeled.trim()
+        })
+        .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// First sentence of a comment-stripped docstring: text up to (and
+/// including) the first `. ` / `.\n`, or the trailing period, or the whole
+/// text when there is no sentence boundary. Truncated to
+/// [`ROLE_SENTENCE_MAX_CHARS`] on a char boundary (never byte-sliced) with
+/// an ellipsis, so multi-byte docstrings cannot panic.
+fn first_sentence(doc: &str) -> String {
+    let doc = doc.trim();
+    let end = doc
+        .find(". ")
+        .or_else(|| doc.find(".\n"))
+        .or_else(|| {
+            if doc.ends_with('.') {
+                Some(doc.len() - 1)
+            } else {
+                None
+            }
+        })
+        .map(|i| i + 1)
+        .unwrap_or(doc.len());
+    let sentence = doc[..end].trim();
+
+    if sentence.chars().count() <= ROLE_SENTENCE_MAX_CHARS {
+        return sentence.to_owned();
+    }
+    let cut: String = sentence
+        .char_indices()
+        .take(ROLE_SENTENCE_MAX_CHARS)
+        .map(|(_, c)| c)
+        .collect();
+    format!("{cut}…")
+}
+
+/// Deterministic natural-language role sentence for an entity.
+///
+/// Precedence:
+/// 1. a non-empty docstring → `identifier phrase: first docstring sentence`;
+/// 2. otherwise, for an entity whose body shows behaviour →
+///    `identifier phrase — calls <tokenized callee names>`;
+/// 3. otherwise the bare identifier phrase alone.
+fn role_sentence(entity: &ParsedEntity) -> String {
+    let phrase = {
+        let p = identifier_token_phrase(&entity.name);
+        if p.is_empty() { entity.name.clone() } else { p }
+    };
+
+    let docstring = entity
+        .docstring
+        .as_ref()
+        .map(|d| strip_comment_markers(d))
+        .filter(|d| !d.is_empty());
+
+    if let Some(doc) = docstring {
+        let sentence = first_sentence(&doc);
+        if !sentence.is_empty() {
+            return format!("{phrase}: {sentence}");
+        }
+    }
+
+    let calls = call_names(entity, ROLE_CALL_NAMES);
+    if !calls.is_empty() {
+        return format!("{phrase} — calls {}", calls.join(", "));
+    }
+
+    phrase
 }
 
 #[cfg(test)]
@@ -666,5 +788,322 @@ mod tests {
         // Self-name never enters the Calls section.
         let (with_self, _) = build(3);
         assert!(!with_self.contains("Calls: hub"));
+    }
+
+    #[test]
+    fn prepare_entities_leaves_markdown_embed_text_untouched() {
+        let mut md_doc = ParsedEntity::new(
+            "README.md",
+            EntityKind::MarkdownDocument,
+            "README.md",
+            None,
+            None,
+            "markdown",
+            "README.md",
+            1,
+            50,
+            None,
+            "test-repo",
+        );
+        md_doc.embed_text = "Original Markdown Document Body".to_string();
+
+        let mut md_section = ParsedEntity::new(
+            "Overview",
+            EntityKind::MarkdownSection,
+            "README.md::Overview",
+            None,
+            None,
+            "markdown",
+            "README.md",
+            5,
+            20,
+            None,
+            "test-repo",
+        );
+        md_section.embed_text = "Original Markdown Section Body".to_string();
+
+        let code_entity = ParsedEntity::new(
+            "run",
+            EntityKind::Function,
+            "run",
+            None,
+            None,
+            "rust",
+            "src/main.rs",
+            1,
+            10,
+            None,
+            "test-repo",
+        );
+
+        let mut batch = vec![md_doc, md_section, code_entity];
+        prepare_entities(&mut batch);
+
+        assert_eq!(batch[0].embed_text, "Original Markdown Document Body");
+        assert_eq!(batch[1].embed_text, "Original Markdown Section Body");
+        assert!(
+            batch[2].embed_text.starts_with("run\n"),
+            "code entity must be prepared with role line: {:?}",
+            batch[2].embed_text
+        );
+    }
+
+    // --- role line (natural-language lead, Workstream A) --------------------
+
+    #[test]
+    fn role_sentence_leads_with_docstring() {
+        let entity = ParsedEntity::new(
+            "saveUser",
+            EntityKind::Method,
+            "UserService.saveUser",
+            None,
+            Some("Saves a new user to the database. Throws on conflict.".to_string()),
+            "java",
+            "UserService.java",
+            42,
+            50,
+            Some("UserService".to_string()),
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        // First line is the role sentence; the kind header follows it.
+        assert!(
+            embed_text.starts_with("save user: Saves a new user to the database.\n"),
+            "role sentence must lead plainly: {embed_text:?}"
+        );
+        assert!(
+            embed_text
+                .lines()
+                .nth(1)
+                .unwrap()
+                .starts_with("[method] saveUser")
+        );
+    }
+
+    #[test]
+    fn role_sentence_falls_back_to_call_names() {
+        let mut entity = ParsedEntity::new(
+            "login",
+            EntityKind::RustFunction,
+            "jobwatch::api::auth::login",
+            None,
+            None,
+            "rust",
+            "src/api/auth.rs",
+            136,
+            160,
+            None,
+            "job-watch",
+        );
+        for callee in [
+            "normalize_email",
+            "verify_credentials_or_fail",
+            "issue_token",
+        ] {
+            entity.reference_intents.push(ReferenceIntent::Call {
+                method: callee.to_string(),
+                receiver: None,
+                line: 1,
+                arg_count: None,
+            });
+        }
+        let embed_text = build_embed_text(&entity);
+        let expected = "login — calls normalize email, verify credentials or fail, issue token";
+        assert!(
+            embed_text.starts_with(expected),
+            "doc-less callable must lead with its behavioural vocabulary: {embed_text:?}"
+        );
+        // The full Calls: section is still there (doc-less recall contract).
+        assert!(embed_text.contains("\nCalls: normalize email"));
+    }
+
+    #[test]
+    fn role_sentence_bare_identifier_when_nothing_known() {
+        let entity = ParsedEntity::new(
+            "useChangePassword",
+            EntityKind::Function,
+            "useChangePassword",
+            None,
+            None,
+            "typescript",
+            "src/api/authQueries.ts",
+            5,
+            12,
+            None,
+            "ui",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(
+            embed_text.starts_with("use change password\n"),
+            "{embed_text:?}"
+        );
+        assert!(
+            !embed_text.contains("—"),
+            "no call list may appear: {embed_text:?}"
+        );
+    }
+
+    #[test]
+    fn role_sentence_truncates_long_docstring_on_char_boundary() {
+        // 1000 chars of multibyte prose with no sentence boundary: must not
+        // panic (byte-slicing UTF-8 would) and must emit the ellipsis.
+        let mut doc = String::new();
+        while doc.chars().count() < 1000 {
+            doc.push_str("sin() y así ");
+        }
+        let entity = ParsedEntity::new(
+            "weave",
+            EntityKind::RustFunction,
+            "weave",
+            None,
+            Some(doc),
+            "rust",
+            "src/weave.rs",
+            1,
+            10,
+            None,
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        let role = embed_text
+            .lines()
+            .next()
+            .expect("role line exists")
+            .to_string();
+        let char_count = role.chars().count();
+        // phrase ("weave") + ": " + sentence(max 200) + …
+        assert!(
+            char_count <= ROLE_SENTENCE_MAX_CHARS + "weave: ".chars().count() + 1,
+            "role line must be bounded: {char_count} chars"
+        );
+        assert!(
+            role.ends_with('…'),
+            "cut mid-sentence must show ellipsis: {role:?}"
+        );
+    }
+
+    #[test]
+    fn role_sentence_strips_comment_markers() {
+        let entity = ParsedEntity::new(
+            "init",
+            EntityKind::GroovyMethod,
+            "nextflow.plugin.extension.PluginExtensionPoint.init",
+            None,
+            Some("/**\n * Channel factory initialization.\n */".to_string()),
+            "groovy",
+            "PluginExtensionPoint.groovy",
+            12,
+            12,
+            Some("PluginExtensionPoint".to_string()),
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        assert!(
+            embed_text.starts_with("init: Channel factory initialization.\n"),
+            "comment markers must not leak into the role line: {embed_text:?}"
+        );
+    }
+
+    #[test]
+    fn embed_text_role_line_precedes_structural_fields() {
+        let mut entity = ParsedEntity::new(
+            "saveUser",
+            EntityKind::Method,
+            "UserService.saveUser",
+            Some("public void saveUser(User user)".to_string()),
+            Some("Saves a new user to the database.".to_string()),
+            "java",
+            "UserService.java",
+            42,
+            50,
+            Some("UserService".to_string()),
+            "test-repo",
+        );
+        entity.reference_intents.push(ReferenceIntent::Call {
+            method: "to_database".to_string(),
+            receiver: None,
+            line: 1,
+            arg_count: None,
+        });
+        let embed_text = build_embed_text(&entity);
+        let role_idx = embed_text.lines().take(1).count();
+        let sig_idx = embed_text
+            .lines()
+            .position(|l| l.starts_with("Signature:"))
+            .expect("signature present")
+            + 1;
+        let calls_idx = embed_text
+            .lines()
+            .position(|l| l.starts_with("Calls:"))
+            .expect("calls present")
+            + 1;
+        assert!(role_idx < sig_idx, "role must precede Signature");
+        assert!(role_idx < calls_idx, "role must precede Calls");
+        // The docstring body itself still follows.
+        assert!(embed_text.contains("\nSaves a new user to the database.\n"));
+    }
+
+    #[test]
+    fn role_sentence_handles_non_code_kinds() {
+        // Config/build entities have no behaviour: the role line collapses
+        // to the identifier phrase and must not panic.
+        let entity = ParsedEntity::new(
+            "org.springframework:spring-core:5.3.29",
+            EntityKind::BuildDependency,
+            "org.springframework:spring-core:5.3.29",
+            Some("scope: compile".to_string()),
+            Some("Maven dependency: org.springframework:spring-core:5.3.29".to_string()),
+            "xml",
+            "pom.xml",
+            15,
+            19,
+            None,
+            "test-repo",
+        );
+        let embed_text = build_embed_text(&entity);
+        let first = embed_text.lines().next().unwrap();
+        // Docstring branch fires for any kind; the phrase still leads and
+        // nothing about config/build kinds panics or misformats.
+        assert!(
+            first.starts_with("org springframework spring core 5 3 29: "),
+            "{first:?}"
+        );
+    }
+
+    #[test]
+    fn role_sentence_uses_shorter_call_cap_than_calls_section() {
+        let mut entity = ParsedEntity::new(
+            "hub",
+            EntityKind::RustFunction,
+            "hub",
+            None,
+            None,
+            "rust",
+            "src/hub.rs",
+            1,
+            2,
+            None,
+            "r",
+        );
+        for i in 0..MAX_CALL_NAMES + 1 {
+            entity.reference_intents.push(ReferenceIntent::Call {
+                method: format!("callee_{i:02}"),
+                receiver: None,
+                line: i + 1,
+                arg_count: None,
+            });
+        }
+        let embed_text = build_embed_text(&entity);
+        let role = embed_text.lines().next().unwrap();
+        assert_eq!(
+            role.matches("callee").count(),
+            ROLE_CALL_NAMES,
+            "role line capped at {ROLE_CALL_NAMES} names: {role:?}"
+        );
+        let calls = embed_text
+            .lines()
+            .find(|l| l.starts_with("Calls:"))
+            .expect("Calls section");
+        assert_eq!(calls.matches("callee").count(), MAX_CALL_NAMES);
     }
 }

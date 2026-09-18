@@ -746,6 +746,21 @@ else
     exit 1
 fi
 
+# Test 15: Role-sentence behavioural recall for doc-less function
+echo ""
+echo "Test 15: Searching for doc-less function by outgoing call names in role sentence..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"exercise qualified calls\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- search "exercise qualified calls" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$MCP_RESPONSE" | grep -q "exercise_qualified_calls" && echo "$CLI_RESPONSE" | grep -q "exercise_qualified_calls"; then
+    echo -e "${GREEN}✓ Found doc-less function exercise_qualified_calls via role sentence (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Function exercise_qualified_calls not found via role sentence query${NC}"
+    exit 1
+fi
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Rust E2E tests passed!${NC}"
