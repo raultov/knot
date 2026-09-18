@@ -26,6 +26,7 @@ publish_at_utc.sh
 .perf_metrics/run_*
 
 plan.md
+PLAN_*.md
 
 # Additional E2E test artifacts
 /tests/.e2e_cross_repo_client/

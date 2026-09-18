@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.10.0
+
+- **Mandatory Re-index (State v6)**: `IndexState` bumped from v5 to **v6**. Embed text schema now leads with a natural-language role sentence (`<identifier_phrase>: <first_sentence(docstring)>` or `<identifier_phrase> — calls <top_callee_names>`). Older indexes are incompatible and force `knot-indexer --clean`.
+- **Embedding Model Selection (`KNOT_EMBED_MODEL`)**: Configurable embedding model support via `KNOT_EMBED_MODEL` (supports `AllMiniLML6V2` [default], `BGESmallENV15`, `BGEBaseENV15`, `MultilingualE5Small`, `JinaEmbeddingsV2BaseCode`, `NomicEmbedTextV15`).
+- **Asymmetric Prefix Management**: Automatic query/passage instruction prefixing for asymmetric models (e.g. `BGE`, `E5`, `Nomic`). Fixed `embed_query` in fastembed 6 to correctly prepend model query prefixes.
+- **Model Dimension Guard**: `validate_embed_pair` ensures `KNOT_EMBED_DIM` matches the selected model's native dimension at startup, preventing mid-query Qdrant dimension mismatches.
+- **Consumer Library Warning**: Consumers built against previous versions of `knot` produce old-model query vectors against v6 passages. Dimensions match, so there is **no error — only silent recall loss**. Re-index and rebuild together.
+- **Entry-Point Cosine Harness**: Added `tests/measure_entrypoint_cosine.sh` for exact measurement of raw cosine similarity vs. window cutoff across benchmark queries. Detailed evaluation docs committed in `docs/measurements/` and TDD plan in `docs/specs/entrypoint_recall_tdd_plan.md`.
+
+---
+
 ## v1.9.8
 
 - **Fixed**: residual entry-point recall failures after the v1.9.7 fix — the
