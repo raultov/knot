@@ -94,7 +94,7 @@ readonly ROWS=(
   "capture the current view as an image|chrome-devtools-mcp|screenshot|src/tools/screenshot.ts|1|must"
   "take screenshot|chrome-devtools-mcp|screenshot|src/tools|1|must"
   "acquire a client for talking to the database|HikariCP|getConnection|pool/HikariPool.java|1|info"
-  "get the callers of a symbol|csharp-code-map|GetCallersAsync|src/|8|must"
+  "get the callers of a symbol|csharp-code-map|GetCallersAsync|src/|5|must"
   "log a user in and issue a session token|job-watch-ui|login|src/auth/AuthContext.tsx|8|info"
   # --- documented unreachable query-time (position INFO-only) ---
   "find relevant code by meaning across the repository|knot|run_search_hybrid_context|src/cli_tools/search_hybrid_context/mod.rs|0|info"
