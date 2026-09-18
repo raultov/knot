@@ -167,6 +167,14 @@ Scripts in `tests/`:
   recall; rows marked `must` fail the run, rows marked `info` only report
   measured positions (documented-unreachable cases included by design).
 
+### Live-Index Cosine-Window Harness (opt-in)
+`tests/measure_entrypoint_cosine.sh`:
+- Companion diagnostics to `run_rank_recall_live.sh`; measures the raw cosine
+  similarity vs. window cutoff for benchmark queries against a live index.
+- Run to regenerate `docs/measurements/` artifacts:
+  `./tests/measure_entrypoint_cosine.sh --out docs/measurements/entrypoint_cosine_baseline.md`
+- Exits non-zero if all measured queries fail, preserving existing measurement files.
+
 ### Running Specific Test
 ```bash
 # Single language (rebuilds binaries if needed)
