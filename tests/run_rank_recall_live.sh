@@ -44,7 +44,20 @@ readonly NEEDS_PY="ranking arithmetic"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}knot rank-recall LIVE harness${NC}"
+# Print the active embedding model the way search actually resolves it
+# (`EmbedModelChoice::from_env`): rank rows are meaningless without stating
+# which model produced the vectors.
+EMBED_MODEL_LINE="$("$BIN" embed-model 2>/dev/null || true)"
+echo -e "${BLUE}Active embedding model: ${EMBED_MODEL_LINE:-unknown (knot embed-model failed)}${NC}"
 echo -e "${BLUE}========================================${NC}"
+
+OUT_FILE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) OUT_FILE="$2"; shift 2 ;;
+        *) echo "Unknown option: $1 (supported: --out FILE)" >&2; exit 1 ;;
+    esac
+done
 
 # --- preconditions (skip, never fail) ---------------------------------------
 
@@ -110,6 +123,11 @@ measure_row() {
 }
 
 fail=0
+TMP_OUT=""
+if [ -n "$OUT_FILE" ]; then
+    TMP_OUT="$(mktemp)"
+    printf '%s\n%s\n' "QUERY|REPO|EXPECT|MEASURED|VERDICT" "--------------------------------" >"$TMP_OUT"
+fi
 printf "%-58s %-22s %-8s %-8s %-6s\n" "QUERY" "REPO" "EXPECT" "MEASURED" "VERDICT"
 printf "%s\n" "----------------------------------------------------------------------------------------------"
 
@@ -165,11 +183,18 @@ EOF
     printf "%-58s %-22s %-8s %-8s %s%s%s\n" \
         "${query:0:58}" "$repo" "#$max_pos: $want_name" "$measured" \
         "$([ "$verdict" = "FAIL" ] && echo -e "$RED$verdict$NC" || echo -e "$([ "$verdict" = "PASS" ] && echo -e "$GREEN$verdict$NC" || echo -e "${YELLOW}${verdict}${NC}")")"
+    if [ -n "$OUT_FILE" ]; then
+        printf '%s|%s|%s|%s|%s\n' "$query" "$repo" "$want_name" "$measured" "$verdict" >>"$TMP_OUT"
+    fi
 done
 
 echo -e "${YELLOW}[3/3] Summary${NC}"
 if [ "$fail" -ne 0 ]; then
     echo -e "${RED}Rank-recall harness FAILED — see FAIL rows above.${NC}"
     exit 1
+fi
+if [ -n "$OUT_FILE" ]; then
+    mv "$TMP_OUT" "$OUT_FILE"
+    echo "Results written to $OUT_FILE"
 fi
 echo -e "${GREEN}Rank-recall harness PASSED (INFO rows report measured positions only).${NC}"

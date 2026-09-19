@@ -84,6 +84,11 @@ esac
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}knot entry-point cosine-window harness${NC}"
+# Print the active embedding model the way search actually resolves it
+# (`EmbedModelChoice::from_env`) — a per-model record needs to state the
+# model, or a rank row is meaningless.
+EMBED_MODEL_LINE="$("$BIN" embed-model 2>/dev/null || true)"
+echo -e "${BLUE}Active embedding model: ${EMBED_MODEL_LINE:-unknown (knot embed-model failed)}${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # --- preconditions (skip, never fail) ---------------------------------------
