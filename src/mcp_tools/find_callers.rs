@@ -30,9 +30,9 @@ use crate::mcp_tools::repo_scope_from_args;
     description = "Read-only reverse dependency lookup. Use this to find all code that references, calls, extends, or implements a specific entity. \
                    Answers 'who uses this code?' by querying the graph database. Differs from search tools by providing exact dependency tracking. \
                    \n\nUsage: Use for impact analysis before refactoring or to detect dead code. Do NOT use this for semantic feature discovery—use 'search_hybrid_context' instead. \
-                   \n\nMatching is precedence-based: exact FQN (containing '.' or '::') → FQN suffix (`Type.member`) → exact name → signature prefix (`accept(List`) → fuzzy substring. \
-                   The first tier that matches wins, so an exact name never returns fuzzy noise. Pass a qualified name (`Namespace.Type.Member`) to disambiguate homonyms. \
-                   Responses state which tier matched and flag fuzzy results explicitly. \
+                    \n\nMatching is precedence-based: exact FQN (containing '.' or '::') → FQN suffix (`Type.member`) → exact name → signature prefix (`accept(List`) → name prefix (queries under 4 characters) → fuzzy substring (queries of 4+ characters). \
+                    The first tier that matches wins, so an exact name never returns fuzzy noise. Queries shorter than 4 characters resolve by anchored name prefix instead of substring, avoiding substring noise on short strings. Pass a qualified name (`Namespace.Type.Member`) to disambiguate homonyms. \
+                    Responses state which tier matched and flag fuzzy results explicitly. \
                    \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References, Overridden by, Overrides) with exact file paths and line numbers. \
                    Each caller entry and each resolved target states its repository as `(repo: name)`, so rows are attributable when multiple repositories are in scope. \
                    For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \

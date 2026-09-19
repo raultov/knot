@@ -10,6 +10,8 @@ pub enum MatchTier {
     FqnSuffix,
     ExactName,
     SignaturePrefix,
+    /// Anchored prefix match on target entity name for queries under [`MIN_FUZZY_LEN`].
+    NamePrefix,
     Fuzzy,
 }
 
@@ -41,6 +43,7 @@ impl MatchTier {
             Self::FqnSuffix => "fqn_suffix",
             Self::ExactName => "exact_name",
             Self::SignaturePrefix => "signature_prefix",
+            Self::NamePrefix => "name_prefix",
             Self::Fuzzy => "fuzzy",
         }
     }
@@ -101,6 +104,17 @@ pub fn target_resolution_tiers(name: &str) -> Vec<(MatchTier, &'static str)> {
             MatchTier::Fuzzy,
             "toLower(target.fqn) CONTAINS $name_lower \
              OR toLower(target.name + COALESCE(target.signature, '')) CONTAINS $name_lower",
+        ));
+    } else if !name.is_empty() {
+        // Below MIN_FUZZY_LEN, CONTAINS degenerates into matching unrelated
+        // names (`use` is a substring of every `*STATUSES` constant), so the
+        // short-query tier is an anchored prefix on the name only. The FQN is
+        // deliberately excluded: Rust/Java FQNs start with the crate/package,
+        // so an FQN prefix would match a whole repository. The empty-name
+        // guard matters because `STARTS WITH ''` is true for every row.
+        tiers.push((
+            MatchTier::NamePrefix,
+            "toLower(target.name) STARTS WITH $name_lower",
         ));
     }
 
@@ -755,11 +769,10 @@ impl GraphDb {
             // a later tier.
         }
 
-        let default_tier = if name.len() >= MIN_FUZZY_LEN {
-            MatchTier::Fuzzy
-        } else {
-            MatchTier::ExactName
-        };
+        let default_tier = target_resolution_tiers(name)
+            .last()
+            .map(|(tier, _)| *tier)
+            .unwrap_or(MatchTier::ExactName);
         Ok(ResolvedTargets {
             targets: Vec::new(),
             tier: default_tier,
@@ -1690,10 +1703,10 @@ mod tests {
         let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
         assert_eq!(mapped, vec![MatchTier::ExactName, MatchTier::Fuzzy]);
 
-        // "Off" has len 3, so it does not get Fuzzy
+        // "Off" has len 3, so it gets NamePrefix instead of Fuzzy
         let tiers = target_resolution_tiers("Off");
         let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
-        assert_eq!(mapped, vec![MatchTier::ExactName]);
+        assert_eq!(mapped, vec![MatchTier::ExactName, MatchTier::NamePrefix]);
     }
 
     #[test]
@@ -1729,10 +1742,77 @@ mod tests {
     }
 
     #[test]
-    fn test_tier_ladder_omits_fuzzy_for_short_names() {
+    fn test_tier_ladder_uses_name_prefix_for_short_names() {
         let tiers = target_resolution_tiers("Id");
         let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped, vec![MatchTier::ExactName, MatchTier::NamePrefix]);
+    }
+
+    #[test]
+    fn short_query_ladder_has_name_prefix_and_no_fuzzy() {
+        let tiers = target_resolution_tiers("use");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert!(mapped.contains(&MatchTier::NamePrefix));
+        assert!(!mapped.contains(&MatchTier::Fuzzy));
+    }
+
+    #[test]
+    fn name_prefix_predicate_is_anchored_lowered_and_param_bound() {
+        let tiers = target_resolution_tiers("use");
+        let (_, pred) = tiers
+            .iter()
+            .find(|(t, _)| *t == MatchTier::NamePrefix)
+            .expect("name_prefix tier for short query");
+        assert!(pred.contains("STARTS WITH"));
+        assert!(pred.contains("toLower("));
+        assert!(pred.contains("$name_lower"));
+        assert!(!pred.contains("CONTAINS"));
+        assert!(!pred.contains("target.fqn"));
+    }
+
+    #[test]
+    fn long_query_ladder_is_unchanged_by_prefix_tier() {
+        let tiers = target_resolution_tiers("useS");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(mapped, vec![MatchTier::ExactName, MatchTier::Fuzzy]);
+        assert!(!mapped.contains(&MatchTier::NamePrefix));
+    }
+
+    #[test]
+    fn exact_name_precedes_name_prefix_tier() {
+        let tiers = target_resolution_tiers("use");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        let exact_idx = mapped
+            .iter()
+            .position(|t| *t == MatchTier::ExactName)
+            .unwrap();
+        let prefix_idx = mapped
+            .iter()
+            .position(|t| *t == MatchTier::NamePrefix)
+            .unwrap();
+        assert!(exact_idx < prefix_idx);
+    }
+
+    #[test]
+    fn signature_prefix_precedes_name_prefix_for_short_query() {
+        let tiers = target_resolution_tiers("f(x");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            mapped,
+            vec![
+                MatchTier::ExactName,
+                MatchTier::SignaturePrefix,
+                MatchTier::NamePrefix
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_query_gets_no_prefix_tier() {
+        let tiers = target_resolution_tiers("");
+        let mapped: Vec<MatchTier> = tiers.iter().map(|(t, _)| *t).collect();
         assert_eq!(mapped, vec![MatchTier::ExactName]);
+        assert!(!mapped.contains(&MatchTier::NamePrefix));
     }
 
     #[test]

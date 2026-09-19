@@ -371,8 +371,7 @@ knot callers "UserModel" --repo android
 was previously untracked (macro calls, DOM/CSS usage — all consulted now)
 
 **Solutions:**
-- Exact tiers are case-sensitive: try `userService` vs `UserService`; fuzzy
-  matching is case-insensitive and needs ≥ 4 characters
+- Exact tiers are case-sensitive: try `userService` vs `UserService`; queries under 4 characters resolve by anchored name prefix; fuzzy matching is case-insensitive and needs ≥ 4 characters
 - Try the full qualified name if applicable
 - Search instead: `knot search "uses this entity"`
 - Check for string references: `knot search "handleRequest"` (in strings)

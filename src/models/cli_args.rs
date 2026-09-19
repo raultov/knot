@@ -49,7 +49,9 @@ pub enum Commands {
 
     /// Find all references to an entity (reverse dependency lookup)
     Callers {
-        /// Entity name to find references for
+        /// Entity name to find references for. Matching is precedence-based:
+        /// exact FQN → FQN suffix → exact name → signature prefix → name
+        /// prefix (queries under 4 chars) → fuzzy substring (4+ chars).
         entity_name: String,
 
         /// Repository scope: one name, comma-separated list, or 'all'/'*'

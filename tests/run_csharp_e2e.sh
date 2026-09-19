@@ -766,6 +766,42 @@ else
     FAILURES=$((FAILURES + 1))
 fi
 
+echo ""
+echo "H49-H52. find_callers(\"Ges\") short query prefix match (H49-H52)"
+H49_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"Ges\",\"repo_name\":\"$REPO_NAME\"}}}"
+H49_MCP=$(invoke_mcp "$H49_REQUEST")
+H49_CLI=$(invoke_cli callers "Ges" -r "$REPO_NAME")
+
+if echo "$H49_MCP" | grep -q "GestureOwner" && echo "$H49_MCP" | grep -q "GestureConfig"; then
+    echo -e "${GREEN}✓ H49. find_callers(\"Ges\") resolves prefix targets GestureOwner and GestureConfig (MCP)${NC}"
+else
+    echo -e "${RED}✗ H49. find_callers(\"Ges\") missing prefix targets (MCP)${NC}"
+    FAILURES=$((FAILURES + 1))
+fi
+
+if echo "$H49_MCP" | grep -q "name prefix match" && ! echo "$H49_MCP" | grep -qi "Fuzzy match"; then
+    echo -e "${GREEN}✓ H50. find_callers(\"Ges\") surfaces name prefix match disclosure without fuzzy caveat (MCP)${NC}"
+else
+    echo -e "${RED}✗ H50. find_callers(\"Ges\") tier disclosure incorrect (MCP)${NC}"
+    FAILURES=$((FAILURES + 1))
+fi
+
+if ! echo "$H49_MCP" | grep -q "IsEligible" && ! echo "$H49_MCP" | grep -q "OfflineSlot"; then
+    echo -e "${GREEN}✓ H51. find_callers(\"Ges\") does not pull in non-prefix entities (MCP)${NC}"
+else
+    echo -e "${RED}✗ H51. find_callers(\"Ges\") pulled in non-prefix entities (MCP)${NC}"
+    FAILURES=$((FAILURES + 1))
+fi
+
+H52_CLI_TARGETS=$(echo "$H49_CLI" | grep -oE "Gesture(Owner|Config)" | sort -u)
+H52_MCP_TARGETS=$(echo "$H49_MCP" | grep -oE "Gesture(Owner|Config)" | sort -u)
+if [ "$H52_CLI_TARGETS" = "$H52_MCP_TARGETS" ] && [ -n "$H52_CLI_TARGETS" ]; then
+    echo -e "${GREEN}✓ H52. CLI/MCP parity on targets for short query \"Ges\"${NC}"
+else
+    echo -e "${RED}✗ H52. CLI/MCP parity failed for short query \"Ges\"${NC}"
+    FAILURES=$((FAILURES + 1))
+fi
+
 # ── Results ───────────────────────────────────────────────────────────────────
 echo ""
 if [ "$FAILURES" -eq 0 ]; then

@@ -7,6 +7,10 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.11.0
 
+- **Fixed**: `find_callers` target resolution now resolves short queries (< 4 characters)
+  via an anchored `NamePrefix` tier (`toLower(target.name) STARTS WITH $name_lower`)
+  instead of returning 0 targets when no exact match exists. Long queries (≥ 4 characters)
+  remain unchanged and fall back to `Fuzzy` substring matching.
 - **No Re-index Required (State Compatibility Window)**: upgrading from a
   published `v1.10.0` index needs **no re-index and no configuration change**
   on the default path. `IndexState` no longer encodes model identity: the

@@ -155,6 +155,7 @@ impl<'a> ResolutionView<'a> {
             "fqn_suffix" => "FQN suffix match",
             "exact_name" => "exact name match",
             "signature_prefix" => "signature prefix match",
+            "name_prefix" => "name prefix match",
             "fuzzy" => "fuzzy match",
             other => other,
         }
@@ -408,5 +409,29 @@ mod tests {
         let view = ResolutionView::from_references(&refs).expect("res");
         assert!(view.hidden_notice(true).contains("2 entities matched"));
         assert!(view.hidden_notice(true).contains("kind md_section"));
+    }
+
+    #[test]
+    fn name_prefix_tier_renders_label() {
+        let refs = json!({
+            "resolution": {
+                "query": "use",
+                "tier": "name_prefix",
+                "fuzzy": false,
+                "truncated": false,
+                "targets": [
+                    {
+                        "fqn": "useSearch",
+                        "kind": "function",
+                        "file_path": "src/api/queries.ts",
+                        "start_line": 55
+                    }
+                ]
+            }
+        });
+        let view = ResolutionView::from_references(&refs).expect("resolution");
+        assert_eq!(view.tier_label(), "name prefix match");
+        assert_eq!(view.summary(), "Resolved to 1 target by name prefix match");
+        assert!(!view.is_fuzzy());
     }
 }
