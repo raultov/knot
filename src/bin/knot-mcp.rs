@@ -37,6 +37,12 @@ async fn main() -> SdkResult<()> {
         info!("Running in dry-run mode (no database connections)");
         mcp_handler::KnotMcpHandler::new_dry_run()
     } else {
+        // Startup guard: refuse to serve with a model/collection mismatch
+        // (§F4.3). Runs before databases are opened for serving.
+        knot::startup_guard::verify_startup(&cfg)
+            .await
+            .expect("Embedding-model startup guard failed");
+
         let h = mcp_handler::KnotMcpHandler::new(
             &cfg.qdrant_url,
             &cfg.qdrant_collection,

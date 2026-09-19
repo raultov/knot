@@ -3,7 +3,7 @@
 //! This module encapsulates the core indexing pipeline logic that coordinates
 //! all stages: discovery, parsing, preparation, embedding, ingestion, and relationship resolution.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
@@ -11,7 +11,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tracing::info;
 
 use crate::config::Config;
-use crate::db::{graph::GraphDb, vector::VectorDb};
+use crate::db::{graph::GraphDb, graph::RepoQueryExt, graph::UpsertExt, vector::VectorDb};
 use crate::models::{EmbeddedEntity, ParsedEntity, ResolutionEntity};
 use crate::pipeline::{
     embed::{Embedder, needs_reset},
@@ -109,6 +109,12 @@ async fn run_pipeline_inner(
         return Ok(RunMetrics::new(0));
     };
 
+    // Index-time model guard (§F4.4): refuse to mix models inside one
+    // repository's index. A run without a marker mismatch proceeds; with
+    // `--clean`, the marker is overwritten below, so only a clean run needs
+    // no check.
+    ensure_embed_marker_allows_run(graph_db, cfg).await?;
+
     // Detect a full indexing run (no prior state on disk) so that we can
     // short-circuit the slow per-file deletion path with a single bulk
     // `delete_by_repo` query. Without this, initial indexing on a populated
@@ -152,6 +158,19 @@ async fn run_pipeline_inner(
     // unions the batch with the build dependencies persisted in Neo4j.
     link_cross_repo_dependencies(&resolution_entities, graph_db, cfg).await?;
 
+    // Stage 7a: persist the embedding-model marker on this repository's
+    // `:Repository` node. `MERGE ... SET` ⇒ idempotent, self-heals a legacy
+    // index on its next run. Deliberately its own step so the marker does
+    // not depend on cross-repo linking succeeding.
+    graph_db
+        .upsert_repo_embed_marker(
+            &cfg.repo_name,
+            &cfg.embed_model,
+            cfg.embed_dim,
+            &cfg.qdrant_collection,
+        )
+        .await?;
+
     if !files_to_parse.is_empty() {
         let metrics =
             resolve_and_save_relationships(&mut resolution_entities, graph_db, cfg).await?;
@@ -163,6 +182,7 @@ async fn run_pipeline_inner(
             &cfg.repo_path,
             &repo_root,
             total_entities,
+            &cfg.embed_model,
         )?;
 
         print_run_summary(&metrics);
@@ -176,6 +196,7 @@ async fn run_pipeline_inner(
             &cfg.repo_path,
             &repo_root,
             0,
+            &cfg.embed_model,
         )?;
         Ok(RunMetrics::new(0))
     } else {
@@ -192,8 +213,38 @@ struct PipelineInputs {
     repo_root: PathBuf,
 }
 
-/// Centralized progress logging for the "nothing to do" outcomes of stage 1.
-/// Tracing macros carry a large clippy cognitive-complexity cost, so keeping
+/// Index-time model guard (§F4.4): if this repository's persisted marker
+/// names a different embedding model and the run is not `--clean`, bail —
+/// the current marker is authoritative for the vectors already stored for
+/// this repository in the active collection.
+async fn ensure_embed_marker_allows_run(graph_db: &GraphDb, cfg: &Config) -> Result<()> {
+    if cfg.clean {
+        // A clean run overwrites the stored data and the marker anyway.
+        return Ok(());
+    }
+    let markers = graph_db
+        .repo_embed_markers(std::slice::from_ref(&cfg.repo_name))
+        .await
+        .context("Failed to read this repository's embed-model marker")?;
+    if let Some(marker) = markers.first()
+        && let Some(model) = marker.embed_model.as_deref()
+        && model != cfg.embed_model
+    {
+        anyhow::bail!(
+            "Repository '{}' was indexed with embedding model '{}' but this run is \
+             configured with '{}'. Incremental indexing would mix models inside one \
+             collection. Run `knot-indexer --clean` to rebuild the repository entirely \
+             with '{}'.",
+            cfg.repo_name,
+            model,
+            cfg.embed_model,
+            cfg.embed_model
+        );
+    }
+    Ok(())
+}
+
+/// Centralized progress logging for the "nothing to do" outcomes of stage 1./// Tracing macros carry a large clippy cognitive-complexity cost, so keeping
 /// them in dedicated helpers lets the classification logic stay below the
 /// threshold without suppression attributes.
 fn log_nothing_to_index(msg: &str) {

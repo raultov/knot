@@ -39,6 +39,10 @@ impl VectorUpsertExt for VectorDb {
                 payload.insert("repo_name", e.entity.repo_name.clone());
                 payload.insert("file_path", e.entity.file_path.clone());
                 payload.insert("start_line", e.entity.start_line as i64);
+                // Persist the parsed `#[cfg(test)]` context so the ranker
+                // can penalize test helpers living inside production files
+                // (a path-only test check keeps their CALLABLE_BOOST).
+                payload.insert("is_test_context", e.entity.is_test_context);
                 if let Some(sig) = &e.entity.signature {
                     payload.insert("signature", sig.clone());
                 }

@@ -15,7 +15,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, PartialEq, Eq, Subcommand)]
 pub enum Commands {
     /// Search for code entities by semantic meaning
     Search {
@@ -133,6 +133,10 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
     },
+
+    /// Print the active embedding model (resolved from KNOT_EMBED_MODEL)
+    /// as `name dim default_collection`, one per line. Harness support.
+    EmbedModel,
 }
 
 #[cfg(test)]

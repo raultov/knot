@@ -28,6 +28,13 @@ async fn main() -> anyhow::Result<()> {
 
     utils::inject_custom_ca_certs(&cfg.custom_ca_certs);
 
+    // Harness support: report the resolved embedding model without touching
+    // any database. Resolved through `EmbedModelChoice::from_env` so the
+    // measurement harnesses print exactly what search_hybrid_context uses.
+    if cli.command == Commands::EmbedModel {
+        return print_embed_model(&cfg);
+    }
+
     let vector_db = Arc::new(
         knot::db::vector::VectorDb::connect(&cfg.qdrant_url, &cfg.qdrant_collection, cfg.embed_dim)
             .await?,
@@ -35,6 +42,10 @@ async fn main() -> anyhow::Result<()> {
 
     let graph_db =
         Arc::new(GraphDb::connect(&cfg.neo4j_uri, &cfg.neo4j_user, &cfg.neo4j_password).await?);
+
+    // Startup guard (§F4.3): ~name the invisible repositories (WarnPartial)
+    // or abort on a model/collection mismatch before serving queries.
+    knot::startup_guard::verify_startup(&cfg).await?;
 
     let embedder = Arc::new(Mutex::new(Embedder::init(
         knot::pipeline::state::fastembed_cache_dir(&cfg.repo_path),
@@ -119,6 +130,8 @@ async fn main() -> anyhow::Result<()> {
             run_deps_command(&repo_name, depth, reverse, output, &graph_db).await?;
         }
 
+        Commands::EmbedModel => unreachable!("handled before database connections"),
+
         Commands::Repos { filter, output } => {
             // `repos` only needs the graph database — no vector DB or embedder.
             // We keep the standard initialization above to avoid splitting
@@ -138,6 +151,23 @@ async fn main() -> anyhow::Result<()> {
 /// empty result is explained honestly (declared-but-unindexed,
 /// resolves-but-no-edge-yet, repo not indexed, nothing declared) — never a
 /// bare, misleading "No dependencies found."
+/// Print the active embedding model (`name dim default_collection`),
+/// resolved the same way `search_hybrid_context` resolves it
+/// (`KNOT_EMBED_MODEL` / [`DEFAULT_EMBED_MODEL`]). Harness support: a
+/// per-model measurement record states the model, or a row is meaningless.
+fn print_embed_model(cfg: &Config) -> anyhow::Result<()> {
+    use std::str::FromStr as _;
+    let choice = knot::pipeline::embed::EmbedModelChoice::from_str(&cfg.embed_model)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!(
+        "{} {} {}",
+        cfg.embed_model,
+        choice.dim,
+        choice.default_collection("knot_entities")
+    );
+    Ok(())
+}
+
 async fn run_deps_command(
     repo_name: &str,
     depth: u32,

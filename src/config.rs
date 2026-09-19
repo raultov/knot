@@ -11,9 +11,12 @@
 //! - [`Config::load_mcp`] for knot-mcp (MCP server)
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::FromArgMatches;
+use clap::parser::ValueSource;
+use clap::{CommandFactory, Parser, ValueEnum};
+use std::str::FromStr as _;
 
-#[derive(Debug, Clone, ValueEnum, PartialEq, Default)]
+#[derive(Debug, Clone, ValueEnum, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
     Table,
@@ -67,13 +70,16 @@ pub struct IndexerCli {
     #[arg(long, env = "KNOT_CUSTOM_QUERIES_PATH")]
     pub custom_queries_path: Option<String>,
 
-    /// Embedding model dimension (must match the deployed fastembed model).
-    #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 768)]
-    pub embed_dim: u64,
+    /// DEPRECATED: the embedding dimension is now derived from the selected
+    /// model (`KNOT_EMBED_MODEL`). Kept as a hidden flag solely so a stale
+    /// value in existing scripts is detected (warning when it agrees, hard
+    /// error when it contradicts) instead of silently ignored.
+    #[arg(long, env = "KNOT_EMBED_DIM", hide = true)]
+    pub embed_dim: Option<u64>,
 
     /// Embedding model to embed entities and queries with. Changing it
-    /// invalidates every stored vector — a full re-index (`--clean`) AND a
-    /// matching `KNOT_EMBED_DIM` are required.
+    /// invalidates every stored vector — a full re-index (`--clean`) is
+    /// required. The vector dimension is derived from this model.
     #[arg(long, env = "KNOT_EMBED_MODEL", default_value_t = default_embed_model())]
     pub embed_model: String,
 
@@ -173,13 +179,16 @@ pub struct McpCli {
     #[arg(long, env = "KNOT_NEO4J_PASSWORD")]
     pub neo4j_password: Option<String>,
 
-    /// Embedding model dimension (must match the deployed fastembed model).
-    #[arg(long, env = "KNOT_EMBED_DIM", default_value_t = 768, hide = true)]
-    pub embed_dim: u64,
+    /// DEPRECATED: the embedding dimension is now derived from the selected
+    /// model (`KNOT_EMBED_MODEL`). Kept as a hidden flag solely so a stale
+    /// value is detected (warning when it agrees, hard error when it
+    /// contradicts) instead of silently ignored.
+    #[arg(long, env = "KNOT_EMBED_DIM", hide = true)]
+    pub embed_dim: Option<u64>,
 
     /// Embedding model to embed entities and queries with. Changing it
-    /// invalidates every stored vector — a full re-index (`--clean`) AND a
-    /// matching `KNOT_EMBED_DIM` are required.
+    /// invalidates every stored vector — a full re-index (`--clean`) is
+    /// required. The vector dimension is derived from this model.
     #[arg(
         long,
         env = "KNOT_EMBED_MODEL",
@@ -239,28 +248,64 @@ fn default_embed_model() -> String {
     crate::pipeline::embed::DEFAULT_EMBED_MODEL.to_owned()
 }
 
-/// Validate the model/dimension pair: the configured `KNOT_EMBED_DIM` must
-/// equal the selected model's native dimension.
+/// Resolve the effective Qdrant collection.
 ///
-/// This turns a confusing mid-request Qdrant "wrong vector size" failure
-/// into a startup error naming both numbers. Note the dimensions CAN
-/// legitimately agree (two different 384-dim models are both 384) — a same-
-/// dimension model switch is caught by the index-state version bump instead
-/// (`state::CURRENT_STATE_VERSION`), not here.
-fn validate_embed_pair(embed_model: &str, embed_dim: u64) -> Result<()> {
-    use std::str::FromStr;
+/// An explicitly supplied collection always wins. Otherwise, the model's
+/// suffix is applied to the base default, so the historical `knot_entities`
+/// is preserved for the default model and the opt-in model lands on its own
+/// collection instead of colliding with a fixed-size one.
+fn resolve_collection(
+    supplied: Option<&str>,
+    base_default: &str,
+    choice: &crate::pipeline::embed::EmbedModelChoice,
+) -> String {
+    match supplied {
+        Some(name) if !name.is_empty() => name.to_owned(),
+        _ => choice.default_collection(base_default),
+    }
+}
+
+/// `--embed-dim` / `KNOT_EMBED_DIM` are deprecated: the dimension is now
+/// derived from the model. A value that agrees is accepted with a
+/// deprecation warning; one that contradicts is a hard error, because it
+/// means the caller believes a different model is active.
+///
+/// Returns the derived dimension (the model's native one) to keep the one
+/// resolve step, the check and the assignment atomic.
+fn check_deprecated_embed_dim(supplied: Option<u64>, native: u64, model: &str) -> Result<u64> {
+    match supplied {
+        None => Ok(native),
+        Some(value) if value == native => {
+            tracing::warn!(
+                "KNOT_EMBED_DIM/--embed-dim is deprecated and will be removed in the next \
+                 major release: the dimension is now derived from the selected model. \
+                 Model '{model}' derives {native}; the supplied value agrees — please \
+                 unset the variable / drop the flag."
+            );
+            Ok(native)
+        }
+        Some(value) => anyhow::bail!(
+            "KNOT_EMBED_DIM ({value}) contradicts the derived dimension of model \
+             '{model}' ({native}). The dimension is now derived from \
+             KNOT_EMBED_MODEL — unset the KNOT_EMBED_DIM variable / drop the \
+             --embed-dim flag and re-run."
+        ),
+    }
+}
+
+/// Shared loader step: resolve the embedding model, run the deprecated-dim
+/// check, and derive the effective Qdrant collection. Kept in one place so
+/// the three CLI loaders cannot drift.
+fn resolve_embed_and_collection(
+    embed_model: &str,
+    embed_dim_supplied: Option<u64>,
+    collection_supplied: Option<&str>,
+) -> Result<(u64, String)> {
     let choice = crate::pipeline::embed::EmbedModelChoice::from_str(embed_model)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    if choice.dim != embed_dim {
-        anyhow::bail!(
-            "KNOT_EMBED_DIM ({embed_dim}) does not match the selected embedding model \
-             '{embed_model}' (native dimension {native}). \
-             Set KNOT_EMBED_DIM to {native}, or unset it and re-run. Changing the model \
-             also requires a full re-index (knot-indexer --clean).",
-            native = choice.dim
-        );
-    }
-    Ok(())
+    let embed_dim = check_deprecated_embed_dim(embed_dim_supplied, choice.dim, embed_model)?;
+    let qdrant_collection = resolve_collection(collection_supplied, "knot_entities", &choice);
+    Ok((embed_dim, qdrant_collection))
 }
 
 /// Returns the path where knot's `.env` file should be located.
@@ -349,58 +394,79 @@ fn parse_dependencies(deps: Option<&String>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// clap argument id for `qdrant_collection` in both CLI structs (the derive
+/// uses the raw field name as the id; the long flag is kebab-cased).
+const QDRANT_COLLECTION_ARG_ID: &str = "qdrant_collection";
+
+/// Whether the `qdrant_collection` argument was explicitly supplied (CLI
+/// argument or environment variable). clap reports a `default_value` as
+/// [`ValueSource::DefaultValue`]; anything else counts as a deliberate
+/// user choice that must win over the model-derived default collection —
+/// distinguishing "not set" from "explicitly set to the base name" is
+/// exactly what the rejected string-comparison alternative cannot do.
+fn collection_was_supplied(matches: &clap::ArgMatches) -> bool {
+    matches.value_source(QDRANT_COLLECTION_ARG_ID) != Some(ValueSource::DefaultValue)
+}
+
 impl Config {
     /// Load configuration for the indexer binary (knot-indexer).
     /// Parses IndexerCli and includes all indexing-specific options.
     pub fn load_indexer() -> Result<Self> {
-        Self::load_env_and_parse(IndexerCli::parse).and_then(
-            |(cli, repo_path, repo_name, neo4j_password)| {
-                validate_embed_pair(&cli.embed_model, cli.embed_dim)?;
-                let dependency_repos = parse_dependencies(cli.dependencies.as_ref());
+        Self::load_env_and_parse::<IndexerCli>().and_then(|parsed| {
+            let (cli, collection_supplied, repo_path, repo_name, neo4j_password) = parsed;
+            let (embed_dim, qdrant_collection) = resolve_embed_and_collection(
+                &cli.embed_model,
+                cli.embed_dim,
+                collection_supplied.as_deref(),
+            )?;
+            let dependency_repos = parse_dependencies(cli.dependencies.as_ref());
 
-                Ok(Self {
-                    repo_path,
-                    repo_name,
-                    qdrant_url: cli.qdrant_url,
-                    qdrant_collection: cli.qdrant_collection,
-                    neo4j_uri: cli.neo4j_uri,
-                    neo4j_user: cli.neo4j_user,
-                    neo4j_password,
-                    custom_queries_path: cli.custom_queries_path,
-                    embed_dim: cli.embed_dim,
-                    embed_model: cli.embed_model,
-                    embedder_reset_interval: cli.embedder_reset_interval,
-                    batch_size: cli.batch_size,
-                    clean: cli.clean,
-                    dependency_repos,
-                    watch: cli.watch,
-                    dry_run: false,
-                    custom_ca_certs: cli.custom_ca_certs,
-                    output_format: OutputFormat::Markdown,
-                    ingest_concurrency: cli.ingest_concurrency,
-                    rayon_threads: cli.rayon_threads,
-                    include_config_files: cli.include_config_files,
-                })
-            },
-        )
+            Ok(Self {
+                repo_path,
+                repo_name,
+                qdrant_url: cli.qdrant_url,
+                qdrant_collection,
+                neo4j_uri: cli.neo4j_uri,
+                neo4j_user: cli.neo4j_user,
+                neo4j_password,
+                custom_queries_path: cli.custom_queries_path,
+                embed_dim,
+                embed_model: cli.embed_model,
+                embedder_reset_interval: cli.embedder_reset_interval,
+                batch_size: cli.batch_size,
+                clean: cli.clean,
+                dependency_repos,
+                watch: cli.watch,
+                dry_run: false,
+                custom_ca_certs: cli.custom_ca_certs,
+                output_format: OutputFormat::Markdown,
+                ingest_concurrency: cli.ingest_concurrency,
+                rayon_threads: cli.rayon_threads,
+                include_config_files: cli.include_config_files,
+            })
+        })
     }
 
     /// Load configuration for the MCP server binary (knot-mcp).
     /// Parses McpCli and only includes MCP-relevant options.
     pub fn load_mcp() -> Result<Self> {
-        Self::load_env_and_parse(McpCli::parse).and_then(
-            |(cli, repo_path, repo_name, neo4j_password)| {
-                validate_embed_pair(&cli.embed_model, cli.embed_dim)?;
+        Self::load_env_and_parse::<McpCli>().and_then(
+            |(cli, collection_supplied, repo_path, repo_name, neo4j_password)| {
+                let (embed_dim, qdrant_collection) = resolve_embed_and_collection(
+                    &cli.embed_model,
+                    cli.embed_dim,
+                    collection_supplied.as_deref(),
+                )?;
                 Ok(Self {
                     repo_path,
                     repo_name,
                     qdrant_url: cli.qdrant_url,
-                    qdrant_collection: cli.qdrant_collection,
+                    qdrant_collection,
                     neo4j_uri: cli.neo4j_uri,
                     neo4j_user: cli.neo4j_user,
                     neo4j_password,
                     custom_queries_path: None,
-                    embed_dim: cli.embed_dim,
+                    embed_dim,
                     embed_model: cli.embed_model,
                     embedder_reset_interval: cli.embedder_reset_interval,
                     batch_size: 0,
@@ -425,9 +491,15 @@ impl Config {
     pub fn load_knot_cli() -> Result<Self> {
         load_knot_env();
 
-        // Parse McpCli from empty args to get defaults from env vars only
-        // This avoids conflicts with knot subcommand arguments (search, callers, explore)
-        let cli = McpCli::try_parse_from(["knot"])?;
+        // Parse McpCli from empty args (the CLI subcommands are parsed
+        // separately by `Cli::parse` and must not conflict with the config
+        // arguments). The two-step matches round-trip is needed so the
+        // `qdrant_collection` `ValueSource` can distinguish an explicit pin
+        // from the default.
+        let matches = McpCli::command()
+            .try_get_matches_from(["knot"])
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let cli = McpCli::from_arg_matches(&matches)?;
 
         // Validate required fields from environment
         let neo4j_password = cli.neo4j_password()
@@ -439,18 +511,24 @@ impl Config {
 
         let repo_name = resolve_repo_name(cli.repo_name(), &repo_path);
 
-        validate_embed_pair(&cli.embed_model, cli.embed_dim)?;
+        let collection_supplied = if collection_was_supplied(&matches) {
+            Some(cli.qdrant_collection.as_str())
+        } else {
+            None
+        };
+        let (embed_dim, qdrant_collection) =
+            resolve_embed_and_collection(&cli.embed_model, cli.embed_dim, collection_supplied)?;
 
         Ok(Self {
             repo_path,
             repo_name,
             qdrant_url: cli.qdrant_url,
-            qdrant_collection: cli.qdrant_collection,
+            qdrant_collection,
             neo4j_uri: cli.neo4j_uri,
             neo4j_user: cli.neo4j_user,
             neo4j_password,
             custom_queries_path: None,
-            embed_dim: cli.embed_dim,
+            embed_dim,
             embed_model: cli.embed_model,
             embedder_reset_interval: cli.embedder_reset_interval,
             batch_size: 0,
@@ -467,15 +545,26 @@ impl Config {
     }
 
     /// Common shared logic for loading environment and resolving repo_path/repo_name.
-    /// Takes a closure that parses the CLI arguments.
-    fn load_env_and_parse<T, F>(parse_cli: F) -> Result<(T, String, String, String)>
+    /// Parses the CLI generically via the two-step matches round-trip so the
+    /// `qdrant_collection` `ValueSource` can be inspected (an explicitly
+    /// supplied collection must win over the model-derived default).
+    /// Returns `(cli, collection_supplied, repo_path, repo_name, neo4j_password)`.
+    fn load_env_and_parse<T>() -> Result<ParsedCli<T>>
     where
-        T: HasCommonFields,
-        F: Fn() -> T,
+        T: HasCommonFields + Parser,
     {
         load_knot_env();
 
-        let cli = parse_cli();
+        let matches = <T as CommandFactory>::command()
+            .try_get_matches_from(std::env::args_os())
+            .unwrap_or_else(|e| e.exit());
+        let cli = T::from_arg_matches(&matches)?;
+
+        let collection_supplied = if collection_was_supplied(&matches) {
+            Some(cli.qdrant_collection())
+        } else {
+            None
+        };
 
         // Validate required fields that can come from CLI or Env.
         let neo4j_password = cli.neo4j_password()
@@ -487,15 +576,26 @@ impl Config {
 
         let repo_name = resolve_repo_name(cli.repo_name(), &repo_path);
 
-        Ok((cli, repo_path, repo_name, neo4j_password))
+        Ok((
+            cli,
+            collection_supplied,
+            repo_path,
+            repo_name,
+            neo4j_password,
+        ))
     }
 }
+
+/// Parsed-cli tuple: `(cli, collection_supplied, repo_path, repo_name, neo4j_password)`.
+type ParsedCli<T> = (T, Option<String>, String, String, String);
 
 /// Trait to abstract common fields between IndexerCli and McpCli.
 trait HasCommonFields {
     fn repo_path(&self) -> Option<String>;
     fn repo_name(&self) -> Option<String>;
     fn neo4j_password(&self) -> Option<String>;
+    /// The parsed `qdrant_collection` value (owned copy).
+    fn qdrant_collection(&self) -> String;
 }
 
 impl HasCommonFields for IndexerCli {
@@ -509,6 +609,10 @@ impl HasCommonFields for IndexerCli {
 
     fn neo4j_password(&self) -> Option<String> {
         self.neo4j_password.clone()
+    }
+
+    fn qdrant_collection(&self) -> String {
+        self.qdrant_collection.clone()
     }
 }
 
@@ -524,6 +628,10 @@ impl HasCommonFields for McpCli {
     fn neo4j_password(&self) -> Option<String> {
         self.neo4j_password.clone()
     }
+
+    fn qdrant_collection(&self) -> String {
+        self.qdrant_collection.clone()
+    }
 }
 
 #[cfg(test)]
@@ -535,45 +643,106 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn default_model_dim_matches_embed_dim_clap_default() {
-        use std::str::FromStr;
+    fn derived_dim_matches_default_model() {
         let choice = crate::pipeline::embed::EmbedModelChoice::from_str(
             crate::pipeline::embed::DEFAULT_EMBED_MODEL,
         )
         .expect("DEFAULT_EMBED_MODEL must be a valid model name");
 
-        // Parse default arguments for IndexerCli to inspect embed_dim default
-        let cli = IndexerCli::try_parse_from(["knot-indexer"]).expect("IndexerCli default parse");
-
-        assert_eq!(
-            choice.dim, cli.embed_dim,
-            "DEFAULT_EMBED_MODEL dimension ({}) must equal IndexerCli default embed_dim ({})",
-            choice.dim, cli.embed_dim
-        );
+        // The dimension is derived from the model: the historical MiniLM
+        // default must keep deriving 384 (backward-compatibility pin).
+        assert_eq!(choice.dim, 384);
     }
 
     #[test]
-    fn validate_embed_pair_accepts_matching_dim() {
-        assert!(validate_embed_pair("AllMiniLML6V2", 384).is_ok());
-        assert!(validate_embed_pair("BGESmallEnv15", 384).is_ok());
-        assert!(validate_embed_pair("JinaEmbeddingsV2BaseCode", 768).is_ok());
+    fn check_deprecated_embed_dim_accepts_none() {
+        let native = check_deprecated_embed_dim(None, 384, "AllMiniLML6V2").unwrap();
+        assert_eq!(native, 384);
     }
 
     #[test]
-    fn validate_embed_pair_rejects_dim_mismatch_with_numbers() {
-        let err = validate_embed_pair("NomicEmbedTextV15", 384).unwrap_err();
+    fn check_deprecated_embed_dim_accepts_matching_value() {
+        let native = check_deprecated_embed_dim(Some(384), 384, "AllMiniLML6V2").unwrap();
+        assert_eq!(native, 384);
+    }
+
+    #[test]
+    fn check_deprecated_embed_dim_rejects_contradiction_with_both_numbers() {
+        let err = check_deprecated_embed_dim(Some(384), 768, "BGEBaseENV15").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("768"), "must name the native dim: {msg}");
-        assert!(msg.contains("384"), "must name the configured dim: {msg}");
-        assert!(
-            msg.contains("--clean"),
-            "must point at the mandatory re-index: {msg}"
+        assert!(msg.contains("384"), "must name the supplied value: {msg}");
+        assert!(msg.contains("768"), "must name the derived dim: {msg}");
+        assert!(msg.contains("BGEBaseENV15"), "must name the model: {msg}");
+        assert!(msg.contains("embed-dim"), "must point at the fix: {msg}");
+    }
+
+    #[test]
+    fn resolve_collection_default_minilm_keeps_base_name() {
+        let minilm = crate::pipeline::embed::EmbedModelChoice::from_str("AllMiniLML6V2").unwrap();
+        assert_eq!(
+            resolve_collection(None, "knot_entities", &minilm),
+            "knot_entities"
         );
     }
 
     #[test]
-    fn validate_embed_pair_rejects_unknown_model() {
-        let err = validate_embed_pair("gpt99", 384).unwrap_err();
+    fn resolve_collection_default_bge_derives_suffixed_collection() {
+        let bge = crate::pipeline::embed::EmbedModelChoice::from_str("BGEBaseENV15").unwrap();
+        assert_eq!(
+            resolve_collection(None, "knot_entities", &bge),
+            "knot_entities_bge768"
+        );
+    }
+
+    #[test]
+    fn resolve_collection_explicit_value_wins_for_either_model() {
+        for name in ["AllMiniLML6V2", "BGEBaseENV15"] {
+            let choice = crate::pipeline::embed::EmbedModelChoice::from_str(name).unwrap();
+            assert_eq!(
+                resolve_collection(Some("my_custom_collection"), "knot_entities", &choice),
+                "my_custom_collection",
+                "explicit value must win for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn qdrant_collection_value_source_distinguishes_default_from_explicit_pin() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Default parse → not supplied → the derived collection applies.
+        temp_env::with_var("KNOT_QDRANT_COLLECTION", None::<&str>, || {
+            let matches = IndexerCli::command()
+                .try_get_matches_from(["knot-indexer"])
+                .unwrap();
+            assert!(!collection_was_supplied(&matches));
+        });
+
+        // Explicit CLI value → supplied.
+        let matches = IndexerCli::command()
+            .try_get_matches_from(["knot-indexer", "--qdrant-collection", "knot_entities"])
+            .unwrap();
+        assert!(collection_was_supplied(&matches));
+
+        // Explicit env value → supplied (env source is not DefaultValue).
+        temp_env::with_var("KNOT_QDRANT_COLLECTION", Some("knot_entities"), || {
+            let matches = IndexerCli::command()
+                .try_get_matches_from(["knot-indexer"])
+                .unwrap();
+            assert!(collection_was_supplied(&matches));
+        });
+
+        // Same plumbing contract for McpCli.
+        temp_env::with_var("KNOT_QDRANT_COLLECTION", None::<&str>, || {
+            let matches = McpCli::command()
+                .try_get_matches_from(["knot-mcp"])
+                .unwrap();
+            assert!(!collection_was_supplied(&matches));
+        });
+    }
+
+    #[test]
+    fn resolve_embed_and_collection_rejects_unknown_model() {
+        let err = resolve_embed_and_collection("gpt99", None, None).unwrap_err();
         assert!(
             err.to_string().contains("Unknown embedding model 'gpt99'"),
             "{err}"
@@ -644,9 +813,27 @@ mod tests {
         assert_eq!(cli.neo4j_uri, "bolt://neo4j:7687");
         assert_eq!(cli.neo4j_user, "admin");
         assert_eq!(cli.neo4j_password, Some("admin123".to_string()));
-        assert_eq!(cli.embed_dim, 768);
+        // D4 backward-compatibility pin: the deprecated flag must keep parsing.
+        assert_eq!(cli.embed_dim, Some(768));
         assert_eq!(cli.batch_size, 128);
         assert!(cli.clean);
+    }
+
+    #[test]
+    fn embed_dim_flag_still_parses() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // `knot-indexer --embed-dim 384` must keep parsing (D4): removing the
+        // flag outright would break existing scripts.
+        temp_env::with_var("KNOT_EMBED_DIM", None::<&str>, || {
+            let cli = IndexerCli::try_parse_from(["knot-indexer", "--embed-dim", "384"])
+                .expect("deprecated --embed-dim must keep parsing");
+            assert_eq!(cli.embed_dim, Some(384));
+        });
+        // And the env var keeps working too.
+        temp_env::with_var("KNOT_EMBED_DIM", Some("384"), || {
+            let cli = IndexerCli::try_parse_from(["knot-indexer"]).expect("env parse");
+            assert_eq!(cli.embed_dim, Some(384));
+        });
     }
 
     #[test]
@@ -741,7 +928,12 @@ mod tests {
         assert_eq!(cli.repo_path, Some("/tmp/repo".to_string()));
         assert_eq!(cli.neo4j_password, Some("secret".to_string()));
         assert_eq!(cli.qdrant_url, "http://localhost:6334"); // default
-        assert_eq!(cli.embed_dim, 768); // default
+        let _guard = ENV_MUTEX.lock().unwrap();
+        temp_env::with_var("KNOT_EMBED_DIM", None::<&str>, || {
+            let cli = McpCli::try_parse_from(["knot-mcp", "--neo4j-password", "secret"])
+                .expect("Failed to parse CLI args");
+            assert_eq!(cli.embed_dim, None); // hidden, no default
+        });
     }
 
     #[test]
@@ -783,7 +975,7 @@ mod tests {
         assert_eq!(cli.neo4j_uri, "bolt://neo4j:7687");
         assert_eq!(cli.neo4j_user, "admin");
         assert_eq!(cli.neo4j_password, Some("admin123".to_string()));
-        assert_eq!(cli.embed_dim, 768);
+        assert_eq!(cli.embed_dim, Some(768));
     }
 
     #[test]
@@ -883,7 +1075,7 @@ mod tests {
         assert!(!cli.qdrant_collection.is_empty());
         assert!(!cli.neo4j_uri.is_empty());
         assert!(!cli.neo4j_user.is_empty());
-        assert!(cli.embed_dim > 0);
+        assert!(cli.embed_dim.is_none_or(|d| d > 0));
     }
 
     #[test]

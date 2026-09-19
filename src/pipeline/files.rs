@@ -100,10 +100,14 @@ pub fn update_index_state(
     repo_path: &str,
     repo_root: &Path,
     embedded_count: usize,
+    embed_model: &str,
 ) -> Result<()> {
     info!("Updating index state...");
     index_state.update_files(files_to_parse, repo_root)?;
     index_state.remove_files(deleted_files);
+    // Record the model that produced this run's vectors (the Neo4j marker
+    // is the authority; this is the belt-and-braces copy in index_state).
+    index_state.embed_model = Some(embed_model.to_owned());
     index_state.save(repo_path)?;
 
     if embedded_count > 0 {
@@ -250,12 +254,15 @@ mod tests {
             temp_repo,
             repo_root,
             10,
+            "AllMiniLML6V2",
         );
 
         assert!(result.is_ok());
         assert_eq!(index_state.file_hashes.len(), 1);
         assert!(!index_state.file_hashes.contains_key("old.java"));
         assert!(index_state.file_hashes.contains_key("new.ts"));
+        // save() records the producing model.
+        assert_eq!(index_state.embed_model.as_deref(), Some("AllMiniLML6V2"));
     }
 
     #[test]

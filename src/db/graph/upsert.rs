@@ -73,6 +73,17 @@ pub trait UpsertExt {
     ) -> Result<()>;
     async fn upsert_repository_node(&self, repo_name: &str) -> Result<()>;
     async fn upsert_repo_dependency(&self, from_repo: &str, to_repo: &str) -> Result<()>;
+    /// Persist the embedding-model marker on the repository's `:Repository`
+    /// node. Deliberately its own method (not a widened
+    /// `upsert_repository*`): the marker must not depend on cross-repo
+    /// linking succeeding.
+    async fn upsert_repo_embed_marker(
+        &self,
+        repo_name: &str,
+        embed_model: &str,
+        embed_dim: u64,
+        qdrant_collection: &str,
+    ) -> Result<()>;
 }
 impl UpsertExt for GraphDb {
     /// Load entity mappings (name, fqn -> uuid) for incremental indexing.
@@ -320,6 +331,7 @@ impl UpsertExt for GraphDb {
         info!("Ensured :Repository node for '{repo_name}'");
         Ok(())
     }
+
     /// Create a DEPENDS_ON relationship between two repositories.
     async fn upsert_repo_dependency(&self, from_repo: &str, to_repo: &str) -> Result<()> {
         self.graph
@@ -337,6 +349,37 @@ impl UpsertExt for GraphDb {
                 "Failed to create DEPENDS_ON relationship from '{from_repo}' to '{to_repo}'"
             ))?;
         info!("Created DEPENDS_ON: {from_repo} -> {to_repo}");
+        Ok(())
+    }
+    /// Persist the embedding-model marker on this repository's `:Repository`
+    /// node (`MERGE ... SET`, so idempotent and self-healing: a legacy index
+    /// without a marker gets one on its next index run).
+    async fn upsert_repo_embed_marker(
+        &self,
+        repo_name: &str,
+        embed_model: &str,
+        embed_dim: u64,
+        qdrant_collection: &str,
+    ) -> Result<()> {
+        info!(
+            "Marking embed model '{embed_model}' (dim {embed_dim}, collection '{qdrant_collection}') on :Repository '{repo_name}'"
+        );
+        self.graph
+            .run(
+                query(
+                    "MERGE (r:Repository {name: $repo_name})
+                     SET r.embed_model = $embed_model,
+                         r.embed_dim = $embed_dim,
+                         r.qdrant_collection = $qdrant_collection,
+                         r.embed_marked_at = datetime()",
+                )
+                .param("repo_name", repo_name)
+                .param("embed_model", embed_model)
+                .param("embed_dim", embed_dim as i64)
+                .param("qdrant_collection", qdrant_collection),
+            )
+            .await
+            .context("Failed to upsert the :Repository embed-model marker")?;
         Ok(())
     }
 }

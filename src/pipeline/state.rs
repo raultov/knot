@@ -41,15 +41,21 @@ const STATE_FILE: &str = "index_state.json";
 /// via `KNOT_EMBED_MODEL`. Vectors built by v5 and earlier are
 /// incomparable and must be rebuilt.
 ///
-/// v7: the default embedding model changed from `AllMiniLML6V2` to
-/// `BGEBaseENV15` (`crate::pipeline::embed::DEFAULT_EMBED_MODEL`), from 384
-/// to 768 dimensions. The dimension change is caught by Qdrant, but a
-/// same-dimension model switch would produce **no error** at all — only
-/// silently degraded recall, new-model query vectors searching old-model
-/// passages. The version bump catches both and forces
-/// `knot-indexer --clean`; a dimension change additionally requires
-/// recreating the Qdrant collection at 768.
+/// v7: adds the optional `is_test_context` payload field (absent-tolerant)
+/// and the optional `embed_model` marker. Old versions are accepted via
+/// [`MIN_COMPATIBLE_STATE_VERSION`]: the model that produced the vectors is
+/// tracked by the `:Repository` embed marker (see
+/// `crate::startup_guard`), NOT by this number — a version bump here would
+/// force every upgrading user into a re-index, which the two-model
+/// selection plan explicitly rejects.
 const CURRENT_STATE_VERSION: u32 = 7;
+
+/// Oldest on-disk schema whose vectors remain valid. v6 introduced the
+/// role-sentence embed text; v7 only adds the optional `is_test_context`
+/// payload field, which is absent-tolerant — so a v6 index needs no
+/// re-index. The model that produced the vectors is tracked by the
+/// `:Repository` marker, not by this number.
+const MIN_COMPATIBLE_STATE_VERSION: u32 = 6;
 
 /// Returns the cache directory for fastembed models.
 /// Prioritizes the `KNOT_FASTEMBED_CACHE_DIR` environment variable.
@@ -81,12 +87,20 @@ pub type FileClassification = (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<Str
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexState {
     /// Schema version of the on-disk state file. Versions older than
-    /// [`CURRENT_STATE_VERSION`] are treated as stale and force a full
-    /// re-index on load.
+    /// [`MIN_COMPATIBLE_STATE_VERSION`] are treated as incompatible and
+    /// force a full re-index on load; versions newer than
+    /// [`CURRENT_STATE_VERSION`] are rejected (downgrade).
     #[serde(default)]
     pub version: u32,
     /// Map of file_path -> SHA-256 hash (hex string).
     pub file_hashes: HashMap<String, String>,
+    /// The embedding model that built the vectors recorded in this state.
+    /// Absent in v6 files (deserialized to `None` — absent-tolerant) and
+    /// written by every new save. The Neo4j `:Repository` marker is the
+    /// authority; this field is a belt-and-braces local defense for an
+    /// indexer run without graph access.
+    #[serde(default)]
+    pub embed_model: Option<String>,
 }
 
 impl Default for IndexState {
@@ -94,6 +108,7 @@ impl Default for IndexState {
         Self {
             version: CURRENT_STATE_VERSION,
             file_hashes: HashMap::new(),
+            embed_model: None,
         }
     }
 }
@@ -101,11 +116,38 @@ impl Default for IndexState {
 impl IndexState {
     /// Load the index state from disk, or return empty state if not found.
     ///
-    /// Returns an error if the on-disk state has an older version than
-    /// [`CURRENT_STATE_VERSION`], because the FQN schema has changed and
-    /// the old index is incompatible. The caller should print instructions
-    /// and exit with code 1.
-    pub fn load(repo_path: &str) -> Result<Self> {
+    /// Returns an error when the on-disk state is older than
+    /// [`MIN_COMPATIBLE_STATE_VERSION`] (incompatible FQN/embed schema) or
+    /// newer than [`CURRENT_STATE_VERSION`] (downgrade) because the caller
+    /// flags `--clean`.
+    pub fn load_for_indexer(
+        repo_path: &str,
+        configured_embed_model: &str,
+        clean: bool,
+    ) -> Result<Self> {
+        let state = Self::load(repo_path)?;
+
+        // Belt-and-braces defense: the persisted model is not authoritative
+        // (the Neo4j `:Repository` marker is), but if the on-disk state was
+        // written under a different model and the run is not a clean
+        // re-index, the vectors recorded here would be mixed with new-model
+        // ones on an incremental run.
+        if let Some(model) = &state.embed_model
+            && model != configured_embed_model
+            && !clean
+        {
+            anyhow::bail!(
+                "The persisted index state was built with embedding model '{model}' \
+                 but this run is configured with '{configured_embed_model}'. \
+                 Run `knot-indexer --clean` to rebuild this repository with '{configured_embed_model}'."
+            );
+        }
+
+        Ok(state)
+    }
+
+    /// Load the index state from disk, or return empty state if not found.
+    fn load(repo_path: &str) -> Result<Self> {
         let state_path = Self::state_file_path(repo_path);
 
         if !state_path.exists() {
@@ -119,11 +161,22 @@ impl IndexState {
         let state: IndexState =
             serde_json::from_str(&content).context("Failed to deserialize index state JSON")?;
 
-        if state.version < CURRENT_STATE_VERSION {
+        if state.version < MIN_COMPATIBLE_STATE_VERSION {
             anyhow::bail!(
-                "Detected index_state v{}; current version is v{}. \
-                 The on-disk index is incompatible.\n\
+                "Detected index_state v{}; the minimum compatible version is v{} \
+                 (current v{}). The on-disk index is incompatible.\n\
                  Run `knot-indexer --clean` to rebuild from scratch.",
+                state.version,
+                MIN_COMPATIBLE_STATE_VERSION,
+                CURRENT_STATE_VERSION
+            );
+        }
+
+        if state.version > CURRENT_STATE_VERSION {
+            anyhow::bail!(
+                "Detected index_state v{}, which is newer than this knot understands \
+                 (current v{}). The index was written by a newer knot version.\n\
+                 Upgrade knot, or run `knot-indexer --clean` to rebuild from scratch.",
                 state.version,
                 CURRENT_STATE_VERSION
             );
@@ -151,6 +204,7 @@ impl IndexState {
         let to_persist = Self {
             version: CURRENT_STATE_VERSION,
             file_hashes: self.file_hashes.clone(),
+            embed_model: self.embed_model.clone(),
         };
 
         let content = serde_json::to_string_pretty(&to_persist)
@@ -433,6 +487,7 @@ mod tests {
         let mut state = IndexState {
             version: 0,
             file_hashes: HashMap::new(),
+            embed_model: None,
         };
         state
             .file_hashes
@@ -447,6 +502,105 @@ mod tests {
             parsed.get("version").and_then(|v| v.as_u64()),
             Some(CURRENT_STATE_VERSION as u64)
         );
+    }
+
+    // ---- §F5 compatibility window tests ----
+
+    #[test]
+    fn test_load_v6_state_is_accepted_without_reindex() {
+        // The v1.10.0 published format: vectors from a MiniLM index remain
+        // valid, so v6 must load cleanly.
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let state_dir = dir.path().join(".knot");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_file = state_dir.join("index_state.json");
+
+        let raw = r#"{
+            "version": 6,
+            "file_hashes": {
+                "src/lib.rs": "abc123"
+            }
+        }"#;
+        fs::write(&state_file, raw).unwrap();
+
+        let loaded = IndexState::load(repo_path).unwrap();
+        assert_eq!(loaded.version, 6);
+        assert_eq!(loaded.file_hashes.get("src/lib.rs").unwrap(), "abc123");
+        // Absent embed_model deserializes to None (absent-tolerant).
+        assert_eq!(loaded.embed_model, None);
+    }
+
+    #[test]
+    fn test_load_newer_version_rejected_as_downgrade() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let state_dir = dir.path().join(".knot");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_file = state_dir.join("index_state.json");
+
+        let raw = r#"{
+            "version": 99,
+            "file_hashes": {}
+        }"#;
+        fs::write(&state_file, raw).unwrap();
+
+        let err = IndexState::load(repo_path).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("newer than this knot understands"),
+            "downgrade must be rejected with an Upgrade hint: {msg}"
+        );
+        assert!(msg.contains("--clean"), "must suggest --clean: {msg}");
+    }
+
+    #[test]
+    fn test_save_round_trips_embed_model() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let mut state = IndexState {
+            embed_model: Some("BGEBaseENV15".to_string()),
+            ..Default::default()
+        };
+        state
+            .file_hashes
+            .insert("file1.rs".to_string(), "h".to_string());
+        state.save(repo_path).unwrap();
+
+        let loaded = IndexState::load(repo_path).unwrap();
+        assert_eq!(
+            loaded.embed_model.as_deref(),
+            Some("BGEBaseENV15"),
+            "save() must round-trip the active model"
+        );
+    }
+
+    #[test]
+    fn test_load_for_indexer_rejects_model_mismatch_on_incremental_run() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        let state = IndexState {
+            embed_model: Some("BGEBaseENV15".to_string()),
+            ..Default::default()
+        };
+        state.save(repo_path).unwrap();
+
+        let err = IndexState::load_for_indexer(repo_path, "AllMiniLML6V2", false).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("BGEBaseENV15"), "{msg}");
+        assert!(msg.contains("AllMiniLML6V2"), "{msg}");
+        assert!(msg.contains("--clean"), "{msg}");
+
+        // --clean overrides the defense (belt-and-braces only).
+        let loaded = IndexState::load_for_indexer(repo_path, "AllMiniLML6V2", true).unwrap();
+        assert_eq!(loaded.embed_model.as_deref(), Some("BGEBaseENV15"));
+
+        // Same model on an incremental run is accepted.
+        IndexState::load_for_indexer(repo_path, "BGEBaseENV15", false).unwrap();
     }
 
     #[test]
@@ -477,7 +631,6 @@ mod tests {
             "error should suggest --clean flag: {msg}"
         );
     }
-
     #[test]
     fn test_load_missing_version_treated_as_incompatible() {
         let dir = tempdir().unwrap();

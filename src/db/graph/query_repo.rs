@@ -51,6 +51,16 @@ pub trait RepoQueryExt {
         needle: &str,
         exclude_repo: &str,
     ) -> Result<Vec<(String, String)>>;
+    /// The embedding-model markers of the requested repositories.
+    ///
+    /// An empty `repo_names` slice ⇒ every `:Repository` node. Repositories
+    /// indexed before the marker existed come back with `None` fields (the
+    /// startup guard treats them as legacy and infers the model from the
+    /// collection dimension).
+    async fn repo_embed_markers(
+        &self,
+        repo_names: &[String],
+    ) -> Result<Vec<crate::startup_guard::RepoEmbedMarker>>;
     /// Shared traversal behind [`RepoQueryExt::find_repo_dependencies`] and
     /// [`RepoQueryExt::find_repo_dependents`]: the two directions differ only
     /// in the edge pattern.
@@ -73,65 +83,6 @@ pub struct RepoIdentity {
 }
 
 impl RepoQueryExt for GraphDb {
-    /// Traverse the `DEPENDS_ON` graph from `repo_name` up to `max_depth`
-    /// hops, in the requested direction (forward = dependencies of the repo,
-    /// reverse = repositories that depend on it).
-    ///
-    /// One shared builder keeps the forward and reverse queries in lockstep
-    /// (same depth semantics, same self-exclusion, same ordering) — the two
-    /// directions differ only in the edge pattern, so two hand-written
-    /// builders would be a drift hazard and a near-duplicate pair.
-    async fn traverse_depends_on(
-        &self,
-        repo_name: &str,
-        max_depth: u32,
-        reverse: bool,
-    ) -> Result<Vec<String>> {
-        let pattern = if reverse {
-            format!(
-                "MATCH (other:Repository)-[:DEPENDS_ON*1..{max_depth}]->(r:Repository {{name: $repo_name}})"
-            )
-        } else {
-            format!(
-                "MATCH (r:Repository {{name: $repo_name}})-[:DEPENDS_ON*1..{max_depth}]->(other:Repository)"
-            )
-        };
-        let cypher = format!(
-            "{pattern}
-             WHERE other.name <> $repo_name
-             RETURN DISTINCT other.name AS dep_name
-             ORDER BY dep_name"
-        );
-
-        let mut rows = self
-            .graph
-            .execute(query(&cypher).param("repo_name", repo_name))
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to query {} of '{repo_name}' (depth {max_depth})",
-                    if reverse {
-                        "dependents"
-                    } else {
-                        "dependencies"
-                    }
-                )
-            })?;
-
-        let names = collect_column_strings(&mut rows, "dep_name").await;
-
-        info!(
-            "Found {} {} of '{repo_name}' (depth {max_depth})",
-            names.len(),
-            if reverse {
-                "dependents"
-            } else {
-                "dependencies"
-            }
-        );
-        Ok(names)
-    }
-
     /// Find all repositories that this repo depends on (transitive, up to max_depth).
     async fn find_repo_dependencies(&self, repo_name: &str, max_depth: u32) -> Result<Vec<String>> {
         self.traverse_depends_on(repo_name, max_depth, false).await
@@ -178,7 +129,7 @@ impl RepoQueryExt for GraphDb {
 
     /// All persisted `build_dependency` entity names for a repository,
     /// including those from manifests that the current incremental batch did
-    /// not re-parse. Used by cross-repo linking so a consumer whose manifest
+    /// not reparse. Used by cross-repo linking so a consumer whose manifest
     /// is unchanged still links newly indexed dependencies.
     async fn find_build_dependency_names(&self, repo_name: &str) -> Result<Vec<String>> {
         let mut rows = self
@@ -258,6 +209,106 @@ impl RepoQueryExt for GraphDb {
             .await
             .context("Failed to query dependency candidates for reverse sweep")?;
         Ok(collect_column_pairs(&mut rows, "consumer", "dep_name").await)
+    }
+
+    async fn repo_embed_markers(
+        &self,
+        repo_names: &[String],
+    ) -> Result<Vec<crate::startup_guard::RepoEmbedMarker>> {
+        // Empty name list ⇒ every repository node.
+        let (where_clause, param) = if repo_names.is_empty() {
+            ("", None)
+        } else {
+            (" WHERE r.name IN $repo_names", Some(repo_names.to_vec()))
+        };
+        let cypher = format!(
+            "MATCH (r:Repository){where_clause}
+             RETURN r.name AS repo_name,
+                    coalesce(r.embed_model, '') AS embed_model,
+                    coalesce(r.embed_dim, -1) AS embed_dim,
+                    coalesce(r.qdrant_collection, '') AS qdrant_collection
+             ORDER BY r.name"
+        );
+        let q = match &param {
+            Some(names) => query(&cypher).param("repo_names", names.to_vec()),
+            None => query(&cypher),
+        };
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context("Failed to query :Repository embed markers")?;
+
+        let mut markers = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            let name = row.get::<String>("repo_name").unwrap_or_default();
+            let model = row.get::<String>("embed_model").unwrap_or_default();
+            let dim = row.get::<i64>("embed_dim").unwrap_or(-1);
+            let collection = row.get::<String>("qdrant_collection").unwrap_or_default();
+            markers.push(crate::startup_guard::RepoEmbedMarker::from_row(
+                name, model, dim, collection,
+            ));
+        }
+        Ok(markers)
+    }
+
+    /// Traverse the `DEPENDS_ON` graph from `repo_name` up to `max_depth`
+    /// hops, in the requested direction (forward = dependencies of the repo,
+    /// reverse = repositories that depend on it).
+    ///
+    /// One shared builder keeps the forward and reverse queries in lockstep
+    /// (same depth semantics, same self-exclusion, same ordering) — the two
+    /// directions differ only in the edge pattern, so two handwritten
+    /// builders would be a drift hazard and a near-duplicate pair.
+    async fn traverse_depends_on(
+        &self,
+        repo_name: &str,
+        max_depth: u32,
+        reverse: bool,
+    ) -> Result<Vec<String>> {
+        let pattern = if reverse {
+            format!(
+                "MATCH (other:Repository)-[:DEPENDS_ON*1..{max_depth}]->(r:Repository {{name: $repo_name}})"
+            )
+        } else {
+            format!(
+                "MATCH (r:Repository {{name: $repo_name}})-[:DEPENDS_ON*1..{max_depth}]->(other:Repository)"
+            )
+        };
+        let cypher = format!(
+            "{pattern}
+             WHERE other.name <> $repo_name
+             RETURN DISTINCT other.name AS dep_name
+             ORDER BY dep_name"
+        );
+
+        let mut rows = self
+            .graph
+            .execute(query(&cypher).param("repo_name", repo_name))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to query {} of '{repo_name}' (depth {max_depth})",
+                    if reverse {
+                        "dependents"
+                    } else {
+                        "dependencies"
+                    }
+                )
+            })?;
+
+        let names = collect_column_strings(&mut rows, "dep_name").await;
+
+        info!(
+            "Found {} {} of '{repo_name}' (depth {max_depth})",
+            names.len(),
+            if reverse {
+                "dependents"
+            } else {
+                "dependencies"
+            }
+        );
+        Ok(names)
     }
 
     /// List all indexed repositories with their entity count, file count, build

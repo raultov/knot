@@ -54,9 +54,8 @@ impl Embedder {
     /// holds `Embedder::init(cache_dir)` from the published crate).
     ///
     /// On first run this will download the ONNX model weights (~440 MB for
-    /// the default BGEBaseENV15, ~130 MB for BGESmallENV15, ~23 MB for
-    /// AllMiniLML6V2) and cache them locally. Subsequent runs load from
-    /// cache.
+    /// the opt-in BGEBaseENV15, ~23 MB for the default AllMiniLML6V2) and
+    /// cache them locally. Subsequent runs load from cache.
     pub fn init(cache_dir: std::path::PathBuf) -> Result<Self> {
         let choice = EmbedModelChoice::from_env()
             .map_err(|e| anyhow::anyhow!("Invalid KNOT_EMBED_MODEL: {e}"))?;
@@ -96,6 +95,15 @@ impl Embedder {
     /// The resolved model's native vector dimension (for config validation).
     pub fn dim(&self) -> u64 {
         self.choice.dim
+    }
+
+    /// The resolved model's wire name (query-time guard reports).
+    pub fn model_name(&self) -> &'static str {
+        EmbedModelChoice::supported()
+            .iter()
+            .find(|(_, c)| c == &self.choice)
+            .map(|(name, _)| *name)
+            .unwrap_or("unknown")
     }
 
     /// Embed a batch of [`ParsedEntity`] records and return [`EmbeddedEntity`] values.

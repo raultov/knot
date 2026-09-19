@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
     VectorParamsBuilder,
@@ -6,6 +7,45 @@ use qdrant_client::qdrant::{
 use tracing::info;
 
 use super::VectorDb;
+
+/// Probe the real stored vector dimension of a Qdrant collection.
+///
+/// `None` ⇒ the collection does not exist (a fresh deployment — the guard
+/// ladder never blocks on it). Shared by every knot binary's startup guard
+/// (`crate::startup_guard`); knot-server should call this instead of
+/// keeping its own `vector_guard` copy.
+pub async fn probe_collection_dim(url: &str, collection: &str) -> Result<Option<u64>> {
+    let client = Qdrant::from_url(url)
+        .timeout(std::time::Duration::from_secs(300))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("Failed to build Qdrant client for the collection-dimension probe")?;
+
+    let exists = client
+        .collection_exists(collection)
+        .await
+        .context("Failed to check collection existence during the dimension probe")?;
+    if !exists {
+        return Ok(None);
+    }
+
+    let info = client
+        .collection_info(collection)
+        .await
+        .context("Failed to query collection info during the dimension probe")?;
+
+    let dim = info
+        .result
+        .as_ref()
+        .and_then(|i| i.config.as_ref())
+        .and_then(|c| c.params.as_ref())
+        .and_then(|p| p.vectors_config.as_ref())
+        .and_then(|vc| match vc.config {
+            Some(qdrant_client::qdrant::vectors_config::Config::Params(ref p)) => Some(p.size),
+            _ => None,
+        });
+    Ok(dim)
+}
 
 /// Extension trait for connection and initialization operations.
 #[expect(
@@ -22,7 +62,7 @@ pub trait VectorConnectExt {
 impl VectorConnectExt for VectorDb {
     /// Connect to Qdrant and return a ready-to-use [`VectorDb`].
     async fn connect(url: &str, collection: &str, embed_dim: u64) -> Result<VectorDb> {
-        let client = qdrant_client::Qdrant::from_url(url)
+        let client = Qdrant::from_url(url)
             .timeout(std::time::Duration::from_secs(300))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()

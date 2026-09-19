@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         info!("Clean mode: ignoring existing index state");
         IndexState::default()
     } else {
-        IndexState::load(&cfg.repo_path)?
+        IndexState::load_for_indexer(&cfg.repo_path, &cfg.embed_model, cfg.clean)?
     };
 
     let vector_db = Arc::new(vector_db);
