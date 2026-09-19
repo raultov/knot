@@ -387,6 +387,7 @@ pub fn list_files_query(repo_scoped: bool) -> String {
          {prefix_clause}{repo_clause}\
          RETURN e.file_path AS file_path, e.repo_name AS repo_name, count(e) AS entity_count \
          ORDER BY e.repo_name, e.file_path \
+         SKIP $skip \
          LIMIT $limit"
     )
 }
@@ -930,11 +931,12 @@ pub trait QueryExt {
     /// Read-only file listing (see [`list_files_query`]): distinct
     /// `(file_path, repo_name)` pairs with entity counts, ordered by
     /// `(repo_name, file_path)`. `prefix` is the normalized repo-relative
-    /// directory prefix ("" = list everything); `limit` caps the row count.
+    /// directory prefix ("" = list everything); `skip` and `limit` control pagination.
     async fn list_files(
         &self,
         prefix: &str,
         repo_names: &[String],
+        skip: usize,
         limit: usize,
     ) -> Result<serde_json::Value>;
 
@@ -1351,11 +1353,13 @@ impl QueryExt for GraphDb {
         &self,
         prefix: &str,
         repo_names: &[String],
+        skip: usize,
         limit: usize,
     ) -> Result<serde_json::Value> {
         let query_str = list_files_query(!repo_names.is_empty());
         let mut q = query(&query_str)
             .param("prefix", prefix.to_string())
+            .param("skip", skip as i64)
             .param("limit", limit as i64);
         if !repo_names.is_empty() {
             q = q.param("repo_names", repo_names.to_vec());

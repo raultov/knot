@@ -14,7 +14,7 @@
 //! - Use this BEFORE `search_hybrid_context` when you do not know the
 //!   codebase layout, and pass the same prefix as the search's `path`
 //!   parameter to scope searches to those files.
-//! - Use `explore_file` afterwards for the anatomy of one relevant file.
+//! - Use `explore_file` afterward for the anatomy of one relevant file.
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::*;
@@ -36,8 +36,9 @@ use crate::mcp_tools::repo_scope_from_args;
                    Do NOT use this to enumerate entities — use 'explore_file' on a file from this listing for its anatomy. \
                    \n\nBehaviour & Return: Read-only query with no side effects. \
                    Returns a Markdown table with columns: REPOSITORY, FILE, ENTITIES, ordered by (repository, path). \
+                   When output exceeds 2000 files, the table displays the first 2000 matches alongside a truncation notice. \
                    When nothing matches the prefix, returns 'No indexed files matched the given path'. \
-                   \n\nParameter guidance: 'path' is optional. PREFERRED: a repo-relative directory prefix (e.g. 'src/api') matched on a path boundary, or a glob ('src/**/*_test.rs'). Absolute paths under the local checkout are accepted and normalized like 'explore_file'. Omit to list every indexed file (capped; the reply notes truncation). \
+                   \n\nParameter guidance: 'path' is optional. PREFERRED: a repo-relative directory prefix (e.g. 'src/api') matched on a path boundary, or a glob ('src/**/*_test.rs'). Globs exhaustively scan all indexed files in pages without dropping candidates. Absolute paths under the local checkout are accepted and normalized like 'explore_file'. Omit to list every indexed file (capped; the reply notes truncation). \
                    \n\nParameter guidance: 'repo_name' scopes the listing. Accepts a single repository name or a comma-separated list; include it when several indexed repositories may share path shapes. \
                    \n\nSupports all languages indexed by knot.",
     read_only_hint = true,
