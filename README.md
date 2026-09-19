@@ -814,8 +814,8 @@ Priority (highest to lowest): CLI flags > environment variables > `.env` file.
 | `KNOT_NEO4J_URI`           | `--neo4j-uri`              | `bolt://localhost:7687`     | Neo4j Bolt URI                                           |
 | `KNOT_NEO4J_USER`          | `--neo4j-user`             | `neo4j`                     | Neo4j username                                           |
 | `KNOT_NEO4J_PASSWORD`      | `--neo4j-password`         | *(required)*                | Neo4j password                                           |
-| `KNOT_EMBED_MODEL`         | `--embed-model`            | `BGEBaseENV15`              | Embedding model (`AllMiniLML6V2`, `BGESmallENV15`, `BGEBaseENV15`, `MultilingualE5Small`, `JinaEmbeddingsV2BaseCode`, `NomicEmbedTextV15`) |
-| `KNOT_EMBED_DIM`           | `--embed-dim`              | `768`                       | Embedding vector dimension (validated against selected model) |
+| `KNOT_EMBED_MODEL`         | `--embed-model`            | `AllMiniLML6V2`             | Embedding model (`AllMiniLML6V2` (default) or the opt-in `BGEBaseENV15`) |
+| `KNOT_EMBED_DIM`           | `--embed-dim`              | *(derived)*                 | **Deprecated (hidden):** the dimension is derived from the model. A value that agrees warns; one that contradicts aborts. |
 | `KNOT_BATCH_SIZE`          | `--batch-size`             | `128`                       | Entities per batch                                       |
 | `KNOT_CLEAN`               | `--clean`                  | `false`                     | Force full re-index (delete all existing data)           |
 | `KNOT_CUSTOM_CA_CERTS`     | `--custom-ca-certs`       | *(none)*                    | Path to CA certificate bundle for corporate SSL proxies  |
@@ -826,26 +826,42 @@ Priority (highest to lowest): CLI flags > environment variables > `.env` file.
 
 ## 🤖 Embedding Model Selection
 
-`knot` supports selecting alternative embedding models via `KNOT_EMBED_MODEL` or `--embed-model`:
+`knot` supports exactly **two** embedding models, selected via `KNOT_EMBED_MODEL` or `--embed-model`. The default is chosen for backward compatibility: a `v1.10.0` user upgrading finds **zero re-index and zero configuration change** — same model, same collection, same dimension.
 
-- `BGEBaseENV15` (768-dim, **default**) — BAAI BGE v1.5 asymmetric model. Strongest measured semantic recall of the supported models; requires a 768-dim Qdrant collection.
-- `AllMiniLML6V2` (384-dim) — Fast, lightweight, symmetric sentence model (the historical default).
-- `BGESmallENV15` (384-dim) — BAAI BGE v1.5, lighter 384-dim sibling of the default.
-- `MultilingualE5Small` (384-dim) — intfloat E5 multilingual model with `query: `/`passage: ` prefixes.
-- `JinaEmbeddingsV2BaseCode` (768-dim) — Code-aware model for programming language & NL alignment.
-- `NomicEmbedTextV15` (768-dim) — Nomic v1.5 model with `search_query: `/`search_document: ` prefixes.
+| Model | dim | Default? | Qdrant collection (derived) |
+|---|---|---|---|
+| `AllMiniLML6V2` | 384 | **yes** | `knot_entities` (unchanged since 1.0) |
+| `BGEBaseENV15` (opt-in) | 768 | no | `knot_entities_bge768` (derived automatically) |
+
+The supported set is **closed**: the whole model universe for knot is this table (`src/pipeline/embed/model.rs`), and adding a future model must be a one-row change there. The four models available in `v1.10.0` only (`BGESmallENV15`, `MultilingualE5Small`, `JinaEmbeddingsV2BaseCode`, `NomicEmbedTextV15`) were **removed on purpose** — setting one aborts startup with an error listing the two accepted names. The vector dimension is **derived from the model**: `KNOT_EMBED_DIM` / `--embed-dim` are hidden and deprecated (a value that agrees emits a deprecation warning; one that contradicts is a hard error because it means you believe a different model is active).
+
+An explicit collection (`KNOT_QDRANT_COLLECTION` set by CLI, env or `.env`) always wins; when it is unset, the model's derived collection applies — BGE users could otherwise collide with a fixed-size `knot_entities` created at 384.
 
 `search_hybrid_context` re-ranks **independently of the model's cosine scale**: each candidate pool is normalized before the boosts are applied, so switching model does not require re-tuning the ranker.
 
-> **Note:** Changing the embedding model invalidates all existing vector embeddings. A full re-index (`knot-indexer --clean`) is required, and `KNOT_EMBED_DIM` must match the model's native vector dimension. **Changing the dimension** (384 ↔ 768, e.g. the default `AllMiniLML6V2` → `BGEBaseENV15`) additionally requires recreating the Qdrant collection, because a collection's dimension is fixed at creation:
->
-> ```bash
-> # Recreate the collection at the new dimension, then re-index every repository:
-> curl -X DELETE "http://localhost:6333/collections/knot_entities"
-> KNOT_REPO_PATH=/path/to/repo KNOT_REPO_NAME=my-repo knot-indexer --clean
-> ```
->
-> If `KNOT_EMBED_DIM` is set in your environment from an earlier setup, update it (`768`) or unset it — the default now matches `BGEBaseENV15`. A stale value aborts startup with a message naming both dimensions.
+### Startup guards (model markers)
+
+Every index run records the producing model on the repository's `:Repository` node. On startup, `knot` and `knot-mcp` verify that the configured model matches the collection's real vector dimension and every marked repository:
+
+- **Dimension mismatch with the collection** — aborts with an actionable message (a collection's vector size is fixed at creation).
+- **Every marked repository on another model** — aborts, naming both models.
+- **Some repositories on another model** — warns and names the repositories that will not appear in semantic search. Scope-limited searches (`search_hybrid_context` with `repo`) specifically return a `note` instead of a silent empty result.
+- **Legacy index without markers** — the dimension infers the model (`384 ⇒ AllMiniLML6V2`, `768 ⇒ BGEBaseENV15`); a consistent legacy index is never fail-closed and self-heals (writes the marker) on the next index run.
+
+### Runbook: opting into BGE-base
+
+```bash
+# 1. Choose the model (consumers read this too):
+export KNOT_EMBED_MODEL=BGEBaseENV15
+
+# 2. Every repository needs a clean re-index; the alternative collection
+#    knot_entities_bge768 is derived automatically for every run afterwards:
+KNOT_REPO_PATH=/path/to/repo KNOT_REPO_NAME=my-repo knot-indexer --clean
+
+# 3. Restart every consumer (knot-mcp servers, knot CLI users).
+```
+
+Cost and recall measurements for both models live in `docs/measurements/` (`model_cost_1_11.md`, `model_matrix_1_11.md`).
 
 ---
 
