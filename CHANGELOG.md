@@ -7,12 +7,58 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.11.0
 
-- **Mandatory Re-index (State v7)**: `IndexState` bumped from v6 to **v7** because the default embedding model changed. Older indexes are incompatible and force `knot-indexer --clean`.
-- **New default embedding model: `BGEBaseENV15`** (768-dim, asymmetric). The default moves from `AllMiniLML6V2` (384-dim) after the ranker became scale-invariant (below). BGE-base is 768-dimensional, so adopting it **requires recreating the Qdrant collection at 768** and re-indexing every repository; `KNOT_EMBED_DIM`'s default is now `768`. Every other supported model stays selectable via `KNOT_EMBED_MODEL`.
-- **Scale-invariant re-ranking (`search_hybrid_context`)**: raw cosine is now min–max normalized **within the candidate pool** before any boost is added (`rank::normalize_pool_cosines`), and every kind/lexical/coverage constant is applied in that normalized `[0, 1]` unit (`SEMANTIC_WEIGHT = 0.40`, the measured mean pool span the constants were calibrated against). This removes the old dependency on one model's cosine band — the blocker that previously made a model swap regress the baselines. Degenerate pools (single candidate, zero variance, missing cosine) fall back deterministically with no NaN.
-- **Root-coverage provenance re-graded**: a nested step whose pool caller covers a strictly better root set is now credited at transitive grade rather than receiving a flat ×0.5 of the full entry-point boost. The old halving was calibrated to raw cosine and no longer sufficed once the semantic term was normalized (it let `run` inside `submitChangePassword` displace `useChangePassword` in the TypeScript E2E). Model-agnostic, no per-model constant.
+- **No Re-index Required (State Compatibility Window)**: upgrading from a
+  published `v1.10.0` index needs **no re-index and no configuration change**
+  on the default path. `IndexState` no longer encodes model identity: the
+  load gate becomes a compatibility window (`state.version < 6` rejected,
+  `> 7` rejected as a downgrade), so a v6 index loads as-is. v7 adds only
+  the absent-tolerant `is_test_context` vector-payload field and an
+  optional `embed_model` marker to the state file. (The previously
+  "published" v6→v7-bumpy default-model flip was planned here instead — no
+  released knot ever shipped `BGEBaseENV15` as the default.)
+- **Two-Model Embedding Selection**: `KNOT_EMBED_MODEL` accepts exactly two
+  models now — **`AllMiniLML6V2` (384-dim, the default, kept)** and the
+  opt-in **`BGEBaseENV15`** (768-dim). The other four (`BGESmallENV15`,
+  `MultilingualE5Small`, `JinaEmbeddingsV2BaseCode`, `NomicEmbedTextV15`)
+  are **removed** — selecting one aborts startup listing the two accepted
+  names. The model table (`src/pipeline/embed/model.rs`) is the single
+  source of truth: name, fastembed variant, dimension, asymmetric prefixes
+  and the default-collection suffix. The dimension is now **derived** from
+  the model — `KNOT_EMBED_DIM` / `--embed-dim` are hidden and deprecated
+  (an agreeing value warns; a contradicting one is a hard error).
+- **Derived default collection**: the default model keeps the historical
+  `knot_entities` collection; the opt-in model derives
+  `knot_entities_bge768` so the two live indexes can coexist without a
+  collection-dimension collision. An explicitly set
+  `KNOT_QDRANT_COLLECTION` (CLI/env/`.env`) always wins.
+- **Embedding-model markers + startup guards**: every index run persists
+  the producing model on the repository's `:Repository` node. `knot` and
+  `knot-mcp` run a startup guard: dimension mismatch with the collection →
+  abort; every marked repository on another model → abort; some on another
+  model → warning naming the invisible repositories; legacy index without
+  markers → infer the model from the collection dimension
+  (`384 ⇒ AllMiniLML6V2`, `768 ⇒ BGEBaseENV15`) and proceed (never
+  fail-closed), self-healing the marker on the next index run. The indexer
+  additionally refuses an incremental run mixing models into one
+  repository unless `--clean` is given, and `search_hybrid_context`
+  returns an explicit note instead of a silent empty result when a scoped
+  repository was indexed with another model.
+- **`is_test_context` closes the BGE ranking residual (§F6)**: the parsed
+  `#[cfg(test)]` context is now carried in the Qdrant payload and the
+  ranker routes every test decision (path penalty, neutral-kind gate,
+  root-coverage provenance, seed selection, supersession) through
+  `is_test_entity(path OR flag)` — so a `#[cfg(test)]` helper living in
+  `src/` can no longer claim production provenance. Absent payload field ⇒
+  `false` ⇒ today's behaviour (byte-identical scores for a v6 index).
+  Progressive; no forced re-index.
+- **Scale-invariant re-ranking (`search_hybrid_context`)**: raw cosine is now min–max normalized **within the candidate pool** before any boost is added (`rank::normalize_pool_cosines`), and every kind/lexical/coverage constant is applied in that normalized `[0, 1]` unit (`SEMANTIC_WEIGHT = 0.40`, the measured mean MiniLM pool span the constants were calibrated against). This removes the old dependency on one model's cosine band — the blocker that previously made a model swap regress the baselines. Degenerate pools (single candidate, zero variance, missing cosine) fall back deterministically with no NaN.
+- **Root-coverage provenance re-graded**: a nested step whose pool caller covers a strictly better root set is now credited at transitive grade rather than receiving a flat ×0.5 of the full entry-point boost. The old halving was calibrated to raw cosine and no longer sufficed once the semantic term was normalized. Model-agnostic, no per-model constant.
 - **Rank trace exposes `cosine_norm`**: `RUST_LOG=search_hybrid_context::rank=debug` now logs both the raw `cosine` (the harnesses read it) and the normalized `cosine_norm` the score is built from, so a lost row can be attributed to semantic recall or to scoring.
-- **Adoption trade-off (measured, documented)**: the full BGE-base live run is recorded in `docs/measurements/entrypoint_cosine_v1_11_bgebase.md`. Every residual target row improved its cosine rank (7→5, 8→1, 250→66, 14→4) and 3 of the 4 `must` baselines rank #1. One baseline remains a **ranking** residual — `authenticate user with email and password` (job-watch) finishes at #6 because BGE-base promotes inline `#[cfg(test)]` helpers in `src/` and the ranker cannot see them (`is_test_context` is not in the Qdrant payload). Under `AllMiniLML6V2` the same ranker puts `login` at #1.
+- **Per-model harness support**: `knot embed-model` prints the active model
+  (`name dim default_collection`) as resolved from `KNOT_EMBED_MODEL`;
+  `tests/run_rank_recall_live.sh` and `tests/measure_entrypoint_cosine.sh`
+  print it in their header and the former now accepts `--out FILE`.
+- **Adoption trade-off (measured, documented)**: the full BGE-base live run is recorded in `docs/measurements/entrypoint_cosine_v1_11_bgebase.md`. Every residual target row improved its cosine rank (7→5, 8→1, 250→66, 14→4) and 3 of the 4 `must` baselines rank #1. One baseline remains a **ranking** residual — `authenticate user with email and password` (job-watch) finishes at #6 because BGE-base promotes inline `#[cfg(test)]` helpers in `src/` (closed by the `is_test_context` change above).
 
 ---
 
