@@ -203,31 +203,39 @@ pub fn classify_startup(
     markers: &[RepoEmbedMarker],
 ) -> StartupVerdict {
     classify_startup_with_hints(
-        configured,
-        configured_name,
-        collection,
-        collection_dim,
+        GuardContext {
+            configured,
+            configured_name,
+            collection,
+            collection_dim,
+        },
         markers,
         &GuardHints::default(),
     )
 }
 
+/// Target/environment context passed into [`classify_startup_with_hints`].
+#[derive(Debug, Clone, Copy)]
+pub struct GuardContext<'a> {
+    pub configured: &'a EmbedModelChoice,
+    pub configured_name: &'a str,
+    pub collection: &'a str,
+    pub collection_dim: Option<u64>,
+}
+
 /// [`classify_startup`] with caller-supplied remediation wording.
 pub fn classify_startup_with_hints(
-    configured: &EmbedModelChoice,
-    configured_name: &str,
-    collection: &str,
-    collection_dim: Option<u64>,
+    ctx: GuardContext<'_>,
     markers: &[RepoEmbedMarker],
     hints: &GuardHints<'_>,
 ) -> StartupVerdict {
     // Rule 1: fresh deployment.
-    let Some(stored_dim) = collection_dim else {
+    let Some(stored_dim) = ctx.collection_dim else {
         return StartupVerdict::Ok;
     };
 
     // Rule 2: the collection is a fixed-size voucher for exactly one model.
-    if stored_dim != configured.dim {
+    if stored_dim != ctx.configured.dim {
         return StartupVerdict::Abort(format!(
             "Qdrant collection '{collection}' holds {stored_dim}-dimensional vectors but the \
                  configured embedding model '{configured_name}' produces {configured_dim}-dimensional ones. \
@@ -235,8 +243,10 @@ pub fn classify_startup_with_hints(
                  a different collection (the default for '{configured_name}' is '{default_collection}') or \
                  switch {embed_model_var} back to a model matching {stored_dim}, then \
                  {reindex_cmd} the affected repositories.",
-            configured_dim = configured.dim,
-            default_collection = configured.default_collection("knot_entities"),
+            collection = ctx.collection,
+            configured_dim = ctx.configured.dim,
+            configured_name = ctx.configured_name,
+            default_collection = ctx.configured.default_collection("knot_entities"),
             collection_var = hints.collection_var,
             embed_model_var = hints.embed_model_var,
             reindex_cmd = hints.reindex_cmd
@@ -255,7 +265,7 @@ pub fn classify_startup_with_hints(
     let mismatched: Vec<&RepoEmbedMarker> = marked
         .iter()
         .copied()
-        .filter(|m| m.embed_model.as_deref() != Some(configured_name))
+        .filter(|m| m.embed_model.as_deref() != Some(ctx.configured_name))
         .collect();
 
     if mismatched.is_empty() {
@@ -271,7 +281,8 @@ pub fn classify_startup_with_hints(
             marked.len(),
             mismatched[0].embed_model.as_deref().unwrap_or("?"),
             hints.embed_model_var,
-            hints.reindex_cmd
+            hints.reindex_cmd,
+            configured_name = ctx.configured_name,
         ));
     }
 
@@ -422,10 +433,12 @@ mod tests {
         };
         let bge = EmbedModelChoice::from_str("BGEBaseENV15").expect("opt-in model known");
         match classify_startup_with_hints(
-            &bge,
-            "BGEBaseENV15",
-            "knot_entities",
-            Some(384),
+            GuardContext {
+                configured: &bge,
+                configured_name: "BGEBaseENV15",
+                collection: "knot_entities",
+                collection_dim: Some(384),
+            },
             &[],
             &hints,
         ) {
@@ -440,10 +453,12 @@ mod tests {
         let (minilm, name) = minilm();
         let markers = [marker("a", Some("BGEBaseENV15"))];
         match classify_startup_with_hints(
-            &minilm,
-            name,
-            "knot_entities",
-            Some(384),
+            GuardContext {
+                configured: &minilm,
+                configured_name: name,
+                collection: "knot_entities",
+                collection_dim: Some(384),
+            },
             &markers,
             &hints,
         ) {
