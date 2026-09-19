@@ -387,14 +387,19 @@ pub(crate) struct Coverage {
 /// annotation. Production callables only: a candidate under a test path
 /// must not reclaim the test-path penalty through call provenance, and
 /// prose/config kinds have no boost at all.
-fn root_coverage_boost(kind: &str, file_path: &str, coverage: Coverage) -> f32 {
+fn root_coverage_boost(
+    kind: &str,
+    file_path: &str,
+    is_test_context: bool,
+    coverage: Coverage,
+) -> f32 {
     let Coverage {
         direct,
         transitive,
         total_roots,
         superseded_by_caller,
     } = coverage;
-    if kind_boost(kind) < 0.0 || is_test_path(file_path) {
+    if kind_boost(kind) < 0.0 || is_test_context || is_test_path(file_path) {
         return 0.0;
     }
     if superseded_by_caller {
@@ -479,6 +484,29 @@ pub struct Candidate<'a> {
     pub context: Option<&'a str>,
     /// Outgoing CALLS degree measured by the pool annotation.
     pub out_degree: usize,
+    /// Parsed `#[cfg(test)]` context from the vector payload. `false` when
+    /// the payload does not carry the field (a v6 index) — backward
+    /// compatibility: absent ⇒ today's path-only behaviour.
+    pub is_test_context: bool,
+}
+
+/// Whether a candidate is test code, by path **or** by parsed context.
+///
+/// `is_test_path` only inspects paths, so a `#[cfg(test)]` module inside a
+/// production file (`src/auth/credentials.rs` under a `#[cfg(test)] mod`)
+/// keeps `CALLABLE_BOOST` and pays no [`TEST_PATH_PENALTY`] — the measured
+/// BGE-base regression that displaced `login` behind `normalize_email_*`
+/// helpers. This guard closes it; absent payload flags degrade to
+/// `false`, keeping byte-identical scores for v6 rows.
+pub fn is_test_entity(c: &Candidate<'_>) -> bool {
+    is_test_path(c.file_path) || c.is_test_context
+}
+
+/// Whether a raw payload row is test code — same rule as
+/// [`is_test_entity`] for callers that read the JSON row directly (the
+/// pool-annotation provenance gates) instead of building a [`Candidate`].
+pub fn is_test_row(kind: &str, file_path: &str, is_test_context: bool) -> bool {
+    kind_boost(kind) < 0.0 || is_test_context || is_test_path(file_path)
 }
 
 /// Final ranking score for one candidate.
@@ -490,24 +518,24 @@ pub struct Candidate<'a> {
 pub fn final_score(sem: f32, query: &str, candidate: Candidate<'_>) -> f32 {
     let Candidate {
         kind,
-        file_path,
         name,
         context,
         out_degree,
-    } = candidate;
+        ..
+    } = &candidate;
     let mut score =
-        SEMANTIC_WEIGHT * sem + kind_boost(kind) + lexical_boost_in_context(query, name, context);
+        SEMANTIC_WEIGHT * sem + kind_boost(kind) + lexical_boost_in_context(query, name, *context);
     // Neutral kinds that orchestrate calls are behavior the taxonomy did
     // not name (TS MCP tools, top-level TS modules); prosa/config/test
     // kinds pay penalties and can never take the boost, and a sub-degree
     // node stays cosmetic.
     if kind_boost(kind) == 0.0
-        && out_degree >= NEUTRAL_BEHAVIORAL_OUT_DEGREE
-        && !is_test_path(file_path)
+        && out_degree >= &NEUTRAL_BEHAVIORAL_OUT_DEGREE
+        && !is_test_entity(&candidate)
     {
         score += NEUTRAL_BEHAVIORAL_BOOST;
     }
-    if is_test_path(file_path) {
+    if is_test_entity(&candidate) {
         score += TEST_PATH_PENALTY;
     }
     score
@@ -575,6 +603,10 @@ struct RowFacts {
     total_roots: usize,
     superseded_by_caller: bool,
     out_degree: usize,
+    /// Parsed `#[cfg(test)]` context from the payload. Absent ⇒ `false` —
+    /// the backward-compatibility pin for a v6 index (byte-identical
+    /// scores: the scoring decisions route through `is_test_entity`).
+    is_test_context: bool,
     /// Diagnostic provenance: which recall channel surfaced the row
     /// (`cosine` / `definition` / `probe` / `bridge` / `prefix`, attached by
     /// the pool's `merge_hits`). Absent → plain cosine.
@@ -614,6 +646,10 @@ fn row_facts(entity: &serde_json::Value) -> RowFacts {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         out_degree: count_field("caller_out_degree"),
+        is_test_context: entity
+            .get("is_test_context")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         channel: entity
             .get(super::CHANNEL_FIELD)
             .and_then(|v| v.as_str())
@@ -633,10 +669,12 @@ fn score_row(facts: &RowFacts, sem: f32, query: &str) -> f32 {
             name: &facts.name,
             context: Some(&facts.fqn),
             out_degree: facts.out_degree,
+            is_test_context: facts.is_test_context,
         },
     ) + root_coverage_boost(
         &facts.kind,
         &facts.file_path,
+        facts.is_test_context,
         Coverage {
             direct: facts.direct_roots,
             transitive: facts.transitive_roots,
@@ -792,6 +830,7 @@ mod tests {
             root_coverage_boost(
                 "function",
                 "src/a.rs",
+                false,
                 Coverage {
                     direct: 0,
                     transitive: 0,
@@ -805,6 +844,7 @@ mod tests {
         let one = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 1,
                 transitive: 0,
@@ -821,6 +861,7 @@ mod tests {
         let two = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 2,
                 transitive: 0,
@@ -833,6 +874,7 @@ mod tests {
         let three = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 3,
                 transitive: 0,
@@ -843,6 +885,7 @@ mod tests {
         let saturated = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 7,
                 transitive: 0,
@@ -871,10 +914,12 @@ mod tests {
                 name: "entryPoint",
                 context: Some("app::A::entryPoint"),
                 out_degree: 0,
+                is_test_context: false,
             },
         ) + root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 2,
                 transitive: 0,
@@ -891,10 +936,12 @@ mod tests {
                 name: "helperOne",
                 context: Some("app::B::helperOne"),
                 out_degree: 0,
+                is_test_context: false,
             },
         ) + root_coverage_boost(
             "function",
             "src/b.rs",
+            false,
             Coverage {
                 direct: 1,
                 transitive: 0,
@@ -916,6 +963,7 @@ mod tests {
         let none = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 0,
                 transitive: 0,
@@ -926,6 +974,7 @@ mod tests {
         let transitive3 = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 0,
                 transitive: 3,
@@ -936,6 +985,7 @@ mod tests {
         let direct2 = root_coverage_boost(
             "function",
             "src/a.rs",
+            false,
             Coverage {
                 direct: 2,
                 transitive: 0,
@@ -956,6 +1006,7 @@ mod tests {
             root_coverage_boost(
                 "function",
                 "src/a.rs",
+                false,
                 Coverage {
                     direct: 0,
                     transitive: 5,
@@ -979,6 +1030,7 @@ mod tests {
         let step = root_coverage_boost(
             "function",
             "src/hooks.ts",
+            false,
             Coverage {
                 direct: 2,
                 transitive: 0,
@@ -989,6 +1041,7 @@ mod tests {
         let outer = root_coverage_boost(
             "function",
             "src/hooks.ts",
+            false,
             Coverage {
                 direct: 3,
                 transitive: 0,
@@ -999,6 +1052,7 @@ mod tests {
         let plain = root_coverage_boost(
             "function",
             "src/hooks.ts",
+            false,
             Coverage {
                 direct: 2,
                 transitive: 0,
@@ -1031,6 +1085,7 @@ mod tests {
             root_coverage_boost(
                 "rust_function",
                 "tests/login_test.rs",
+                false,
                 Coverage {
                     direct: 3,
                     transitive: 2,
@@ -1045,6 +1100,7 @@ mod tests {
             root_coverage_boost(
                 "markdown_section",
                 "docs/a.md",
+                false,
                 Coverage {
                     direct: 3,
                     transitive: 2,
@@ -1059,6 +1115,7 @@ mod tests {
             root_coverage_boost(
                 "config_property",
                 "config/app.yml",
+                false,
                 Coverage {
                     direct: 3,
                     transitive: 2,
@@ -1072,6 +1129,7 @@ mod tests {
             root_coverage_boost(
                 "build_dependency",
                 "Cargo.toml",
+                false,
                 Coverage {
                     direct: 3,
                     transitive: 2,
@@ -1853,6 +1911,7 @@ mod tests {
                     file_path: path,
                     context: None,
                     out_degree: 20,
+                    is_test_context: false,
                 },
             )
         };
@@ -1865,6 +1924,7 @@ mod tests {
                 file_path: "docs/a.md",
                 context: None,
                 out_degree: 0,
+                is_test_context: false,
             },
         );
         // Prose: penalty, no boost.
@@ -1879,6 +1939,7 @@ mod tests {
                 file_path: "config/a.yml",
                 context: None,
                 out_degree: 0,
+                is_test_context: false,
             },
         );
         assert_eq!(boosted("config_property", "config/a.yml"), config_bare);
@@ -1888,6 +1949,172 @@ mod tests {
             boosted("rust_function", "tests/foo_test.rs"),
             SEMANTIC_WEIGHT * 0.30 + CALLABLE_BOOST + TEST_PATH_PENALTY
         );
+    }
+
+    // ---- §F6: `is_test_context` regression tests ----
+
+    #[test]
+    fn is_test_entity_truth_table() {
+        let path_only = Candidate {
+            kind: "function",
+            file_path: "tests/foo_test.rs",
+            name: "x",
+            context: None,
+            out_degree: 0,
+            is_test_context: false,
+        };
+        let flag_only = Candidate {
+            kind: "function",
+            file_path: "src/auth/credentials.rs",
+            name: "x",
+            context: None,
+            out_degree: 0,
+            is_test_context: true,
+        };
+        let both = Candidate {
+            kind: "function",
+            file_path: "tests/foo_test.rs",
+            name: "x",
+            context: None,
+            out_degree: 0,
+            is_test_context: true,
+        };
+        let neither = Candidate {
+            kind: "function",
+            file_path: "src/auth/credentials.rs",
+            name: "x",
+            context: None,
+            out_degree: 0,
+            is_test_context: false,
+        };
+        assert!(is_test_entity(&path_only));
+        assert!(is_test_entity(&flag_only));
+        assert!(is_test_entity(&both));
+        assert!(!is_test_entity(&neither));
+    }
+
+    #[test]
+    fn test_context_flag_receives_penalty_and_ranks_below_production() {
+        // Measured symptom (BGE-base, job-watch): `normalize_email_rejects_*`
+        // (a #[cfg(test)] helper in src/auth/credentials.rs) displaced
+        // `login` despite the identical cosine.
+        let production = final_score(
+            0.40,
+            "authenticate user",
+            Candidate {
+                kind: "rust_function",
+                file_path: "src/auth/user.rs",
+                name: "login",
+                context: None,
+                out_degree: 0,
+                is_test_context: false,
+            },
+        );
+        let cfg_test_helper = final_score(
+            0.40,
+            "authenticate user",
+            Candidate {
+                kind: "rust_function",
+                file_path: "src/auth/credentials.rs",
+                name: "normalize_email_helper",
+                context: None,
+                out_degree: 0,
+                is_test_context: true,
+            },
+        );
+        assert!(
+            (cfg_test_helper - (production + TEST_PATH_PENALTY)).abs() < 1e-6,
+            "a #[cfg(test)] helper in a production path must pay the penalty"
+        );
+        assert!(cfg_test_helper < production);
+        // The path-based penalty must be applied once, never twice.
+        let both = final_score(
+            0.40,
+            "authenticate user",
+            Candidate {
+                kind: "rust_function",
+                file_path: "tests/foo_test.rs",
+                name: "normalize_email_helper",
+                context: None,
+                out_degree: 0,
+                is_test_context: true,
+            },
+        );
+        assert_eq!(both, cfg_test_helper);
+    }
+
+    #[test]
+    fn row_without_is_test_context_scores_identically() {
+        // Retrofit pin: a pool row whose payload lacks `is_test_context`
+        // (a v6 index) scores byte-identically to the pre-change behaviour.
+        let row = json!({
+            "name": "login",
+            "kind": "rust_function",
+            "file_path": "src/auth/user.rs",
+            "fqn": "auth::user::login",
+            "start_line": 10,
+            "uuid": "u1",
+            "score": 0.9
+        });
+        let facts = row_facts(&row);
+        assert!(!facts.is_test_context);
+        let scored = score_row(&facts, 0.50, "login");
+        let expected = final_score(
+            0.50,
+            "login",
+            Candidate {
+                kind: "rust_function",
+                file_path: "src/auth/user.rs",
+                name: "login",
+                context: Some("auth::user::login"),
+                out_degree: 0,
+                is_test_context: false,
+            },
+        );
+        assert_eq!(scored, expected);
+    }
+
+    #[test]
+    fn cfg_test_helper_does_not_earn_root_coverage_provenance() {
+        // Provenance gate closure: a payload-flagged test helper must not
+        // reclaim the boost through call provenance.
+        let flag_only = root_coverage_boost(
+            "rust_function",
+            "src/auth/credentials.rs",
+            true,
+            Coverage {
+                direct: 3,
+                transitive: 2,
+                total_roots: 8,
+                superseded_by_caller: false,
+            },
+        );
+        assert_eq!(flag_only, 0.0);
+        // Sanity: the same coverage WITH a production path earns coverage.
+        let production = root_coverage_boost(
+            "rust_function",
+            "src/a.rs",
+            false,
+            Coverage {
+                direct: 2,
+                transitive: 0,
+                total_roots: 8,
+                superseded_by_caller: false,
+            },
+        );
+        assert!(production > 0.0);
+    }
+
+    #[test]
+    fn is_test_row_matches_kind_and_flag_rules() {
+        // Negative kind: porter.
+        assert!(is_test_row("markdown_section", "docs/a.md", false));
+        // Production path, flag set → test.
+        assert!(is_test_row("function", "src/a.rs", true));
+        // Production path, flag absent, no test path markers → not test.
+        assert!(!is_test_row("function", "src/a.rs", false));
+        // Path marker alone → test.
+        assert!(is_test_row("function", "tests/a.rs", false));
     }
 
     #[test]
@@ -1902,6 +2129,7 @@ mod tests {
                 name: "k",
                 context: None,
                 out_degree: 1,
+                is_test_context: false,
             },
         );
         let zero = final_score(
@@ -1913,6 +2141,7 @@ mod tests {
                 name: "k",
                 context: None,
                 out_degree: 0,
+                is_test_context: false,
             },
         );
         assert_eq!(one, zero);
@@ -1926,6 +2155,7 @@ mod tests {
                 name: "k",
                 context: None,
                 out_degree: 2,
+                is_test_context: false,
             },
         );
         assert!((two - (one + NEUTRAL_BEHAVIORAL_BOOST)).abs() < 1e-6);
@@ -1945,6 +2175,7 @@ mod tests {
                 name: "M",
                 context: None,
                 out_degree: 10,
+                is_test_context: false,
             },
         );
         assert_eq!(
