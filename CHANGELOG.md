@@ -7,6 +7,9 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.11.0
 
+- **Hardened**: the `list_files` pager has an absolute `MAX_SCAN_PAGES` iteration
+  cap, so a backend that ignores `SKIP` terminates with a truncated result
+  instead of looping forever.
 - **Fixed**: `explore_file` now segregates attribute-usage markup tokens (`html_class`, `html_id`)
   into a compact summary section by default, preventing Tailwind classes and ID tokens from inflating
   code lists. Genuine module-level declarations (`constant`), CSS declarations (`css_class`, `css_id`),

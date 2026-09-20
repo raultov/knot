@@ -17,6 +17,8 @@
 //!   searches exhaustively page the graph database until all files are checked,
 //!   ensuring no matching paths are silently dropped.
 //! - Plain-prefix queries fetch up to [`MAX_FILES`] entries in a single read.
+//! - The pager is capped at [`MAX_SCAN_PAGES`] iterations so a non-advancing
+//!   fetcher terminates with `"truncated": true` instead of looping forever.
 //! - Ordering is deterministic: `(repo_name, file_path)` from the graph
 //!   query; glob filtering preserves that order; the reply carries
 //!   `"truncated": true` when the output file count exceeds [`MAX_FILES`].
@@ -36,6 +38,13 @@ use crate::models::RepoScope;
 /// bounded, and the reply surfaces `"truncated": true` so callers
 /// know to narrow the filter.
 const MAX_FILES: usize = 2000;
+
+/// Hard cap on the number of pages a single listing scan may read.
+/// The real Neo4j backend honours `SKIP`, so a scan always converges;
+/// this bounds a fetcher that does not (non-advancing or non-shrinking
+/// pages) so it terminates instead of looping forever. Reaching the cap
+/// is reported as a truncated result — never a panic, never a silent stop.
+const MAX_SCAN_PAGES: usize = 64;
 
 /// Normalize caller-supplied path input to the canonical relative form of
 /// the index — the `explore_file` §4 behavior inherited wholesale: POSIX
@@ -220,20 +229,31 @@ pub fn format_files_output(
     }
 }
 
+/// Outcome of a paged scan over the graph's file listing.
+struct ScanOutcome {
+    /// Rows collected, in graph order.
+    rows: Vec<serde_json::Value>,
+    /// `true` when the source ran out of rows. `false` when the scan
+    /// stopped early at [`MAX_SCAN_PAGES`], which means rows may remain
+    /// unseen.
+    exhausted: bool,
+}
+
 /// Fetch all files matching `query_prefix` from the graph via paging.
 async fn fetch_all_files_paged<F, Fut>(
     fetch_page: F,
     query_prefix: &str,
     repo_names: &[String],
     page_size: usize,
-) -> Result<Vec<serde_json::Value>>
+) -> Result<ScanOutcome>
 where
     F: Fn(String, Vec<String>, usize, usize) -> Fut,
     Fut: Future<Output = Result<serde_json::Value>>,
 {
     let mut all_rows = Vec::new();
     let mut skip = 0;
-    loop {
+    let mut exhausted = false;
+    for _ in 0..MAX_SCAN_PAGES {
         let page = fetch_page(
             query_prefix.to_string(),
             repo_names.to_vec(),
@@ -245,11 +265,15 @@ where
         let fetched_len = page_arr.len();
         all_rows.extend(page_arr);
         if fetched_len < page_size {
+            exhausted = true;
             break;
         }
         skip += page_size;
     }
-    Ok(all_rows)
+    Ok(ScanOutcome {
+        rows: all_rows,
+        exhausted,
+    })
 }
 
 /// Run the file listing shared by `knot files` and the `list_files` MCP
@@ -285,9 +309,9 @@ where
 
     let is_glob = normalized.contains('*') || normalized.contains('?');
 
-    let (raw, has_more_unfiltered) = if is_glob {
-        let rows = fetch_all_files_paged(&fetch_page, "", &repo_names, MAX_FILES).await?;
-        (rows, false)
+    let (raw, may_have_more) = if is_glob {
+        let scan = fetch_all_files_paged(&fetch_page, "", &repo_names, MAX_FILES).await?;
+        (scan.rows, !scan.exhausted)
     } else {
         let page = fetch_page(normalized.clone(), repo_names.clone(), 0, MAX_FILES + 1).await?;
         let mut rows = page.as_array().cloned().unwrap_or_default();
@@ -310,7 +334,7 @@ where
         return Ok(serde_json::Value::Null);
     }
 
-    let is_truncated = filtered.len() > MAX_FILES || has_more_unfiltered;
+    let is_truncated = filtered.len() > MAX_FILES || may_have_more;
     let mut final_files = filtered;
     if final_files.len() > MAX_FILES {
         final_files.truncate(MAX_FILES);
@@ -424,6 +448,44 @@ mod tests {
     fn markdown_empty_list_hits_the_no_match_message() {
         let md = format_list_files_markdown(&json!([]));
         assert!(md.contains("No indexed files matched"));
+    }
+
+    #[tokio::test]
+    async fn pager_terminates_at_max_scan_pages_when_fetcher_ignores_skip() {
+        use std::time::Duration;
+
+        let repo_scope = RepoScope::All;
+
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_list_files_with_fetcher(
+                Some("auto/**"),
+                &repo_scope,
+                |_prefix, _repo_names, _skip, _limit| async move {
+                    let mut page = Vec::new();
+                    page.push(json!({
+                        "repo_name": "repo",
+                        "file_path": "auto/keep.java",
+                        "entity_count": 1,
+                    }));
+                    for i in 0..1999 {
+                        page.push(json!({
+                            "repo_name": "repo",
+                            "file_path": format!("other/f{i}.java"),
+                            "entity_count": 1,
+                        }));
+                    }
+                    Ok(json!(page))
+                },
+            ),
+        )
+        .await
+        .expect("listing timed out — pager did not terminate")
+        .unwrap();
+
+        let files = res.get("files").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(files.len(), MAX_SCAN_PAGES);
+        assert_eq!(res.get("truncated").and_then(|v| v.as_bool()), Some(true));
     }
 
     #[tokio::test]
