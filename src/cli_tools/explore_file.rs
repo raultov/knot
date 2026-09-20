@@ -113,9 +113,21 @@ pub async fn run_explore_file(
         .await
         .unwrap_or_else(|_| serde_json::json!([]));
 
+    let entities_arr = json_entities_array(&entities);
+    let (code_entities, markup_groups, markup_total) = split_markup(&entities_arr);
+
     let mut result = serde_json::json!({
         "entities": entities,
         "outgoing_references": outgoing_refs,
+        "markup_references": markup_groups.iter().map(|g| {
+            serde_json::json!({
+                "name": g.name,
+                "kind": g.kind,
+                "count": g.count,
+            })
+        }).collect::<Vec<_>>(),
+        "markup_count": markup_total,
+        "code_entity_count": code_entities.len(),
     });
 
     // §4 step 6 — DISAMBIGUATE: when the exact match produces nothing,
@@ -162,7 +174,11 @@ pub async fn run_explore_file(
     Ok((normalized_path, result))
 }
 
-pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> String {
+pub fn format_file_entities(
+    file_path: &str,
+    result: &serde_json::Value,
+    include_markup: bool,
+) -> String {
     let mut output = format!("# Entities in {}\n\n", format_file_line(file_path, None));
 
     let entities = json_entities_array(result);
@@ -181,19 +197,6 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
         .cloned()
         .unwrap_or_default();
 
-    // Three separable outcomes (§ of the not-found honesty contract):
-    //   entities found            — render them.
-    //   zero entities, but the
-    //   suffix fallback *found*   — the path is close to an indexed file;
-    //   candidate paths             say so and offer the candidates.
-    //   zero entities, zero
-    //   candidates                — no indexed file matched the path; never
-    //                               claim it exists but is empty (knot does
-    //                               not index a per-file node, so "exists
-    //                               with zero entities" and "does not
-    //                               exist" are indistinguishable from the
-    //                               graph — the wording must not pretend
-    //                               otherwise).
     if entities.is_empty() && outgoing_refs.is_empty() && ambiguous_candidates.is_empty() {
         output.push_str(&format!(
             "No indexed file matched `{}`. The path may not exist, may not be \
@@ -220,8 +223,20 @@ pub fn format_file_entities(file_path: &str, result: &serde_json::Value) -> Stri
     }
 
     if !entities.is_empty() {
-        output.push_str(&format!("Found {} entity/entities:\n\n", entities.len()));
-        append_entity_groups(&mut output, &entities);
+        let entities_arr = json_entities_array(result);
+        let (code_entities, markup_groups, markup_total) = split_markup(&entities_arr);
+        if markup_total == 0 {
+            output.push_str(&format!("Found {} entity/entities:\n\n", entities.len()));
+        } else {
+            output.push_str(&format!(
+                "Found {} code entity/entities ({} markup references summarized below):\n\n",
+                code_entities.len(),
+                markup_total
+            ));
+        }
+
+        append_entity_groups(&mut output, &code_entities);
+        append_markup_section(&mut output, &markup_groups, markup_total, include_markup);
     }
 
     append_outgoing_references(&mut output, &outgoing_refs);
@@ -273,7 +288,7 @@ const KIND_BUCKETS: &[KindBucket] = &[
     },
     KindBucket {
         header: "Companion Objects",
-        kinds: &["kotlin_companion"],
+        kinds: &["kotlin_companion_object"],
     },
     KindBucket {
         header: "Methods",
@@ -282,6 +297,10 @@ const KIND_BUCKETS: &[KindBucket] = &[
     KindBucket {
         header: "Functions",
         kinds: &["function", "kotlin_function"],
+    },
+    KindBucket {
+        header: "Constants",
+        kinds: &["constant"],
     },
     KindBucket {
         header: "Properties",
@@ -487,14 +506,171 @@ const KIND_BUCKETS: &[KindBucket] = &[
         header: "Template Variables",
         kinds: &["helm_template_var"],
     },
+    // --- Additional language / web / config / prose buckets ---
+    KindBucket {
+        header: "Enums",
+        kinds: &["enum", "kotlin_enum"],
+    },
+    KindBucket {
+        header: "CSS Selectors",
+        kinds: &["css_class", "css_id"],
+    },
+    KindBucket {
+        header: "CSS Variables",
+        kinds: &["css_variable", "scss_variable"],
+    },
+    KindBucket {
+        header: "Mixins & Functions (SCSS)",
+        kinds: &["scss_mixin", "scss_function"],
+    },
+    KindBucket {
+        header: "HTML Elements",
+        kinds: &["html_element"],
+    },
+    KindBucket {
+        header: "Structs (C)",
+        kinds: &["c_struct"],
+    },
+    KindBucket {
+        header: "Functions (C)",
+        kinds: &["c_function"],
+    },
+    KindBucket {
+        header: "Classes (C++)",
+        kinds: &["cpp_class"],
+    },
+    KindBucket {
+        header: "Methods (C++)",
+        kinds: &["cpp_method"],
+    },
+    KindBucket {
+        header: "Namespaces (C++)",
+        kinds: &["cpp_namespace"],
+    },
+    KindBucket {
+        header: "Macros (C/C++)",
+        kinds: &["macro_definition"],
+    },
+    KindBucket {
+        header: "Subroutines (VCL)",
+        kinds: &["vcl_subroutine", "vcl_builtin_sub"],
+    },
+    KindBucket {
+        header: "Backends & Probes (VCL)",
+        kinds: &["vcl_backend", "vcl_probe"],
+    },
+    KindBucket {
+        header: "ACLs (VCL)",
+        kinds: &["vcl_acl"],
+    },
+    KindBucket {
+        header: "Imports & Instances (VCL)",
+        kinds: &["vcl_import", "vcl_object_instance"],
+    },
+    KindBucket {
+        header: "VCL Version",
+        kinds: &["vcl_version"],
+    },
+    KindBucket {
+        header: "Test Cases (VTC)",
+        kinds: &["vtc_test_case"],
+    },
+    KindBucket {
+        header: "Test Actors (VTC)",
+        kinds: &[
+            "vtc_server",
+            "vtc_client",
+            "vtc_varnish_instance",
+            "vtc_logexpect",
+            "vtc_barrier",
+        ],
+    },
+    KindBucket {
+        header: "Modules (VCC)",
+        kinds: &["vcc_module", "vcc_object"],
+    },
+    KindBucket {
+        header: "Functions & Methods (VCC)",
+        kinds: &["vcc_function", "vcc_method"],
+    },
+    KindBucket {
+        header: "Documentation Sections",
+        kinds: &["markdown_document", "markdown_section"],
+    },
+    KindBucket {
+        header: "Project Identity",
+        kinds: &["project_identity"],
+    },
 ];
 
 const OTHERS_HEADER: &str = "Other Entities";
 
+/// Attribute-usage kinds: the JSX/HTML parsers emit one entity per
+/// whitespace-separated token of every `class=`/`className=` and one per
+/// `id=`, so a single Tailwind className yields 10-20 of them. They are
+/// reference targets of REFERENCES_DOM / USES_CSS_CLASS, not file anatomy.
+/// Declaration kinds (`css_class`, `css_id`, `html_element`) are NOT here:
+/// they carry their own sections and keep their line numbers.
+const MARKUP_KINDS: &[&str] = &["html_class", "html_id"];
+const MARKUP_HEADER: &str = "Markup References (not code)";
+const MARKUP_PREVIEW_LIMIT: usize = 20;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MarkupGroup {
+    pub name: String,
+    pub kind: String,
+    pub count: usize,
+}
+
+pub(crate) fn is_markup_kind(kind: &str) -> bool {
+    MARKUP_KINDS.contains(&kind)
+}
+
+/// Split entities into (code_entities, distinct_markup_groups, total_markup_count).
+///
+/// Groups sort by count desc, then name asc, then kind asc, so the rendered
+/// summary is deterministic and assertable across test runs.
+pub(crate) fn split_markup(
+    entities: &[serde_json::Value],
+) -> (Vec<&serde_json::Value>, Vec<MarkupGroup>, usize) {
+    let mut code_entities = Vec::new();
+    let mut counts: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    let mut markup_total = 0;
+
+    for entity in entities {
+        let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        if is_markup_kind(kind) {
+            markup_total += 1;
+            let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            *counts
+                .entry((name.to_string(), kind.to_string()))
+                .or_insert(0) += 1;
+        } else {
+            code_entities.push(entity);
+        }
+    }
+
+    let mut groups: Vec<MarkupGroup> = counts
+        .into_iter()
+        .map(|((name, kind), count)| MarkupGroup { name, kind, count })
+        .collect();
+
+    // Sort by count desc, then name asc, then kind asc
+    groups.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+
+    (code_entities, groups, markup_total)
+}
+
 /// Group `entities` by [`KIND_BUCKETS`] and append a Markdown section per
 /// non-empty bucket (plus a final `Other Entities` bucket for any kinds
 /// not present in the table).
-fn append_entity_groups(output: &mut String, entities: &[serde_json::Value]) {
+fn append_entity_groups(output: &mut String, entities: &[&serde_json::Value]) {
     let mut buckets: Vec<Vec<&serde_json::Value>> = vec![Vec::new(); KIND_BUCKETS.len()];
     let mut others: Vec<&serde_json::Value> = Vec::new();
 
@@ -521,6 +697,57 @@ fn append_entity_groups(output: &mut String, entities: &[serde_json::Value]) {
         for entity in others {
             output.push_str(&format_entity_summary(entity));
         }
+    }
+}
+
+/// Render the markup section either as a compact summary or in full when opt-in.
+fn append_markup_section(
+    output: &mut String,
+    groups: &[MarkupGroup],
+    total_count: usize,
+    include_markup: bool,
+) {
+    if total_count == 0 {
+        return;
+    }
+
+    output.push_str(&format!("## {MARKUP_HEADER}\n\n"));
+
+    if include_markup {
+        for group in groups {
+            output.push_str(&format!(
+                "- **`{}`** ({}) ×{}\n",
+                group.name, group.kind, group.count
+            ));
+        }
+        output.push('\n');
+    } else {
+        let distinct_count = groups.len();
+        output.push_str(&format!(
+            "{} markup references, {} distinct, from `class`/`id` attributes.\n",
+            total_count, distinct_count
+        ));
+
+        let top_tokens: Vec<String> = groups
+            .iter()
+            .take(MARKUP_PREVIEW_LIMIT)
+            .map(|g| format!("`{}` ×{}", g.name, g.count))
+            .collect();
+
+        if !top_tokens.is_empty() {
+            output.push_str("Top tokens: ");
+            output.push_str(&top_tokens.join(", "));
+            if groups.len() > MARKUP_PREVIEW_LIMIT {
+                output.push_str(&format!(
+                    ", … and {} more",
+                    groups.len() - MARKUP_PREVIEW_LIMIT
+                ));
+            }
+            output.push_str(".\n");
+        }
+        output.push_str(
+            "Pass `--include-markup` (CLI) or `include_markup: true` (MCP) to list them all.\n\n",
+        );
     }
 }
 
@@ -612,7 +839,7 @@ mod tests {
             "outgoing_references": [],
             "file_matched": false
         });
-        let formatted = format_file_entities("src/main.java", &result);
+        let formatted = format_file_entities("src/main.java", &result, false);
         assert!(
             formatted.contains("No indexed file matched `src/main.java`"),
             "got: {formatted}"
@@ -631,7 +858,7 @@ mod tests {
                 {"file_path": "src/api/main.java", "repo_name": "app"}
             ]
         });
-        let formatted = format_file_entities("main.java", &result);
+        let formatted = format_file_entities("main.java", &result, false);
         assert!(
             formatted.contains("No indexed file matched `main.java` exactly"),
             "got: {formatted}"
@@ -651,7 +878,7 @@ mod tests {
             "outgoing_references": [],
             "file_matched": true
         });
-        let formatted = format_file_entities("src/empty.rs", &result);
+        let formatted = format_file_entities("src/empty.rs", &result, false);
         assert!(
             formatted.contains("No indexed file matched `src/empty.rs`"),
             "got: {formatted}"
@@ -669,7 +896,7 @@ mod tests {
                 "signature": "public class MyClass"
             }
         ]);
-        let formatted = format_file_entities("src/main.java", &entities);
+        let formatted = format_file_entities("src/main.java", &entities, false);
         assert!(formatted.contains("## Classes"));
         assert!(formatted.contains("MyClass"));
         assert!(formatted.contains("(line 10)"));
@@ -690,7 +917,7 @@ mod tests {
                 "start_line": 50
             }
         ]);
-        let formatted = format_file_entities("src/main.java", &entities);
+        let formatted = format_file_entities("src/main.java", &entities, false);
         assert!(formatted.contains("Found 2 entity/entities"));
         assert!(formatted.contains("Class1"));
         assert!(formatted.contains("Class2"));
@@ -704,7 +931,7 @@ mod tests {
             {"name": "myMethod", "kind": "method"},
             {"name": "myFunction", "kind": "function"}
         ]);
-        let formatted = format_file_entities("src/main.java", &entities);
+        let formatted = format_file_entities("src/main.java", &entities, false);
         assert!(formatted.contains("## Classes"));
         assert!(formatted.contains("## Interfaces"));
         assert!(formatted.contains("## Methods"));
@@ -769,7 +996,7 @@ mod tests {
                 "kind": "unknown_kind"
             }
         ]);
-        let formatted = format_file_entities("src/main.java", &entities);
+        let formatted = format_file_entities("src/main.java", &entities, false);
         // Unknown kinds fall into the "Other Entities" bucket so they remain visible.
         assert!(formatted.contains("UnknownEntity"));
         assert!(formatted.contains("Found 1 entity/entities"));
@@ -777,11 +1004,63 @@ mod tests {
     }
 
     #[test]
+    fn test_format_file_entities_markup_summarized_and_opt_in() {
+        let entities = json!([
+            {"name": "myFunc", "kind": "function"},
+            {"name": "myConst", "kind": "constant"},
+            {"name": "btn-primary", "kind": "html_class"},
+            {"name": "btn-primary", "kind": "html_class"},
+            {"name": "container", "kind": "html_class"},
+            {"name": "my-id", "kind": "html_id"}
+        ]);
+
+        // Default summary (include_markup = false)
+        let formatted_default = format_file_entities("src/Component.tsx", &entities, false);
+        assert!(
+            formatted_default
+                .contains("Found 2 code entity/entities (4 markup references summarized below)")
+        );
+        assert!(formatted_default.contains("## Functions"));
+        assert!(formatted_default.contains("myFunc"));
+        assert!(formatted_default.contains("## Constants"));
+        assert!(formatted_default.contains("myConst"));
+        assert!(!formatted_default.contains("## Other Entities"));
+        assert!(!formatted_default.contains("- **`btn-primary`**"));
+        assert!(formatted_default.contains("## Markup References (not code)"));
+        assert!(formatted_default.contains("4 markup references, 3 distinct"));
+        assert!(formatted_default.contains("`btn-primary` ×2"));
+        assert!(formatted_default.contains("Pass `--include-markup`"));
+
+        // Full list (include_markup = true)
+        let formatted_full = format_file_entities("src/Component.tsx", &entities, true);
+        assert!(formatted_full.contains("- **`btn-primary`** (html_class) ×2"));
+        assert!(formatted_full.contains("- **`container`** (html_class) ×1"));
+        assert!(formatted_full.contains("- **`my-id`** (html_id) ×1"));
+    }
+
+    #[test]
+    fn test_format_file_entities_declarative_css_and_html_elements_kept_in_code() {
+        let entities = json!([
+            {"name": "app-root", "kind": "html_element", "start_line": 5},
+            {"name": "main-header", "kind": "css_class", "start_line": 12},
+            {"name": "theme-dark", "kind": "css_id", "start_line": 25}
+        ]);
+        let formatted = format_file_entities("src/styles.css", &entities, false);
+        assert!(formatted.contains("Found 3 entity/entities"));
+        assert!(formatted.contains("## HTML Elements"));
+        assert!(formatted.contains("app-root"));
+        assert!(formatted.contains("## CSS Selectors"));
+        assert!(formatted.contains("main-header"));
+        assert!(formatted.contains("theme-dark"));
+        assert!(!formatted.contains("Markup References"));
+    }
+
+    #[test]
     fn test_format_file_entities_displays_file_path() {
         let entities = json!([
             {"name": "MyClass", "kind": "class"}
         ]);
-        let formatted = format_file_entities("src/main/java/MyClass.java", &entities);
+        let formatted = format_file_entities("src/main/java/MyClass.java", &entities, false);
         assert!(formatted.contains("src/main/java/MyClass.java"));
     }
 
@@ -836,5 +1115,36 @@ mod tests {
         // '/' is already there and there's no need to fall back to equality.
         let fragment = ends_with_suffix_query("/repo/src/lib.rs");
         assert_eq!(fragment, "e.file_path ENDS WITH '/repo/src/lib.rs'");
+    }
+
+    #[test]
+    fn test_all_wire_kinds_covered_by_buckets_or_markup() {
+        let mut missing = Vec::new();
+        for kind in crate::models::EntityKind::all_wire_kinds() {
+            let in_bucket = KIND_BUCKETS.iter().any(|b| b.kinds.contains(&kind));
+            let in_markup = is_markup_kind(kind);
+            if !in_bucket && !in_markup {
+                missing.push(kind);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Every EntityKind wire label must be in KIND_BUCKETS or MARKUP_KINDS; unmapped: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn test_all_bucket_kinds_exist_in_entity_kind_wire_labels() {
+        let wire_labels: Vec<&str> = crate::models::EntityKind::all_wire_kinds().collect();
+        for bucket in KIND_BUCKETS {
+            for kind in bucket.kinds {
+                assert!(
+                    wire_labels.contains(kind),
+                    "KIND_BUCKETS entry '{}' points to unknown kind '{}'",
+                    bucket.header,
+                    kind
+                );
+            }
+        }
     }
 }

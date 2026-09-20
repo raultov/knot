@@ -269,6 +269,13 @@ impl std::fmt::Display for EntityKind {
     }
 }
 
+impl EntityKind {
+    /// Every wire-format label, for exhaustiveness checks.
+    pub fn all_wire_kinds() -> impl Iterator<Item = &'static str> {
+        KIND_LABELS.iter().map(|(_, label)| *label)
+    }
+}
+
 /// A raw entity extracted from the AST before embedding.
 ///
 /// Created in Stage 2 (parse) and enriched with a UUID in Stage 3 (prepare).

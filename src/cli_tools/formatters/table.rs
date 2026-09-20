@@ -256,7 +256,7 @@ fn callers_resolution_header(entity_name: &str, references: &Value, total_refs: 
     out
 }
 
-pub fn format_explore_table(file_path: &str, result: &Value) -> String {
+pub fn format_explore_table(file_path: &str, result: &Value, include_markup: bool) -> String {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::DynamicFullWidth);
     table.set_header(vec![
@@ -271,8 +271,16 @@ pub fn format_explore_table(file_path: &str, result: &Value) -> String {
     ]);
 
     let arr = json_entities_array(result);
+    let (code_entities, markup_groups, markup_total) =
+        crate::cli_tools::explore_file::split_markup(&arr);
 
-    for entity in &arr {
+    let display_entities = if include_markup {
+        arr.iter().collect::<Vec<_>>()
+    } else {
+        code_entities
+    };
+
+    for entity in display_entities {
         let kind = entity.get("kind").and_then(|v| v.as_str()).unwrap_or("-");
         let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("-");
         let line = json_line_number(entity);
@@ -296,24 +304,36 @@ pub fn format_explore_table(file_path: &str, result: &Value) -> String {
             "interface" => Color::Cyan,
             "method" | "function" | "python_method" | "python_function" => Color::Blue,
             "variable" | "field" => Color::Magenta,
+            "html_class" | "html_id" => Color::DarkGrey,
             _ => Color::White,
         };
 
         table.add_row(vec![
             Cell::new(kind).fg(kind_color),
-            Cell::new(name),
+            Cell::new(name).fg(Color::Green),
             Cell::new(line).set_alignment(CellAlignment::Right),
             Cell::new(sig_or_doc),
         ]);
     }
 
-    if table.row_iter().count() == 0 {
+    if table.is_empty() {
         return format!("No entities found in `{}`.\n", file_path);
     }
 
-    let count = arr.len();
-    let header = format!("Entities in `{}` ({} found)\n", file_path, count);
-    header + &table.to_string()
+    let mut out = format!(
+        "Entities in `{}` ({} found)\n{}",
+        file_path,
+        arr.len(),
+        table
+    );
+    if !include_markup && markup_total > 0 {
+        out.push_str(&format!(
+            "\nNOTE: {} markup references hidden ({} distinct). Use --include-markup to show them.\n",
+            markup_total,
+            markup_groups.len()
+        ));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -477,7 +497,7 @@ mod tests {
     #[test]
     fn test_format_explore_table_empty() {
         let entities = json!([]);
-        let output = format_explore_table("test.java", &entities);
+        let output = format_explore_table("test.java", &entities, false);
         assert!(output.contains("No entities found"));
     }
 
@@ -491,7 +511,7 @@ mod tests {
                 "signature": "public class MyClass"
             }
         ]);
-        let output = format_explore_table("test.java", &entities);
+        let output = format_explore_table("test.java", &entities, false);
         assert!(output.contains("Entities in `test.java`"));
         assert!(output.contains("MyClass"));
         assert!(output.contains("class"));
@@ -507,7 +527,7 @@ mod tests {
                 "docstring": "This is a method"
             }
         ]);
-        let output = format_explore_table("test.java", &entities);
+        let output = format_explore_table("test.java", &entities, false);
         assert!(output.contains("myMethod"));
         assert!(output.contains("This is a method"));
     }

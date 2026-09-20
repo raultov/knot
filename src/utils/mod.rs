@@ -175,13 +175,14 @@ pub fn format_explore_output(
     file_path: &str,
     json_value: serde_json::Value,
     output_format: crate::config::OutputFormat,
+    include_markup: bool,
 ) -> String {
     format_output_with_handlers(
         file_path,
         json_value,
         output_format,
-        crate::cli_tools::formatters::format_explore_table,
-        crate::cli_tools::format_file_entities,
+        |fp, val| crate::cli_tools::formatters::format_explore_table(fp, val, include_markup),
+        |fp, val| crate::cli_tools::format_file_entities(fp, val, include_markup),
     )
 }
 
@@ -322,7 +323,8 @@ mod tests {
     #[test]
     fn test_format_explore_output_json() {
         let json = serde_json::json!([{"name": "MyClass", "kind": "class"}]);
-        let result = format_explore_output("test.java", json, crate::config::OutputFormat::Json);
+        let result =
+            format_explore_output("test.java", json, crate::config::OutputFormat::Json, false);
         assert!(result.contains("MyClass"));
     }
 

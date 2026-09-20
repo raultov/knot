@@ -186,6 +186,23 @@ else
     exit 1
 fi
 
+# Test 1b: Verify markup reference segregation and --include-markup opt-in
+echo "Testing markup reference segregation in test_javascript.jsx..."
+if echo "$CLI_RESPONSE" | grep -q "markup references hidden" && ! echo "$CLI_RESPONSE" | grep -q "toolbar-expanded"; then
+    echo -e "${GREEN}✓ CLI: Default explore output segregates markup tokens${NC}"
+else
+    echo -e "${RED}✗ CLI: Default explore output failed to segregate markup tokens${NC}"
+    exit 1
+fi
+
+CLI_FULL_RESPONSE=$(cargo run --release --bin knot -- explore "$JSX_FILE" --include-markup 2>/dev/null)
+if echo "$CLI_FULL_RESPONSE" | grep -q "toolbar-expanded"; then
+    echo -e "${GREEN}✓ CLI: --include-markup shows full markup reference list${NC}"
+else
+    echo -e "${RED}✗ CLI: --include-markup failed to show markup tokens${NC}"
+    exit 1
+fi
+
 # Test 2: Search for HTML elements and attributes
 echo ""
 echo "Test 2: Searching for HTML elements and attributes in test_angular.html..."

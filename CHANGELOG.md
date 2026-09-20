@@ -7,6 +7,12 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.11.0
 
+- **Fixed**: `explore_file` now segregates attribute-usage markup tokens (`html_class`, `html_id`)
+  into a compact summary section by default, preventing Tailwind classes and ID tokens from inflating
+  code lists. Genuine module-level declarations (`constant`), CSS declarations (`css_class`, `css_id`),
+  custom HTML elements (`html_element`), and all 110 wire entity kinds now map to dedicated buckets
+  instead of falling into `Other Entities`. Added `--include-markup` (CLI) and `include_markup` (MCP)
+  to expand the full markup reference list on demand.
 - **Fixed**: `find_callers` target resolution now resolves short queries (< 4 characters)
   via an anchored `NamePrefix` tier (`toLower(target.name) STARTS WITH $name_lower`)
   instead of returning 0 targets when no exact match exists. Long queries (≥ 4 characters)

@@ -104,12 +104,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Explore {
             file_path,
             repo,
+            include_markup,
             output,
         } => {
             let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
             let (fp, json_result) =
                 cli_tools::run_explore_file(&file_path, &target_repo, &graph_db).await?;
-            let formatted = utils::format_explore_output(&fp, json_result, output);
+            let formatted = utils::format_explore_output(&fp, json_result, output, include_markup);
             utils::print_with_pager(&formatted);
         }
 

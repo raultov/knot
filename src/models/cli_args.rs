@@ -84,6 +84,10 @@ pub enum Commands {
         #[arg(short, long)]
         repo: Option<String>,
 
+        /// Include full markup reference list (class/id attribute tokens)
+        #[arg(long)]
+        include_markup: bool,
+
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,

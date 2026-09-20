@@ -28,9 +28,9 @@ use crate::mcp_tools::repo_scope_from_args;
     description = "Read-only file anatomy inspection. Use this to list all classes, methods, and properties within a specific source file without reading its entire contents. \
                    Provides a structural bird's-eye view of a file, showing entity signatures and docstrings to quickly grasp a module's layout. \
                    \n\nUsage: Use AFTER identifying an interesting file via 'search_hybrid_context' to understand its available methods, or before modifying a file. Do NOT use this for searching across multiple files. \
-                   \n\nBehaviour & Return: Read-only operation. Returns a Markdown-formatted outline of the file's entities, grouped by type (Classes, Methods, Interfaces), including line numbers for direct editor navigation. No side effects. \
+                   \n\nBehaviour & Return: Read-only operation. Returns a Markdown-formatted outline of the file's entities, grouped by type (Classes, Methods, Interfaces, Constants, etc.), including line numbers for direct editor navigation. Attribute-usage markup references (html_class, html_id) are summarized in a separate section by default to avoid inflating code lists; set include_markup to true to list them in full. No side effects. \
                    \n\nPath handling: file_path should be a repo-relative path (e.g. 'src/services/user.ts'). Absolute paths under your local checkout are also accepted; the tool strips the known local root automatically. The returned file_path is normalized to the same repo-relative form regardless of how it was queried. If the query is ambiguous across multiple repositories, the answer includes an 'ambiguous_path_candidates' list — retry with a longer path or pass repo_name. \
-                   \n\nParameter guidance: 'file_path' must be a relative or absolute path to a valid source file. Include 'repo_name' if the file path might be ambiguous across multiple indexed repositories. \
+                   \n\nParameter guidance: 'file_path' must be a relative or absolute path to a valid source file. Include 'repo_name' if the file path might be ambiguous across multiple indexed repositories. Set 'include_markup' to true to expand attribute-usage markup tokens. \
                    \n\nSupports Java, Kotlin, C#, and TypeScript codebases.",
     read_only_hint = true,
     destructive_hint = false,
@@ -50,6 +50,10 @@ pub struct ExploreFileTool {
         max_length = 255
     )]
     pub repo_name: Option<String>,
+    #[json_schema(
+        description = "Optional: set to true to list all attribute-usage markup tokens (html_class, html_id) in full rather than in a compact summary. Defaults to false."
+    )]
+    pub include_markup: Option<bool>,
 }
 
 impl ExploreFileTool {
@@ -69,6 +73,11 @@ impl ExploreFileTool {
             .ok_or_else(|| {
                 CallToolError::from_message("Missing 'file_path' parameter".to_string())
             })?;
+
+        let include_markup = args
+            .get("include_markup")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let repo = repo_scope_from_args(&args);
 
@@ -90,24 +99,37 @@ impl ExploreFileTool {
             .await
             .map_err(|e| CallToolError::from_message(format!("Explore file failed: {}", e)))?;
 
-        let formatted = cli_tools::format_file_entities(&fp, &json_result);
+        let formatted = cli_tools::format_file_entities(&fp, &json_result, include_markup);
 
-        // Surface `ambiguous_path_candidates` as structured content so MCP
-        // clients (and the BDD grep assertions) can detect the
-        // disambiguation hint without parsing the formatted Markdown.
-        let structured_content = json_result
+        // Surface `ambiguous_path_candidates` and markup metadata as structured content
+        let mut structured_map = serde_json::Map::new();
+
+        if let Some(arr) = json_result
             .as_object()
             .and_then(|obj| obj.get("ambiguous_path_candidates"))
             .and_then(|v| v.as_array())
             .filter(|arr| !arr.is_empty())
-            .map(|arr| {
-                let mut map = serde_json::Map::new();
-                map.insert(
-                    "ambiguous_path_candidates".to_string(),
-                    serde_json::Value::Array(arr.clone()),
-                );
-                map
-            });
+        {
+            structured_map.insert(
+                "ambiguous_path_candidates".to_string(),
+                serde_json::Value::Array(arr.clone()),
+            );
+        }
+
+        if let Some(obj) = json_result.as_object() {
+            if let Some(count) = obj.get("markup_count") {
+                structured_map.insert("markup_count".to_string(), count.clone());
+            }
+            if let Some(refs) = obj.get("markup_references") {
+                structured_map.insert("markup_references".to_string(), refs.clone());
+            }
+        }
+
+        let structured_content = if structured_map.is_empty() {
+            None
+        } else {
+            Some(structured_map)
+        };
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(
