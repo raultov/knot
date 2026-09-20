@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## v1.11.0
+## v1.11.1
 
 - **Fixed**: `list_files` no longer fabricates a total in its truncation notice.
   The reply carries `total_matches` — exact when the scan consumed every
@@ -31,6 +31,10 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
   via an anchored `NamePrefix` tier (`toLower(target.name) STARTS WITH $name_lower`)
   instead of returning 0 targets when no exact match exists. Long queries (≥ 4 characters)
   remain unchanged and fall back to `Fuzzy` substring matching.
+
+---
+
+## v1.11.0
 - **No Re-index Required (State Compatibility Window)**: upgrading from a
   published `v1.10.0` index needs **no re-index and no configuration change**
   on the default path. `IndexState` no longer encodes model identity: the
