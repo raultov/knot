@@ -384,11 +384,10 @@ pub fn get_file_outgoing_references_query(repo_names: &[String]) -> String {
 /// Cipher for the read-only file listing used by the `list_files` CLI
 /// subcommand and MCP tool: distinct repo-relative paths of the scoped
 /// repositories with their entity counts, deterministically ordered.
-/// `prefix` filters paths with a path-boundary `STARTS WITH` so a
-/// directory prefix (`src/api`) never matches a sibling path that merely
-/// contains the fragment (`docs/src/api-notes.md`). `None` (no prefix)
-/// lists every file of the scope; the cap keeps the surface read-only
-/// cheap even on monorepos.
+/// `prefix` pre-narrows paths via Cypher's literal `STARTS WITH` (the
+/// directory-boundary rule is applied per page by `path_matches` caller-side,
+/// so `src/api` pre-fetches `src/api-notes.md` but discards it during paged
+/// filtering). `None` (no prefix) lists every file of the scope.
 pub fn list_files_query(repo_scoped: bool) -> String {
     let prefix_clause = "WHERE e.file_path STARTS WITH $prefix ";
     let repo_clause = if repo_scoped {

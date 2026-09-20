@@ -12,11 +12,11 @@
 //!   separators, no leading `./`, local-root stripping) and matched as a
 //!   **directory-prefix with path boundary**: `src/api` matches
 //!   `src/api/users.ts` but not `src/api-notes.md`.
-//! - A glob pattern (`*`, `?`, `**`) switches to pattern matching over the
-//!   full path list fetched from the graph in pages of [`MAX_FILES`]. Glob
-//!   searches exhaustively page the graph database until all files are checked,
-//!   ensuring no matching paths are silently dropped.
-//! - Plain-prefix queries fetch up to [`MAX_FILES`] entries in a single read.
+//! - Both plain prefixes and glob patterns (`*`, `?`, `**`) page the graph
+//!   in reads of [`MAX_FILES`], applying the path-boundary filter to each
+//!   page, so a literal `STARTS WITH` over-match can never fill the output
+//!   window and hide valid files behind it. A glob scans the whole scope;
+//!   a plain prefix lets the graph query pre-narrow the rows.
 //! - The pager is capped at [`MAX_SCAN_PAGES`] iterations so a non-advancing
 //!   fetcher terminates with `"truncated": true` instead of looping forever.
 //! - Ordering is deterministic: `(repo_name, file_path)` from the graph
@@ -231,49 +231,66 @@ pub fn format_files_output(
 
 /// Outcome of a paged scan over the graph's file listing.
 struct ScanOutcome {
-    /// Rows collected, in graph order.
+    /// Rows that passed [`path_matches`], in graph order.
     rows: Vec<serde_json::Value>,
-    /// `true` when the source ran out of rows. `false` when the scan
-    /// stopped early at [`MAX_SCAN_PAGES`], which means rows may remain
-    /// unseen.
+    /// `true` when the source ran out of rows, which makes `rows.len()`
+    /// the exact pre-truncation match total. `false` when the scan
+    /// stopped early — at the match cap or at [`MAX_SCAN_PAGES`] — which
+    /// makes `rows.len()` a lower bound only.
     exhausted: bool,
 }
 
-/// Fetch all files matching `query_prefix` from the graph via paging.
-async fn fetch_all_files_paged<F, Fut>(
-    fetch_page: F,
-    query_prefix: &str,
-    repo_names: &[String],
+/// Parameters for [`scan_matching_files`].
+struct ScanParams<'a> {
+    query_prefix: &'a str,
+    filter: &'a str,
+    repo_names: &'a [String],
     page_size: usize,
-) -> Result<ScanOutcome>
+    stop_after: usize,
+}
+
+/// Page the graph's file listing, applying [`path_matches`] per page so a
+/// literal `STARTS WITH` over-match (`src/api` → `src/api-notes.md`) can
+/// never consume the output window and hide valid files behind it.
+///
+/// Stops on the first of: the source running out of rows (`exhausted`),
+/// `stop_after` valid matches collected, or [`MAX_SCAN_PAGES`] pages read.
+async fn scan_matching_files<F, Fut>(fetch_page: F, params: ScanParams<'_>) -> Result<ScanOutcome>
 where
     F: Fn(String, Vec<String>, usize, usize) -> Fut,
     Fut: Future<Output = Result<serde_json::Value>>,
 {
-    let mut all_rows = Vec::new();
-    let mut skip = 0;
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let mut skip = 0usize;
     let mut exhausted = false;
+
     for _ in 0..MAX_SCAN_PAGES {
         let page = fetch_page(
-            query_prefix.to_string(),
-            repo_names.to_vec(),
+            params.query_prefix.to_string(),
+            params.repo_names.to_vec(),
             skip,
-            page_size,
+            params.page_size,
         )
         .await?;
         let page_arr = page.as_array().cloned().unwrap_or_default();
         let fetched_len = page_arr.len();
-        all_rows.extend(page_arr);
-        if fetched_len < page_size {
+        rows.extend(page_arr.into_iter().filter(|row| {
+            let candidate = row.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+            path_matches(params.filter, candidate)
+        }));
+
+        if fetched_len < params.page_size {
             exhausted = true;
             break;
         }
-        skip += page_size;
+        if rows.len() >= params.stop_after {
+            rows.truncate(params.stop_after);
+            break;
+        }
+        skip += params.page_size;
     }
-    Ok(ScanOutcome {
-        rows: all_rows,
-        exhausted,
-    })
+
+    Ok(ScanOutcome { rows, exhausted })
 }
 
 /// Run the file listing shared by `knot files` and the `list_files` MCP
@@ -309,36 +326,27 @@ where
 
     let is_glob = normalized.contains('*') || normalized.contains('?');
 
-    let (raw, may_have_more) = if is_glob {
-        let scan = fetch_all_files_paged(&fetch_page, "", &repo_names, MAX_FILES).await?;
-        (scan.rows, !scan.exhausted)
-    } else {
-        let page = fetch_page(normalized.clone(), repo_names.clone(), 0, MAX_FILES + 1).await?;
-        let mut rows = page.as_array().cloned().unwrap_or_default();
-        let has_more = rows.len() > MAX_FILES;
-        if has_more {
-            rows.truncate(MAX_FILES);
-        }
-        (rows, has_more)
-    };
+    let query_prefix = if is_glob { "" } else { normalized.as_str() };
 
-    let filtered: Vec<serde_json::Value> = raw
-        .into_iter()
-        .filter(|row| {
-            let candidate = row.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-            path_matches(&normalized, candidate)
-        })
-        .collect();
+    let scan = scan_matching_files(
+        &fetch_page,
+        ScanParams {
+            query_prefix,
+            filter: &normalized,
+            repo_names: &repo_names,
+            page_size: MAX_FILES,
+            stop_after: MAX_FILES + 1,
+        },
+    )
+    .await?;
 
-    if filtered.is_empty() {
+    if scan.rows.is_empty() {
         return Ok(serde_json::Value::Null);
     }
 
-    let is_truncated = filtered.len() > MAX_FILES || may_have_more;
-    let mut final_files = filtered;
-    if final_files.len() > MAX_FILES {
-        final_files.truncate(MAX_FILES);
-    }
+    let is_truncated = scan.rows.len() > MAX_FILES || !scan.exhausted;
+    let mut final_files = scan.rows;
+    final_files.truncate(MAX_FILES);
 
     Ok(json!({
         "files": final_files,
@@ -448,6 +456,104 @@ mod tests {
     fn markdown_empty_list_hits_the_no_match_message() {
         let md = format_list_files_markdown(&json!([]));
         assert!(md.contains("No indexed files matched"));
+    }
+
+    #[tokio::test]
+    async fn plain_prefix_behind_many_non_matching_siblings_pages_and_returns_matches() {
+        let mut mock_files = Vec::new();
+        for i in 0..2400 {
+            mock_files.push(json!({
+                "repo_name": "repo",
+                "file_path": format!("src/api-notes/f{i}.md"),
+                "entity_count": 1,
+            }));
+        }
+        for i in 0..5 {
+            mock_files.push(json!({
+                "repo_name": "repo",
+                "file_path": format!("src/api/users{i}.ts"),
+                "entity_count": 2,
+            }));
+        }
+
+        let repo_scope = RepoScope::All;
+
+        let res = run_list_files_with_fetcher(
+            Some("src/api"),
+            &repo_scope,
+            |prefix, _repo_names, skip, limit| {
+                let mock_files = mock_files.clone();
+                async move {
+                    let filtered: Vec<serde_json::Value> = mock_files
+                        .into_iter()
+                        .filter(|f| {
+                            let path = f.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+                            path.starts_with(&prefix)
+                        })
+                        .skip(skip)
+                        .take(limit)
+                        .collect();
+                    Ok(json!(filtered))
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        let files = res.get("files").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(files.len(), 5);
+        for f in files {
+            let path = f.get("file_path").and_then(|v| v.as_str()).unwrap();
+            assert!(path.starts_with("src/api/"));
+        }
+        assert_eq!(res.get("truncated").and_then(|v| v.as_bool()), Some(false));
+    }
+
+    #[tokio::test]
+    async fn plain_prefix_with_unfiltered_overflow_but_filtered_under_cap_reports_not_truncated() {
+        let mut mock_files = Vec::new();
+        for i in 0..3000 {
+            mock_files.push(json!({
+                "repo_name": "repo",
+                "file_path": format!("src/api-notes/f{i}.md"),
+                "entity_count": 1,
+            }));
+        }
+        for i in 0..10 {
+            mock_files.push(json!({
+                "repo_name": "repo",
+                "file_path": format!("src/api/x{i}.ts"),
+                "entity_count": 2,
+            }));
+        }
+
+        let repo_scope = RepoScope::All;
+
+        let res = run_list_files_with_fetcher(
+            Some("src/api"),
+            &repo_scope,
+            |prefix, _repo_names, skip, limit| {
+                let mock_files = mock_files.clone();
+                async move {
+                    let filtered: Vec<serde_json::Value> = mock_files
+                        .into_iter()
+                        .filter(|f| {
+                            let path = f.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+                            path.starts_with(&prefix)
+                        })
+                        .skip(skip)
+                        .take(limit)
+                        .collect();
+                    Ok(json!(filtered))
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        let files = res.get("files").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(files.len(), 10);
+        assert_eq!(res.get("truncated").and_then(|v| v.as_bool()), Some(false));
     }
 
     #[tokio::test]

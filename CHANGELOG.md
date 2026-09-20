@@ -7,6 +7,12 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.11.0
 
+- **Fixed**: plain-prefix `list_files` queries no longer drop valid files. The
+  graph's `STARTS WITH` is a superset of the path-boundary rule (`src/api` also
+  returns `src/api-notes.md`), and the single unfiltered read let more than 2000
+  non-matching siblings consume the whole window. Prefix queries now page the
+  graph and apply the boundary filter per page, and truncation is decided on the
+  filtered count only.
 - **Hardened**: the `list_files` pager has an absolute `MAX_SCAN_PAGES` iteration
   cap, so a backend that ignores `SKIP` terminates with a truncated result
   instead of looping forever.
