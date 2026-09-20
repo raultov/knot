@@ -7,6 +7,11 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.11.0
 
+- **Fixed**: `list_files` no longer fabricates a total in its truncation notice.
+  The reply carries `total_matches` — exact when the scan consumed every
+  candidate, flagged by `total_is_lower_bound` when it stopped at the cap — and
+  the notice renders `Showing first 2000 of 3471 files` or
+  `Showing first 2000 of more than 2000 files` instead of the invented `N + 1`.
 - **Fixed**: plain-prefix `list_files` queries no longer drop valid files. The
   graph's `STARTS WITH` is a superset of the path-boundary rule (`src/api` also
   returns `src/api-notes.md`), and the single unfiltered read let more than 2000

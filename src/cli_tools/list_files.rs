@@ -22,6 +22,9 @@
 //! - Ordering is deterministic: `(repo_name, file_path)` from the graph
 //!   query; glob filtering preserves that order; the reply carries
 //!   `"truncated": true` when the output file count exceeds [`MAX_FILES`].
+//! - `"total_matches"` is the pre-truncation match count. It is exact when
+//!   the scan consumed the source and a lower bound otherwise, which
+//!   `"total_is_lower_bound"` states explicitly.
 //! - When truncated, the rendered markdown surfaces a notice indicating the
 //!   truncation while still rendering the first [`MAX_FILES`] matches.
 
@@ -207,11 +210,24 @@ pub fn format_list_files_markdown(files: &serde_json::Value) -> String {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if is_truncated {
-        out.push_str(&format!(
-            "\nShowing first {} of at least {} files (truncated) — narrow the pattern.",
-            rows.len(),
-            rows.len() + 1
-        ));
+        let shown = rows.len();
+        let exact = files
+            .get("total_matches")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|_| {
+                !files
+                    .get("total_is_lower_bound")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true)
+            });
+        match exact {
+            Some(total) => out.push_str(&format!(
+                "\nShowing first {shown} of {total} files (truncated) — narrow the pattern."
+            )),
+            None => out.push_str(&format!(
+                "\nShowing first {shown} of more than {shown} files (truncated) — narrow the pattern."
+            )),
+        }
     }
     out
 }
@@ -344,13 +360,16 @@ where
         return Ok(serde_json::Value::Null);
     }
 
-    let is_truncated = scan.rows.len() > MAX_FILES || !scan.exhausted;
+    let total_matches = scan.rows.len();
+    let is_truncated = total_matches > MAX_FILES || !scan.exhausted;
     let mut final_files = scan.rows;
     final_files.truncate(MAX_FILES);
 
     Ok(json!({
         "files": final_files,
         "truncated": is_truncated,
+        "total_matches": total_matches,
+        "total_is_lower_bound": !scan.exhausted,
     }))
 }
 
@@ -435,21 +454,39 @@ mod tests {
     }
 
     #[test]
-    fn markdown_table_renders_truncated_notice() {
+    fn markdown_table_renders_exact_truncated_notice() {
         let files = json!({
             "files": [
                 {"repo_name": "r", "file_path": "src/a.rs", "entity_count": 3},
                 {"repo_name": "r", "file_path": "src/b.rs", "entity_count": 1},
             ],
             "truncated": true,
+            "total_matches": 3471,
+            "total_is_lower_bound": false,
         });
         let md = format_list_files_markdown(&files);
         assert!(md.contains("| Repository | File | Entities |"));
         assert!(md.contains("| r | src/a.rs | 3 |"));
         assert!(md.contains("| r | src/b.rs | 1 |"));
+        assert!(md.contains("Showing first 2 of 3471 files (truncated) — narrow the pattern."));
+    }
+
+    #[test]
+    fn markdown_table_renders_lower_bound_notice() {
+        let files = json!({
+            "files": [
+                {"repo_name": "r", "file_path": "src/a.rs", "entity_count": 3},
+                {"repo_name": "r", "file_path": "src/b.rs", "entity_count": 1},
+            ],
+            "truncated": true,
+            "total_matches": 2,
+            "total_is_lower_bound": true,
+        });
+        let md = format_list_files_markdown(&files);
         assert!(
-            md.contains("Showing first 2 of at least 3 files (truncated) — narrow the pattern.")
+            md.contains("Showing first 2 of more than 2 files (truncated) — narrow the pattern.")
         );
+        assert!(!md.contains("of at least 3"));
     }
 
     #[test]
@@ -507,6 +544,11 @@ mod tests {
             assert!(path.starts_with("src/api/"));
         }
         assert_eq!(res.get("truncated").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(res.get("total_matches").and_then(|v| v.as_u64()), Some(5));
+        assert_eq!(
+            res.get("total_is_lower_bound").and_then(|v| v.as_bool()),
+            Some(false)
+        );
     }
 
     #[tokio::test]
@@ -592,6 +634,14 @@ mod tests {
         let files = res.get("files").and_then(|v| v.as_array()).unwrap();
         assert_eq!(files.len(), MAX_SCAN_PAGES);
         assert_eq!(res.get("truncated").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            res.get("total_matches").and_then(|v| v.as_u64()),
+            Some(MAX_SCAN_PAGES as u64)
+        );
+        assert_eq!(
+            res.get("total_is_lower_bound").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[tokio::test]
@@ -640,5 +690,10 @@ mod tests {
         let files = res.get("files").and_then(|v| v.as_array()).unwrap();
         assert_eq!(files.len(), 10);
         assert_eq!(res.get("truncated").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(res.get("total_matches").and_then(|v| v.as_u64()), Some(10));
+        assert_eq!(
+            res.get("total_is_lower_bound").and_then(|v| v.as_bool()),
+            Some(false)
+        );
     }
 }

@@ -17,8 +17,8 @@ the discovery half of "search only in `src/api/**`".
     `src/api` matches `src/api/users.ts` but never `src/api-notes.md`.
   - **Glob**: `*` wildcards a segment (`src/*.rs`), `?` one character,
     `**` matches any depth (`src/**/*_test.rs`).
-  - Omitted: lists every indexed file (capped; the reply notes
-    truncation and you should narrow the scope).
+  - Omitted: lists every indexed file (capped; the reply notes truncation with
+    an exact total or an explicit lower bound, and you should narrow the scope).
 
 - **`--repo <name>`**: repository scope (recommended when several indexed
   repositories share path shapes).
