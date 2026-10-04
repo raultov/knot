@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.11.2
 
 - **Fixed**: Deterministic UUID v5 generation for HTML/JSX markup entities (`HtmlId`, `HtmlClass`, `HtmlElement`).
   Previously created with random `Uuid::new_v4()`, markup entities now derive stable v5 UUIDs from entity parameters, eliminating Qdrant and Neo4j churn on incremental re-indexing.
