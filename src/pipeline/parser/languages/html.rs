@@ -9,7 +9,6 @@
 use crate::models::{EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
-use uuid::Uuid;
 
 /// Extract the name and trimmed value from an attribute node.
 /// Returns (attr_name, attr_value).
@@ -82,69 +81,35 @@ fn extract_html_attribute(
     }
 
     if attr_name == "id" && !attr_value.is_empty() {
-        entities.push(ParsedEntity {
-            uuid: Uuid::new_v4(),
-            name: attr_value.clone(),
-            kind: EntityKind::HtmlId,
-            fqn: format!("#{}", attr_value),
-            signature: None,
-            docstring: None,
-            inline_comments: Vec::new(),
-            decorators: Vec::new(),
-            language: "html".to_string(),
-            file_path: file_path.to_string(),
-            start_line: line,
-            end_line: line,
-            enclosing_class: None,
-            repo_name: repo_name.to_string(),
-            reference_intents: Vec::new(),
-            calls: Vec::new(),
-            relationships: Vec::new(),
-            embed_text: String::new(),
-            rust_attributes: None,
-            impl_trait: None,
-            impl_target: None,
-            generics: None,
-            lifetimes: None,
-            alias_module_path: None,
-            original_export_name: None,
-            enclosing_class_fqn: None,
-            default_export: None,
-            is_test_context: false,
-        });
+        entities.push(ParsedEntity::new(
+            attr_value.clone(),
+            EntityKind::HtmlId,
+            format!("#{}", attr_value),
+            None,
+            None,
+            "html",
+            file_path,
+            line,
+            line,
+            None,
+            repo_name,
+        ));
     } else if attr_name == "class" && !attr_value.is_empty() {
         for class_name in attr_value.split_whitespace() {
             if !class_name.is_empty() {
-                entities.push(ParsedEntity {
-                    uuid: Uuid::new_v4(),
-                    name: class_name.to_string(),
-                    kind: EntityKind::HtmlClass,
-                    fqn: format!(".{}", class_name),
-                    signature: None,
-                    docstring: None,
-                    inline_comments: Vec::new(),
-                    decorators: Vec::new(),
-                    language: "html".to_string(),
-                    file_path: file_path.to_string(),
-                    start_line: line,
-                    end_line: line,
-                    enclosing_class: None,
-                    repo_name: repo_name.to_string(),
-                    reference_intents: Vec::new(),
-                    calls: Vec::new(),
-                    relationships: Vec::new(),
-                    embed_text: String::new(),
-                    rust_attributes: None,
-                    impl_trait: None,
-                    impl_target: None,
-                    generics: None,
-                    lifetimes: None,
-                    alias_module_path: None,
-                    original_export_name: None,
-                    enclosing_class_fqn: None,
-                    default_export: None,
-                    is_test_context: false,
-                });
+                entities.push(ParsedEntity::new(
+                    class_name,
+                    EntityKind::HtmlClass,
+                    format!(".{}", class_name),
+                    None,
+                    None,
+                    "html",
+                    file_path,
+                    line,
+                    line,
+                    None,
+                    repo_name,
+                ));
             }
         }
     }
@@ -177,36 +142,19 @@ fn extract_html_elements(
                             )]
                             if tag_name.contains('-') {
                                 // Web Component / Angular Component
-                                entities.push(ParsedEntity {
-                                    uuid: Uuid::new_v4(),
-                                    name: tag_name.clone(),
-                                    kind: EntityKind::HtmlElement,
-                                    fqn: format!("<{}>", tag_name),
-                                    signature: None,
-                                    docstring: None,
-                                    inline_comments: Vec::new(),
-                                    decorators: Vec::new(),
-                                    language: "html".to_string(),
-                                    file_path: file_path.to_string(),
-                                    start_line: line,
-                                    end_line: line,
-                                    enclosing_class: None,
-                                    repo_name: repo_name.to_string(),
-                                    reference_intents: Vec::new(),
-                                    calls: Vec::new(),
-                                    relationships: Vec::new(),
-                                    embed_text: String::new(),
-                                    rust_attributes: None,
-                                    impl_trait: None,
-                                    impl_target: None,
-                                    generics: None,
-                                    lifetimes: None,
-                                    alias_module_path: None,
-                                    original_export_name: None,
-                                    enclosing_class_fqn: None,
-                                    default_export: None,
-                                    is_test_context: false,
-                                });
+                                entities.push(ParsedEntity::new(
+                                    tag_name.clone(),
+                                    EntityKind::HtmlElement,
+                                    format!("<{}>", tag_name),
+                                    None,
+                                    None,
+                                    "html",
+                                    file_path,
+                                    line,
+                                    line,
+                                    None,
+                                    repo_name,
+                                ));
                             }
                         }
                         "attribute" => {
@@ -589,5 +537,38 @@ mod tests {
         assert!(classes.iter().any(|c| c.name == "main-nav"));
         assert!(classes.iter().any(|c| c.name == "footer"));
         assert!(classes.iter().any(|c| c.name == "sticky"));
+    }
+
+    #[test]
+    fn test_html_markup_entities_uuids_are_deterministic() {
+        let source = r#"
+<my-element id="my-id" class="class1 class2"></my-element>
+        "#;
+        let tree1 = parse_html_snippet(source);
+        let entities1 = extract_entities_html(
+            tree1.root_node(),
+            source.as_bytes(),
+            "index.html",
+            "test_repo",
+        );
+
+        let tree2 = parse_html_snippet(source);
+        let entities2 = extract_entities_html(
+            tree2.root_node(),
+            source.as_bytes(),
+            "index.html",
+            "test_repo",
+        );
+
+        assert_eq!(entities1.len(), 4); // 1 element, 1 id, 2 classes
+        assert_eq!(entities1.len(), entities2.len());
+
+        for (e1, e2) in entities1.iter().zip(entities2.iter()) {
+            assert_eq!(
+                e1.uuid, e2.uuid,
+                "UUID should be deterministic for entity {}",
+                e1.name
+            );
+        }
     }
 }

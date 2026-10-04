@@ -182,6 +182,7 @@ pub fn parse_files_stream(
         .map(|m| m.into_inner().unwrap_or_default())
         .unwrap_or_default();
     languages::varnish::aggregate_varnish_builtin_subs(&mut entities, &parse_cfg.repo_name);
+    disambiguate_entity_uuids(&mut entities);
 
     // Publish the entity total BEFORE the first blocking_send. This is the
     // exact handoff point the progress observer relies on: parse band ends
@@ -222,6 +223,7 @@ pub fn parse_files(files: &[PathBuf], parse_cfg: &ParseConfig) -> Vec<ParsedEnti
 
     // Post-process Varnish built-in sub aggregators globally.
     languages::varnish::aggregate_varnish_builtin_subs(&mut entities, &parse_cfg.repo_name);
+    disambiguate_entity_uuids(&mut entities);
 
     entities
 }
@@ -308,11 +310,13 @@ impl<'a> FileCtx<'a> {
 fn parse_single_file(path: &Path, parse_cfg: &ParseConfig) -> Result<Vec<ParsedEntity>> {
     let ctx = FileCtx::new(path, parse_cfg)?;
 
-    if let Some(entities) = dispatch_by_filename(&ctx) {
-        return Ok(entities);
-    }
+    let mut entities = if let Some(entities) = dispatch_by_filename(&ctx) {
+        entities
+    } else {
+        dispatch_by_extension(&ctx)?
+    };
 
-    let entities = dispatch_by_extension(&ctx)?;
+    disambiguate_entity_uuids(&mut entities);
 
     debug!(
         "Extracted {} entities from {}",
@@ -713,7 +717,81 @@ fn dispatch_yaml(
 /// `.exists()` on each ancestor, which resolves against the **process CWD**
 /// for relative inputs. Callers in the pipeline always have the absolute
 /// path from `discover_files`; only the **persisted** entity `file_path`
-/// is relative.
+/// Disambiguate duplicate entity UUIDs across a collection of parsed entities.
+///
+/// Runs a collision-only disambiguation pass over entities extracted from files.
+/// Entities sharing a base UUID identity (`{repo_name}:{file_path}:{fqn}:{start_line}`) are grouped.
+/// Each group is sorted deterministically by `(kind label, name, end_line, signature, original index)`.
+///
+/// The first entity retains its base UUID identity.
+/// Subsequence members sharing a base identity receive:
+/// `Uuid::new_v5(&NAMESPACE_KNOT, "{base identity}:{kind label}:{name}#{n}")`,
+/// where `n` is its 1-based rank among the members sharing that same `(kind, name)`.
+pub(crate) fn disambiguate_entity_uuids(entities: &mut [ParsedEntity]) {
+    use crate::models::NAMESPACE_KNOT;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    if entities.len() <= 1 {
+        return;
+    }
+
+    // Group entity indices by base UUID
+    let mut groups: HashMap<Uuid, Vec<usize>> = HashMap::new();
+    for (idx, entity) in entities.iter().enumerate() {
+        groups.entry(entity.uuid).or_default().push(idx);
+    }
+
+    for (base_uuid, mut indices) in groups {
+        if indices.len() <= 1 {
+            continue;
+        }
+
+        // Sort members of colliding group deterministically
+        indices.sort_by(|&a, &b| {
+            let ea = &entities[a];
+            let eb = &entities[b];
+            ea.kind
+                .to_string()
+                .cmp(&eb.kind.to_string())
+                .then_with(|| ea.name.cmp(&eb.name))
+                .then_with(|| ea.end_line.cmp(&eb.end_line))
+                .then_with(|| ea.signature.cmp(&eb.signature))
+                .then_with(|| a.cmp(&b))
+        });
+
+        // Base identity string from any entity in group
+        let first = &entities[indices[0]];
+        let base_identity = format!(
+            "{}:{}:{}:{}",
+            first.repo_name, first.file_path, first.fqn, first.start_line
+        );
+
+        let mut kind_name_counts: HashMap<(String, String), usize> = HashMap::new();
+        for (i, &idx) in indices.iter().enumerate() {
+            let kind_label = entities[idx].kind.to_string();
+            let name = entities[idx].name.clone();
+
+            let count = kind_name_counts
+                .entry((kind_label.clone(), name.clone()))
+                .or_insert(0);
+            *count += 1;
+
+            if i == 0 {
+                // First entity in sorted group keeps base UUID derived at creation
+                debug_assert_eq!(entities[idx].uuid, base_uuid);
+            } else {
+                let n = *count;
+                let disambiguated_identity =
+                    format!("{}:{}:{}#{}", base_identity, kind_label, name, n);
+                entities[idx].uuid =
+                    Uuid::new_v5(&NAMESPACE_KNOT, disambiguated_identity.as_bytes());
+            }
+        }
+    }
+}
+
+/// Helper function to check if absolute_path is in a helm chart dir.
 fn is_in_helm_chart_dir(absolute_path: &Path) -> bool {
     let mut current = absolute_path.parent();
 
@@ -1536,5 +1614,242 @@ int bar(const char *s);
         parse_files_stream(&files, &cfg, sender, 4, Some(callbacks));
 
         assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+    #[test]
+    fn test_disambiguate_entity_uuids_different_kinds() {
+        use crate::models::EntityKind;
+
+        let e1 = ParsedEntity::new(
+            "foo",
+            EntityKind::Constant,
+            "mod::foo",
+            None,
+            None,
+            "typescript",
+            "src/foo.ts",
+            10,
+            10,
+            None,
+            "test_repo",
+        );
+        let base_uuid = e1.uuid;
+
+        let e2 = ParsedEntity::new(
+            "foo",
+            EntityKind::Function,
+            "mod::foo",
+            None,
+            None,
+            "typescript",
+            "src/foo.ts",
+            10,
+            15,
+            None,
+            "test_repo",
+        );
+        assert_eq!(e2.uuid, base_uuid);
+
+        let mut entities = vec![e1.clone(), e2.clone()];
+        disambiguate_entity_uuids(&mut entities);
+
+        assert_ne!(entities[0].uuid, entities[1].uuid);
+        // By kind label: "constant" comes before "function"
+        assert_eq!(entities[0].kind, EntityKind::Constant);
+        assert_eq!(entities[0].uuid, base_uuid);
+        assert_eq!(entities[1].kind, EntityKind::Function);
+        assert_ne!(entities[1].uuid, base_uuid);
+    }
+
+    #[test]
+    fn test_disambiguate_entity_uuids_input_order_independent() {
+        use crate::models::EntityKind;
+        let e1 = ParsedEntity::new(
+            "foo",
+            EntityKind::Constant,
+            "mod::foo",
+            None,
+            None,
+            "typescript",
+            "src/foo.ts",
+            10,
+            10,
+            None,
+            "test_repo",
+        );
+        let e2 = ParsedEntity::new(
+            "foo",
+            EntityKind::Function,
+            "mod::foo",
+            None,
+            None,
+            "typescript",
+            "src/foo.ts",
+            10,
+            15,
+            None,
+            "test_repo",
+        );
+
+        let mut order1 = vec![e1.clone(), e2.clone()];
+        disambiguate_entity_uuids(&mut order1);
+
+        let mut order2 = vec![e2.clone(), e1.clone()];
+        disambiguate_entity_uuids(&mut order2);
+
+        let const_uuid1 = order1
+            .iter()
+            .find(|e| e.kind == EntityKind::Constant)
+            .unwrap()
+            .uuid;
+        let func_uuid1 = order1
+            .iter()
+            .find(|e| e.kind == EntityKind::Function)
+            .unwrap()
+            .uuid;
+
+        let const_uuid2 = order2
+            .iter()
+            .find(|e| e.kind == EntityKind::Constant)
+            .unwrap()
+            .uuid;
+        let func_uuid2 = order2
+            .iter()
+            .find(|e| e.kind == EntityKind::Function)
+            .unwrap()
+            .uuid;
+
+        assert_eq!(const_uuid1, const_uuid2);
+        assert_eq!(func_uuid1, func_uuid2);
+    }
+
+    #[test]
+    fn test_disambiguate_entity_uuids_identical_kind_and_name() {
+        use crate::models::EntityKind;
+        use uuid::Uuid;
+        let e1 = ParsedEntity::new(
+            "cls",
+            EntityKind::HtmlClass,
+            ".cls",
+            None,
+            None,
+            "html",
+            "index.html",
+            5,
+            5,
+            None,
+            "test_repo",
+        );
+        let e2 = ParsedEntity::new(
+            "cls",
+            EntityKind::HtmlClass,
+            ".cls",
+            None,
+            None,
+            "html",
+            "index.html",
+            5,
+            5,
+            None,
+            "test_repo",
+        );
+        let base_uuid = e1.uuid;
+        assert_eq!(e2.uuid, base_uuid);
+
+        let mut entities = vec![e1, e2];
+        disambiguate_entity_uuids(&mut entities);
+
+        assert_eq!(entities[0].uuid, base_uuid);
+        assert_ne!(entities[1].uuid, base_uuid);
+
+        let expected_disambiguated = Uuid::new_v5(
+            &crate::models::NAMESPACE_KNOT,
+            "test_repo:index.html:.cls:5:html_class:cls#2".as_bytes(),
+        );
+        assert_eq!(entities[1].uuid, expected_disambiguated);
+    }
+
+    #[test]
+    fn test_disambiguate_entity_uuids_no_collisions_untouched() {
+        use crate::models::EntityKind;
+        let e1 = ParsedEntity::new(
+            "foo",
+            EntityKind::Function,
+            "mod::foo",
+            None,
+            None,
+            "typescript",
+            "src/foo.ts",
+            1,
+            5,
+            None,
+            "test_repo",
+        );
+        let e2 = ParsedEntity::new(
+            "bar",
+            EntityKind::Function,
+            "mod::bar",
+            None,
+            None,
+            "typescript",
+            "src/foo.ts",
+            10,
+            15,
+            None,
+            "test_repo",
+        );
+        let uuid1 = e1.uuid;
+        let uuid2 = e2.uuid;
+
+        let mut entities = vec![e1, e2];
+        disambiguate_entity_uuids(&mut entities);
+
+        assert_eq!(entities[0].uuid, uuid1);
+        assert_eq!(entities[1].uuid, uuid2);
+    }
+
+    #[test]
+    fn test_ts_arrow_const_fixture_distinct_uuids() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("arrow.ts");
+        fs::write(&file_path, "export const foo = () => 1;\n").unwrap();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+            ..Default::default()
+        };
+
+        let entities = parse_files(&[file_path], &cfg);
+        let foo_entities: Vec<_> = entities.iter().filter(|e| e.name == "foo").collect();
+        assert_eq!(
+            foo_entities.len(),
+            2,
+            "Expected constant and function entities for arrow const"
+        );
+        assert_ne!(foo_entities[0].uuid, foo_entities[1].uuid);
+    }
+
+    #[test]
+    fn test_html_duplicate_class_on_same_line_distinct_uuids() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("index.html");
+        fs::write(&file_path, "<div class=\"btn btn\"></div>\n").unwrap();
+
+        let cfg = ParseConfig {
+            custom_queries_path: None,
+            repo_name: "test-repo".to_string(),
+            include_config_files: true,
+            repo_path: None,
+            ..Default::default()
+        };
+
+        let entities = parse_files(&[file_path], &cfg);
+        let btn_entities: Vec<_> = entities.iter().filter(|e| e.name == "btn").collect();
+        assert_eq!(btn_entities.len(), 2, "Expected 2 btn class entities");
+        assert_ne!(btn_entities[0].uuid, btn_entities[1].uuid);
     }
 }

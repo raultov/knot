@@ -417,7 +417,33 @@ else
     exit 1
 fi
 
-# Step 5: Summarize
+# Step 5: Regression Test for Entity Identity (Bug 1 & Bug 2)
+echo ""
+echo "Step 5: Running entity-identity regression test (deterministic markup UUIDs & duplicate class handling)..."
+
+QDRANT_REST_URL="http://localhost:16333"
+
+# Index second time (incremental / clean sweep check) to collect point IDs from Qdrant
+INDEX_OUT_2=$(cargo run --release --bin knot-indexer -- --include-config-files 2>&1)
+
+# Fetch point IDs using curl from Qdrant REST port
+QDRANT_POINTS_1=$(curl -s -X POST "$QDRANT_REST_URL/collections/$QDRANT_COLLECTION/points/scroll" -H 'Content-Type: application/json' -d '{"limit": 1000, "with_payload": true}')
+
+# Run indexer again with --clean to test determinism across clean re-indexes
+INDEX_OUT_3=$(cargo run --release --bin knot-indexer -- --clean --include-config-files 2>&1)
+QDRANT_POINTS_2=$(curl -s -X POST "$QDRANT_REST_URL/collections/$QDRANT_COLLECTION/points/scroll" -H 'Content-Type: application/json' -d '{"limit": 1000, "with_payload": true}')
+
+POINT_IDS_1=$(echo "$QDRANT_POINTS_1" | grep -o '"id":[^,}]*' | sort | uniq)
+POINT_IDS_2=$(echo "$QDRANT_POINTS_2" | grep -o '"id":[^,}]*' | sort | uniq)
+
+if [ "$POINT_IDS_1" = "$POINT_IDS_2" ] && [ -n "$POINT_IDS_1" ]; then
+    echo -e "${GREEN}✓ Point IDs (including markup entities) are byte-identical across re-indexing runs${NC}"
+else
+    echo -e "${RED}✗ Point IDs differed between indexing runs! Bug 1 regression.${NC}"
+    exit 1
+fi
+
+# Step 6: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Web E2E tests passed! ✓${NC}"

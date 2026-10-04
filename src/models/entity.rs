@@ -463,9 +463,14 @@ impl From<&EmbeddedEntity> for ResolutionEntity {
 impl ParsedEntity {
     /// Create a new entity with a deterministic UUID v5.
     ///
-    /// The UUID is derived from the entity's unique identity (repo_name:file_path:fqn)
-    /// to ensure the same entity always receives the same UUID across indexing runs.
-    /// This is critical for incremental indexing to avoid breaking graph relationships.
+    /// The base UUID is derived from the entity's unique identity (`{repo_name}:{file_path}:{fqn}:{start_line}`)
+    /// to ensure the same entity receives the same UUID across indexing runs.
+    ///
+    /// If multiple entities within a single file share the same base UUID identity,
+    /// a collision-only disambiguation pass (`disambiguate_entity_uuids`) is run to assign
+    /// deterministic UUIDs to colliding members. Non-first members sharing a base identity receive:
+    /// `Uuid::new_v5(&NAMESPACE_KNOT, "{base identity}:{kind label}:{name}#{n}")`, where `n` is its
+    /// 1-based rank among the members sharing that same `(kind, name)`.
     #[expect(
         clippy::too_many_arguments,
         reason = "Entity constructor requires many fields"
@@ -600,6 +605,16 @@ mod tests {
         assert_eq!(
             a.uuid, b.uuid,
             "UUIDs must be deterministic for the same triple (repo, path, fqn, line)"
+        );
+
+        // Explicitly assert against the backward-compatible Uuid::new_v5 formula
+        let expected_uuid = Uuid::new_v5(
+            &NAMESPACE_KNOT,
+            "mycrate:src/config.rs:mycrate::config::Config:1".as_bytes(),
+        );
+        assert_eq!(
+            a.uuid, expected_uuid,
+            "UUID must match legacy v5 identity formula for non-colliding entities"
         );
 
         // The mirror: two different absolute prefixes in `file_path` MUST NOT

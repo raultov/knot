@@ -5,6 +5,16 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed**: Deterministic UUID v5 generation for HTML/JSX markup entities (`HtmlId`, `HtmlClass`, `HtmlElement`).
+  Previously created with random `Uuid::new_v4()`, markup entities now derive stable v5 UUIDs from entity parameters, eliminating Qdrant and Neo4j churn on incremental re-indexing.
+- **Fixed**: UUID v5 collision disambiguation pass (`disambiguate_entity_uuids`) for distinct entities sharing identical identity keys (`{repo_name}:{file_path}:{fqn}:{start_line}`).
+  Entities colliding on base identity (such as TypeScript arrow-function constants exported as both a `constant` and `function`, same-line re-exports, or duplicate HTML classes) are deterministically ordered and assigned disambiguated v5 UUIDs (`{base identity}:{kind label}:{name}#{n}`).
+- **Compatibility & Self-Healing**: Non-colliding entities retain their existing UUIDs bit-for-bit, preserving index state version compatibility without forcing a full re-index (`--clean` remains optional; existing indexes self-heal file by file upon re-indexing).
+
+---
+
 ## v1.11.1
 
 - **Fixed**: `list_files` no longer fabricates a total in its truncation notice.

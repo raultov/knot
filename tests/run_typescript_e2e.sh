@@ -509,6 +509,24 @@ else
     exit 1
 fi
 
+# Test 13: Arrow function constant fixture yields 2 retrievable entities (constant and function)
+echo ""
+echo "Test 13: Verifying arrow const double extraction yields two distinct retrievable entities..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"arrowConstEntityTest\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+# Check Qdrant points for arrowConstEntityTest
+QDRANT_REST_URL="http://localhost:16333"
+QDRANT_PAYLOAD=$(curl -s -X POST "$QDRANT_REST_URL/collections/$QDRANT_COLLECTION/points/scroll" -H 'Content-Type: application/json' -d '{"limit": 1000, "with_payload": true}')
+ARROW_ENTITIES_COUNT=$(echo "$QDRANT_PAYLOAD" | grep -o '"name":"arrowConstEntityTest"' | wc -l)
+
+if [ "$ARROW_ENTITIES_COUNT" -eq 2 ]; then
+    echo -e "${GREEN}✓ Arrow const fixture created 2 distinct entities in Qdrant${NC}"
+else
+    echo -e "${RED}✗ Expected 2 entities for arrowConstEntityTest in Qdrant, found $ARROW_ENTITIES_COUNT${NC}"
+    exit 1
+fi
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"

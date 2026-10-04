@@ -1,7 +1,6 @@
 use crate::models::{CallIntent, EntityKind, ParsedEntity};
 use crate::pipeline::parser::utils::{is_capitalized, node_text};
 use tree_sitter::Node;
-use uuid::Uuid;
 
 /// Extract JSX component invocation as a call intent.
 ///
@@ -134,70 +133,36 @@ pub(crate) fn extract_jsx_html_attributes(
         for (attr_name, attr_value, _) in attrs {
             if attr_name == "id" {
                 // Create HtmlId entity
-                entities.push(ParsedEntity {
-                    uuid: Uuid::new_v4(),
-                    name: attr_value.clone(),
-                    kind: EntityKind::HtmlId,
-                    fqn: format!("#{}", attr_value),
-                    signature: None,
-                    docstring: None,
-                    inline_comments: Vec::new(),
-                    decorators: Vec::new(),
-                    language: "javascript".to_string(),
-                    file_path: file_path.to_string(),
-                    start_line: line,
-                    end_line: line,
-                    enclosing_class: None,
-                    repo_name: repo_name.to_string(),
-                    reference_intents: Vec::new(),
-                    calls: Vec::new(),
-                    relationships: Vec::new(),
-                    embed_text: String::new(),
-                    rust_attributes: None,
-                    impl_trait: None,
-                    impl_target: None,
-                    generics: None,
-                    lifetimes: None,
-                    alias_module_path: None,
-                    original_export_name: None,
-                    enclosing_class_fqn: None,
-                    default_export: None,
-                    is_test_context: false,
-                });
+                entities.push(ParsedEntity::new(
+                    attr_value.clone(),
+                    EntityKind::HtmlId,
+                    format!("#{}", attr_value),
+                    None,
+                    None,
+                    "javascript",
+                    file_path,
+                    line,
+                    line,
+                    None,
+                    repo_name,
+                ));
             } else if attr_name == "className" {
                 // Split by whitespace and create HtmlClass entity for each class
                 for class_name in attr_value.split_whitespace() {
                     if !class_name.is_empty() {
-                        entities.push(ParsedEntity {
-                            uuid: Uuid::new_v4(),
-                            name: class_name.to_string(),
-                            kind: EntityKind::HtmlClass,
-                            fqn: format!(".{}", class_name),
-                            signature: None,
-                            docstring: None,
-                            inline_comments: Vec::new(),
-                            decorators: Vec::new(),
-                            language: "javascript".to_string(),
-                            file_path: file_path.to_string(),
-                            start_line: line,
-                            end_line: line,
-                            enclosing_class: None,
-                            repo_name: repo_name.to_string(),
-                            reference_intents: Vec::new(),
-                            calls: Vec::new(),
-                            relationships: Vec::new(),
-                            embed_text: String::new(),
-                            rust_attributes: None,
-                            impl_trait: None,
-                            impl_target: None,
-                            generics: None,
-                            lifetimes: None,
-                            alias_module_path: None,
-                            original_export_name: None,
-                            enclosing_class_fqn: None,
-                            default_export: None,
-                            is_test_context: false,
-                        });
+                        entities.push(ParsedEntity::new(
+                            class_name,
+                            EntityKind::HtmlClass,
+                            format!(".{}", class_name),
+                            None,
+                            None,
+                            "javascript",
+                            file_path,
+                            line,
+                            line,
+                            None,
+                            repo_name,
+                        ));
                     }
                 }
             }
@@ -209,5 +174,54 @@ pub(crate) fn extract_jsx_html_attributes(
     while let Some(c) = child {
         extract_jsx_html_attributes(c, source, entities, file_path, repo_name);
         child = c.next_sibling();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    #[test]
+    fn test_jsx_markup_entities_uuids_are_deterministic() {
+        let mut parser = Parser::new();
+        let language = tree_sitter_javascript::LANGUAGE;
+        parser
+            .set_language(&language.into())
+            .expect("Error loading JS grammar");
+
+        let source = r#"
+const App = () => <div id="app-id" className="cls1 cls2" />;
+        "#;
+        let tree1 = parser.parse(source, None).unwrap();
+        let mut entities1 = Vec::new();
+        extract_jsx_html_attributes(
+            tree1.root_node(),
+            source.as_bytes(),
+            &mut entities1,
+            "App.jsx",
+            "test_repo",
+        );
+
+        let tree2 = parser.parse(source, None).unwrap();
+        let mut entities2 = Vec::new();
+        extract_jsx_html_attributes(
+            tree2.root_node(),
+            source.as_bytes(),
+            &mut entities2,
+            "App.jsx",
+            "test_repo",
+        );
+
+        assert_eq!(entities1.len(), 3); // 1 id, 2 classes
+        assert_eq!(entities1.len(), entities2.len());
+
+        for (e1, e2) in entities1.iter().zip(entities2.iter()) {
+            assert_eq!(
+                e1.uuid, e2.uuid,
+                "UUID should be deterministic for JSX entity {}",
+                e1.name
+            );
+        }
     }
 }
