@@ -120,10 +120,19 @@ fn resolve_vcl_include(
         .unwrap_or(path);
     let vcl_prefix = format!("vcl:{}", repo_name);
 
-    fqn_to_uuid
+    // The basename fallback matches every VCL file whose path ends with the
+    // include's basename, so `alpha/shared.vcl` and `beta/shared.vcl` both
+    // match `include "shared.vcl"`. Collect every hit and rank them instead of
+    // returning the first one out of the map: `fqn_to_uuid` iteration order is
+    // randomized per process. An include target is a different file from the
+    // includer by construction, so same-file locality cannot disambiguate here
+    // and the FQN / UUID ordering is the tie-break.
+    let candidates: Vec<(&str, Uuid)> = fqn_to_uuid
         .iter()
-        .find(|(fqn, _)| fqn.starts_with(&vcl_prefix) && fqn.ends_with(file_name))
-        .map(|(_, &uuid)| uuid)
+        .filter(|(fqn, _)| fqn.starts_with(&vcl_prefix) && fqn.ends_with(file_name))
+        .map(|(fqn, uuid)| (fqn.as_str(), *uuid))
+        .collect();
+    calls::pick_deterministic_candidate(&candidates, None)
 }
 
 /// Owned lookup maps for reference resolution: the incoming global context
@@ -315,7 +324,7 @@ fn resolve_intent(
                 entity.enclosing_class.as_deref(),
                 ctx,
             )
-            .map(|uuid| calls::redirect_class_call_to_constructor(uuid, ctx));
+            .map(|uuid| calls::redirect_class_call_to_constructor(uuid, &entity.file_path, ctx));
             (resolved, RelationshipType::Calls)
         }
         ReferenceIntent::Extends { parent, .. } => (
@@ -576,6 +585,291 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Collect every `(caller FQN, target UUID, relationship type)` triple as
+    /// a set so runs can be compared without depending on push order.
+    fn relationship_set(
+        entities: &[ResolutionEntity],
+    ) -> HashSet<(String, Uuid, RelationshipType)> {
+        entities
+            .iter()
+            .flat_map(|e| {
+                e.relationships
+                    .iter()
+                    .map(move |(uuid, rel)| (e.fqn.clone(), *uuid, *rel))
+            })
+            .collect()
+    }
+
+    /// Run [`resolve_reference_intents`] `runs` times over clones of
+    /// `entities` and assert the resulting relationship set is identical on
+    /// every run.
+    ///
+    /// Each run builds fresh `HashMap`s, so `RandomState` reshuffles their
+    /// iteration order. Any "first match wins" scan over a map therefore
+    /// returns a different target on each run — which is exactly the bug this
+    /// harness exists to catch. Cloning the fixture keeps UUIDs stable so the
+    /// sets are directly comparable.
+    fn assert_resolution_deterministic(
+        entities: &[ResolutionEntity],
+        runs: usize,
+    ) -> HashSet<(String, Uuid, RelationshipType)> {
+        let mut reference: Option<HashSet<(String, Uuid, RelationshipType)>> = None;
+        for run in 0..runs {
+            let mut batch = entities.to_vec();
+            resolve_reference_intents(&mut batch);
+            let got = relationship_set(&batch);
+            match &reference {
+                None => reference = Some(got),
+                Some(expected) => assert_eq!(
+                    &got, expected,
+                    "run {run} produced a different relationship set: HashMap \
+                     iteration order leaked into the resolution result"
+                ),
+            }
+        }
+        reference.expect("at least one run is required")
+    }
+
+    /// Regression: `resolve_receiver_call` matched candidate FQNs by
+    /// substring (`fqn.contains("Widget.render")`) and returned the first hit
+    /// out of `fqn_to_uuid`. Three `render` methods under distinct module
+    /// paths all contain `Widget.render`, so the edge landed on an arbitrary
+    /// one of them depending on `RandomState`.
+    #[test]
+    fn test_resolution_deterministic_under_fqn_substring_collisions() {
+        let mut entities: Vec<ResolutionEntity> = [
+            ("pkg.alpha.Widget.render", "src/alpha.rs"),
+            ("pkg.beta.Widget.render", "src/beta.rs"),
+            ("pkg.gamma.delta.Widget.render", "src/gamma.rs"),
+        ]
+        .into_iter()
+        .map(|(fqn, file)| {
+            mock_resolution_entity_with_kind(
+                "render",
+                fqn,
+                Some("Widget"),
+                file,
+                EntityKind::Method,
+            )
+        })
+        .collect();
+        // `pkg.alpha.Widget.render` is the lexicographically smallest match.
+        let expected_target = entities[0].uuid;
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "pkg.app.caller",
+            None,
+            "src/app.rs",
+            EntityKind::Method,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "render".to_string(),
+            receiver: Some("widget".to_string()),
+            line: 1,
+            arg_count: None,
+        });
+        entities.push(caller);
+
+        let rels = assert_resolution_deterministic(&entities, 64);
+        assert_eq!(
+            rels,
+            HashSet::from([(
+                "pkg.app.caller".to_string(),
+                expected_target,
+                RelationshipType::Calls
+            )]),
+            "an ambiguous receiver match must resolve to the lexicographically \
+             smallest matching FQN"
+        );
+    }
+
+    /// Same substring collision, but the caller lives in the same file as one
+    /// of the candidates: same-file locality must win over the FQN ordering.
+    #[test]
+    fn test_resolution_prefers_same_file_candidate_in_fqn_scan() {
+        let mut entities: Vec<ResolutionEntity> = [
+            ("pkg.alpha.Widget.render", "src/alpha.rs"),
+            ("pkg.beta.Widget.render", "src/beta.rs"),
+            ("pkg.gamma.delta.Widget.render", "src/gamma.rs"),
+        ]
+        .into_iter()
+        .map(|(fqn, file)| {
+            mock_resolution_entity_with_kind(
+                "render",
+                fqn,
+                Some("Widget"),
+                file,
+                EntityKind::Method,
+            )
+        })
+        .collect();
+        // Same file as `pkg.beta.Widget.render`, which is NOT the smallest FQN.
+        let expected_target = entities[1].uuid;
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "pkg.app.caller",
+            None,
+            "src/beta.rs",
+            EntityKind::Method,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "render".to_string(),
+            receiver: Some("widget".to_string()),
+            line: 1,
+            arg_count: None,
+        });
+        entities.push(caller);
+
+        let rels = assert_resolution_deterministic(&entities, 64);
+        assert_eq!(
+            rels,
+            HashSet::from([(
+                "pkg.app.caller".to_string(),
+                expected_target,
+                RelationshipType::Calls
+            )]),
+            "a candidate declared in the caller's own file must win over the FQN ordering"
+        );
+    }
+
+    /// Regression: `lookup_method_in_class_hierarchy` matched classes by
+    /// suffix (`class_fqn.ends_with(".ChatModel")`) and returned the first hit
+    /// out of `uuid_to_fqn`. Several `ChatModel` classes across modules each
+    /// own a `run` method, so `super.run()` landed on an arbitrary one
+    /// depending on `RandomState`.
+    #[test]
+    fn test_resolution_deterministic_under_class_suffix_collisions() {
+        let mut entities: Vec<ResolutionEntity> = [
+            ("pkg.alpha.ChatModel", "src/alpha.rs"),
+            ("pkg.beta.ChatModel", "src/beta.rs"),
+            ("pkg.gamma.delta.ChatModel", "src/gamma.rs"),
+        ]
+        .into_iter()
+        .map(|(fqn, file)| {
+            mock_resolution_entity_with_kind("ChatModel", fqn, None, file, EntityKind::Class)
+        })
+        .collect();
+
+        let mut run_methods: Vec<ResolutionEntity> = [
+            ("pkg.alpha.ChatModel.run", "src/alpha.rs"),
+            ("pkg.beta.ChatModel.run", "src/beta.rs"),
+            ("pkg.gamma.delta.ChatModel.run", "src/gamma.rs"),
+        ]
+        .into_iter()
+        .map(|(fqn, file)| {
+            mock_resolution_entity_with_kind(
+                "run",
+                fqn,
+                Some("ChatModel"),
+                file,
+                EntityKind::Method,
+            )
+        })
+        .collect();
+        // `pkg.alpha.ChatModel` is the lexicographically smallest class FQN
+        // matching the `.ChatModel` suffix.
+        let expected_target = run_methods[0].uuid;
+        entities.append(&mut run_methods);
+
+        // `Child extends ChatModel` populates the extends map that
+        // `resolve_super_call` walks. The parent name itself is ambiguous
+        // (three `ChatModel` classes), so that edge is skipped as ambiguous
+        // and the expected set below holds only the super call.
+        let mut child = mock_resolution_entity_with_kind(
+            "Child",
+            "pkg.app.Child",
+            None,
+            "src/app.rs",
+            EntityKind::Class,
+        );
+        child.reference_intents.push(ReferenceIntent::Extends {
+            parent: "ChatModel".to_string(),
+            line: 1,
+        });
+        entities.push(child);
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "caller",
+            "pkg.app.Child.caller",
+            Some("Child"),
+            "src/app.rs",
+            EntityKind::Method,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "run".to_string(),
+            receiver: Some("super".to_string()),
+            line: 1,
+            arg_count: None,
+        });
+        entities.push(caller);
+
+        let rels = assert_resolution_deterministic(&entities, 64);
+        assert_eq!(
+            rels,
+            HashSet::from([(
+                "pkg.app.Child.caller".to_string(),
+                expected_target,
+                RelationshipType::Calls
+            )]),
+            "an ambiguous class-suffix match must resolve to the \
+             lexicographically smallest matching class FQN"
+        );
+    }
+
+    /// Regression: `resolve_vcl_include`'s basename fallback scanned
+    /// `fqn_to_uuid` and returned the first hit. Several VCL files can share a
+    /// basename (`alpha/shared.vcl`, `beta/shared.vcl`), so the `Includes`
+    /// edge landed on an arbitrary one depending on `RandomState`.
+    #[test]
+    fn test_resolution_deterministic_under_vcl_basename_collisions() {
+        let mut entities: Vec<ResolutionEntity> = [
+            "vcl:myrepo:alpha/shared.vcl",
+            "vcl:myrepo:beta/shared.vcl",
+            "vcl:myrepo:gamma/delta/shared.vcl",
+        ]
+        .into_iter()
+        .map(|fqn| {
+            mock_resolution_entity_with_kind(
+                "shared",
+                fqn,
+                None,
+                fqn.trim_start_matches("vcl:myrepo:"),
+                EntityKind::Function,
+            )
+        })
+        .collect();
+        // `vcl:myrepo:alpha/shared.vcl` is the lexicographically smallest
+        // FQN with the `shared.vcl` basename.
+        let expected_target = entities[0].uuid;
+
+        let mut caller = mock_resolution_entity_with_kind(
+            "entry",
+            "vcl:myrepo:entry.vcl",
+            None,
+            "entry.vcl",
+            EntityKind::Function,
+        );
+        caller.reference_intents.push(ReferenceIntent::VclInclude {
+            path: "shared.vcl".to_string(),
+            line: 1,
+        });
+        entities.push(caller);
+
+        let rels = assert_resolution_deterministic(&entities, 64);
+        assert_eq!(
+            rels,
+            HashSet::from([(
+                "vcl:myrepo:entry.vcl".to_string(),
+                expected_target,
+                RelationshipType::Includes
+            )]),
+            "an ambiguous VCL include basename match must resolve to the \
+             lexicographically smallest matching FQN"
+        );
     }
 
     #[test]

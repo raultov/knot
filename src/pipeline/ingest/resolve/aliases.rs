@@ -81,35 +81,49 @@ fn chain_terminal(
     current: Uuid,
     visited_order: &[Uuid],
     cycle_detected: bool,
-) -> Uuid {
-    if !cycle_detected {
-        return current;
-    }
-    let back_edge_target = alias_map.get(&current).copied().unwrap_or(current);
-    let cycle_start_idx = visited_order
-        .iter()
-        .position(|u| *u == back_edge_target)
-        .unwrap_or(0);
-    let representative = visited_order[cycle_start_idx..]
-        .iter()
-        .min()
-        .copied()
-        .unwrap_or(current);
-    warn!(
-        "Alias cycle detected involving {} entities; collapsing to representative {}",
-        visited_order.len() - cycle_start_idx,
+) {
+    let terminal = if cycle_detected {
+        let back_edge_target = alias_map.get(&current).copied().unwrap_or(current);
+        let cycle_start_idx = visited_order
+            .iter()
+            .position(|u| *u == back_edge_target)
+            .unwrap_or(0);
+        let representative = visited_order[cycle_start_idx..]
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(current);
+        warn!(
+            "Alias cycle detected involving {} entities; collapsing to representative {}",
+            visited_order.len() - cycle_start_idx,
+            representative
+        );
         representative
-    );
-    for &member in &visited_order[cycle_start_idx..] {
-        if member != representative {
-            alias_map.insert(member, representative);
+    } else {
+        current
+    };
+    // Path-compress the whole walk — the tail that leads into a collapsed
+    // cycle included — so every node points straight at its component's
+    // canonical target. Rewriting only the cycle (as this used to do) left
+    // tail nodes on their original edge, so the collapsed map ended up in a
+    // different shape depending on which key `collapse_alias_cycles` happened
+    // to visit first (`HashMap` iteration order is randomized per process).
+    //
+    // The terminal keeps no entry of its own: a chain end already has none,
+    // and a cycle representative is removed below because it *is* the target.
+    for &member in visited_order {
+        if member != terminal {
+            alias_map.insert(member, terminal);
         }
     }
-    alias_map.remove(&representative);
-    representative
+    alias_map.remove(&terminal);
 }
 
 fn collapse_alias_cycles(alias_map: &mut HashMap<Uuid, Uuid>) {
+    // Keys are deliberately iterated in `HashMap` order rather than sorted:
+    // the collapsed map must be independent of iteration order, and
+    // `test_alias_map_tail_into_cycle_is_order_independent` relies on
+    // `RandomState` reshuffling that order to prove it.
     let keys: Vec<Uuid> = alias_map.keys().copied().collect();
     for key in keys {
         if !alias_map.contains_key(&key) {
@@ -128,10 +142,7 @@ fn collapse_alias_cycles(alias_map: &mut HashMap<Uuid, Uuid>) {
             visited_order.push(next);
             current = next;
         }
-        let terminal = chain_terminal(alias_map, current, &visited_order, cycle_detected);
-        if !cycle_detected && terminal != key {
-            alias_map.insert(key, terminal);
-        }
+        chain_terminal(alias_map, current, &visited_order, cycle_detected);
     }
 }
 
@@ -225,6 +236,18 @@ mod tests {
             original_export_name: None,
             default_export: default_export.map(|s| s.to_string()),
             is_test_context: false,
+        }
+    }
+
+    fn mock_entity_with_alias_and_uuid(
+        name: &str,
+        file: &str,
+        alias_module_path: &str,
+        uuid: Uuid,
+    ) -> ResolutionEntity {
+        ResolutionEntity {
+            uuid,
+            ..mock_entity_with_alias(name, file, Some(alias_module_path), None)
         }
     }
 
@@ -385,6 +408,45 @@ mod tests {
             for (target, _) in &e.relationships {
                 assert_eq!(*target, rep);
             }
+        }
+    }
+
+    /// A tail that hangs off a cycle must be rewritten to the cycle's
+    /// representative along with the cycle itself, otherwise the collapsed
+    /// map depends on which key `collapse_alias_cycles` happened to visit
+    /// first — and `HashMap` iteration order is randomized per process.
+    ///
+    /// Component under test: `T -> C3 -> C1 -> C2 -> C3`, so the cycle is
+    /// `{C1, C2, C3}` with representative `C1` (the smallest UUID) and `T`
+    /// is the tail pointing at `C3`.
+    #[test]
+    fn test_alias_map_tail_into_cycle_is_order_independent() {
+        let uuid_t = Uuid::parse_str("00000000-0000-0000-0000-00000000000a").unwrap();
+        let uuid_c1 = Uuid::parse_str("00000000-0000-0000-0000-00000000000b").unwrap();
+        let uuid_c2 = Uuid::parse_str("00000000-0000-0000-0000-00000000000c").unwrap();
+        let uuid_c3 = Uuid::parse_str("00000000-0000-0000-0000-00000000000d").unwrap();
+
+        let expected: HashMap<Uuid, Uuid> =
+            HashMap::from([(uuid_t, uuid_c1), (uuid_c2, uuid_c1), (uuid_c3, uuid_c1)]);
+
+        // Each iteration builds fresh `HashMap`s, so `RandomState` reshuffles
+        // the key order that `collapse_alias_cycles` walks.
+        for _ in 0..64 {
+            let entities = vec![
+                mock_entity_with_alias_and_uuid("X", "t.js", "./c3", uuid_t),
+                mock_entity_with_alias_and_uuid("X", "c1.js", "./c2", uuid_c1),
+                mock_entity_with_alias_and_uuid("X", "c2.js", "./c3", uuid_c2),
+                mock_entity_with_alias_and_uuid("X", "c3.js", "./c1", uuid_c3),
+            ];
+            let map = build_alias_map_for_test(&entities);
+            assert_eq!(
+                map, expected,
+                "alias collapse must not depend on HashMap iteration order"
+            );
+            assert!(
+                map.values().all(|target| !map.contains_key(target)),
+                "collapsed aliases must be fully path-compressed: {map:?}"
+            );
         }
     }
 }

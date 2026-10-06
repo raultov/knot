@@ -139,6 +139,48 @@ pub(crate) fn find_entity_in_same_file(
     None
 }
 
+/// Rank equally-plausible resolution candidates with a total order and return
+/// the winner.
+///
+/// `HashMap::iter()` / `HashMap::values()` order is randomized per process
+/// (`std::collections::hash_map::RandomState`), so a "first match wins" scan
+/// over a map emits a different edge target on every run whenever several
+/// candidates match at once. Candidates are ranked by:
+///
+/// 1. same-file locality — a candidate declared in the caller's own file wins
+///    outright, which is the criterion [`find_entity_in_same_file`] already
+///    establishes elsewhere in this module;
+/// 2. the lexicographically smallest FQN;
+/// 3. the smallest UUID, reachable when two distinct entities carry the same
+///    FQN — this completes the ordering so the winner is always unique.
+///
+/// `caller_file` is the caller's file path together with the uuid → file map.
+/// Pass `None` when same-file locality is not meaningful for the match (a VCL
+/// `include` target is a different file from the includer by construction);
+/// rule 1 is then skipped and the FQN / UUID ordering decides.
+///
+/// This only picks *which* target an already-decided edge points at. It never
+/// changes whether the edge is created: a caller that found at least one
+/// candidate keeps resolving to exactly one target.
+pub(crate) fn pick_deterministic_candidate(
+    candidates: &[(&str, Uuid)],
+    caller_file: Option<(&str, &HashMap<Uuid, String>)>,
+) -> Option<Uuid> {
+    candidates
+        .iter()
+        .map(|&(fqn, uuid)| {
+            let in_caller_file = caller_file.is_some_and(|(file, uuid_to_file)| {
+                uuid_to_file.get(&uuid).is_some_and(|f| f == file)
+            });
+            // `!in_caller_file` is `false` for same-file candidates so they
+            // sort first; the tuple as a whole is a total order, so the winner
+            // is unique and independent of the order candidates arrived in.
+            (!in_caller_file, fqn, uuid)
+        })
+        .min()
+        .map(|(_, _, uuid)| uuid)
+}
+
 pub(crate) fn find_by_arg_count(
     uuids: &[Uuid],
     arg_count: usize,
@@ -169,7 +211,11 @@ pub(crate) fn find_by_arg_count(
 ///    extends-map (inheritance chain).
 ///
 /// Other intents (`TypeReference`, `ValueReference`, `Extends`, …) are unaffected.
-pub(crate) fn redirect_class_call_to_constructor(uuid: Uuid, ctx: &ResolutionContext) -> Uuid {
+pub(crate) fn redirect_class_call_to_constructor(
+    uuid: Uuid,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Uuid {
     let Some(kind_map) = ctx.uuid_to_kind else {
         return uuid;
     };
@@ -191,13 +237,13 @@ pub(crate) fn redirect_class_call_to_constructor(uuid: Uuid, ctx: &ResolutionCon
         return uuid;
     };
 
-    if let Some(init_uuid) = lookup_init_in_class_hierarchy(class_name, ctx) {
+    if let Some(init_uuid) = lookup_init_in_class_hierarchy(class_name, caller_file_path, ctx) {
         return init_uuid;
     }
 
     if let Some(parents) = ctx.extends_map.get(class_name) {
         for parent in parents {
-            if let Some(init_uuid) = lookup_init_in_class_hierarchy(parent, ctx) {
+            if let Some(init_uuid) = lookup_init_in_class_hierarchy(parent, caller_file_path, ctx) {
                 return init_uuid;
             }
         }
@@ -208,8 +254,12 @@ pub(crate) fn redirect_class_call_to_constructor(uuid: Uuid, ctx: &ResolutionCon
 
 /// Locate a class's `__init__` constructor by trying every FQN shape the parser
 /// may have produced (`<ClassName>.__init__`, `<mod.ClassName>.__init__`, …).
-fn lookup_init_in_class_hierarchy(class_name: &str, ctx: &ResolutionContext) -> Option<Uuid> {
-    lookup_method_in_class_hierarchy(class_name, "__init__", ctx)
+fn lookup_init_in_class_hierarchy(
+    class_name: &str,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    lookup_method_in_class_hierarchy(class_name, "__init__", caller_file_path, ctx)
 }
 
 /// Locate `<class_name>.<method>` by trying every FQN shape the parser may
@@ -219,6 +269,7 @@ fn lookup_init_in_class_hierarchy(class_name: &str, ctx: &ResolutionContext) -> 
 fn lookup_method_in_class_hierarchy(
     class_name: &str,
     method: &str,
+    caller_file_path: &str,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
     if let Some(uuid) = lookup_fqn(class_name, method, ctx.fqn_to_uuid) {
@@ -226,16 +277,30 @@ fn lookup_method_in_class_hierarchy(
     }
 
     if let Some(uuid_to_fqn) = ctx.uuid_to_fqn {
-        for class_fqn in uuid_to_fqn.values() {
-            let is_class_match = class_fqn == class_name
-                || class_fqn.ends_with(&format!(".{}", class_name))
-                || class_fqn.ends_with(&format!("::{}", class_name));
-            if is_class_match
-                && let Some(uuid) = lookup_fqn_by_fqn(class_fqn, method, ctx.fqn_to_uuid)
-            {
-                return Some(uuid);
-            }
-        }
+        // The suffix predicate matches every class that ends with the short
+        // name, so a name reused across modules (`pkg.alpha.ChatModel`,
+        // `pkg.beta.ChatModel`, …) yields several methods at once. Collect
+        // them all and rank them instead of returning the first hit out of
+        // the map: `uuid_to_fqn` iteration order is randomized per process.
+        // Recall is unchanged — an edge is still produced whenever at least
+        // one class FQN matches.
+        let candidates: Vec<(&str, Uuid)> = uuid_to_fqn
+            .values()
+            .filter_map(|class_fqn| {
+                let is_class_match = class_fqn == class_name
+                    || class_fqn.ends_with(&format!(".{}", class_name))
+                    || class_fqn.ends_with(&format!("::{}", class_name));
+                if !is_class_match {
+                    return None;
+                }
+                lookup_fqn_by_fqn(class_fqn, method, ctx.fqn_to_uuid)
+                    .map(|uuid| (class_fqn.as_str(), uuid))
+            })
+            .collect();
+        return pick_deterministic_candidate(
+            &candidates,
+            Some((caller_file_path, ctx.uuid_to_file)),
+        );
     }
 
     None
@@ -297,12 +362,15 @@ fn resolve_homonym_fallback(
 fn resolve_super_call(
     intent: &CallIntent,
     caller_enclosing_class: Option<&str>,
+    caller_file_path: &str,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
     let enclosing_class = caller_enclosing_class?;
     let parents = ctx.extends_map.get(enclosing_class)?;
     for parent in parents {
-        if let Some(uuid) = lookup_method_in_class_hierarchy(parent, &intent.method, ctx) {
+        if let Some(uuid) =
+            lookup_method_in_class_hierarchy(parent, &intent.method, caller_file_path, ctx)
+        {
             return Some(disambiguate_overload(uuid, intent, ctx, Some(parent)));
         }
     }
@@ -392,14 +460,28 @@ fn resolve_receiver_call(
         let capitalized_method_dot = format!("{}.{}", capitalized, intent.method);
         let method_colon = format!("{}::{}", receiver_class, intent.method);
         let capitalized_method_colon = format!("{}::{}", capitalized, intent.method);
-        for (fqn, uuid) in ctx.fqn_to_uuid.iter() {
-            if fqn.contains(&method_dot)
-                || fqn.contains(&capitalized_method_dot)
-                || fqn.contains(&method_colon)
-                || fqn.contains(&capitalized_method_colon)
-            {
-                return Some(*uuid);
-            }
+        // The substring predicate is deliberately loose (`pkg.alpha.Widget.render`
+        // and `pkg.beta.Widget.render` both contain `Widget.render`), so
+        // several FQNs hit at once when a method name is reused across module
+        // paths. Collect every hit and rank them instead of returning the
+        // first one out of the map: `fqn_to_uuid` iteration order is
+        // randomized per process. Recall is unchanged — an edge is still
+        // produced whenever at least one FQN matches.
+        let candidates: Vec<(&str, Uuid)> = ctx
+            .fqn_to_uuid
+            .iter()
+            .filter(|(fqn, _)| {
+                fqn.contains(&method_dot)
+                    || fqn.contains(&capitalized_method_dot)
+                    || fqn.contains(&method_colon)
+                    || fqn.contains(&capitalized_method_colon)
+            })
+            .map(|(fqn, uuid)| (fqn.as_str(), *uuid))
+            .collect();
+        if let Some(uuid) =
+            pick_deterministic_candidate(&candidates, Some((caller_file_path, ctx.uuid_to_file)))
+        {
+            return Some(uuid);
         }
     }
 
@@ -439,7 +521,7 @@ pub(crate) fn resolve_single_call_intent(
     // `super.` calls are terminal: an unresolved super() must never fall
     // through to the bare-name fallback (it would be misattributed to self).
     if intent.receiver.as_deref().is_some_and(is_super_receiver) {
-        return resolve_super_call(intent, caller_enclosing_class, ctx);
+        return resolve_super_call(intent, caller_enclosing_class, caller_file_path, ctx);
     }
     resolve_implicit_this_call(intent, caller_enclosing_class, ctx)
         .or_else(|| resolve_static_receiver_call(intent, ctx))
