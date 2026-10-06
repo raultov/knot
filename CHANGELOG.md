@@ -5,6 +5,18 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.11.3
+
+- **Fixed(resolve)**: Reference resolution determinism across `HashMap` iteration orders. Replaced "first match wins" scans with deterministic candidate ranking (`pick_deterministic_candidate`) ordering candidates by same-file locality, lexicographical FQN, and UUID tie-breaking for:
+  - FQN substring matching in receiver calls (`resolve_receiver_call`)
+  - Class name suffix matching in class hierarchies (`lookup_method_in_class_hierarchy` & `lookup_init_in_class_hierarchy`)
+  - Basename matching in VCL include references (`resolve_vcl_include`)
+- **Fixed(resolve)**: Order-independent alias cycle collapsing in `collapse_alias_cycles`. Path-compresses the entire walk (including tails leading into cycles) in `chain_terminal` to ensure canonical representative mapping regardless of key iteration order.
+- **Docs**: Documented reference resolution determinism contract in `README.md`.
+- **Test(unit)**: Added 5 regression tests in `src/pipeline/ingest/resolve/mod.rs` and `aliases.rs` covering FQN substring collisions, same-file preference, class suffix collisions, VCL basename collisions, and alias tail-into-cycle independence.
+
+---
+
 ## v1.11.2
 
 - **Fixed**: Deterministic UUID v5 generation for HTML/JSX markup entities (`HtmlId`, `HtmlClass`, `HtmlElement`).
