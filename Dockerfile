@@ -2,7 +2,7 @@
 # Provides universal Linux compatibility (glibc 2.35+)
 
 # Build stage
-FROM rust:1.90-slim-trixie AS builder
+FROM rust:1.98-slim-trixie AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
