@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.11.4
+
+- **Fixed(java)**: Call resolution for interface-typed fields (#28). Calls on a field whose declared type is an interface (such as Spring constructor-injected services) now resolve to the interface method even when the field name differs from the type (e.g. `private final CatalogProvider source; source.fetchItems()`).
+- **Feature(java)**: Declared-type receiver resolution in `java/scope.rs`. Walks enclosing scopes innermost-first to map receivers to their declared types: local variables, `for` and enhanced-for variables, method/lambda/catch parameters, `try`-with-resources, `instanceof` and `switch` pattern variables, record components, and fields (including `this.field` restricted to the innermost class). Shadowing is respected: declarations with unusable types (`var`, untyped lambda parameters, multi-catch, varargs, arrays) shadow outer fields without lending their type.
+- **Feature(java)**: Method reference support (`expr::method`, `Type::method`, `this::method`). Emits a `Call` intent with declared-type receiver resolution; constructor references (`Type::new`) are ignored.
+- **Perf(resolve)**: O(1) class/member index for receiver call resolution. Replaced multi-pass scans over every FQN with a `"Class.member"` index in `ResolutionContext`. Extends ancestors are traversed breadth-first for inherited interface/class methods.
+- **Build**: Bumped Rust builder image to `1.99-slim-trixie` in `Dockerfile`.
+- **Test**: Added unit tests in `java/mod.rs` (shadowing, record components, lambdas, method references) and `calls.rs` (exact class suffix preference over homonyms, extends hierarchy); added E2E tests 12–18 in `tests/run_java_e2e.sh` with dedicated multi-file fixture in `tests/testing_files/java/interface_fields/`.
+
+---
+
 ## v1.11.3
 
 - **Fixed(resolve)**: Reference resolution determinism across `HashMap` iteration orders. Replaced "first match wins" scans with deterministic candidate ranking (`pick_deterministic_candidate`) ordering candidates by same-file locality, lexicographical FQN, and UUID tie-breaking for:

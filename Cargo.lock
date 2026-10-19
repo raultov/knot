@@ -1933,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "knot"
-version = "1.11.3"
+version = "1.11.4"
 dependencies = [
  "anyhow",
  "async-trait",
