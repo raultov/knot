@@ -147,6 +147,7 @@ struct LookupMaps {
     uuid_to_name: HashMap<Uuid, String>,
     extends_map: HashMap<String, Vec<String>>,
     alias_map: HashMap<Uuid, Uuid>,
+    class_member_index: HashMap<String, Vec<(String, Uuid)>>,
 }
 
 impl LookupMaps {
@@ -212,6 +213,7 @@ impl LookupMaps {
         }
 
         let alias_map = aliases::build_alias_map(entities, &uuid_to_file);
+        let class_member_index = context::build_class_member_index(&fqn_to_uuid);
 
         Self {
             fqn_to_uuid,
@@ -223,6 +225,7 @@ impl LookupMaps {
             uuid_to_name,
             extends_map,
             alias_map,
+            class_member_index,
         }
     }
 
@@ -236,6 +239,7 @@ impl LookupMaps {
             uuid_to_fqn: Some(&self.uuid_to_fqn),
             uuid_to_kind: Some(&self.uuid_to_kind),
             uuid_to_name: Some(&self.uuid_to_name),
+            class_member_index: &self.class_member_index,
         }
     }
 }

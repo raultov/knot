@@ -1,5 +1,8 @@
+mod scope;
+
 use crate::models::{CallIntent, ReferenceIntent};
 use crate::pipeline::parser::utils::{extract_new_expression_name, node_text};
+use scope::resolve_receiver_type_if_declared;
 use tree_sitter::Node;
 
 /// Recursively extract all call intents from Java.
@@ -12,7 +15,7 @@ pub(crate) fn collect_all_reference_intents_java(
     let line = node.start_position().row + 1;
 
     match node.kind() {
-        "method_invocation" | "object_creation_expression" => {
+        "method_invocation" | "object_creation_expression" | "method_reference" => {
             // Use non-recursive extraction to avoid double-processing children
             // (this function already handles recursion via the child loop below)
             let call_intents = extract_single_call_intent_java(node, source);
@@ -273,9 +276,11 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
         // If we found a dot, we know the last identifier is the method
         if found_dot {
             if let Some(method) = method_name {
+                let resolved_receiver =
+                    receiver.map(|r| resolve_receiver_type_if_declared(node, &r, source));
                 intents.push(CallIntent {
                     method,
-                    receiver,
+                    receiver: resolved_receiver,
                     line,
                     arg_count: None,
                 });
@@ -294,6 +299,40 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
             intents.push(CallIntent {
                 method: receiver_val,
                 receiver: None,
+                line,
+                arg_count: None,
+            });
+        }
+    } else if node.kind() == "method_reference" {
+        let line = node.start_position().row + 1;
+        let mut receiver_text: Option<String> = None;
+        let mut method_name: Option<String> = None;
+        let mut found_colons = false;
+
+        let mut child = node.child(0);
+        while let Some(c) = child {
+            if c.kind() == "::" {
+                found_colons = true;
+            } else if !found_colons {
+                if receiver_text.is_none() && c.is_named() {
+                    receiver_text = Some(node_text(c, source));
+                }
+            } else {
+                if c.kind() == "identifier" {
+                    method_name = Some(node_text(c, source));
+                } else if c.kind() == "new" {
+                    return intents;
+                }
+            }
+            child = c.next_sibling();
+        }
+
+        if let Some(method) = method_name {
+            let resolved_receiver =
+                receiver_text.map(|r| resolve_receiver_type_if_declared(node, &r, source));
+            intents.push(CallIntent {
+                method,
+                receiver: resolved_receiver,
                 line,
                 arg_count: None,
             });
@@ -645,5 +684,393 @@ mod tests {
             "Wildcard import should emit no type references, got: {:?}",
             import_refs
         );
+    }
+
+    #[test]
+    fn test_field_receiver_resolved_to_declared_type() {
+        let code = r#"
+            class ReportService {
+                private final DataProvider source;
+                void build() {
+                    source.fetchItems();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "fetchItems")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("DataProvider".to_string()));
+    }
+
+    #[test]
+    fn test_this_field_receiver_resolved_to_declared_type() {
+        let code = r#"
+            class ReportService {
+                private final DataProvider source;
+                void build() {
+                    this.source.fetchItems();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "fetchItems")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("DataProvider".to_string()));
+    }
+
+    #[test]
+    fn test_generic_field_type_stripped() {
+        let code = r#"
+            class ReportService {
+                private List<Item> items;
+                void build() {
+                    items.size();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "size")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("List".to_string()));
+    }
+
+    #[test]
+    fn test_scoped_field_type_uses_simple_name() {
+        let code = r#"
+            class ReportService {
+                private com.example.DataProvider source;
+                void build() {
+                    source.fetch();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "fetch")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("DataProvider".to_string()));
+    }
+
+    #[test]
+    fn test_parameter_shadows_field() {
+        let code = r#"
+            class ReportService {
+                private Foo x;
+                void build(Bar x) {
+                    x.run();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "run")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_local_variable_shadows_field() {
+        let code = r#"
+            class ReportService {
+                private Foo x;
+                void build() {
+                    Bar x = new Bar();
+                    x.run();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "run")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_var_local_does_not_substitute() {
+        let code = r#"
+            class ReportService {
+                void build() {
+                    var x = new Bar();
+                    x.run();
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "run")
+            .expect("call intent not found");
+        assert_eq!(call.receiver, Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_method_reference_on_field() {
+        let code = r#"
+            class ReportService {
+                private DataProvider source;
+                void build() {
+                    supply(source::fetchGroups);
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "fetchGroups")
+            .expect("call intent for method ref not found");
+        assert_eq!(call.receiver, Some("DataProvider".to_string()));
+    }
+
+    #[test]
+    fn test_method_reference_on_type() {
+        let code = r#"
+            class ReportService {
+                void build() {
+                    items.forEach(String::toUpperCase);
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "toUpperCase")
+            .expect("call intent for method ref not found");
+        assert_eq!(call.receiver, Some("String".to_string()));
+    }
+
+    #[test]
+    fn test_method_reference_this() {
+        let code = r#"
+            class ReportService {
+                void build() {
+                    items.forEach(this::process);
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let call = intents
+            .iter()
+            .find(|i| i.method == "process")
+            .expect("call intent for method ref not found");
+        assert_eq!(call.receiver, Some("this".to_string()));
+    }
+
+    #[test]
+    fn test_method_reference_constructor_ignored() {
+        let code = r#"
+            class ReportService {
+                void build() {
+                    items.map(Foo::new);
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let has_new = intents.iter().any(|i| i.method == "new");
+        assert!(
+            !has_new,
+            "Foo::new should not emit Call intent for method 'new'"
+        );
+    }
+
+    #[test]
+    fn test_orphan_pass_uses_field_types_and_method_refs() {
+        let code = r#"
+            class ReportService {
+                private DataProvider source;
+                void build() {
+                    source.fetchItems();
+                    supply(source::fetchGroups);
+                }
+            }
+        "#;
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        collect_all_reference_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        let fetch_items = intents.iter().find(
+            |(i, _)| matches!(i, ReferenceIntent::Call { method, .. } if method == "fetchItems"),
+        );
+        assert!(
+            fetch_items.is_some(),
+            "fetchItems call intent should be extracted in orphan pass"
+        );
+        if let Some((ReferenceIntent::Call { receiver, .. }, _)) = fetch_items {
+            assert_eq!(receiver.as_deref(), Some("DataProvider"));
+        }
+        let fetch_groups = intents.iter().find(
+            |(i, _)| matches!(i, ReferenceIntent::Call { method, .. } if method == "fetchGroups"),
+        );
+        assert!(
+            fetch_groups.is_some(),
+            "fetchGroups method ref should be extracted in orphan pass"
+        );
+        if let Some((ReferenceIntent::Call { receiver, .. }, _)) = fetch_groups {
+            assert_eq!(receiver.as_deref(), Some("DataProvider"));
+        }
+    }
+
+    /// Receiver recorded for the first call to `method` in `code`.
+    fn receiver_of(code: &str, method: &str) -> Option<String> {
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(code).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        intents
+            .into_iter()
+            .find(|i| i.method == method)
+            .unwrap_or_else(|| panic!("call intent for {method} not found"))
+            .receiver
+    }
+
+    #[test]
+    fn test_untyped_lambda_param_shadows_field() {
+        let code = "class A { private Foo x; void m() { l.f(x -> x.run()); } }";
+        assert_eq!(receiver_of(code, "run"), Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_inferred_lambda_params_shadow_field() {
+        let code = "class A { private Foo x; void m() { l.f((x, y) -> x.run()); } }";
+        assert_eq!(receiver_of(code, "run"), Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_typed_lambda_param_shadows_field() {
+        let code = "class A { private Foo x; void m() { l.f((Bar x) -> x.run()); } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_enhanced_for_variable_shadows_field() {
+        let code = "class A { private Foo x; void m() { for (Bar x : xs) { x.run(); } } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_enhanced_for_iterable_expression_sees_field() {
+        let code = "class A { private Foo x; void m() { for (Bar x : x.items()) { } } }";
+        assert_eq!(receiver_of(code, "items"), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn test_var_local_shadows_field() {
+        let code = "class A { private Foo x; void m() { var x = new Bar(); x.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_catch_parameter_shadows_field() {
+        let code = "class A { private Foo x; void m() { try { } catch (Bar x) { x.run(); } } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_multi_catch_parameter_shadows_field_untyped() {
+        let code =
+            "class A { private Foo x; void m() { try { } catch (Bar | Baz x) { x.run(); } } }";
+        assert_eq!(receiver_of(code, "run"), Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_for_init_variable_shadows_field() {
+        let code = "class A { private Foo x; void m() { for (Bar x = b(); ; ) { x.run(); } } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_try_resource_shadows_field() {
+        let code = "class A { private Foo x; void m() { try (Bar x = o()) { x.run(); } } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_instanceof_pattern_shadows_field() {
+        let code =
+            "class A { private Foo x; void m(Object o) { if (o instanceof Bar x) { x.run(); } } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_flow_scoped_pattern_does_not_fall_back_to_field() {
+        let code = "class A { private Foo x; void m(Object o) { if (!(o instanceof Bar x)) { return; } x.run(); } }";
+        assert_ne!(receiver_of(code, "run"), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn test_switch_type_pattern_shadows_field() {
+        let code = "class A { private Foo x; void m(Object o) { switch (o) { case Bar x -> x.run(); default -> { } } } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_spread_parameter_shadows_field_untyped() {
+        let code = "class A { private Foo xs; void m(Bar... xs) { xs.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("xs".to_string()));
+    }
+
+    #[test]
+    fn test_record_component_resolves_to_declared_type() {
+        let code = "record R(Foo src) { void m() { src.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn test_inner_class_field_shadows_outer_local() {
+        let code = "class A { void m() { Foo x = f(); new Runnable() { private Bar x; public void run() { x.go(); } }; } }";
+        assert_eq!(receiver_of(code, "go"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_this_field_only_looks_at_innermost_class() {
+        let code = "class A { private Foo x; void m() { new Runnable() { public void run() { this.x.go(); } }; } }";
+        assert_eq!(receiver_of(code, "go"), Some("this.x".to_string()));
+    }
+
+    #[test]
+    fn test_sibling_block_local_does_not_leak() {
+        let code = "class A { private Foo x; void m() { { Bar x = b(); } x.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn test_conjunction_pattern_shadows_field() {
+        let code = "class A { private Foo x; boolean m(Object o) { return o instanceof Bar x && x.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn test_array_field_binds_no_type() {
+        let code = "class A { private Foo[] xs; void m() { xs.clone(); } }";
+        assert_eq!(receiver_of(code, "clone"), Some("xs".to_string()));
     }
 }

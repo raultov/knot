@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 use super::context::ResolutionContext;
@@ -410,13 +410,66 @@ fn resolve_implicit_this_call(
     None
 }
 
-fn resolve_static_receiver_call(intent: &CallIntent, ctx: &ResolutionContext) -> Option<Uuid> {
-    let receiver = intent.receiver.as_ref()?;
-    if !receiver.chars().next().is_some_and(|c| c.is_uppercase()) || receiver == "this" {
+/// Locate `method` declared on a type whose simple (or partially qualified)
+/// name is `class_name`: `CatalogProvider` matches
+/// `com.api.CatalogProvider.fetchItems` but never
+/// `com.impl.HttpCatalogProvider.fetchItems`. A single hash probe on the
+/// class/member index replaces a scan over every FQN.
+fn lookup_method_by_class_and_name(
+    class_name: &str,
+    method: &str,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    if let Some(uuid) = lookup_fqn(class_name, method, ctx.fqn_to_uuid) {
+        return Some(uuid);
+    }
+
+    let simple_class = class_name.rsplit(['.', ':']).next()?;
+    let entries = ctx
+        .class_member_index
+        .get(&format!("{simple_class}.{method}"))?;
+    let suffix_dot = format!(".{class_name}.{method}");
+    let suffix_colon = format!("::{class_name}::{method}");
+    let candidates: Vec<(&str, Uuid)> = entries
+        .iter()
+        .filter(|(fqn, _)| fqn.ends_with(&suffix_dot) || fqn.ends_with(&suffix_colon))
+        .map(|(fqn, uuid)| (fqn.as_str(), *uuid))
+        .collect();
+    pick_deterministic_candidate(&candidates, Some((caller_file_path, ctx.uuid_to_file)))
+}
+
+fn resolve_static_receiver_call(
+    intent: &CallIntent,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    let receiver = intent.receiver.as_deref()?;
+    if !receiver.chars().next().is_some_and(|c| c.is_uppercase()) {
         return None;
     }
-    let uuid = lookup_fqn(receiver, &intent.method, ctx.fqn_to_uuid)?;
-    Some(disambiguate_overload(uuid, intent, ctx, Some(receiver)))
+
+    // Breadth-first over the receiver type and its `extends` ancestors, so a
+    // method inherited from a parent type (e.g. a sub-interface field calling
+    // a method declared on its super-interface) still resolves. The nearest
+    // declaring type wins.
+    let mut visited: HashSet<&str> = HashSet::from([receiver]);
+    let mut queue: VecDeque<&str> = VecDeque::from([receiver]);
+    while let Some(class_name) = queue.pop_front() {
+        if let Some(uuid) =
+            lookup_method_by_class_and_name(class_name, &intent.method, caller_file_path, ctx)
+        {
+            return Some(disambiguate_overload(uuid, intent, ctx, Some(class_name)));
+        }
+        let parents = ctx.extends_map.get(class_name).into_iter().flatten();
+        for parent in parents {
+            if visited.insert(parent.as_str()) {
+                queue.push_back(parent.as_str());
+            }
+        }
+    }
+
+    None
 }
 
 fn resolve_receiver_call(
@@ -524,7 +577,7 @@ pub(crate) fn resolve_single_call_intent(
         return resolve_super_call(intent, caller_enclosing_class, caller_file_path, ctx);
     }
     resolve_implicit_this_call(intent, caller_enclosing_class, ctx)
-        .or_else(|| resolve_static_receiver_call(intent, ctx))
+        .or_else(|| resolve_static_receiver_call(intent, caller_file_path, ctx))
         .or_else(|| resolve_receiver_call(intent, caller_file_path, ctx))
         .or_else(|| resolve_bare_call(intent, caller_file_path, ctx))
 }
@@ -1420,6 +1473,99 @@ mod tests {
         assert_eq!(
             init_calls, 1,
             "There must be exactly one Calls edge to Foo.__init__ (parser + redirect deduplicated)"
+        );
+    }
+
+    #[test]
+    fn test_type_receiver_prefers_exact_class_over_suffix_homonym() {
+        let http_impl = mock_resolution_entity_at(
+            "fetchItems",
+            "com.a.impl.HttpCatalogProvider.fetchItems",
+            Some("HttpCatalogProvider"),
+            "src/impl/HttpCatalogProvider.java",
+        );
+        let iface = mock_resolution_entity_at(
+            "fetchItems",
+            "com.z.api.CatalogProvider.fetchItems",
+            Some("CatalogProvider"),
+            "src/api/CatalogProvider.java",
+        );
+        let mut caller = mock_resolution_entity_at(
+            "build",
+            "com.web.ReportService.build",
+            Some("ReportService"),
+            "src/web/ReportService.java",
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "fetchItems".to_string(),
+            receiver: Some("CatalogProvider".to_string()),
+            line: 10,
+            arg_count: None,
+        });
+
+        let iface_uuid = iface.uuid;
+        let mut entities = vec![http_impl, iface, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "build").unwrap();
+        assert_eq!(caller_entity.relationships.len(), 1);
+        assert_eq!(
+            caller_entity.relationships[0],
+            (iface_uuid, RelationshipType::Calls),
+            "Expected call to resolve to CatalogProvider.fetchItems, not HttpCatalogProvider.fetchItems"
+        );
+    }
+
+    #[test]
+    fn test_type_receiver_resolves_inherited_interface_method() {
+        let base_method = mock_resolution_entity_at(
+            "fetchItems",
+            "com.api.BaseProvider.fetchItems",
+            Some("BaseProvider"),
+            "src/api/BaseProvider.java",
+        );
+        let other_method = mock_resolution_entity_at(
+            "fetchItems",
+            "com.api.OtherProvider.fetchItems",
+            Some("OtherProvider"),
+            "src/api/OtherProvider.java",
+        );
+        let mut child_iface = mock_resolution_entity_with_kind(
+            "CatalogProvider",
+            "com.api.CatalogProvider",
+            None,
+            "src/api/CatalogProvider.java",
+            EntityKind::Interface,
+        );
+        child_iface
+            .reference_intents
+            .push(ReferenceIntent::Extends {
+                parent: "BaseProvider".to_string(),
+                line: 3,
+            });
+        let mut caller = mock_resolution_entity_at(
+            "build",
+            "com.web.ReportService.build",
+            Some("ReportService"),
+            "src/web/ReportService.java",
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "fetchItems".to_string(),
+            receiver: Some("CatalogProvider".to_string()),
+            line: 10,
+            arg_count: None,
+        });
+
+        let base_method_uuid = base_method.uuid;
+        let mut entities = vec![base_method, other_method, child_iface, caller];
+        resolve_reference_intents(&mut entities);
+
+        let caller_entity = entities.iter().find(|e| e.name == "build").unwrap();
+        assert_eq!(caller_entity.relationships.len(), 1);
+        assert_eq!(
+            caller_entity.relationships[0],
+            (base_method_uuid, RelationshipType::Calls),
+            "Expected call to resolve to BaseProvider.fetchItems via extends hierarchy"
         );
     }
 }

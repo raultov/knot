@@ -344,6 +344,66 @@ else
     exit 1
 fi
 
+# Tests 12-17: calls through interface-typed fields (issue #28).
+# Fixture: testing_files/java/interface_fields/. Every caller name is unique
+# in the repository, so its presence in the find_callers output of the
+# interface method proves the CALLS edge was created against the interface.
+assert_interface_field_caller() {
+    local id=$1
+    local entity=$2
+    local caller=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description ($caller → $entity)..."
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_response
+    local cli_response
+    mcp_response=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+    cli_response=$(cargo run --release --bin knot -- callers "$entity" 2>/dev/null)
+
+    if echo "$mcp_response" | grep -q "\*\*\`$caller\`\*\*"; then
+        echo -e "${GREEN}✓ MCP: $caller listed as caller of $entity${NC}"
+    else
+        echo -e "${RED}✗ MCP: $caller missing from callers of $entity${NC}"
+        echo "Response was: $mcp_response"
+        exit 1
+    fi
+
+    if echo "$cli_response" | grep "Calls" | grep -q "$caller"; then
+        echo -e "${GREEN}✓ CLI: $caller listed as caller of $entity${NC}"
+    else
+        echo -e "${RED}✗ CLI: $caller missing from callers of $entity${NC}"
+        echo "Response was: $cli_response"
+        exit 1
+    fi
+}
+
+assert_interface_field_caller 12 "CatalogProvider.fetchItems" "buildWithMatchingField" \
+    "Interface-typed field named after its type"
+assert_interface_field_caller 13 "PreferenceService.store" "storeViaMatchingField" \
+    "this.-qualified interface-typed field named after its type, default overload"
+assert_interface_field_caller 14 "CatalogProvider.fetchItems" "buildWithRenamedField" \
+    "Interface-typed field whose name differs from its type"
+assert_interface_field_caller 15 "CatalogProvider.fetchItems" "buildWithThisRenamedField" \
+    "this.-qualified interface-typed field whose name differs from its type"
+assert_interface_field_caller 16 "CatalogProvider.fetchGroups" "scheduleGroupsViaMethodRef" \
+    "Method reference on an interface-typed field"
+assert_interface_field_caller 17 "PreferenceService.store" "storeViaRenamedField" \
+    "Default overload called through a renamed interface-typed field"
+
+# Test 18: Concrete implementation must NOT receive interface calls as direct Calls edges
+echo ""
+echo "Test 18: Verifying concrete implementation does not receive interface calls as direct Calls edges..."
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "HttpCatalogProvider.fetchItems" 2>/dev/null)
+if echo "$CLI_RESPONSE" | grep "Calls" | grep -q "buildWithRenamedField"; then
+    echo -e "${RED}✗ CLI: HttpCatalogProvider.fetchItems erroneously listed interface caller buildWithRenamedField under Calls${NC}"
+    echo "Response was: $CLI_RESPONSE"
+    exit 1
+else
+    echo -e "${GREEN}✓ CLI: HttpCatalogProvider.fetchItems does not claim interface caller under Calls${NC}"
+fi
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -362,6 +422,7 @@ echo "  ✓ Java interface EXTENDS interface (AuditableRepository → Repository
 echo "  ✓ Java anonymous class interface implementation"
 echo "  ✓ Java interface search (MessageHandler)"
 echo "  ✓ Recall ranking (doc-less method definition reaches the top slots)"
+echo "  ✓ Calls through interface-typed fields (any field name, this., method refs)"
 echo ""
 
 exit 0
