@@ -79,7 +79,7 @@ Traditional regex-based searches (`grep`, `rg`, `find`) have critical limitation
 
 The `knot` MCP tools use **Vector Embeddings + Graph Analysis** to provide:
 - ✅ Context-aware, semantic results across 15+ languages (Java, Kotlin, Groovy, C#, Rust, C/C++, Python, TS/JS, Web, Configs)
-- ✅ Full call chain and override visibility (`Overridden by` / `Overrides`)
+- ✅ Full call chain and override visibility (`Overridden by` / `Overrides` / `Dispatched calls`)
 - ✅ Framework-aware discovery (decorators, annotations, dependency injection)
 - ✅ Global multi-repository search and cross-repo dependency linking (`DEPENDS_ON`)
 

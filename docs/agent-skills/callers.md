@@ -63,6 +63,7 @@ Every edge type the pipeline produces is consulted:
 | Declared unused | `DECLARED_UNUSED` | VCL intentional exemption |
 | Overridden by | `OVERRIDES` (reversed) | subtype method implementations |
 | Overrides | `OVERRIDES` | supertype methods implemented |
+| Dispatched calls | `CALLS` + `OVERRIDES*` | callers bound to an override or supertype of the target (dynamic dispatch) |
 
 `CONTAINS` (containment) and `DEPENDS_ON` (repository-level, use `knot deps`)
 are intentionally excluded.
