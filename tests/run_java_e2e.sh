@@ -404,6 +404,156 @@ else
     echo -e "${GREEN}✓ CLI: HttpCatalogProvider.fetchItems does not claim interface caller under Calls${NC}"
 fi
 
+# Tests 19-27: interface dispatch on annotated Spring-style types (issue #29).
+# Fixture: testing_files/java/interface_dispatch/. `DefaultLookupGateway`
+# shares its package with `LookupGateway` and contains its name, so a loose
+# substring match on `LookupGateway.listOptions` also hits the implementation.
+assert_not_direct_caller() {
+    local id=$1
+    local entity=$2
+    local caller=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description ($caller must not call $entity directly)..."
+    local cli_response
+    cli_response=$(cargo run --release --bin knot -- callers "$entity" 2>/dev/null)
+    if echo "$cli_response" | grep "Calls " | grep -q "$caller"; then
+        echo -e "${RED}✗ CLI: $entity erroneously lists $caller under Calls${NC}"
+        echo "Response was: $cli_response"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: $entity does not list $caller under Calls${NC}"
+}
+
+assert_override_relationship() {
+    local id=$1
+    local entity=$2
+    local label=$3
+    local related=$4
+    local description=$5
+
+    echo ""
+    echo "Test $id: $description ($entity $label $related)..."
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_response
+    local cli_response
+    mcp_response=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+    cli_response=$(cargo run --release --bin knot -- callers "$entity" 2>/dev/null)
+
+    if echo "$cli_response" | grep "$label" | grep -q "$related"; then
+        echo -e "${GREEN}✓ CLI: $entity $label $related${NC}"
+    else
+        echo -e "${RED}✗ CLI: missing '$label' row for $related on $entity${NC}"
+        echo "Response was: $cli_response"
+        exit 1
+    fi
+
+    if echo "$mcp_response" | grep -q "$label" && echo "$mcp_response" | grep -q "$related"; then
+        echo -e "${GREEN}✓ MCP: $entity $label $related${NC}"
+    else
+        echo -e "${RED}✗ MCP: missing '$label' entry for $related on $entity${NC}"
+        echo "Response was: $mcp_response"
+        exit 1
+    fi
+}
+
+assert_type_fqn() {
+    local id=$1
+    local type_name=$2
+    local expected_fqn=$3
+
+    echo ""
+    echo "Test $id: Annotated type $type_name keeps the FQN $expected_fqn..."
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"$type_name\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_response
+    mcp_response=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+
+    if echo "$mcp_response" | grep -q "$expected_fqn.$type_name\b"; then
+        echo -e "${RED}✗ MCP: $type_name FQN is doubled ($expected_fqn.$type_name)${NC}"
+        echo "Response was: $mcp_response"
+        exit 1
+    fi
+    if echo "$mcp_response" | grep -q "\*\*FQN:\*\* \`$expected_fqn\`"; then
+        echo -e "${GREEN}✓ MCP: $type_name FQN is $expected_fqn${NC}"
+    else
+        echo -e "${RED}✗ MCP: FQN $expected_fqn not found for $type_name${NC}"
+        echo "Response was: $mcp_response"
+        exit 1
+    fi
+}
+
+assert_type_fqn 19 "DefaultLookupGateway" "com.example.knot.idispatch.service.DefaultLookupGateway"
+assert_type_fqn 20 "OrderLedger" "com.example.knot.idispatch.ledger.OrderLedger"
+assert_interface_field_caller 21 "LookupGateway.listOptions" "optionsViaThisField" \
+    "this.-qualified field on an annotated controller"
+assert_interface_field_caller 22 "LookupGateway.listOptions" "optionsViaInheritedField" \
+    "Field inherited from a superclass declared in another file"
+assert_not_direct_caller 23 "DefaultLookupGateway.listOptions" "optionsViaInheritedField" \
+    "Implementation whose name contains the interface name"
+assert_interface_field_caller 24 "OrderLedger.appendEntry" "recordLedgerEntry" \
+    "Annotated repository interface called through a field"
+assert_override_relationship 25 "DefaultLookupGateway.listOptions" "Overrides" "listOptions" \
+    "@Service implementation overrides the interface method"
+assert_override_relationship 26 "LookupGateway.listOptions" "Overridden by" "listOptions" \
+    "Annotated interface method is overridden by its implementation"
+assert_override_relationship 27 "OrderLedger.appendEntry" "Overridden by" "appendEntry" \
+    "@Repository interface method is overridden by its implementation"
+
+# Tests 28-31: calls that reach the queried method only through dynamic
+# dispatch are listed as "Dispatched calls", naming the method they are
+# statically bound to; sibling implementations never leak.
+assert_dispatched_caller() {
+    local id=$1
+    local entity=$2
+    local caller=$3
+    local bound=$4
+    local description=$5
+
+    echo ""
+    echo "Test $id: $description ($caller reaches $entity via $bound)..."
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_response
+    local cli_response
+    mcp_response=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+    cli_response=$(cargo run --release --bin knot -- callers "$entity" 2>/dev/null)
+
+    if echo "$cli_response" | grep "Dispatched call" | grep "\.$bound " | grep -q "$caller"; then
+        echo -e "${GREEN}✓ CLI: $caller listed as dispatched caller of $entity (bound to $bound)${NC}"
+    else
+        echo -e "${RED}✗ CLI: $caller missing from dispatched callers of $entity${NC}"
+        echo "Response was: $cli_response"
+        exit 1
+    fi
+
+    if echo "$mcp_response" | grep -q "Dispatched calls" \
+        && echo "$mcp_response" | grep -q "### Target: \`[^\`]*\.$bound\`" \
+        && echo "$mcp_response" | grep -q "\*\*\`$caller\`\*\*"; then
+        echo -e "${GREEN}✓ MCP: $caller listed as dispatched caller of $entity (bound to $bound)${NC}"
+    else
+        echo -e "${RED}✗ MCP: $caller missing from dispatched callers of $entity${NC}"
+        echo "Response was: $mcp_response"
+        exit 1
+    fi
+}
+
+assert_dispatched_caller 28 "DefaultLookupGateway.listOptions" "optionsViaThisField" \
+    "LookupGateway.listOptions" "Implementation reached through its interface"
+assert_dispatched_caller 29 "DefaultLookupGateway.listOptions" "optionsViaInheritedField" \
+    "LookupGateway.listOptions" "Implementation reached through an inherited interface field"
+assert_dispatched_caller 30 "LookupGateway.listOptions" "optionsViaConcreteType" \
+    "DefaultLookupGateway.listOptions" "Interface method reached through a concrete-typed call"
+
+echo ""
+echo "Test 31: Sibling implementations never leak into dispatched calls..."
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "DefaultLookupGateway.listOptions" 2>/dev/null)
+if echo "$CLI_RESPONSE" | grep -q "optionsViaCachedGateway"; then
+    echo -e "${RED}✗ CLI: DefaultLookupGateway.listOptions lists optionsViaCachedGateway (bound to a sibling)${NC}"
+    echo "Response was: $CLI_RESPONSE"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI: sibling CachedLookupGateway callers are excluded${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -423,6 +573,9 @@ echo "  ✓ Java anonymous class interface implementation"
 echo "  ✓ Java interface search (MessageHandler)"
 echo "  ✓ Recall ranking (doc-less method definition reaches the top slots)"
 echo "  ✓ Calls through interface-typed fields (any field name, this., method refs)"
+echo "  ✓ Annotated types keep their FQN and link OVERRIDES (@Service, @Repository)"
+echo "  ✓ Interface calls never bind to an implementation containing the interface name"
+echo "  ✓ Dispatched calls in both directions, siblings excluded"
 echo ""
 
 exit 0

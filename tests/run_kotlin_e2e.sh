@@ -438,6 +438,31 @@ else
     exit 1
 fi
 
+# Test 17: annotated classes keep a single-segment FQN and link OVERRIDES (issue #29).
+# `@Repository class UserRepository` used to get the FQN
+# `UserRepository.UserRepository`, which silently dropped its OVERRIDES edges.
+echo ""
+echo "Test 17: Verifying @Repository UserRepository.findById overrides Repository.findById..."
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"UserRepository.findById\",\"repo_name\":\"$REPO_NAME\"}}}"
+
+MCP_RESPONSE=$(echo "$MCP_REQUEST" | env KNOT_NEO4J_URI="$NEO4J_URI" KNOT_NEO4J_USER="$NEO4J_USER" KNOT_NEO4J_PASSWORD="$NEO4J_PASSWORD" KNOT_QDRANT_URL="$QDRANT_URL" KNOT_QDRANT_COLLECTION="$QDRANT_COLLECTION" KNOT_REPO_PATH="$TEST_FILES_DIR" cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+CLI_RESPONSE=$(cargo run --release --bin knot -- callers "UserRepository.findById" -r "$REPO_NAME" 2>/dev/null)
+
+if echo "$CLI_RESPONSE" | grep "Overrides" | grep -q "findById" && echo "$MCP_RESPONSE" | grep -q "Overrides"; then
+    echo -e "${GREEN}✓ UserRepository.findById OVERRIDES Repository.findById (MCP & CLI)${NC}"
+else
+    echo -e "${RED}✗ Missing OVERRIDES edge for annotated class UserRepository${NC}"
+    echo "CLI response was: $CLI_RESPONSE"
+    echo "MCP response was: $MCP_RESPONSE"
+    exit 1
+fi
+
+if echo "$MCP_RESPONSE" | grep -q "UserRepository\.UserRepository"; then
+    echo -e "${RED}✗ Annotated class UserRepository has a doubled FQN${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Annotated class UserRepository keeps a single-segment FQN${NC}"
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
