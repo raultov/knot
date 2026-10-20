@@ -124,6 +124,24 @@ pub(crate) fn lookup_fqn(
     fqn_to_uuid.get(&colon_fqn).copied()
 }
 
+/// `true` when `needle` occurs in `fqn` as a run of whole FQN segments: each
+/// occurrence must start at the beginning of `fqn` or right after a `.` / `:`
+/// separator, and end at the end of `fqn` or right before one. So
+/// `LookupService.listOptions` matches `com.x.LookupService.listOptions` but
+/// neither `com.x.DefaultLookupService.listOptions` nor
+/// `com.x.LookupService.listOptionsAsync`.
+pub(crate) fn contains_on_segment_boundary(fqn: &str, needle: &str) -> bool {
+    let is_separator = |c: char| c == '.' || c == ':';
+    fqn.match_indices(needle).any(|(start, matched)| {
+        let left_ok = fqn[..start].chars().next_back().is_none_or(is_separator);
+        let right_ok = fqn[start + matched.len()..]
+            .chars()
+            .next()
+            .is_none_or(is_separator);
+        left_ok && right_ok
+    })
+}
+
 pub(crate) fn find_entity_in_same_file(
     candidate_uuids: &[Uuid],
     caller_file_path: &str,
@@ -509,25 +527,27 @@ fn resolve_receiver_call(
             return Some(disambiguate_overload(uuid, intent, ctx, Some(&capitalized)));
         }
 
-        let method_dot = format!("{}.{}", receiver_class, intent.method);
-        let capitalized_method_dot = format!("{}.{}", capitalized, intent.method);
-        let method_colon = format!("{}::{}", receiver_class, intent.method);
-        let capitalized_method_colon = format!("{}::{}", capitalized, intent.method);
-        // The substring predicate is deliberately loose (`pkg.alpha.Widget.render`
-        // and `pkg.beta.Widget.render` both contain `Widget.render`), so
-        // several FQNs hit at once when a method name is reused across module
-        // paths. Collect every hit and rank them instead of returning the
-        // first one out of the map: `fqn_to_uuid` iteration order is
-        // randomized per process. Recall is unchanged — an edge is still
-        // produced whenever at least one FQN matches.
+        let needles = [
+            format!("{}.{}", receiver_class, intent.method),
+            format!("{}.{}", capitalized, intent.method),
+            format!("{}::{}", receiver_class, intent.method),
+            format!("{}::{}", capitalized, intent.method),
+        ];
+        // The predicate is deliberately loose about the module path
+        // (`pkg.alpha.Widget.render` and `pkg.beta.Widget.render` both match
+        // `Widget.render`), so several FQNs hit at once when a method name is
+        // reused across module paths. Collect every hit and rank them instead
+        // of returning the first one out of the map: `fqn_to_uuid` iteration
+        // order is randomized per process. It is strict about segment
+        // boundaries, though: `LookupService.listOptions` must never match
+        // `DefaultLookupService.listOptions` (issue #29).
         let candidates: Vec<(&str, Uuid)> = ctx
             .fqn_to_uuid
             .iter()
             .filter(|(fqn, _)| {
-                fqn.contains(&method_dot)
-                    || fqn.contains(&capitalized_method_dot)
-                    || fqn.contains(&method_colon)
-                    || fqn.contains(&capitalized_method_colon)
+                needles
+                    .iter()
+                    .any(|needle| contains_on_segment_boundary(fqn, needle))
             })
             .map(|(fqn, uuid)| (fqn.as_str(), *uuid))
             .collect();
@@ -1513,6 +1533,137 @@ mod tests {
             caller_entity.relationships[0],
             (iface_uuid, RelationshipType::Calls),
             "Expected call to resolve to CatalogProvider.fetchItems, not HttpCatalogProvider.fetchItems"
+        );
+    }
+
+    #[test]
+    fn test_contains_on_segment_boundary() {
+        let needle = "LookupService.listOptions";
+        assert!(contains_on_segment_boundary(
+            "com.x.LookupService.listOptions",
+            needle
+        ));
+        assert!(contains_on_segment_boundary(
+            "LookupService.listOptions",
+            needle
+        ));
+        assert!(contains_on_segment_boundary(
+            "crate::LookupService.listOptions",
+            needle
+        ));
+        assert!(contains_on_segment_boundary(
+            "pkg.LookupService.listOptions.<anonymous@3>.run",
+            needle
+        ));
+        assert!(!contains_on_segment_boundary(
+            "com.x.DefaultLookupService.listOptions",
+            needle
+        ));
+        assert!(!contains_on_segment_boundary(
+            "com.x.LookupService.listOptionsAsync",
+            needle
+        ));
+        // A later whole-segment occurrence still counts.
+        assert!(contains_on_segment_boundary(
+            "a.DefaultLookupService.listOptions.LookupService.listOptions",
+            needle
+        ));
+    }
+
+    /// Mock a `Call` intent from `LookupController.options` through an
+    /// untyped receiver (e.g. a field inherited from another file).
+    fn lookup_caller(receiver: &str) -> ResolutionEntity {
+        let mut caller = mock_resolution_entity_at(
+            "options",
+            "com.web.LookupController.options",
+            Some("LookupController"),
+            "src/web/LookupController.java",
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "listOptions".to_string(),
+            receiver: Some(receiver.to_string()),
+            line: 12,
+            arg_count: None,
+        });
+        caller
+    }
+
+    fn lookup_method(class: &str) -> ResolutionEntity {
+        mock_resolution_entity_at(
+            "listOptions",
+            &format!("com.service.{class}.listOptions"),
+            Some(class),
+            &format!("src/service/{class}.java"),
+        )
+    }
+
+    #[test]
+    fn test_untyped_receiver_never_binds_to_implementation_containing_interface_name() {
+        // Issue #29: `DefaultLookupService` sorts before `LookupService`, so a
+        // plain substring match on `LookupService.listOptions` picked the
+        // implementation.
+        let iface = lookup_method("LookupService");
+        let implementation = lookup_method("DefaultLookupService");
+        let iface_uuid = iface.uuid;
+        let mut entities = vec![implementation, iface, lookup_caller("lookupService")];
+        resolve_reference_intents(&mut entities);
+
+        let caller = entities.iter().find(|e| e.name == "options").unwrap();
+        assert_eq!(
+            caller.relationships,
+            vec![(iface_uuid, RelationshipType::Calls)],
+            "lookupService.listOptions() must bind to LookupService.listOptions"
+        );
+    }
+
+    #[test]
+    fn test_untyped_receiver_with_this_prefix_binds_to_interface() {
+        let iface = lookup_method("LookupService");
+        let implementation = lookup_method("DefaultLookupService");
+        let iface_uuid = iface.uuid;
+        let mut entities = vec![implementation, iface, lookup_caller("this.lookupService")];
+        resolve_reference_intents(&mut entities);
+
+        let caller = entities.iter().find(|e| e.name == "options").unwrap();
+        assert_eq!(
+            caller.relationships,
+            vec![(iface_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    #[test]
+    fn test_untyped_receiver_keeps_unique_implementation_as_fallback() {
+        // Without the interface in scope the only candidate still wins
+        // through the homonym fallback: tightening the match costs no recall.
+        let implementation = lookup_method("DefaultLookupService");
+        let impl_uuid = implementation.uuid;
+        let mut entities = vec![implementation, lookup_caller("lookupService")];
+        resolve_reference_intents(&mut entities);
+
+        let caller = entities.iter().find(|e| e.name == "options").unwrap();
+        assert_eq!(
+            caller.relationships,
+            vec![(impl_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    #[test]
+    fn test_untyped_receiver_ignores_method_name_prefix() {
+        let mut async_variant = mock_resolution_entity_at(
+            "listOptionsAsync",
+            "com.service.LookupService.listOptionsAsync",
+            Some("LookupService"),
+            "src/service/LookupService.java",
+        );
+        async_variant.name = "listOptionsAsync".to_string();
+        let mut entities = vec![async_variant, lookup_caller("lookupService")];
+        resolve_reference_intents(&mut entities);
+
+        let caller = entities.iter().find(|e| e.name == "options").unwrap();
+        assert!(
+            caller.relationships.is_empty(),
+            "listOptions() must not bind to listOptionsAsync: {:?}",
+            caller.relationships
         );
     }
 
