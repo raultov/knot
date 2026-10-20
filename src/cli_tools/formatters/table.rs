@@ -148,6 +148,7 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
         ("declared_unused", "Declared unused", Color::Green),
         ("overridden_by", "Overridden by", Color::Yellow),
         ("overrides", "Overrides", Color::Cyan),
+        ("dispatched_calls", "Dispatched call", Color::Blue),
     ];
 
     for (key, label, label_color) in rel_types {
@@ -404,6 +405,26 @@ mod tests {
         assert!(output.contains("References to `MyEntity`"));
         assert!(output.contains("caller1"));
         assert!(output.contains("Calls"));
+    }
+
+    #[test]
+    fn callers_table_renders_dispatched_calls_with_bound_target() {
+        let references = json!({
+            "calls": [],
+            "dispatched_calls": [
+                {"name": "options", "kind": "method",
+                 "file_path": "src/web/LookupController.java", "start_line": 12,
+                 "target_fqn": "com.acme.DefaultLookupService.listOptions"}
+            ]
+        });
+        let output = format_callers_table("LookupService.listOptions", &references);
+        assert!(!output.contains("may be unused"), "got {output}");
+        assert!(output.contains("Dispatched call"), "got {output}");
+        assert!(
+            output.contains("com.acme.DefaultLookupService.listOptions"),
+            "got {output}"
+        );
+        assert!(output.contains("options"), "got {output}");
     }
 
     #[test]

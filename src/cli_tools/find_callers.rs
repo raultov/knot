@@ -48,7 +48,8 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
     output.push_str(&format_resolution_markdown(references));
 
     // Every relationship type the pipeline produces (see
-    // `find_references_rel_labels`) plus the two OVERRIDES projections.
+    // `find_references_rel_labels`) plus the two OVERRIDES projections and
+    // the calls that reach the target through dynamic dispatch.
     // Empty buckets are skipped by the loop below, so repositories without
     // web/VCL/macro edges render exactly as before.
     let rel_types = [
@@ -69,6 +70,10 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         ("declared_unused", "Declared unused (VCL)"),
         ("overridden_by", "Overridden by (method implementations)"),
         ("overrides", "Overrides (declared supertype methods)"),
+        (
+            "dispatched_calls",
+            "Dispatched calls (bound to an override or supertype method)",
+        ),
     ];
 
     let total_refs: usize = rel_types
@@ -140,10 +145,12 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
             && !arr.is_empty()
         {
             output.push_str(&format!("## {} ({})\n\n", label, arr.len()));
+            // Dispatched calls are bound to a method other than the queried
+            // one, so the bound method is always named.
             output.push_str(&format_relationship_bucket(
                 entity_name,
                 arr,
-                multiple_targets,
+                multiple_targets || key == "dispatched_calls",
             ));
         }
     }
@@ -646,6 +653,41 @@ mod tests {
         assert!(formatted.contains("Overrides (declared supertype methods)"));
         assert!(formatted.contains("Session.getUniqueId"));
         assert!(formatted.contains("ISession.getUniqueId"));
+    }
+
+    #[test]
+    fn test_format_references_result_dispatched_calls_name_bound_method() {
+        // Issue #29: a query on the interface method surfaces a caller bound
+        // to the implementation, and always says which method it is bound to
+        // even when the query resolved to a single target.
+        let references = json!({
+            "calls": [],
+            "dispatched_calls": [
+                {"name": "options", "kind": "method",
+                 "file_path": "src/web/LookupController.java", "start_line": 12,
+                 "target_name": "listOptions",
+                 "target_fqn": "com.acme.DefaultLookupService.listOptions",
+                 "target_file_path": "src/service/DefaultLookupService.java",
+                 "target_start_line": 8}
+            ],
+            "resolution": {
+                "query": "LookupService.listOptions",
+                "tier": "fqn_suffix",
+                "fuzzy": false,
+                "truncated": false,
+                "total_targets": 1,
+                "targets": [{"fqn": "com.acme.LookupService.listOptions"}]
+            }
+        });
+        let formatted = format_references_result("LookupService.listOptions", &references);
+        assert!(formatted.contains("Found 1 reference(s)"));
+        assert!(!formatted.contains("may be unused"));
+        assert!(formatted.contains("Dispatched calls (bound to an override or supertype method)"));
+        assert!(
+            formatted.contains("### Target: `com.acme.DefaultLookupService.listOptions`"),
+            "the bound method must be named:\n{formatted}"
+        );
+        assert!(formatted.contains("**`options`**"));
     }
 
     #[test]

@@ -296,6 +296,42 @@ pub fn overrides_query(repo_scoped: bool) -> String {
     )
 }
 
+/// Cipher for the `dispatched_calls` bucket: callers whose `CALLS` edge is
+/// bound to a method related to a resolved target through `OVERRIDES`, in
+/// either direction — calls bound to an override of the target (the target
+/// is an interface/superclass method) and calls bound to a supertype method
+/// the target overrides (dynamic dispatch can reach the target). Siblings are
+/// excluded: both legs are directed. Rows carry the *bound* method as their
+/// target so the reader sees which declaration the call statically names.
+pub fn dispatched_calls_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "WHERE target.repo_name IN $repo_names AND target.uuid IN $target_uuids"
+    } else {
+        "WHERE target.uuid IN $target_uuids"
+    };
+
+    format!(
+        "CALL {{
+           MATCH (bound:Entity)-[:OVERRIDES*1..]->(target:Entity)
+           {repo_filter}
+           RETURN bound
+           UNION
+           MATCH (target:Entity)-[:OVERRIDES*1..]->(bound:Entity)
+           {repo_filter}
+           RETURN bound
+         }}
+         WITH bound WHERE NOT bound.uuid IN $target_uuids
+         MATCH (entity:Entity)-[:CALLS]->(bound)
+         RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                entity.repo_name AS repo_name,
+                bound.name AS target_name, bound.fqn AS target_fqn,
+                bound.file_path AS target_file_path,
+                bound.start_line AS target_start_line, bound.signature AS target_signature,
+                bound.repo_name AS target_repo_name
+         ORDER BY target_fqn, entity.file_path, entity.start_line"
+    )
+}
+
 pub fn find_callers_query(repo_names: &[String]) -> String {
     if !repo_names.is_empty() {
         "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
@@ -1097,7 +1133,8 @@ impl QueryExt for GraphDb {
             "imports_vmod": [],
             "declared_unused": [],
             "overridden_by": [],
-            "overrides": []
+            "overrides": [],
+            "dispatched_calls": []
         });
 
         // Clamp the requested cap so a caller cannot push a huge scan silently.
@@ -1138,10 +1175,15 @@ impl QueryExt for GraphDb {
             .await?;
         partition_reference_rows(&rows, &mut results);
 
-        // Stage 3: OVERRIDES buckets
+        // Stage 3: OVERRIDES buckets, plus the calls that reach a target
+        // through dynamic dispatch (bound to an override or a supertype).
         for (result_key, query_str) in [
             ("overridden_by", overridden_by_query(!repo_names.is_empty())),
             ("overrides", overrides_query(!repo_names.is_empty())),
+            (
+                "dispatched_calls",
+                dispatched_calls_query(!repo_names.is_empty()),
+            ),
         ] {
             let rows = self
                 .collect_reference_rows(&query_str, &target_uuids, repo_names, result_key)
@@ -1685,8 +1727,8 @@ mod tests {
 
     use super::{
         DEFAULT_MAX_TARGETS, MAX_TARGETS_CEILING, MatchTier, RootCandidate, TargetRow,
-        caller_links_depth2_query, caller_links_query, finalize_targets, find_callers_query,
-        find_files_by_suffix_query, find_references_rel_labels, fold_hidden,
+        caller_links_depth2_query, caller_links_query, dispatched_calls_query, finalize_targets,
+        find_callers_query, find_files_by_suffix_query, find_references_rel_labels, fold_hidden,
         get_file_entities_query, get_file_outgoing_references_query, overridden_by_query,
         overrides_query, partition_by_kind, partition_reference_rows, rank_root_candidates,
         reference_bucket_key, reference_target_query, relationship_query, root_coverage_query,
@@ -2126,6 +2168,34 @@ mod tests {
         let query_str = overrides_query(true);
         assert!(query_str.contains("entity.repo_name IN $repo_names"));
         assert!(query_str.contains("entity.uuid IN $target_uuids"));
+    }
+
+    #[test]
+    fn dispatched_calls_query_walks_both_directed_override_legs() {
+        for repo_scoped in [false, true] {
+            let query_str = dispatched_calls_query(repo_scoped);
+            assert!(query_str.contains("(bound:Entity)-[:OVERRIDES*1..]->(target:Entity)"));
+            assert!(query_str.contains("(target:Entity)-[:OVERRIDES*1..]->(bound:Entity)"));
+            // Undirected traversal would leak sibling implementations.
+            assert!(!query_str.contains("-[:OVERRIDES*1..]-("));
+            assert!(query_str.contains("UNION"));
+            assert!(query_str.contains("NOT bound.uuid IN $target_uuids"));
+            assert!(query_str.contains("MATCH (entity:Entity)-[:CALLS]->(bound)"));
+            assert_eq!(
+                query_str.matches("$repo_names").count(),
+                if repo_scoped { 2 } else { 0 },
+                "repo_scoped={repo_scoped}: {query_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatched_calls_query_projects_bound_method_as_target() {
+        let query_str = dispatched_calls_query(true);
+        assert!(query_str.contains("entity.repo_name AS repo_name"));
+        assert!(query_str.contains("bound.fqn AS target_fqn"));
+        assert!(query_str.contains("bound.repo_name AS target_repo_name"));
+        assert!(query_str.contains("ORDER BY target_fqn, entity.file_path, entity.start_line"));
     }
 
     #[test]
