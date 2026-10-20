@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.11.5
+
+- **Fixed(parser)**: Annotated Java/Kotlin types no longer get a doubled FQN (#29). `@Service public class DefaultLookupService` was indexed as `…DefaultLookupService.DefaultLookupService` because the class context opened at the annotation line; contexts now open at the line of the declared name. This also restores the `OVERRIDES` edges of every annotated type (`@Service`, `@Repository`, `@RestController`, …), which the override linker silently dropped.
+- **Fixed(resolve)**: Untyped receivers no longer bind an interface call to an implementation whose name contains the interface name (#29). The receiver substring match in `resolve_receiver_call` now requires whole FQN segments (`contains_on_segment_boundary`), so `lookupService.listOptions()` never matches `DefaultLookupService.listOptions`, and `listOptions` never matches `listOptionsAsync`.
+- **Feature(query)**: `find_callers` returns a new **Dispatched calls** bucket (`dispatched_calls`): callers whose `CALLS` edge is bound to an override of the target or to a supertype method it overrides. Each row names the method it is statically bound to; sibling implementations are excluded.
+- **Test**: Unit tests in `context.rs`/`extractor/tests.rs` (annotated types), `calls.rs` (segment-boundary matching), `query.rs` and the formatters (dispatched calls); Java E2E tests 19–31 with the `tests/testing_files/java/interface_dispatch/` fixture; Kotlin E2E test 17.
+
+---
+
 ## v1.11.4
 
 - **Fixed(java)**: Call resolution for interface-typed fields (#28). Calls on a field whose declared type is an interface (such as Spring constructor-injected services) now resolve to the interface method even when the field name differs from the type (e.g. `private final CatalogProvider source; source.fetchItems()`).
@@ -1417,6 +1426,15 @@ for the full design rationale, including the rejected alternatives.
  - ✅ Call graph analysis including method calls, field access (`obj->method()`), and scope resolution (`std::vector::size()`)
  - ✅ 3 unit tests for C++ entity and reference extraction
  - ✅ 4 end-to-end integration tests covering FQN, call graphs, macro usage, and type references
+---
+
+## v0.11.0 — C/C++ Language Support (Phase 11)
+ - ✅ C/C++ indexing via tree-sitter-c and tree-sitter-cpp (`.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hh`, `.hxx`)
+ - ✅ New entity kinds: `CppClass`, `CStruct`, `CppMethod`, `CFunction`, `CppNamespace`, `MacroDefinition`
+ - ✅ Namespace-aware FQNs (`Engine::MyClass::start`)
+ - ✅ Reference tracking: direct calls, `obj.bar()` / `ptr->baz()`, scope resolution (`std::vector::size()`), type references and macro usage (uppercase heuristic)
+ - ✅ 3 unit tests and 4 E2E tests (`tests/run_cpp_e2e.sh`); `run_all_e2e.sh` master script; CI runs the C/C++ and cross-language suites
+ - ✅ **Fix(clippy)**: collapse `collapsible_match` in `find_method_body_end`
 ---
 
 ## v0.10.3 — Groovy Private Methods, Nested Closures & UUID Collision Fix
