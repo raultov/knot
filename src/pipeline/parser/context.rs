@@ -7,6 +7,8 @@ use tree_sitter::Node;
 #[derive(Debug, Clone)]
 pub(crate) struct ClassContext {
     pub(crate) name: String,
+    /// Line of the declared name (Rust `impl` blocks: the `impl` keyword).
+    /// Entities strictly after it and before `end_line` are members.
     pub(crate) start_line: usize,
     pub(crate) end_line: usize,
 }
@@ -30,19 +32,24 @@ pub(crate) fn extract_class_contexts(
     ) {
         // Find the name child
         let mut child = node.child(0);
-        let mut class_name: Option<String> = None;
+        let mut class_name: Option<(String, usize)> = None;
         while let Some(c) = child {
             if c.kind() == "identifier" || c.kind() == "type_identifier" {
-                class_name = Some(node_text(c, source));
+                class_name = Some((node_text(c, source), c.start_position().row + 1));
                 break;
             }
             child = c.next_sibling();
         }
 
-        if let Some(name) = class_name {
+        // The context opens at the line of the declared name, not at the
+        // declaration node: Java/Kotlin annotations (`@Service`) are children
+        // of the declaration, so a node-based start would place the type's own
+        // entity strictly inside its context and double its FQN
+        // (`DefaultLookupService.DefaultLookupService`).
+        if let Some((name, name_line)) = class_name {
             contexts.push(ClassContext {
                 name,
-                start_line: node.start_position().row + 1,
+                start_line: name_line,
                 end_line: node.end_position().row + 1,
             });
         }

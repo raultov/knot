@@ -2215,6 +2215,85 @@ fn test_extract_entities_java_nested_class_package_fqn() {
     assert_eq!(inner.fqn, "com.example.Outer.Inner");
 }
 
+fn extract_java(source: &str) -> Vec<ParsedEntity> {
+    extract_entities(
+        source,
+        tree_sitter_java::LANGUAGE.into(),
+        include_str!("../../../../queries/java.scm"),
+        "java",
+        "/test.java",
+        "test-repo",
+    )
+    .unwrap()
+}
+
+fn fqn_of<'a>(entities: &'a [ParsedEntity], name: &str) -> &'a str {
+    &entities.iter().find(|e| e.name == name).unwrap().fqn
+}
+
+#[test]
+fn test_extract_entities_java_annotated_class_fqn_not_doubled() {
+    let source = "package com.example;\n\n@Service\npublic class DefaultLookupService implements LookupService {\n    @Override\n    public Options listOptions() { return null; }\n}";
+    let entities = extract_java(source);
+    assert_eq!(
+        fqn_of(&entities, "DefaultLookupService"),
+        "com.example.DefaultLookupService"
+    );
+    assert_eq!(
+        fqn_of(&entities, "listOptions"),
+        "com.example.DefaultLookupService.listOptions"
+    );
+}
+
+#[test]
+fn test_extract_entities_java_multiple_annotations_fqn_not_doubled() {
+    let source = "package com.example;\n\n@RestController\n@RequiredArgsConstructor\n@RequestMapping(\"/x\")\npublic class LookupController {\n    public void options() {}\n}";
+    let entities = extract_java(source);
+    assert_eq!(
+        fqn_of(&entities, "LookupController"),
+        "com.example.LookupController"
+    );
+    assert_eq!(
+        fqn_of(&entities, "options"),
+        "com.example.LookupController.options"
+    );
+}
+
+#[test]
+fn test_extract_entities_java_annotated_interface_fqn_not_doubled() {
+    let source = "package com.example;\n\n@Repository\npublic interface OrderLedger {\n    Entry appendEntry(Entry e);\n}";
+    let entities = extract_java(source);
+    assert_eq!(fqn_of(&entities, "OrderLedger"), "com.example.OrderLedger");
+    assert_eq!(
+        fqn_of(&entities, "appendEntry"),
+        "com.example.OrderLedger.appendEntry"
+    );
+}
+
+#[test]
+fn test_extract_entities_java_annotated_nested_class_fqn() {
+    let source = "package com.example;\n\n@Service\nclass Outer {\n    @Component\n    static class Inner {}\n}";
+    let entities = extract_java(source);
+    assert_eq!(fqn_of(&entities, "Outer"), "com.example.Outer");
+    assert_eq!(fqn_of(&entities, "Inner"), "com.example.Outer.Inner");
+}
+
+#[test]
+fn test_extract_entities_kotlin_annotated_class_fqn_not_doubled() {
+    let source = "@Service\nclass KService {\n    fun run() {}\n}";
+    let entities = extract_entities(
+        source,
+        tree_sitter_kotlin_ng::LANGUAGE.into(),
+        include_str!("../../../../queries/kotlin.scm"),
+        "kotlin",
+        "/KService.kt",
+        "test-repo",
+    )
+    .unwrap();
+    assert_eq!(fqn_of(&entities, "KService"), "KService");
+    assert_eq!(fqn_of(&entities, "run"), "KService.run");
+}
+
 #[test]
 fn test_extract_entities_java_interface_extends() {
     let source = "interface Child extends Parent {}";
