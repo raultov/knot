@@ -7,7 +7,7 @@
 //! queries can surface the relationship between an interface/superclass method
 //! and its implementations/overrides.
 //!
-//! Design (see `docs/specs/method_override_relationships.md`):
+//! Design:
 //! - **Additive only** — never mutates or removes existing entities/edges.
 //! - **Override-capable guard** — a file-extension guard plus a kind
 //!   allowlist. The generic `Class`/`Interface`/`Method` kinds are shared
@@ -18,9 +18,15 @@
 //!   declaration(s) of the same name walking up its type hierarchy. Full
 //!   transitive visibility is resolved at query time with variable-length
 //!   Cypher (`-[:OVERRIDES*1..]->`).
-//! - **Name-only matching** — the Groovy parser often lacks full signatures.
+//! - **Overload-aware matching** — same-named declarations are filtered by
+//!   arity and parameter types parsed from the raw signatures (see
+//!   [`params`]); when several survive, the most specific wins. Methods
+//!   without a parseable signature (e.g. synthetic Groovy accessors) fall back
+//!   to name-only matching.
 //! - **Batch-local** — only links methods whose supertype methods are present
 //!   in the same indexing batch (incremental limitation, documented in the spec).
+
+mod params;
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,8 +34,16 @@ use uuid::Uuid;
 
 use crate::models::{EntityKind, RelationshipType, ResolutionEntity};
 
-/// Entry in the methods-by-type map: (method_name, method_uuid, entity_index).
-type MethodEntry<'a> = (&'a str, Uuid, usize);
+use params::{ParamList, match_params};
+
+/// A method declared by an override-capable type.
+struct MethodEntry<'a> {
+    name: &'a str,
+    uuid: Uuid,
+    idx: usize,
+    /// Parsed parameter list; `None` when the signature is absent or unreadable.
+    params: Option<ParamList>,
+}
 
 /// Source file extensions of override-capable languages. The guard is
 /// applied FIRST to every entity; this is what excludes TypeScript, which
@@ -37,11 +51,17 @@ type MethodEntry<'a> = (&'a str, Uuid, usize);
 const OVERRIDE_CAPABLE_EXTENSIONS: &[&str] =
     &[".java", ".kt", ".kts", ".groovy", ".gvy", ".gradle", ".cs"];
 
+/// Groovy source extensions: default parameter values compile to one overload
+/// per omittable parameter, so a declaration answers for several arities.
+const DEFAULTS_EXPAND_ARITY_EXTENSIONS: &[&str] = &[".groovy", ".gvy", ".gradle"];
+
+fn has_extension(file_path: &str, extensions: &[&str]) -> bool {
+    extensions.iter().any(|ext| file_path.ends_with(ext))
+}
+
 /// Returns `true` if the file path ends in an override-capable extension.
 fn is_override_capable_file(file_path: &str) -> bool {
-    OVERRIDE_CAPABLE_EXTENSIONS
-        .iter()
-        .any(|ext| file_path.ends_with(ext))
+    has_extension(file_path, OVERRIDE_CAPABLE_EXTENSIONS)
 }
 
 /// Method-like kinds that can override/implement a supertype method.
@@ -174,34 +194,65 @@ fn collect_hierarchy<'a>(
             {
                 continue;
             }
+            let params = e.signature.as_deref().and_then(|sig| {
+                ParamList::parse(
+                    sig,
+                    &e.name,
+                    has_extension(&e.file_path, DEFAULTS_EXPAND_ARITY_EXTENSIONS),
+                )
+            });
             methods_by_type
                 .entry(type_uuid)
                 .or_default()
-                .push((e.name.as_str(), e.uuid, idx));
+                .push(MethodEntry {
+                    name: e.name.as_str(),
+                    uuid: e.uuid,
+                    idx,
+                    params,
+                });
         }
     }
     (supertypes, methods_by_type)
 }
 
+/// The declarations of type `s` that `method` can override: same name, and —
+/// when both signatures were parsed — compatible arity and parameter types.
+/// Among the compatible declarations only the most specific ones are kept.
+/// Declarations whose signature could not be compared are a fallback used only
+/// when no comparable declaration matches.
 fn declared_methods(
     methods_by_type: &HashMap<Uuid, Vec<MethodEntry<'_>>>,
     s: Uuid,
-    method_name: &str,
+    method: &MethodEntry<'_>,
 ) -> Vec<Uuid> {
-    methods_by_type
-        .get(&s)
-        .map(|ms| {
-            ms.iter()
-                .filter(|(name, _, _)| *name == method_name)
-                .map(|(_, uuid, _)| *uuid)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(candidates) = methods_by_type.get(&s) else {
+        return Vec::new();
+    };
+    let mut best_score = None;
+    let mut best = Vec::new();
+    let mut uncomparable = Vec::new();
+    for candidate in candidates.iter().filter(|c| c.name == method.name) {
+        let (Some(sub), Some(sup)) = (&method.params, &candidate.params) else {
+            uncomparable.push(candidate.uuid);
+            continue;
+        };
+        let Some(score) = match_params(sub, sup) else {
+            continue;
+        };
+        if best_score.is_none_or(|b| score > b) {
+            best_score = Some(score);
+            best.clear();
+        }
+        if best_score == Some(score) {
+            best.push(candidate.uuid);
+        }
+    }
+    if best.is_empty() { uncomparable } else { best }
 }
 
 fn nearest_declarations(
     type_uuid: Uuid,
-    method_name: &str,
+    method: &MethodEntry<'_>,
     supertypes: &HashMap<Uuid, Vec<Uuid>>,
     methods_by_type: &HashMap<Uuid, Vec<MethodEntry<'_>>>,
 ) -> Vec<Uuid> {
@@ -216,7 +267,7 @@ fn nearest_declarations(
             if !visited.insert(s) {
                 continue;
             }
-            let declared = declared_methods(methods_by_type, s, method_name);
+            let declared = declared_methods(methods_by_type, s, method);
             if declared.is_empty() {
                 if let Some(parents) = supertypes.get(&s) {
                     next.extend(parents.iter().copied());
@@ -256,11 +307,11 @@ pub(crate) fn link_method_overrides(entities: &mut [ResolutionEntity]) {
     let mut emitted: HashSet<(usize, Uuid)> = HashSet::new();
 
     for (&type_uuid, methods) in &methods_by_type {
-        for &(method_name, _method_uuid, method_idx) in methods {
-            let decls = nearest_declarations(type_uuid, method_name, &supertypes, &methods_by_type);
+        for method in methods {
+            let decls = nearest_declarations(type_uuid, method, &supertypes, &methods_by_type);
             for decl_uuid in decls {
-                if emitted.insert((method_idx, decl_uuid)) {
-                    edges.push((method_idx, decl_uuid));
+                if emitted.insert((method.idx, decl_uuid)) {
+                    edges.push((method.idx, decl_uuid));
                 }
             }
         }
@@ -283,6 +334,19 @@ mod tests {
     /// Convenience: build a method entity in an override-capable file.
     fn capable_method(name: &str, fqn: &str, file: &str, kind: EntityKind) -> ResolutionEntity {
         mock_resolution_entity_with_kind(name, fqn, None, file, kind)
+    }
+
+    /// Convenience: build a method entity carrying a parameter signature.
+    fn method_with_sig(
+        name: &str,
+        fqn: &str,
+        file: &str,
+        kind: EntityKind,
+        signature: &str,
+    ) -> ResolutionEntity {
+        let mut m = capable_method(name, fqn, file, kind);
+        m.signature = Some(signature.to_string());
+        m
     }
 
     fn has_override(e: &ResolutionEntity, target: Uuid) -> bool {
@@ -553,9 +617,9 @@ mod tests {
         assert_eq!(override_count(&entities[3]), 0);
     }
 
-    // --- Scenario H — Overloads (name-only N×M fan-out) -------------------
+    // --- Scenario H — Overloads without signatures (name-only N×M fan-out) --
     #[test]
-    fn scenario_h_overload_fanout() {
+    fn scenario_h_overloads_without_signatures_fan_out() {
         let iface = capable_type("I", "I", "I.java", EntityKind::Interface);
         let i_visit_a = capable_method("visit", "I.visit", "I.java", EntityKind::Method);
         let i_visit_b = capable_method("visit", "I.visit", "I.java", EntityKind::Method);
@@ -578,11 +642,303 @@ mod tests {
         ];
         link_method_overrides(&mut entities);
 
-        // Each Impl.visit links to both I.visit declarations (N×M).
+        // No signature to compare: each Impl.visit links to both I.visit
+        // declarations (N×M), the name-only fallback.
         assert!(has_override(&entities[4], ia));
         assert!(has_override(&entities[4], ib));
         assert!(has_override(&entities[5], ia));
         assert!(has_override(&entities[5], ib));
+    }
+
+    // --- Scenario H2 — Overloads with different arity (issue #30) ----------
+    #[test]
+    fn scenario_h2_arity_selects_the_overridden_overload() {
+        let iface = capable_type(
+            "SettingsService",
+            "SettingsService",
+            "SettingsService.java",
+            EntityKind::Interface,
+        );
+        let one = method_with_sig(
+            "update",
+            "SettingsService.update",
+            "SettingsService.java",
+            EntityKind::Method,
+            "(List<Setting> items)",
+        );
+        let two = method_with_sig(
+            "update",
+            "SettingsService.update",
+            "SettingsService.java",
+            EntityKind::Method,
+            "(List<Setting> items, boolean skipValidation)",
+        );
+        let mut cls = capable_type(
+            "DefaultSettingsService",
+            "DefaultSettingsService",
+            "DefaultSettingsService.java",
+            EntityKind::Class,
+        );
+        cls.relationships
+            .push((iface.uuid, RelationshipType::Implements));
+        let impl_two = method_with_sig(
+            "update",
+            "DefaultSettingsService.update",
+            "DefaultSettingsService.java",
+            EntityKind::Method,
+            "(List<Setting> items, boolean skipValidation)",
+        );
+
+        let (one_uuid, two_uuid) = (one.uuid, two.uuid);
+        let mut entities = vec![iface, one, two, cls, impl_two];
+        link_method_overrides(&mut entities);
+
+        assert!(has_override(&entities[4], two_uuid));
+        assert!(!has_override(&entities[4], one_uuid));
+        assert_eq!(override_count(&entities[4]), 1);
+    }
+
+    // --- Scenario H3 — Walk past a type declaring only other arities -------
+    #[test]
+    fn scenario_h3_walks_past_incompatible_overloads() {
+        let a = capable_type("A", "A", "A.java", EntityKind::Interface);
+        let a_two = method_with_sig(
+            "run",
+            "A.run",
+            "A.java",
+            EntityKind::Method,
+            "(int a, int b)",
+        );
+        let mut b = capable_type("B", "B", "B.java", EntityKind::Class);
+        b.relationships.push((a.uuid, RelationshipType::Implements));
+        let b_one = method_with_sig("run", "B.run", "B.java", EntityKind::Method, "(int a)");
+        let mut c = capable_type("C", "C", "C.java", EntityKind::Class);
+        c.relationships.push((b.uuid, RelationshipType::Extends));
+        let c_two = method_with_sig(
+            "run",
+            "C.run",
+            "C.java",
+            EntityKind::Method,
+            "(final int a, int b)",
+        );
+
+        let (a_two_uuid, b_one_uuid) = (a_two.uuid, b_one.uuid);
+        let mut entities = vec![a, a_two, b, b_one, c, c_two];
+        link_method_overrides(&mut entities);
+
+        // C.run(int, int) skips B.run(int) and reaches A.run(int, int).
+        assert!(has_override(&entities[5], a_two_uuid));
+        assert!(!has_override(&entities[5], b_one_uuid));
+        assert_eq!(override_count(&entities[5]), 1);
+        // B.run(int) overrides nothing: A only declares the two-arg overload.
+        assert_eq!(override_count(&entities[3]), 0);
+    }
+
+    // --- Scenario H4 — Same arity, parameter types decide ------------------
+    #[test]
+    fn scenario_h4_parameter_types_break_same_arity_ties() {
+        let iface = capable_type(
+            "Renderer",
+            "Renderer",
+            "Renderer.java",
+            EntityKind::Interface,
+        );
+        let by_string = method_with_sig(
+            "render",
+            "Renderer.render",
+            "Renderer.java",
+            EntityKind::Method,
+            "(String value)",
+        );
+        let by_long = method_with_sig(
+            "render",
+            "Renderer.render",
+            "Renderer.java",
+            EntityKind::Method,
+            "(Long value)",
+        );
+        let mut cls = capable_type("Plain", "Plain", "Plain.java", EntityKind::Class);
+        cls.relationships
+            .push((iface.uuid, RelationshipType::Implements));
+        let impl_string = method_with_sig(
+            "render",
+            "Plain.render",
+            "Plain.java",
+            EntityKind::Method,
+            "(String value)",
+        );
+
+        let by_string_uuid = by_string.uuid;
+        let mut entities = vec![iface, by_string, by_long, cls, impl_string];
+        link_method_overrides(&mut entities);
+
+        assert!(has_override(&entities[4], by_string_uuid));
+        assert_eq!(override_count(&entities[4]), 1);
+    }
+
+    // --- Scenario H5 — Type variables, most specific overload wins ---------
+    #[test]
+    fn scenario_h5_type_variables_prefer_the_most_specific_overload() {
+        let iface = capable_type("Store", "Store", "Store.kt", EntityKind::KotlinInterface);
+        let by_var = method_with_sig(
+            "put",
+            "Store.put",
+            "Store.kt",
+            EntityKind::KotlinMethod,
+            "(entry: T)",
+        );
+        let by_map = method_with_sig(
+            "put",
+            "Store.put",
+            "Store.kt",
+            EntityKind::KotlinMethod,
+            "(entries: Map<String, T>)",
+        );
+        let mut cls = capable_type(
+            "SettingStore",
+            "SettingStore",
+            "SettingStore.kt",
+            EntityKind::KotlinClass,
+        );
+        cls.relationships
+            .push((iface.uuid, RelationshipType::Implements));
+        let impl_entry = method_with_sig(
+            "put",
+            "SettingStore.put",
+            "SettingStore.kt",
+            EntityKind::KotlinMethod,
+            "(entry: Setting)",
+        );
+        let impl_map = method_with_sig(
+            "put",
+            "SettingStore.put",
+            "SettingStore.kt",
+            EntityKind::KotlinMethod,
+            "(entries: Map<String, Setting>)",
+        );
+
+        let (var_uuid, map_uuid) = (by_var.uuid, by_map.uuid);
+        let mut entities = vec![iface, by_var, by_map, cls, impl_entry, impl_map];
+        link_method_overrides(&mut entities);
+
+        assert!(has_override(&entities[4], var_uuid));
+        assert_eq!(override_count(&entities[4]), 1);
+        assert!(has_override(&entities[5], map_uuid));
+        assert_eq!(override_count(&entities[5]), 1);
+    }
+
+    // --- Scenario H6 — Groovy defaults and the uncomparable fallback -------
+    #[test]
+    fn scenario_h6_groovy_default_parameters_and_missing_signatures() {
+        let base = capable_type("Layout", "Layout", "Layout.groovy", EntityKind::GroovyClass);
+        let with_default = method_with_sig(
+            "layoutRow",
+            "Layout.layoutRow",
+            "Layout.groovy",
+            EntityKind::GroovyMethod,
+            "String layoutRow(String row, int indent = 2)",
+        );
+        let by_list = method_with_sig(
+            "layoutRow",
+            "Layout.layoutRow",
+            "Layout.groovy",
+            EntityKind::GroovyMethod,
+            "String layoutRow(List<String> rows)",
+        );
+        let no_sig = capable_method(
+            "getTitle",
+            "Layout.getTitle",
+            "Layout.groovy",
+            EntityKind::GroovyMethod,
+        );
+        let mut sub = capable_type(
+            "Compact",
+            "Compact",
+            "Compact.groovy",
+            EntityKind::GroovyClass,
+        );
+        sub.relationships
+            .push((base.uuid, RelationshipType::Extends));
+        let sub_row = method_with_sig(
+            "layoutRow",
+            "Compact.layoutRow",
+            "Compact.groovy",
+            EntityKind::GroovyMethod,
+            "String layoutRow(String row)",
+        );
+        let sub_title = method_with_sig(
+            "getTitle",
+            "Compact.getTitle",
+            "Compact.groovy",
+            EntityKind::GroovyMethod,
+            "String getTitle()",
+        );
+
+        let (default_uuid, no_sig_uuid) = (with_default.uuid, no_sig.uuid);
+        let mut entities = vec![base, with_default, by_list, no_sig, sub, sub_row, sub_title];
+        link_method_overrides(&mut entities);
+
+        // `layoutRow(String)` is one of the overloads the default generates.
+        assert!(has_override(&entities[5], default_uuid));
+        assert_eq!(override_count(&entities[5]), 1);
+        // A supertype declaration without signature falls back to the name.
+        assert!(has_override(&entities[6], no_sig_uuid));
+    }
+
+    // --- Scenario H7 — Real parser signatures (Java parser + resolver) -----
+    #[test]
+    fn scenario_h7_java_parser_signatures_issue_30() {
+        use crate::pipeline::parser::{ParseConfig, parse_files};
+
+        let dir = std::env::temp_dir().join(format!("knot_issue30_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SettingsService.java"),
+            "package demo;\nimport java.util.List;\npublic interface SettingsService {\n    default void update(List<Setting> items) { update(items, false); }\n    void update(List<Setting> items, boolean skipValidation);\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("DefaultSettingsService.java"),
+            "package demo;\nimport java.util.List;\npublic class DefaultSettingsService implements SettingsService {\n    @Override\n    public void update(List<Setting> items, boolean skipValidation) { }\n}\n",
+        )
+        .unwrap();
+        let cfg = ParseConfig {
+            repo_root: dir.clone(),
+            custom_queries_path: None,
+            repo_name: "issue30".into(),
+            include_config_files: false,
+            repo_path: None,
+        };
+        let files = vec![
+            dir.join("SettingsService.java"),
+            dir.join("DefaultSettingsService.java"),
+        ];
+        let parsed = parse_files(&files, &cfg);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let mut entities: Vec<ResolutionEntity> =
+            parsed.iter().map(ResolutionEntity::from).collect();
+        super::super::resolve_reference_intents(&mut entities);
+
+        let by_sig = |fqn: &str, sig: &str| {
+            entities
+                .iter()
+                .find(|e| e.fqn == fqn && e.signature.as_deref() == Some(sig))
+                .unwrap_or_else(|| panic!("missing {fqn}{sig}"))
+        };
+        let iface_one = by_sig("demo.SettingsService.update", "(List<Setting> items)").uuid;
+        let iface_two = by_sig(
+            "demo.SettingsService.update",
+            "(List<Setting> items, boolean skipValidation)",
+        )
+        .uuid;
+        let impl_two = by_sig(
+            "demo.DefaultSettingsService.update",
+            "(List<Setting> items, boolean skipValidation)",
+        );
+        assert!(has_override(impl_two, iface_two));
+        assert!(!has_override(impl_two, iface_one));
+        assert_eq!(override_count(impl_two), 1);
     }
 
     // --- Scenario I — No supertype method match ---------------------------
