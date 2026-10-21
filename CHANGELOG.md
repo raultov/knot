@@ -5,6 +5,13 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.11.6
+
+- **Fixed(resolve)**: `OVERRIDES` edges respect overloads (#30). The override linker matched supertype methods by name only, so `DefaultSettingsService.update(List, boolean)` was reported as overriding both `SettingsService.update(List, boolean)` and the `default update(List)` overload, and the wrong edge leaked into **Overridden by** and **Dispatched calls**. Same-named declarations are now filtered by arity and parameter types parsed from the signature (`overrides/params.rs`, Java/Kotlin/Groovy/C#): annotations, modifiers, generics, function types and default values are understood, type variables match concrete types, and among several compatible overloads the most specific one wins. A supertype that only declares other arities is walked past. Groovy default parameters answer for every arity they generate. Methods without a readable signature keep the name-only fallback. Existing indexes keep the stale edges until re-indexed with `--clean`.
+- **Test**: Unit tests in `overrides.rs` (scenarios H2–H7, including the real Java parser) and `overrides/params.rs`; Java E2E tests 32–37 with the `tests/testing_files/java/overload_overrides/` fixture; Kotlin E2E tests 18–19 (`overloads.kt`); C# E2E tests D27b–c (`Overloads/Notifiers.cs`); Groovy E2E group H.
+
+---
+
 ## v1.11.5
 
 - **Fixed(parser)**: Annotated Java/Kotlin types no longer get a doubled FQN (#29). `@Service public class DefaultLookupService` was indexed as `…DefaultLookupService.DefaultLookupService` because the class context opened at the annotation line; contexts now open at the line of the declared name. This also restores the `OVERRIDES` edges of every annotated type (`@Service`, `@Repository`, `@RestController`, …), which the override linker silently dropped.
