@@ -672,7 +672,12 @@ echo '{"method":"tools/call","params":{"name":"find_callers","arguments":{"entit
   are backed by real `OVERRIDES` edges built at index time and resolved
   transitively at query time, so querying an interface/superclass method surfaces
   every implementation, and querying an implementation surfaces the declaration it
-  overrides.
+  overrides. Overloads are told apart: an override links only to the same-named
+  declaration whose arity and parameter types match (`update(List, boolean)` never
+  claims to override `update(List)`); type variables match concrete types
+  (`put(T)` ← `put(Setting)`), the most specific overload wins when several fit,
+  and Groovy default parameters count for every arity they generate. Methods
+  without a readable signature fall back to name-only matching.
 - **Dynamic Dispatch (JVM + C#)**: a **Dispatched calls** group lists the callers
   whose `CALLS` edge is bound to a method related to the target through
   `OVERRIDES` — calls on the interface when you query the implementation, and
