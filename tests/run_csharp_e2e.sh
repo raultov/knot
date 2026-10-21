@@ -352,10 +352,10 @@ echo ""
 echo "A12. Per-kind exact counts..."
 assert_cypher_count "A12a. csharp_interface count" \
     "MATCH (e:Entity) WHERE e.kind = 'csharp_interface' AND e.repo_name = '$REPO_NAME' RETURN count(e) AS cnt" \
-    "3"
+    "5"
 assert_cypher_count "A12b. csharp_class count" \
     "MATCH (e:Entity) WHERE e.kind = 'csharp_class' AND e.repo_name = '$REPO_NAME' RETURN count(e) AS cnt" \
-    "12"
+    "14"
 assert_cypher_count "A12c. csharp_record count" \
     "MATCH (e:Entity) WHERE e.kind = 'csharp_record' AND e.repo_name = '$REPO_NAME' RETURN count(e) AS cnt" \
     "5"
@@ -531,6 +531,31 @@ else
     echo -e "${RED}✗ D27. UserService.Process OVERRIDES BaseService.Process missing${NC}"
     FAILURES=$((FAILURES + 1))
 fi
+
+# D27b-c: overloads share their FQN, so each OVERRIDES edge is identified by
+# the `<override signature> -> <supertype signature>` pair (issue #30).
+assert_override_pairs() {
+    local label="$1" fqn="$2" expected="$3"
+    local actual
+    actual=$(run_neo4j_cypher \
+        "MATCH (a:Entity)-[:OVERRIDES]->(b:Entity) WHERE a.fqn = '$fqn' AND a.repo_name = '$REPO_NAME' RETURN a.signature + ' -> ' + b.signature AS pair ORDER BY pair" \
+        | tr -d '"' | paste -sd'|' -)
+    echo ""
+    echo "$label..."
+    if [ "$actual" = "$expected" ]; then
+        echo -e "${GREEN}✓ $label${NC}"
+    else
+        echo -e "${RED}✗ $label: expected '$expected', got '$actual'${NC}"
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+assert_override_pairs "D27b. EmailNotifier.Notify overloads override only their own declaration" \
+    "MyApp.Overloads.EmailNotifier.Notify" \
+    "(int code) -> (int code)|(string message) -> (string message)|(string message, int priority) -> (string message, int priority)"
+assert_override_pairs "D27c. CounterStore.Put overloads match type parameters of IEntryStore<T>" \
+    "MyApp.Overloads.CounterStore.Put" \
+    "(List<int> entries) -> (List<T> entries)|(int entry) -> (T entry)|(string key, int entry) -> (string key, T entry)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # E · Comments and attributes

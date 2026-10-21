@@ -463,6 +463,35 @@ if echo "$MCP_RESPONSE" | grep -q "UserRepository\.UserRepository"; then
 fi
 echo -e "${GREEN}✓ Annotated class UserRepository keeps a single-segment FQN${NC}"
 
+# Tests 18-19: overload-aware OVERRIDES (issue #30). Overloads share their
+# FQN, so each edge is identified by its `<override> -> <supertype>`
+# signature pair.
+assert_override_pairs() {
+    local id=$1
+    local entity=$2
+    local expected=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description..."
+    local actual
+    actual=$(cargo run --release --bin knot -- callers "$entity" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '.overrides[] | "\(.target_signature) -> \(.signature)"' | LC_ALL=C sort -u | paste -sd'|' -)
+    if [ "$actual" = "$expected" ]; then
+        echo -e "${GREEN}✓ $entity overrides exactly: $actual${NC}"
+    else
+        echo -e "${RED}✗ $entity: expected '$expected', got '$actual'${NC}"
+        exit 1
+    fi
+}
+
+assert_override_pairs 18 "IntEntryFormatter.formatEntry" \
+    "(value: Int) -> (value: T)|(values: List<Int>) -> (values: List<T>)" \
+    "Overrides match by arity and type, type parameters match concrete types"
+assert_override_pairs 19 "ConsoleEventSink.onSinkEvent" \
+    "(handler: (String, Int) -> Unit) -> (handler: (String, Int) -> Unit)|(name: String, handler: (String, Int) -> Unit) -> (name: String, handler: (String, Int) -> Unit)" \
+    "Function-typed parameters count as a single parameter"
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"

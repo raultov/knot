@@ -554,6 +554,74 @@ if echo "$CLI_RESPONSE" | grep -q "optionsViaCachedGateway"; then
 fi
 echo -e "${GREEN}✓ CLI: sibling CachedLookupGateway callers are excluded${NC}"
 
+# Tests 32-37: overload-aware OVERRIDES (issue #30).
+# Fixture: testing_files/java/overload_overrides/. Overloads share their FQN,
+# so the exact edge set is compared by declaration line: the CLI JSON rows as
+# `<queried line>><related file>:<related line>`, the MCP section as the
+# `<related file>:<related line>` of each bullet.
+assert_override_set() {
+    local id=$1
+    local entity=$2
+    local bucket=$3
+    local heading=$4
+    local expected=$5
+    local description=$6
+
+    echo ""
+    echo "Test $id: $description ($entity $heading exactly $expected)..."
+    local cli_actual
+    cli_actual=$(cargo run --release --bin knot -- callers "$entity" -o json 2>/dev/null \
+        | jq -r ".${bucket}[] | \"\(.target_start_line)>\(.file_path | split(\"/\") | last):\(.start_line)\"" \
+        | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$cli_actual" = "$expected" ]; then
+        echo -e "${GREEN}✓ CLI: $entity $heading $cli_actual${NC}"
+    else
+        echo -e "${RED}✗ CLI: $entity $heading expected '$expected', got '$cli_actual'${NC}"
+        exit 1
+    fi
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_expected
+    local mcp_actual
+    mcp_expected=$(echo "$expected" | tr ',' '\n' | sed 's/^[0-9]*>//' | LC_ALL=C sort -u | paste -sd, -)
+    mcp_actual=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk -v h="## $heading" 'index($0, h) == 1 { on = 1; next } /^## / { on = 0 } on && /^- \*\*/' \
+        | grep -o '[A-Za-z]*\.java:[0-9]*' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$mcp_actual" = "$mcp_expected" ]; then
+        echo -e "${GREEN}✓ MCP: $entity $heading $mcp_actual${NC}"
+    else
+        echo -e "${RED}✗ MCP: $entity $heading expected '$mcp_expected', got '$mcp_actual'${NC}"
+        exit 1
+    fi
+}
+
+assert_override_set 32 "DefaultSettingsService.applySettings" "overrides" "Overrides" \
+    "10>SettingsService.java:14" \
+    "Implementation overrides only the overload with matching arity"
+assert_override_set 33 "SettingsService.applySettings" "overridden_by" "Overridden by" \
+    "10>BaseSettingsService.java:13,14>DefaultSettingsService.java:10,14>TieredSettingsService.java:8" \
+    "Each overload is overridden only by implementations with its arity"
+assert_override_set 34 "TieredSettingsService.applySettings" "overrides" "Overrides" \
+    "8>SettingsService.java:14" \
+    "Walks past a supertype declaring only a different-arity overload"
+assert_override_set 35 "PlainValueRenderer.renderValue" "overrides" "Overrides" \
+    "7>ValueRenderer.java:8" \
+    "Same-arity overloads are told apart by parameter type"
+assert_override_set 36 "SettingEntryStore.storeEntry" "overrides" "Overrides" \
+    "13>EntryStore.java:13,9>EntryStore.java:11" \
+    "Type variables match concrete arguments, the most specific overload wins"
+
+echo ""
+echo "Test 37: Dispatched calls never cross into a different-arity overload..."
+LEAKED=$(cargo run --release --bin knot -- callers "DefaultSettingsService.applySettings" -o json 2>/dev/null \
+    | jq '[.dispatched_calls[] | select((.target_file_path | endswith("/SettingsService.java")) and .target_start_line == 10)] | length')
+if [ "$LEAKED" != "0" ]; then
+    echo -e "${RED}✗ CLI: DefaultSettingsService.applySettings lists $LEAKED dispatched call(s) bound to the one-parameter default overload${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI: no dispatched call is bound to the one-parameter default overload${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -576,6 +644,7 @@ echo "  ✓ Calls through interface-typed fields (any field name, this., method 
 echo "  ✓ Annotated types keep their FQN and link OVERRIDES (@Service, @Repository)"
 echo "  ✓ Interface calls never bind to an implementation containing the interface name"
 echo "  ✓ Dispatched calls in both directions, siblings excluded"
+echo "  ✓ OVERRIDES match overloads by arity and parameter types (generics included)"
 echo ""
 
 exit 0

@@ -12,6 +12,8 @@
 #                        surfaced bidirectionally by find_callers (nextflow init case)
 #   G. Property Accessors — Groovy auto-generated getters/setters as synthetic
 #                        entities linked via OVERRIDES to interface getters
+#   H. Overload-aware OVERRIDES — arity, parameter types and default
+#                        parameters pick the overridden declaration (issue #30)
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -56,6 +58,7 @@ echo -e "${BLUE}Group D: Inheritance EXTENDS/IMPLEMENTS${NC}"
 echo -e "${BLUE}Group E: Docstrings${NC}"
 echo -e "${BLUE}Group F: Method OVERRIDES${NC}"
 echo -e "${BLUE}Group G: Property Accessors${NC}"
+echo -e "${BLUE}Group H: Overload-aware OVERRIDES${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -1007,6 +1010,88 @@ else
     echo -e "${RED}✗ baseDir property node should have zero OVERRIDES edges, got $G7${NC}"
     FAILED=1
 fi
+
+# ═══════════════════════════════════════════════════════════
+# GROUP H: Overload-aware OVERRIDES (issue #30)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group H: Overload-aware OVERRIDES ──${NC}"
+
+REPO_H="groovy_overloads_e2e"
+COLL_H="knot_groovy_overloads_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow/overloads"
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/overloads/ItemRenderer.groovy" << 'GROOVY'
+package nextflow.overloads
+
+interface ItemRenderer {
+    String renderItem(String item)
+
+    String renderItem(String item, int width)
+
+    String renderItem(Map<String, Object> item)
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/overloads/PlainItemRenderer.groovy" << 'GROOVY'
+package nextflow.overloads
+
+class PlainItemRenderer implements ItemRenderer {
+    String renderItem(String item) { item }
+
+    String renderItem(String item, int width) { item.padRight(width) }
+
+    String renderItem(Map<String, Object> item) { item.toString() }
+}
+GROOVY
+
+# Default parameters make `layoutRow(String, int = 2)` callable with one or
+# two arguments, so the one-parameter override still links to it.
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/overloads/BaseRowLayout.groovy" << 'GROOVY'
+package nextflow.overloads
+
+abstract class BaseRowLayout {
+    String layoutRow(String row, int indent = 2) { row }
+
+    String layoutRow(List<String> rows) { rows.join() }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/overloads/CompactRowLayout.groovy" << 'GROOVY'
+package nextflow.overloads
+
+class CompactRowLayout extends BaseRowLayout {
+    @Override
+    String layoutRow(String row) { row }
+}
+GROOVY
+
+run_indexer "$REPO_H" "$COLL_H" "--clean"
+
+# Overloads share their FQN, so each edge is identified by its
+# `<override signature> -> <supertype signature>` pair.
+assert_groovy_override_pairs() {
+    local id="$1" entity="$2" expected="$3" description="$4"
+    echo ""
+    echo "Test $id: $description..."
+    local actual
+    actual=$(call_cli "$REPO_H" "$COLL_H" callers "$entity" -r "$REPO_H" -o json \
+        | jq -r '.overrides[] | "\(.target_signature) -> \(.signature)"' | LC_ALL=C sort -u | paste -sd'|' -)
+    if [ "$actual" = "$expected" ]; then
+        echo -e "${GREEN}✓ $entity overrides exactly: $actual${NC}"
+    else
+        echo -e "${RED}✗ $entity: expected '$expected', got '$actual'${NC}"
+        FAILED=1
+    fi
+}
+
+assert_groovy_override_pairs H1 "PlainItemRenderer.renderItem" \
+    "String renderItem(Map<String, Object> item) -> String renderItem(Map<String, Object> item)|String renderItem(String item) -> String renderItem(String item)|String renderItem(String item, int width) -> String renderItem(String item, int width)" \
+    "Each overload overrides only its own declaration"
+assert_groovy_override_pairs H2 "CompactRowLayout.layoutRow" \
+    "String layoutRow(String row) -> String layoutRow(String row, int indent = 2)" \
+    "A default parameter keeps the shorter override linked"
 
 # ── Final result ─────────────────────────────────────────
 echo -e "\n${BLUE}========================================${NC}"
