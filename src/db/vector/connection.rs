@@ -1,12 +1,25 @@
 use anyhow::{Context, Result};
-use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
     VectorParamsBuilder,
 };
+use qdrant_client::{Qdrant, QdrantBuilder};
 use tracing::info;
 
 use super::VectorDb;
+
+/// Client configuration shared by every Qdrant connection.
+///
+/// The client's built-in version check is disabled: on a client/server minor
+/// version gap (or an unreachable server) it `println!`s a warning to stdout,
+/// which corrupts `knot … -o json` output and the `knot-mcp` stdio JSON-RPC
+/// stream. It also costs a blocking health-check round trip per client.
+fn client_builder(url: &str) -> QdrantBuilder {
+    Qdrant::from_url(url)
+        .timeout(std::time::Duration::from_secs(300))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .skip_compatibility_check()
+}
 
 /// Probe the real stored vector dimension of a Qdrant collection.
 ///
@@ -15,9 +28,7 @@ use super::VectorDb;
 /// (`crate::startup_guard`); knot-server should call this instead of
 /// keeping its own `vector_guard` copy.
 pub async fn probe_collection_dim(url: &str, collection: &str) -> Result<Option<u64>> {
-    let client = Qdrant::from_url(url)
-        .timeout(std::time::Duration::from_secs(300))
-        .connect_timeout(std::time::Duration::from_secs(10))
+    let client = client_builder(url)
         .build()
         .context("Failed to build Qdrant client for the collection-dimension probe")?;
 
@@ -62,9 +73,7 @@ pub trait VectorConnectExt {
 impl VectorConnectExt for VectorDb {
     /// Connect to Qdrant and return a ready-to-use [`VectorDb`].
     async fn connect(url: &str, collection: &str, embed_dim: u64) -> Result<VectorDb> {
-        let client = Qdrant::from_url(url)
-            .timeout(std::time::Duration::from_secs(300))
-            .connect_timeout(std::time::Duration::from_secs(10))
+        let client = client_builder(url)
             .build()
             .context("Failed to build Qdrant client")?;
 
@@ -122,7 +131,17 @@ impl VectorConnectExt for VectorDb {
 #[cfg(test)]
 mod tests {
     use super::super::VectorDb;
-    use super::VectorConnectExt;
+    use super::{VectorConnectExt, client_builder};
+
+    #[test]
+    fn client_builder_skips_the_stdout_compatibility_check() {
+        let builder = client_builder("http://localhost:6334");
+        assert!(
+            !builder.check_compatibility,
+            "the qdrant-client version check prints to stdout and corrupts JSON output"
+        );
+        assert_eq!(builder.uri, "http://localhost:6334");
+    }
 
     #[ignore = "requires local Qdrant instance running on http://localhost:6334"]
     #[tokio::test]
