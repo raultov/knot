@@ -1545,3 +1545,191 @@ for the full design rationale, including the rejected alternatives.
  - ✅ **100% E2E Dual-Testing**: All 35 integration tests simultaneously verify both MCP and CLI.
  - ✅ **Docker CLI Support**: Official Docker image now includes the `knot` binary.
  - ✅ **Agent Guidance**: Enhanced `.knot-agent.md` with signature-based search warnings.
+
+---
+
+## v0.8.0
+- **Feature(cli)**: New `knot` CLI sharing one core with the MCP server; every E2E test checks both front ends.
+
+---
+
+## v0.7.4
+- **Feature(query)**: Signature-based lookups in `find_callers` and `find_references` (e.g. `registerUser(String`).
+
+---
+
+## v0.7.3
+- **Feature(mcp)**: Clearer MCP tool output.
+- **Feature(kotlin)**: Kotlin annotations are captured as decorators.
+
+---
+
+## v0.7.2
+- **Chore**: Version bump and `cargo fmt` fixes.
+
+---
+
+## v0.7.1
+- **Chore**: Fixed `collapsible_if` and `items_after_test_module` clippy warnings.
+
+---
+
+## v0.7.0
+- **Feature(kotlin)**: Kotlin support (Phase 5) via `tree-sitter-kotlin-ng`.
+- **Test**: Kotlin E2E suite.
+
+---
+
+## v0.6.6
+- **Feature(web)**: More web ecosystem features.
+
+---
+
+## v0.6.5-patch1
+- **Feature(web)**: Finished Phase 4 of the hybrid web ecosystem.
+
+---
+
+## v0.6.5
+- **Feature(web)**: Hybrid web ecosystem (Phase 4): links between JavaScript, HTML and CSS (DOM ids, CSS classes, imports).
+
+---
+
+## v0.6.4
+- **Feature(css)**: CSS and SCSS indexing (Phase 3): selectors and variables.
+
+---
+
+## v0.6.3
+- **Feature(web)**: HTML/JSX support, indexing `id` and `className` attributes.
+- **Chore**: Startup banner shows the release version.
+
+---
+
+## v0.6.2
+- **Fixed(typescript)**: Decorator references are read from the parent `export_statement` node.
+
+---
+
+## v0.6.1
+- **Chore**: Version bump.
+
+---
+
+## v0.6.0
+- **Feature(javascript)**: JavaScript/Node.js support with entity deduplication.
+- **Feature(typescript)**: Getter support.
+- **Fixed(db)**: Neo4j persistence fixes.
+- **Feature(cli)**: CLI improvements.
+
+---
+
+## v0.5.4
+- **Perf(watch)**: Faster watch mode.
+
+---
+
+## v0.5.3
+- **Fixed(watch)**: Clean mode is turned off after the first run in watch mode.
+- **Test**: Unit tests for the runner and watch modules.
+
+---
+
+## v0.5.2
+- **Feature(watch)**: Real-time watch mode (`--watch`).
+- **Feature(cross-repo)**: Cross-repository dependency analysis (v0.5.1).
+- **Feature(pipeline)**: Parallel streaming pipeline using MPSC channels and per-worker logs (v0.5.0).
+- **Test**: Unit tests for the streaming pipeline, cross-repo analysis and watch mode.
+
+---
+
+## v0.4.3
+- **Refactor(mcp)**: MCP tool execution split into modules.
+
+---
+
+## v0.4.2
+- **Refactor(indexer)**: Indexer orchestration split into modules.
+
+---
+
+## v0.4.1
+- **Refactor**: Parser, db, models and MCP tools split into modules; `parse.rs` became a `parser` submodule.
+
+---
+
+## v0.4.0
+- **Feature(indexer)**: Incremental indexing with memory-efficient chunking.
+
+---
+
+## v0.3.5
+- **Fixed(index)**: Orphaned reference intents are no longer duplicated.
+
+---
+
+## v0.3.4
+- **Feature(parser)**: Better capture of orphaned reference intents.
+
+---
+
+## v0.3.3.1
+- **Fixed(parser)**: `covered_ranges` indices line up with the entities vector in the fallback pass.
+
+---
+
+## v0.3.3
+- **Feature(parser)**: A fallback pass captures orphaned reference intents.
+
+---
+
+## v0.3.2
+- **Fixed(build)**: Missing `Cargo.lock` added.
+- **CI**: Docker image publishing disabled.
+
+---
+
+## v0.3.1
+- **Feature(jsx)**: Tracks JSX/React component usage (v0.3.0).
+- **Fixed(parser)**: Missing files for the Tree-sitter JSX fix added.
+- **Docs**: Multi-language roadmap.
+
+---
+
+## v0.2.6
+- **Feature(resolve)**: Tracks enum and static member usage.
+- **Fixed(parser)**: Fixed a Tree-sitter query syntax error and a type mismatch in `compute_fqn_and_context`.
+
+---
+
+## v0.2.5
+- **Feature(graph)**: Typed relationships (`EXTENDS`, `IMPLEMENTS`, `REFERENCES`).
+
+---
+
+## v0.2.4
+- **Fixed(typescript)**: TypeScript abstract classes and methods are supported.
+
+---
+
+## v0.2.3
+- **Feature(typescript)**: CommonJS TypeScript (`.cts`) files are supported.
+- **Docs**: AI agent auto-configuration and the knot-mcp tool priority directive.
+
+---
+
+## v0.2.2
+- **Chore(dist)**: Dropped the `aarch64-unknown-linux-gnu` target because of cross-linker errors; renamed the workflows.
+
+---
+
+## v0.2.1
+- **Chore**: Version bump.
+
+---
+
+## v0.2.0
+- **Feature(release)**: Automated multi-platform releases with `cargo-dist`.
+- **Perf(db)**: Qdrant payload index on `repo_name` (v0.1.3).
+- **Feature**: Logical multi-repository isolation (v0.1.2).
+- **Feature(parser)**: Constant and enum kinds, plus decorator extraction (v0.1.1).
