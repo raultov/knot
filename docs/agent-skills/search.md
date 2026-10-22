@@ -72,6 +72,10 @@ at or near the top:
 - Callers and helpers appear as **context attached to** a definition
   (caller samples, subclasses, implementers) — never as substitutes that
   displace it.
+- The **Called by** / **Called via dispatch** counts of a result come from
+  that exact entity's edges and agree with `find_callers` on its FQN —
+  same-named methods in other classes never contribute. **Calls** names
+  each callee with its owning type (`StandardAdjuster.computeValue`).
 - Ordering is deterministic (ties break on file path, line, UUID) and
   duplicate rows are removed.
 - Documentation-only topics still surface their best markdown section; to

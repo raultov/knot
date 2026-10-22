@@ -637,6 +637,22 @@ Live-index verification of the reported recall regression set runs via the
 opt-in harness `tests/run_rank_recall_live.sh` (requires indexed
 repositories; skipped otherwise).
 
+**Relationship summary per result (same edges as `find_callers`):** each
+result is annotated from the graph edges of *its own* entity (looked up by
+UUID, never by bare name), so the summary always agrees with `find_callers`
+on that entity's fully qualified name:
+
+- **Called by: N** — direct `CALLS` edges into the entity. Same-named
+  methods in other classes or modules never contribute (a private
+  `computeValue` in two classes keeps two separate caller sets).
+- **Called via dispatch: N** — callers reaching the entity only through
+  dynamic dispatch, i.e. the **Dispatched calls** group of `find_callers`
+  (an interface method called only through its implementation shows
+  `Called via dispatch: 1`, not phantom direct callers).
+- **Calls** — the callees, qualified with their owning type or module
+  (`StandardAdjuster.computeValue`, `GraphDb::connect`), deduplicated.
+- **Subclasses / Implementers / Type Usage** — as before.
+
 #### Tool 2: `find_callers`
 **Find who calls a specific function**
 
