@@ -761,6 +761,68 @@ else
     exit 1
 fi
 
+# Tests 34-35: the search caller summary is built from the same resolved
+# edges as find_callers (issue #31). Fixture: testing_files/rust/caller_summary/,
+# two modules sharing the private helper name `compute_value`.
+assert_search_summary_matches_callers() {
+    local id=$1
+    local query=$2
+    local fqn=$3
+    local expected_calls=$4
+    local foreign_file=$5
+
+    echo ""
+    echo "Test $id: Search caller summary of $fqn matches find_callers ($expected_calls caller(s))..."
+
+    local truth_calls
+    truth_calls=$(cargo run --release --bin knot -- callers "$fqn" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq '.calls | length')
+    if [ "$truth_calls" != "$expected_calls" ]; then
+        echo -e "${RED}✗ find_callers: expected $expected_calls caller(s) of $fqn, got $truth_calls${NC}"
+        exit 1
+    fi
+
+    local row
+    row=$(cargo run --release --bin knot -- search "$query" -r "$REPO_NAME" -m 10 -o json 2>/dev/null \
+        | jq -c --arg fqn "$fqn" '[.[] | select(.fqn == $fqn)] | first // empty')
+    if [ -z "$row" ]; then
+        echo -e "${RED}✗ CLI: $fqn not found in search results for '$query'${NC}"
+        exit 1
+    fi
+    local cli_calls
+    cli_calls=$(echo "$row" | jq '.caller_count // 0')
+    if [ "$cli_calls" != "$truth_calls" ] \
+        || echo "$row" | jq -r '(.caller_samples // [])[]' | grep -q "$foreign_file"; then
+        echo -e "${RED}✗ CLI: search summary says $cli_calls caller(s), find_callers says $truth_calls (or leaks $foreign_file)${NC}"
+        echo "Row was: $row"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: search summary matches find_callers ($cli_calls)${NC}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"$query\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+    local section
+    section=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk -v fqn="**FQN:** \`$fqn\`" '
+            /^## `/ { if (hit) printf "%s", buf; buf = ""; hit = 0 }
+            { buf = buf $0 "\n"; if (index($0, fqn) == 1) hit = 1 }
+            END { if (hit) printf "%s", buf }')
+    local mcp_calls
+    mcp_calls=$(echo "$section" | grep -o '\*\*Called by:\*\* [0-9]* location' | grep -o '[0-9]*' | head -1)
+    mcp_calls=${mcp_calls:-0}
+    if [ -z "$section" ] || [ "$mcp_calls" != "$truth_calls" ] || echo "$section" | grep -q "$foreign_file"; then
+        echo -e "${RED}✗ MCP: search summary says $mcp_calls caller(s), find_callers says $truth_calls (or leaks $foreign_file)${NC}"
+        echo "Section was: $section"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: search summary matches find_callers ($mcp_calls)${NC}"
+}
+
+assert_search_summary_matches_callers 34 "compute the standard price adjustment value" \
+    "caller_summary::standard::compute_value" 1 "alternate.rs"
+assert_search_summary_matches_callers 35 "compute the alternate per-currency adjustment values" \
+    "caller_summary::alternate::compute_value" 2 "standard.rs"
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Rust E2E tests passed!${NC}"
@@ -790,6 +852,7 @@ echo "  - Homonymous new() disambiguation by receiver (WidgetA::new vs WidgetB::
 echo "  - impl Trait for Type self-type extraction (Logger::new FQN)"
 echo "  - Kind-aware ranking (definition outranks prose/tests/helpers) + kinds filter"
   echo "  - list_files (directory prefix + glob) and the search --path filter"
+echo "  - Search caller summary matches find_callers (homonym private helpers)"
 echo ""
 
 # Step 5: Summarize

@@ -622,6 +622,132 @@ if [ "$LEAKED" != "0" ]; then
 fi
 echo -e "${GREEN}✓ CLI: no dispatched call is bound to the one-parameter default overload${NC}"
 
+# Tests 38-41: the search caller summary is built from the same resolved
+# edges as find_callers (issue #31). Fixture: testing_files/java/caller_summary/.
+# Every queried method has a same-named homonym elsewhere in the repository,
+# so a name-based summary over-counts and leaks the homonym's callers.
+search_row_cli() {
+    local query=$1
+    local fqn=$2
+    cargo run --release --bin knot -- search "$query" -r "$REPO_NAME" -m 10 -o json 2>/dev/null \
+        | jq -c --arg fqn "$fqn" '[.[] | select(.fqn == $fqn)] | first // empty'
+}
+
+search_section_mcp() {
+    local id=$1
+    local query=$2
+    local fqn=$3
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"$query\",\"max_results\":10,\"repo_name\":\"$REPO_NAME\"}}}"
+    echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk -v fqn="**FQN:** \`$fqn\`" '
+            /^## `/ { if (hit) printf "%s", buf; buf = ""; hit = 0 }
+            { buf = buf $0 "\n"; if (index($0, fqn) == 1) hit = 1 }
+            END { if (hit) printf "%s", buf }'
+}
+
+# Count from a "**<label>:** N location(s)" line; an absent line means 0.
+mcp_summary_count() {
+    local section=$1
+    local label=$2
+    local count
+    count=$(echo "$section" | grep -o "\*\*$label:\*\* [0-9]* location" | grep -o '[0-9]*' | head -1)
+    echo "${count:-0}"
+}
+
+assert_search_summary_matches_callers() {
+    local id=$1
+    local query=$2
+    local fqn=$3
+    local expected_calls=$4
+    local expected_dispatched=$5
+    local foreign_file=$6
+
+    echo ""
+    echo "Test $id: Search caller summary of $fqn matches find_callers ($expected_calls direct, $expected_dispatched dispatched)..."
+
+    # Ground truth: find_callers on the exact FQN.
+    local callers_json
+    callers_json=$(cargo run --release --bin knot -- callers "$fqn" -o json 2>/dev/null)
+    local truth_targets truth_calls truth_dispatched
+    truth_targets=$(echo "$callers_json" | jq '.resolution.targets | length')
+    truth_calls=$(echo "$callers_json" | jq '.calls | length')
+    truth_dispatched=$(echo "$callers_json" | jq '.dispatched_calls | length')
+    if [ "$truth_targets" != "1" ] || [ "$truth_calls" != "$expected_calls" ] \
+        || [ "$truth_dispatched" != "$expected_dispatched" ]; then
+        echo -e "${RED}✗ find_callers: expected 1 target / $expected_calls direct / $expected_dispatched dispatched, got $truth_targets / $truth_calls / $truth_dispatched${NC}"
+        echo "Response was: $callers_json"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ find_callers: $truth_calls direct, $truth_dispatched dispatched caller(s)${NC}"
+
+    local row
+    row=$(search_row_cli "$query" "$fqn")
+    if [ -z "$row" ]; then
+        echo -e "${RED}✗ CLI: $fqn not found in search results for '$query'${NC}"
+        exit 1
+    fi
+    local cli_calls cli_dispatched
+    cli_calls=$(echo "$row" | jq '.caller_count // 0')
+    cli_dispatched=$(echo "$row" | jq '.dispatched_caller_count // 0')
+    if [ "$cli_calls" != "$truth_calls" ] || [ "$cli_dispatched" != "$truth_dispatched" ]; then
+        echo -e "${RED}✗ CLI: search summary says $cli_calls direct / $cli_dispatched dispatched, find_callers says $truth_calls / $truth_dispatched${NC}"
+        echo "Row was: $row"
+        exit 1
+    fi
+    if echo "$row" | jq -r '(.caller_samples // []) + (.dispatched_caller_samples // []) | .[]' | grep -q "$foreign_file"; then
+        echo -e "${RED}✗ CLI: search summary of $fqn leaks a caller from $foreign_file${NC}"
+        echo "Row was: $row"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: search summary matches find_callers, no caller from $foreign_file${NC}"
+
+    local section
+    section=$(search_section_mcp "$id" "$query" "$fqn")
+    if [ -z "$section" ]; then
+        echo -e "${RED}✗ MCP: $fqn not found in search results for '$query'${NC}"
+        exit 1
+    fi
+    local mcp_calls mcp_dispatched
+    mcp_calls=$(mcp_summary_count "$section" "Called by")
+    mcp_dispatched=$(mcp_summary_count "$section" "Called via dispatch")
+    if [ "$mcp_calls" != "$truth_calls" ] || [ "$mcp_dispatched" != "$truth_dispatched" ]; then
+        echo -e "${RED}✗ MCP: search summary says $mcp_calls direct / $mcp_dispatched dispatched, find_callers says $truth_calls / $truth_dispatched${NC}"
+        echo "Section was: $section"
+        exit 1
+    fi
+    if echo "$section" | grep -q "$foreign_file"; then
+        echo -e "${RED}✗ MCP: search summary of $fqn leaks a caller from $foreign_file${NC}"
+        echo "Section was: $section"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: search summary matches find_callers, no caller from $foreign_file${NC}"
+}
+
+CSUMMARY_PKG="com.example.knot.csummary"
+assert_search_summary_matches_callers 38 "compute the standard price adjustment value" \
+    "$CSUMMARY_PKG.pricing.StandardAdjuster.computeValue" 1 0 "AlternateAdjuster.java"
+assert_search_summary_matches_callers 39 "compute the alternate per-currency adjustment values" \
+    "$CSUMMARY_PKG.pricing.AlternateAdjuster.computeValue" 2 0 "StandardAdjuster.java"
+assert_search_summary_matches_callers 40 "persist a receipt into the long-term archive" \
+    "$CSUMMARY_PKG.receipts.ReceiptArchive.persist" 0 1 "DraftCache.java"
+
+# Test 41: the "Calls" list names each callee with its owning type, so the
+# private helpers of homonym classes can be told apart.
+echo ""
+echo "Test 41: Search \"Calls\" list qualifies callees with their owning type..."
+ADJUST_ROW=$(search_row_cli "standard adjuster adjust request" "$CSUMMARY_PKG.pricing.StandardAdjuster.adjust")
+if [ -z "$ADJUST_ROW" ]; then
+    echo -e "${RED}✗ CLI: StandardAdjuster.adjust not found in search results${NC}"
+    exit 1
+fi
+ADJUST_DEPS=$(echo "$ADJUST_ROW" | jq -r '.dependencies | join(",")')
+if [ "$ADJUST_DEPS" != "StandardAdjuster.computeValue" ]; then
+    echo -e "${RED}✗ CLI: expected dependencies 'StandardAdjuster.computeValue', got '$ADJUST_DEPS'${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI: StandardAdjuster.adjust calls StandardAdjuster.computeValue${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -645,6 +771,7 @@ echo "  ✓ Annotated types keep their FQN and link OVERRIDES (@Service, @Reposi
 echo "  ✓ Interface calls never bind to an implementation containing the interface name"
 echo "  ✓ Dispatched calls in both directions, siblings excluded"
 echo "  ✓ OVERRIDES match overloads by arity and parameter types (generics included)"
+echo "  ✓ Search caller summary matches find_callers (homonyms, dispatched calls)"
 echo ""
 
 exit 0
