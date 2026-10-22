@@ -944,6 +944,15 @@ pub trait QueryExt {
         max_targets: usize,
         kinds: Option<&str>,
     ) -> Result<serde_json::Value>;
+    /// Reference buckets of already-resolved targets, keyed exactly like
+    /// [`QueryExt::find_references`] minus its `resolution` block. Used when
+    /// the caller already holds the entity UUIDs (search enrichment), so no
+    /// name-based resolution can merge homonyms.
+    async fn find_references_for_targets(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+    ) -> Result<serde_json::Value>;
     async fn find_callers(
         &self,
         entity_name: &str,
@@ -1050,7 +1059,7 @@ impl QueryExt for GraphDb {
              OPTIONAL MATCH (m)-[:CALLS]->(dep:Entity)
              RETURN m.name, m.kind, m.fqn, m.signature, m.docstring, m.file_path,
                     m.start_line, m.repo_name AS repo_name,
-                    collect(dep.name) as dependencies"
+                    collect(DISTINCT coalesce(dep.fqn, dep.name)) as dependencies"
         );
 
         for uuid in uuids {
@@ -1074,9 +1083,11 @@ impl QueryExt for GraphDb {
                 let file_path = row_data.get::<String>("m.file_path").ok();
                 let start_line = row_data.get::<i64>("m.start_line").ok();
                 let repo_name = row_data.get::<String>("repo_name").ok();
-                let dependencies = row_data
-                    .get::<Vec<String>>("dependencies")
-                    .unwrap_or_default();
+                let dependencies = qualified_callee_labels(
+                    &row_data
+                        .get::<Vec<String>>("dependencies")
+                        .unwrap_or_default(),
+                );
 
                 let entity_json = serde_json::json!({
                     "uuid": uuid,
@@ -1113,6 +1124,45 @@ impl QueryExt for GraphDb {
         kinds: Option<&str>,
     ) -> Result<serde_json::Value> {
         let kind_filter = crate::cli_tools::kinds::KindFilter::parse(kinds);
+
+        // Clamp the requested cap so a caller cannot push a huge scan silently.
+        let max_targets = max_targets.clamp(1, MAX_TARGETS_CEILING);
+
+        // Stage 1: Resolve targets
+        let resolved = self
+            .resolve_reference_targets(entity_name, repo_names, max_targets, &kind_filter)
+            .await?;
+
+        let target_uuids: Vec<String> = resolved.targets.iter().map(|t| t.uuid.clone()).collect();
+
+        // Stages 2 and 3: the buckets of the resolved targets.
+        let mut results = self
+            .find_references_for_targets(&target_uuids, repo_names)
+            .await?;
+
+        // Add the resolution info — `total_targets` is the real pre-truncation
+        // entity count so downstream formatters can quantify truncation; the
+        // kind-filter fields disclose what the filter removed.
+        results["resolution"] = serde_json::json!({
+            "query": entity_name,
+            "tier": resolved.tier,
+            "fuzzy": matches!(resolved.tier, MatchTier::Fuzzy),
+            "truncated": resolved.truncated,
+            "total_targets": resolved.total,
+            "kind_filter": kind_filter.wire_label(),
+            "hidden_non_code": resolved.hidden_non_code,
+            "hidden_kinds": resolved.hidden_kinds,
+            "targets": resolved.targets
+        });
+
+        Ok(results)
+    }
+
+    async fn find_references_for_targets(
+        &self,
+        target_uuids: &[String],
+        repo_names: &[String],
+    ) -> Result<serde_json::Value> {
         // Every bucket the multi-label query can produce is pre-initialized;
         // empty ones stay as `[]` so the wire shape is stable (formatters
         // and tests rely on the keys existing).
@@ -1137,41 +1187,16 @@ impl QueryExt for GraphDb {
             "dispatched_calls": []
         });
 
-        // Clamp the requested cap so a caller cannot push a huge scan silently.
-        let max_targets = max_targets.clamp(1, MAX_TARGETS_CEILING);
-
-        // Stage 1: Resolve targets
-        let resolved = self
-            .resolve_reference_targets(entity_name, repo_names, max_targets, &kind_filter)
-            .await?;
-
-        // Add the resolution info — `total_targets` is the real pre-truncation
-        // entity count so downstream formatters can quantify truncation; the
-        // kind-filter fields disclose what the filter removed.
-        results["resolution"] = serde_json::json!({
-            "query": entity_name,
-            "tier": resolved.tier,
-            "fuzzy": matches!(resolved.tier, MatchTier::Fuzzy),
-            "truncated": resolved.truncated,
-            "total_targets": resolved.total,
-            "kind_filter": kind_filter.wire_label(),
-            "hidden_non_code": resolved.hidden_non_code,
-            "hidden_kinds": resolved.hidden_kinds,
-            "targets": resolved.targets
-        });
-
-        if resolved.targets.is_empty() {
+        if target_uuids.is_empty() {
             return Ok(results);
         }
-
-        let target_uuids: Vec<String> = resolved.targets.iter().map(|t| t.uuid.clone()).collect();
 
         // Stage 2: one labelled multi-relationship query instead of one
         // round-trip per bucket. The global `ORDER BY` remains the intra-bucket
         // order; the stable partition below preserves it per bucket.
         let query_str = relationship_query(find_references_rel_labels(), !repo_names.is_empty());
         let rows = self
-            .collect_reference_rows(&query_str, &target_uuids, repo_names, "references")
+            .collect_reference_rows(&query_str, target_uuids, repo_names, "references")
             .await?;
         partition_reference_rows(&rows, &mut results);
 
@@ -1186,7 +1211,7 @@ impl QueryExt for GraphDb {
             ),
         ] {
             let rows = self
-                .collect_reference_rows(&query_str, &target_uuids, repo_names, result_key)
+                .collect_reference_rows(&query_str, target_uuids, repo_names, result_key)
                 .await?;
             if let Some(arr) = results.get_mut(result_key) {
                 *arr = serde_json::json!(rows);
@@ -1508,6 +1533,51 @@ impl QueryExt for GraphDb {
         }
         Ok(coverage)
     }
+}
+
+/// Short display label of a callee FQN: its last two segments, keeping the
+/// FQN's own separator (`com.x.Adjuster.computeValue` → `Adjuster.computeValue`,
+/// `knot::db::GraphDb::connect` → `GraphDb::connect`). The owning type (or
+/// module) tells homonym callees apart without the full package path; a
+/// path-like owner keeps only its last path component.
+pub(crate) fn qualified_callee_label(fqn: &str) -> String {
+    let Some((owner_path, member, separator)) = split_last_segment(fqn) else {
+        return fqn.to_string();
+    };
+    let owner = split_last_segment(owner_path).map_or(owner_path, |(_, owner, _)| owner);
+    let owner = owner.rsplit('/').next().unwrap_or(owner);
+    if owner.is_empty() {
+        member.to_string()
+    } else {
+        format!("{owner}{separator}{member}")
+    }
+}
+
+/// Split `fqn` at its last `::` or `.` separator, whichever comes later.
+fn split_last_segment(fqn: &str) -> Option<(&str, &str, &'static str)> {
+    let colon = fqn.rfind("::").map(|i| (i, "::"));
+    let dot = fqn.rfind('.').map(|i| (i, "."));
+    let (index, separator) = match (colon, dot) {
+        (Some(c), Some(d)) => {
+            if c.0 > d.0 {
+                c
+            } else {
+                d
+            }
+        }
+        (c, d) => c.or(d)?,
+    };
+    Some((&fqn[..index], &fqn[index + separator.len()..], separator))
+}
+
+/// Map callee FQNs to [`qualified_callee_label`], dropping duplicate labels
+/// while keeping first-seen order.
+fn qualified_callee_labels(fqns: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    fqns.iter()
+        .map(|fqn| qualified_callee_label(fqn))
+        .filter(|label| seen.insert(label.clone()))
+        .collect()
 }
 
 fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
@@ -2045,6 +2115,57 @@ mod tests {
         assert!(query_str.contains("type(r) AS rel_type"));
         assert!(query_str.contains("|MACRO_CALLS"));
         assert!(query_str.contains("ORDER BY target.fqn"));
+    }
+
+    #[test]
+    fn qualified_callee_label_keeps_owner_and_separator() {
+        use super::qualified_callee_label;
+        assert_eq!(
+            qualified_callee_label("com.example.pricing.StandardAdjuster.computeValue"),
+            "StandardAdjuster.computeValue"
+        );
+        assert_eq!(
+            qualified_callee_label("knot::db::graph::GraphDb::find_references"),
+            "GraphDb::find_references"
+        );
+        assert_eq!(
+            qualified_callee_label("caller_summary::standard::compute_value"),
+            "standard::compute_value"
+        );
+        assert_eq!(qualified_callee_label("Foo::bar"), "Foo::bar");
+        assert_eq!(qualified_callee_label("helper"), "helper");
+    }
+
+    #[test]
+    fn qualified_callee_label_uses_the_last_separator_kind() {
+        use super::qualified_callee_label;
+        // Mixed separators: the member hangs off the later one.
+        assert_eq!(
+            qualified_callee_label("pkg.mod::Type::method"),
+            "Type::method"
+        );
+        assert_eq!(
+            qualified_callee_label("pkg::mod.Type.method"),
+            "Type.method"
+        );
+        // A path-like owner keeps only its last path component.
+        assert_eq!(
+            qualified_callee_label("src/utils/format::formatDate"),
+            "format::formatDate"
+        );
+    }
+
+    #[test]
+    fn qualified_callee_labels_drop_duplicates_in_order() {
+        let fqns = vec![
+            "a.Alpha.run".to_string(),
+            "b.Beta.stop".to_string(),
+            "c.Alpha.run".to_string(),
+        ];
+        assert_eq!(
+            super::qualified_callee_labels(&fqns),
+            vec!["Alpha.run".to_string(), "Beta.stop".to_string()]
+        );
     }
 
     #[test]

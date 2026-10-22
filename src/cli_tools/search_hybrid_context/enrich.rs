@@ -8,7 +8,7 @@
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::db::graph::{DEFAULT_MAX_TARGETS, GraphDb, QueryExt};
+use crate::db::graph::{GraphDb, QueryExt};
 use crate::models::RepoScope;
 
 /// Enrich search results with related entities (subclasses, implementers, usages).
@@ -16,9 +16,14 @@ use crate::models::RepoScope;
 /// Annotation-only: relationship data is attached to entities that are
 /// already in the result list. Callers and helpers are shown as context of a
 /// definition, never as substitute rows displacing it.
+///
+/// Each row is enriched from the edges of its own UUID — the same edges
+/// `find_callers` reports for that exact entity — so same-named entities
+/// elsewhere never contribute callers. One lookup per row: a batched lookup
+/// would let an interface and its implementation, both in the result list,
+/// hide each other's dispatched calls.
 pub(super) async fn enrich_with_relationships(
     context: &serde_json::Value,
-    _entity_names: &[String],
     graph_db: &Arc<GraphDb>,
     repo: &RepoScope,
 ) -> anyhow::Result<serde_json::Value> {
@@ -27,12 +32,9 @@ pub(super) async fn enrich_with_relationships(
 
     if let Some(entities) = enriched.as_array_mut() {
         for entity in entities.iter_mut() {
-            if let Some(name) = entity.get("name").and_then(|v| v.as_str())
+            if let Some(uuid) = entity.get("uuid").and_then(|v| v.as_str())
                 && let Ok(references) = graph_db
-                    // `kinds=all`: the call-site enrichment must keep seeing
-                    // every reference edge regardless of the search's own
-                    // kind filter semantics.
-                    .find_references(name, &repo_names, DEFAULT_MAX_TARGETS, Some("all"))
+                    .find_references_for_targets(&[uuid.to_string()], &repo_names)
                     .await
             {
                 enrich_single_entity(entity, &references);
@@ -107,6 +109,25 @@ pub(crate) fn enrich_single_entity(entity: &mut serde_json::Value, references: &
         if let Some(obj) = entity.as_object_mut() {
             obj.insert("caller_count".to_string(), json!(caller_count));
             obj.insert("caller_samples".to_string(), json!(samples));
+        }
+    }
+
+    // Calls bound to an override or to a supertype method reach this entity
+    // only through dynamic dispatch: reported apart from direct callers,
+    // exactly like the "Dispatched calls" group of `find_callers`.
+    if let Some(dispatched_arr) = references
+        .get("dispatched_calls")
+        .and_then(|v| v.as_array())
+        && !dispatched_arr.is_empty()
+    {
+        let dispatched_count = dispatched_arr.len();
+        let samples = format_reference_samples(dispatched_arr);
+        if let Some(obj) = entity.as_object_mut() {
+            obj.insert(
+                "dispatched_caller_count".to_string(),
+                json!(dispatched_count),
+            );
+            obj.insert("dispatched_caller_samples".to_string(), json!(samples));
         }
     }
 }
@@ -211,6 +232,46 @@ mod tests {
         assert!(entity.get("implementers").is_some());
         assert!(entity.get("type_usage_count").is_some());
         assert!(entity.get("caller_count").is_some());
+    }
+
+    #[test]
+    fn test_enrich_single_entity_reports_dispatched_calls_apart() {
+        let mut entity = json!({"name": "persist"});
+        let references = json!({
+            "calls": [],
+            "dispatched_calls": [
+                {"name": "archiveViaConcreteType", "file_path": "ReceiptClient.java"}
+            ]
+        });
+
+        enrich_single_entity(&mut entity, &references);
+
+        assert!(entity.get("caller_count").is_none());
+        assert_eq!(entity.get("dispatched_caller_count"), Some(&json!(1)));
+        assert_eq!(
+            entity.get("dispatched_caller_samples"),
+            Some(&json!(["archiveViaConcreteType in ReceiptClient.java"]))
+        );
+    }
+
+    #[test]
+    fn test_enrich_single_entity_counts_only_given_rows() {
+        // The buckets belong to one UUID: every row counts, none is filtered
+        // or merged by name (issue #31).
+        let mut entity = json!({"name": "computeValue"});
+        let references = json!({
+            "calls": [{"name": "adjust", "file_path": "StandardAdjuster.java"}],
+            "dispatched_calls": []
+        });
+
+        enrich_single_entity(&mut entity, &references);
+
+        assert_eq!(entity.get("caller_count"), Some(&json!(1)));
+        assert_eq!(
+            entity.get("caller_samples"),
+            Some(&json!(["adjust in StandardAdjuster.java"]))
+        );
+        assert!(entity.get("dispatched_caller_count").is_none());
     }
 
     #[test]

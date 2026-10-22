@@ -181,25 +181,9 @@ pub async fn run_search_hybrid_context(
         fetched.as_array().cloned().unwrap_or_default(),
     ));
 
-    let entity_names: Vec<String> = context
-        .as_array()
-        .map(|entities| {
-            entities
-                .iter()
-                .filter_map(|entity| {
-                    entity
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let enriched_context =
-        enrich::enrich_with_relationships(&context, &entity_names, ctx.graph_db, repo)
-            .await
-            .unwrap_or(context);
+    let enriched_context = enrich::enrich_with_relationships(&context, ctx.graph_db, repo)
+        .await
+        .unwrap_or(context);
 
     Ok(enriched_context)
 }

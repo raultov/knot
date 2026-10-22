@@ -72,33 +72,29 @@ pub(crate) fn format_entity(entity: &serde_json::Value) -> String {
         "**Implementers:**",
     ));
 
-    // Show type usage summary
-    if let Some(count) = entity.get("type_usage_count").and_then(|v| v.as_i64()) {
-        output.push_str(&format!(
-            "**Type Usage:** Referenced in {count} location(s)\n"
-        ));
-        append_samples(
-            entity,
-            "type_usage_samples",
-            "Sample usages",
-            count,
-            &mut output,
-        );
-        output.push('\n');
-    }
-
-    // Show callers summary
-    if let Some(count) = entity.get("caller_count").and_then(|v| v.as_i64()) {
-        output.push_str(&format!("**Called by:** {count} location(s)\n"));
-        append_samples(
-            entity,
-            "caller_samples",
-            "Sample callers",
-            count,
-            &mut output,
-        );
-        output.push('\n');
-    }
+    append_count_summary(
+        entity,
+        ("type_usage_count", "type_usage_samples"),
+        "**Type Usage:** Referenced in",
+        "Sample usages",
+        &mut output,
+    );
+    append_count_summary(
+        entity,
+        ("caller_count", "caller_samples"),
+        "**Called by:**",
+        "Sample callers",
+        &mut output,
+    );
+    // Callers reaching this entity only through dynamic dispatch, kept apart
+    // from direct callers exactly like `find_callers` does.
+    append_count_summary(
+        entity,
+        ("dispatched_caller_count", "dispatched_caller_samples"),
+        "**Called via dispatch:**",
+        "Sample dispatched callers",
+        &mut output,
+    );
 
     // Show dependencies
     output.push_str(&format_string_list(entity, "dependencies", "**Calls:**"));
@@ -124,6 +120,25 @@ fn format_string_list(entity: &serde_json::Value, key: &str, title: &str) -> Str
     }
     section.push('\n');
     section
+}
+
+/// Appends a `"{title} N location(s)"` summary line plus its samples when
+/// `keys.0` (the count) is present; nothing otherwise. `keys.1` names the
+/// sample array, `samples_header` its block title (see [`append_samples`]).
+fn append_count_summary(
+    entity: &serde_json::Value,
+    keys: (&str, &str),
+    title: &str,
+    samples_header: &str,
+    output: &mut String,
+) {
+    let (count_key, samples_key) = keys;
+    let Some(count) = entity.get(count_key).and_then(|v| v.as_i64()) else {
+        return;
+    };
+    output.push_str(&format!("{title} {count} location(s)\n"));
+    append_samples(entity, samples_key, samples_header, count, output);
+    output.push('\n');
 }
 
 /// Appends a sample list block ("Sample usages:" / "Sample callers:") when
@@ -318,6 +333,22 @@ mod tests {
         // say so explicitly (v1.10.0).
         assert!(formatted.contains("Sample callers — showing 2 of 3 (truncated):"));
         assert!(formatted.contains("caller1 in file1.java"));
+    }
+
+    #[test]
+    fn test_format_entity_with_dispatched_callers() {
+        let entity = json!({
+            "name": "persist",
+            "kind": "method",
+            "dispatched_caller_count": 1,
+            "dispatched_caller_samples": ["archiveViaConcreteType in ReceiptClient.java"]
+        });
+        let formatted = format_entity(&entity);
+        assert!(formatted.contains("**Called via dispatch:** 1 location(s)"));
+        assert!(formatted.contains("Sample dispatched callers:"));
+        assert!(formatted.contains("archiveViaConcreteType in ReceiptClient.java"));
+        // No direct caller: no "Called by" line at all.
+        assert!(!formatted.contains("**Called by:**"));
     }
 
     #[test]
