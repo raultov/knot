@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.11.8
 
 - **Fixed(rust)**: `self.method()` calls produce `CALLS` edges (#36). The Rust parser only accepted a plain identifier as a method-call receiver, so every call through `self`, a field path (`self.repo.save()`) or a call chain (`a.b().c()`, `x.iter().map(..).sum()`, `self.fetch().await?.decode()`) was dropped, and methods reached only that way were reported by `find_callers` as unused. Receivers are now rendered as a compact path (`self`, `self.repo`, `a.b()`) with arguments, `.await`, `?`, parentheses and borrows stripped. Turbofish method calls (`x.collect::<Vec<_>>()`) are captured too. On this repository, `rust_method` entities with no caller drop from 137 to 44.
 - **Fixed(resolve)**: Calls on Rust compound receivers resolve from evidence only. `self.m()` binds to the enclosing type through its crate-anchored `enclosing_class_fqn` (the short-name probe never matched `<crate>::<module>::<Type>::<method>`), then its parents, and is terminal: a derived `self.clone()` never binds to an unrelated `clone`. Other compound receivers bind to `<Type>::<method>`, where `Type` is the last path segment in CamelCase (`self.repo` → `Repo`, `self.price_rules()` → `PriceRules`). They never use the name-only homonym fallback, which would bind std calls such as `.iter().collect()` or `.as_str()` to the only user method sharing the name. Plain identifier receivers keep the previous ladder. In every language, an explicit `self.m()` / `this.m()` that misses the exact FQN probe now looks the method up on the enclosing type (class/member index) before any homonym fallback.
