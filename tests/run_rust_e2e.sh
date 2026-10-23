@@ -823,6 +823,49 @@ assert_search_summary_matches_callers 34 "compute the standard price adjustment 
 assert_search_summary_matches_callers 35 "compute the alternate per-currency adjustment values" \
     "caller_summary::alternate::compute_value" 2 "standard.rs"
 
+# Tests 36-41: method calls through `self`, `self.field` and call-chain
+# receivers produce CALLS edges (issue #36). Fixture:
+# testing_files/rust/self_calls/, with a same-file homonym helper on another
+# type and a cross-module homonym `PriceAdjuster` as precision traps.
+assert_exact_callers() {
+    local id=$1
+    local fqn=$2
+    local expected=$3
+
+    echo ""
+    echo "Test $id: find_callers of $fqn is exactly [$expected]..."
+
+    local cli_callers
+    cli_callers=$(cargo run --release --bin knot -- callers "$fqn" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '[.calls[].name] | sort | join(",")')
+    if [ "$cli_callers" != "$expected" ]; then
+        echo -e "${RED}✗ CLI: expected callers [$expected], got [$cli_callers]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: callers are [$cli_callers]${NC}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$fqn\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_callers
+    mcp_callers=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk '/^## /{ in_calls = ($0 ~ /^## Calls/) } in_calls && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | sort | paste -sd, -)
+    if [ "$mcp_callers" != "$expected" ]; then
+        echo -e "${RED}✗ MCP: expected callers [$expected], got [$mcp_callers]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: callers are [$mcp_callers]${NC}"
+}
+
+assert_exact_callers 36 "self_calls::PriceAdjuster::compute_value" "adjust,flush"
+assert_exact_callers 37 "self_calls::other::PriceAdjuster::compute_value" "recompute"
+assert_exact_callers 38 "self_calls::DiscountAdjuster::compute_value" ""
+assert_exact_callers 39 "self_calls::Repo::save" "persist"
+assert_exact_callers 40 "self_calls::PriceAdjuster::builder" "rebuild"
+assert_exact_callers 41 "self_calls::Builder::finish" "rebuild"
+assert_exact_callers 42 "self_calls::Pool::collect" ""
+assert_exact_callers 43 "self_calls::Tier::as_str" ""
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}All Rust E2E tests passed!${NC}"
@@ -853,6 +896,7 @@ echo "  - impl Trait for Type self-type extraction (Logger::new FQN)"
 echo "  - Kind-aware ranking (definition outranks prose/tests/helpers) + kinds filter"
   echo "  - list_files (directory prefix + glob) and the search --path filter"
 echo "  - Search caller summary matches find_callers (homonym private helpers)"
+echo "  - self.method(), self.field.method() and call-chain receivers produce CALLS edges"
 echo ""
 
 # Step 5: Summarize
