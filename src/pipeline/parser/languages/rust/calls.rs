@@ -111,60 +111,100 @@ pub(crate) fn collect_call_nodes(
 
 /// Extract function name and receiver from a call_expression node.
 fn extract_call_details(node: Node<'_>, source: &[u8]) -> Option<(String, Option<String>)> {
-    // Find the function part of the call_expression
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        match c.kind() {
-            // Direct function call: identifier
-            "identifier" => {
-                let func_name = node_text(c, source).to_string();
-                return Some((func_name, None));
-            }
-            // Method call: field_expression (receiver.method)
-            "field_expression" => {
-                if let Some((method_name, receiver)) = extract_from_field_expression(c, source) {
-                    return Some((method_name, Some(receiver)));
-                }
-            }
-            // Scoped call: scoped_identifier (Module::function or Type::method)
-            "scoped_identifier" => {
-                let (func_name, receiver) = extract_from_scoped_identifier(c, source)?;
-                return Some((func_name, receiver));
-            }
-            _ => {}
-        }
-        child = c.next_sibling();
-    }
-    None
+    extract_callee(node.child_by_field_name("function")?, source)
 }
 
-/// Extract method name and receiver from field_expression (e.g., obj.method)
-fn extract_from_field_expression(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
-    let mut method_name = String::new();
-    let mut receiver = String::new();
-    let mut found_method = false;
-    let mut found_receiver = false;
-
-    let mut child = node.child(0);
-    while let Some(c) = child {
-        match c.kind() {
-            "field_identifier" => {
-                method_name = node_text(c, source).to_string();
-                found_method = true;
-            }
-            "identifier" => {
-                receiver = node_text(c, source).to_string();
-                found_receiver = true;
-            }
-            _ => {}
+/// Extract function name and receiver from the callee of a call_expression.
+fn extract_callee(callee: Node<'_>, source: &[u8]) -> Option<(String, Option<String>)> {
+    match callee.kind() {
+        // Direct function call: identifier
+        "identifier" => Some((node_text(callee, source).to_string(), None)),
+        // Method call: field_expression (receiver.method)
+        "field_expression" => {
+            let (method_name, receiver) = extract_from_field_expression(callee, source)?;
+            Some((method_name, Some(receiver)))
         }
-        child = c.next_sibling();
+        // Scoped call: scoped_identifier (Module::function or Type::method)
+        "scoped_identifier" => extract_from_scoped_identifier(callee, source),
+        // Turbofish call: `x.collect::<Vec<_>>()`, `parse::<u32>()`. A
+        // module path (`serde_yaml::from_str::<T>()`) is left out: its
+        // lowercase module yields no receiver, and the bare name would fall
+        // through to the name-only fallback and bind to a user homonym.
+        "generic_function" => {
+            let function = callee.child_by_field_name("function")?;
+            if function.kind() == "scoped_identifier" {
+                return None;
+            }
+            extract_callee(function, source)
+        }
+        _ => None,
     }
+}
 
-    if found_method && found_receiver {
-        Some((method_name, receiver))
-    } else {
-        None
+/// Placeholder receiver for an expression with no identifiable path. It is
+/// never `None` (that would let implicit-`self` resolution bind the call to
+/// the enclosing type) and never `self`.
+const OPAQUE_RECEIVER: &str = "(expr)";
+
+/// Extract method name and receiver from field_expression (e.g., obj.method).
+///
+/// The receiver is rendered by [`render_receiver`]: `self.m()` → `self`,
+/// `self.repo.save()` → `self.repo`, `a.b().c()` → `a.b()`.
+fn extract_from_field_expression(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
+    let field = node.child_by_field_name("field")?;
+    if field.kind() != "field_identifier" {
+        return None;
+    }
+    let method_name = node_text(field, source).to_string();
+    let receiver = node
+        .child_by_field_name("value")
+        .and_then(|value| render_receiver(value, source))
+        .unwrap_or_else(|| OPAQUE_RECEIVER.to_string());
+    Some((method_name, receiver))
+}
+
+/// Render a method-call receiver as a compact dotted path, dropping call
+/// arguments, `.await`, `?`, parentheses, derefs and borrows so the resolver
+/// sees the same shape other languages produce (`self.repo`, `a.b()`).
+/// Returns `None` when the expression carries no identifiable path.
+fn render_receiver(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "self" | "identifier" | "crate" | "super" => Some(node_text(node, source).to_string()),
+        "scoped_identifier" | "type_identifier" | "generic_type" => Some(
+            node_text(node, source)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect(),
+        ),
+        "field_expression" => {
+            let value = render_receiver(node.child_by_field_name("value")?, source)?;
+            let field = node_text(node.child_by_field_name("field")?, source);
+            Some(format!("{value}.{field}"))
+        }
+        "call_expression" => {
+            let function = render_receiver(node.child_by_field_name("function")?, source)?;
+            Some(format!("{function}()"))
+        }
+        "generic_function" => render_receiver(node.child_by_field_name("function")?, source),
+        "index_expression" => Some(format!(
+            "{}[]",
+            render_receiver(node.named_child(0)?, source)?
+        )),
+        "macro_invocation" => {
+            let name = node_text(node.child_by_field_name("macro")?, source);
+            Some(format!("{name}!()"))
+        }
+        "try_expression"
+        | "await_expression"
+        | "parenthesized_expression"
+        | "unary_expression"
+        | "reference_expression" => {
+            // The operand is the last named child (`&mut x` has a
+            // `mutable_specifier` before it).
+            let last = u32::try_from(node.named_child_count().checked_sub(1)?).ok()?;
+            render_receiver(node.named_child(last)?, source)
+        }
+        _ => None,
     }
 }
 

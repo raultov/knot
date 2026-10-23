@@ -1893,3 +1893,144 @@ fn test_qualify_rust_fqns_sets_enclosing_class_fqn_for_methods() {
         "method enclosing_class_fqn should be crate-qualified"
     );
 }
+
+/// Parse `body` as the body of `impl Foo { fn caller(&self) { <body> } }`
+/// and return the `(method, receiver)` of every Call intent attached to
+/// `caller`, in source order.
+fn method_call_intents(body: &str) -> Vec<(String, Option<String>)> {
+    let code = format!("impl Foo {{\n    fn caller(&self) {{\n        {body}\n    }}\n}}\n");
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .unwrap();
+    let tree = parser.parse(&code, None).unwrap();
+
+    let end_line = code.lines().count();
+    let mut entities = vec![ParsedEntity::new(
+        "caller",
+        EntityKind::RustMethod,
+        "Foo::caller",
+        None,
+        None,
+        "rust",
+        "/test.rs",
+        2,
+        end_line,
+        Some("Foo".to_string()),
+        "test_repo",
+    )];
+    collect_rust_call_references(
+        tree.root_node(),
+        code.as_bytes(),
+        &mut entities,
+        "/test.rs",
+        "test_repo",
+    );
+
+    entities[0]
+        .reference_intents
+        .iter()
+        .filter_map(|ri| match ri {
+            ReferenceIntent::Call {
+                method, receiver, ..
+            } => Some((method.clone(), receiver.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn call(method: &str, receiver: &str) -> (String, Option<String>) {
+    (method.to_string(), Some(receiver.to_string()))
+}
+
+#[test]
+fn test_self_method_call_emits_self_receiver() {
+    assert_eq!(
+        method_call_intents("self.compute_value(sku);"),
+        vec![call("compute_value", "self")]
+    );
+}
+
+#[test]
+fn test_self_field_method_call_emits_dotted_receiver() {
+    assert_eq!(
+        method_call_intents("self.repo.save();"),
+        vec![call("save", "self.repo")]
+    );
+}
+
+#[test]
+fn test_call_chain_receiver_emits_every_link() {
+    // The outer `.c()` is a call_expression whose receiver is `a.b()`; it
+    // must not be dropped, and its receiver must never be `None` (that
+    // would let implicit-`self` resolution bind it to `Foo::c`).
+    assert_eq!(
+        method_call_intents("a.b().c();"),
+        vec![call("c", "a.b()"), call("b", "a")]
+    );
+}
+
+#[test]
+fn test_self_call_chain_receiver() {
+    assert_eq!(
+        method_call_intents("self.builder().finish();"),
+        vec![call("finish", "self.builder()"), call("builder", "self")]
+    );
+}
+
+#[test]
+fn test_call_chain_receiver_drops_arguments() {
+    // Arguments (including multi-line closures) never leak into the receiver.
+    assert_eq!(
+        method_call_intents("items.iter().map(|x| {\n    x + 1\n}).sum();"),
+        vec![
+            call("sum", "items.iter().map()"),
+            call("map", "items.iter()"),
+            call("iter", "items"),
+        ]
+    );
+}
+
+#[test]
+fn test_await_and_try_receivers_are_unwrapped() {
+    assert_eq!(
+        method_call_intents("self.fetch().await?.decode();"),
+        vec![call("decode", "self.fetch()"), call("fetch", "self")]
+    );
+}
+
+#[test]
+fn test_scoped_call_receiver_in_chain() {
+    assert_eq!(
+        method_call_intents("Repo::open().save();"),
+        vec![call("save", "Repo::open()"), call("open", "Repo")]
+    );
+}
+
+#[test]
+fn test_turbofish_method_call_is_captured() {
+    assert_eq!(
+        method_call_intents("let v = self.items.collect::<Vec<_>>();"),
+        vec![call("collect", "self.items")]
+    );
+}
+
+#[test]
+fn test_turbofish_module_path_call_is_not_captured() {
+    // `serde_yaml::from_str::<T>()` would lose its module and bind by bare
+    // name to an unrelated user `from_str`.
+    assert_eq!(
+        method_call_intents("let v = serde_yaml::from_str::<Value>(src);"),
+        vec![]
+    );
+}
+
+#[test]
+fn test_opaque_receiver_still_emits_call() {
+    // A receiver with no identifiable path (here a parenthesized deref)
+    // still produces the Call intent with a non-`None`, non-`self` receiver.
+    let intents = method_call_intents("(*boxed).run();");
+    assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].0, "run");
+    assert_eq!(intents[0].1.as_deref(), Some("boxed"));
+}

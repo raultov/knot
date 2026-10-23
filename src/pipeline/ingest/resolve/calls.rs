@@ -395,19 +395,116 @@ fn resolve_super_call(
     None
 }
 
-fn resolve_implicit_this_call(
+/// The caller-side context a call intent is resolved from.
+pub(crate) struct CallerScope<'a> {
+    pub file_path: &'a str,
+    /// Short name of the enclosing type (`PriceAdjuster`).
+    pub enclosing_class: Option<&'a str>,
+    /// Fully qualified enclosing type when the parser provides it
+    /// (`shop::pricing::PriceAdjuster` for Rust methods).
+    pub enclosing_class_fqn: Option<&'a str>,
+    /// The caller is Rust code: compound receivers are resolved by
+    /// [`resolve_rust_compound_receiver_call`].
+    pub is_rust: bool,
+}
+
+/// `true` for a receiver the Rust parser renders from a compound expression:
+/// `self`, a field path (`self.repo`) or a call chain (`a.b()`, `(expr)`).
+/// A plain identifier (`sku`) or type (`Repo`) is not compound.
+fn is_rust_compound_receiver(receiver: &str) -> bool {
+    receiver == "self" || receiver.contains(['.', '(', '[', '!'])
+}
+
+/// `price_rules` → `PriceRules`.
+fn snake_to_camel(segment: &str) -> String {
+    segment
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect()
+}
+
+/// Resolve a Rust call on a compound receiver from evidence only.
+///
+/// The receiver's type is unknown without type inference, so the name-only
+/// homonym fallback would bind `skus.iter().collect()` or
+/// `self.label.as_str()` to whichever user method shares the std method's
+/// name (issue #36). Instead:
+///
+/// - `self` binds to the enclosing type (or its parents) and is terminal;
+/// - any other compound receiver binds to `<Type>::<method>` where `Type` is
+///   its last path segment in CamelCase — a field or getter named after its
+///   type (`self.repo` → `Repo`, `self.price_rules()` → `PriceRules`).
+fn resolve_rust_compound_receiver_call(
     intent: &CallIntent,
-    caller_enclosing_class: Option<&str>,
+    receiver: &str,
+    caller: &CallerScope<'_>,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
-    if !(intent.receiver.is_none()
-        || intent.receiver.as_deref() == Some("this")
-        || intent.receiver.as_deref() == Some("self"))
+    if receiver == "self" {
+        return resolve_implicit_this_call(intent, caller, ctx);
+    }
+    let segment = receiver
+        .rsplit('.')
+        .next()?
+        .trim_end_matches("()")
+        .trim_end_matches("[]")
+        .rsplit("::")
+        .next()?;
+    if segment.is_empty()
+        || segment == "self"
+        || !segment.chars().all(|c| c.is_alphanumeric() || c == '_')
     {
         return None;
     }
-    let enclosing_class = caller_enclosing_class?;
+    let type_name = snake_to_camel(segment);
+    let uuid = lookup_method_by_class_and_name(&type_name, &intent.method, caller.file_path, ctx)?;
+    Some(disambiguate_overload(uuid, intent, ctx, Some(&type_name)))
+}
+
+fn resolve_implicit_this_call(
+    intent: &CallIntent,
+    caller: &CallerScope<'_>,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    let explicit_receiver = match intent.receiver.as_deref() {
+        None => false,
+        Some("this" | "self") => true,
+        Some(_) => return None,
+    };
+
+    // The fully qualified enclosing type is exact: it never collides with a
+    // same-named type in another module (Rust FQNs are crate-anchored, so the
+    // short-name probe below cannot match them).
+    if let Some(class_fqn) = caller.enclosing_class_fqn
+        && let Some(uuid) = lookup_fqn(class_fqn, &intent.method, ctx.fqn_to_uuid)
+    {
+        return Some(disambiguate_overload(uuid, intent, ctx, Some(class_fqn)));
+    }
+
+    let enclosing_class = caller.enclosing_class?;
     if let Some(uuid) = lookup_fqn(enclosing_class, &intent.method, ctx.fqn_to_uuid) {
+        return Some(disambiguate_overload(
+            uuid,
+            intent,
+            ctx,
+            Some(enclosing_class),
+        ));
+    }
+
+    // An explicit `self.m()` / `this.m()` names a method of the enclosing
+    // type even when its FQN is module-qualified. Without this the call
+    // falls through to the name-only homonym fallback and may bind to a
+    // same-named method of another type. A bare `m()` is not covered: in
+    // Rust it is a free-function call, never a method of the enclosing type.
+    if explicit_receiver
+        && let Some(uuid) =
+            lookup_method_by_class_and_name(enclosing_class, &intent.method, caller.file_path, ctx)
+    {
         return Some(disambiguate_overload(
             uuid,
             intent,
@@ -587,16 +684,22 @@ fn resolve_bare_call(
 
 pub(crate) fn resolve_single_call_intent(
     intent: &CallIntent,
-    caller_file_path: &str,
-    caller_enclosing_class: Option<&str>,
+    caller: &CallerScope<'_>,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
+    let caller_file_path = caller.file_path;
     // `super.` calls are terminal: an unresolved super() must never fall
     // through to the bare-name fallback (it would be misattributed to self).
     if intent.receiver.as_deref().is_some_and(is_super_receiver) {
-        return resolve_super_call(intent, caller_enclosing_class, caller_file_path, ctx);
+        return resolve_super_call(intent, caller.enclosing_class, caller_file_path, ctx);
     }
-    resolve_implicit_this_call(intent, caller_enclosing_class, ctx)
+    if caller.is_rust
+        && let Some(receiver) = intent.receiver.as_deref()
+        && is_rust_compound_receiver(receiver)
+    {
+        return resolve_rust_compound_receiver_call(intent, receiver, caller, ctx);
+    }
+    resolve_implicit_this_call(intent, caller, ctx)
         .or_else(|| resolve_static_receiver_call(intent, caller_file_path, ctx))
         .or_else(|| resolve_receiver_call(intent, caller_file_path, ctx))
         .or_else(|| resolve_bare_call(intent, caller_file_path, ctx))
@@ -895,6 +998,186 @@ mod tests {
             foo_bar_entity
                 .relationships
                 .contains(&(foo_helper_uuid, RelationshipType::Calls))
+        );
+    }
+
+    /// A crate-anchored Rust method (`<crate>::<module>::<Type>::<method>`)
+    /// as the Rust qualifier emits it, with its `enclosing_class_fqn`.
+    fn rust_method(name: &str, type_fqn: &str, file_path: &str) -> ResolutionEntity {
+        let type_name = type_fqn.rsplit("::").next().unwrap();
+        let mut entity = mock_resolution_entity_with_kind(
+            name,
+            &format!("{type_fqn}::{name}"),
+            Some(type_name),
+            file_path,
+            EntityKind::RustMethod,
+        );
+        entity.enclosing_class_fqn = Some(type_fqn.to_string());
+        entity
+    }
+
+    fn self_call(method: &str) -> ReferenceIntent {
+        ReferenceIntent::Call {
+            method: method.to_string(),
+            receiver: Some("self".to_string()),
+            line: 1,
+            arg_count: None,
+        }
+    }
+
+    /// Issue #36: `self.helper()` must bind to the enclosing type's method
+    /// through its crate-anchored FQN, never to a homonym on another type in
+    /// the same file nor to the same-named type in another module.
+    #[test]
+    fn test_resolve_rust_self_call_with_crate_anchored_fqns() {
+        let own = rust_method("compute_value", "shop::PriceAdjuster", "src/lib.rs");
+        let same_file_homonym =
+            rust_method("compute_value", "shop::DiscountAdjuster", "src/lib.rs");
+        let other_module = rust_method(
+            "compute_value",
+            "shop::other::PriceAdjuster",
+            "src/other.rs",
+        );
+        let mut caller = rust_method("adjust", "shop::PriceAdjuster", "src/lib.rs");
+        caller.reference_intents = vec![self_call("compute_value")];
+        let mut other_caller =
+            rust_method("recompute", "shop::other::PriceAdjuster", "src/other.rs");
+        other_caller.reference_intents = vec![self_call("compute_value")];
+
+        let own_uuid = own.uuid;
+        let other_module_uuid = other_module.uuid;
+
+        let mut entities = vec![same_file_homonym, other_module, own, caller, other_caller];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(
+            entities[3].relationships,
+            vec![(own_uuid, RelationshipType::Calls)]
+        );
+        assert_eq!(
+            entities[4].relationships,
+            vec![(other_module_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    /// Without `enclosing_class_fqn` (e.g. fixtures with no crate root), a
+    /// `self` call still resolves through the short type name.
+    #[test]
+    fn test_resolve_rust_self_call_without_enclosing_fqn() {
+        let own = rust_method("helper", "__loose::sample::Foo", "sample.rs");
+        let homonym = rust_method("helper", "__loose::sample::Bar", "sample.rs");
+        let mut caller = rust_method("run", "__loose::sample::Foo", "sample.rs");
+        caller.enclosing_class_fqn = None;
+        caller.reference_intents = vec![self_call("helper")];
+
+        let own_uuid = own.uuid;
+        let mut entities = vec![homonym, own, caller];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(
+            entities[2].relationships,
+            vec![(own_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    fn receiver_call(method: &str, receiver: &str) -> ReferenceIntent {
+        ReferenceIntent::Call {
+            method: method.to_string(),
+            receiver: Some(receiver.to_string()),
+            line: 1,
+            arg_count: None,
+        }
+    }
+
+    /// Resolve `intents` issued by a Rust method of `shop::PriceAdjuster`
+    /// against `targets` and return the FQNs it ends up calling.
+    fn rust_call_targets(
+        targets: Vec<ResolutionEntity>,
+        intents: Vec<ReferenceIntent>,
+    ) -> Vec<String> {
+        let mut caller = rust_method("caller", "shop::PriceAdjuster", "src/lib.rs");
+        caller.reference_intents = intents;
+        let mut entities = targets;
+        entities.push(caller);
+        resolve_reference_intents(&mut entities);
+
+        let caller = entities.last().unwrap();
+        let mut fqns: Vec<String> = caller
+            .relationships
+            .iter()
+            .filter_map(|(uuid, _)| entities.iter().find(|e| e.uuid == *uuid))
+            .map(|e| e.fqn.clone())
+            .collect();
+        fqns.sort();
+        fqns
+    }
+
+    /// Issue #36: a std method on a receiver of unknown type
+    /// (`skus.iter().collect()`, `self.label.as_str()`) must never bind to
+    /// the only user-defined method that happens to share its name.
+    #[test]
+    fn test_resolve_rust_compound_receiver_skips_name_only_fallback() {
+        let targets = vec![
+            rust_method("collect", "shop::recall::Pool", "src/recall.rs"),
+            rust_method("as_str", "shop::query::Tier", "src/query.rs"),
+            mock_resolution_entity_at(
+                "find",
+                "AlphaSearchService.find",
+                Some("AlphaSearchService"),
+                "web/alpha.ts",
+            ),
+        ];
+        let intents = vec![
+            receiver_call("collect", "skus.iter().map()"),
+            receiver_call("as_str", "self.label"),
+            receiver_call("find", "self.items.iter()"),
+        ];
+        assert!(rust_call_targets(targets, intents).is_empty());
+    }
+
+    /// `self.m()` with no `m` on the enclosing type (e.g. a derived
+    /// `self.clone()`) is terminal: no fallback to a same-named method.
+    #[test]
+    fn test_resolve_rust_self_call_is_terminal() {
+        let targets = vec![rust_method("clone", "shop::Other", "src/lib.rs")];
+        let intents = vec![self_call("clone")];
+        assert!(rust_call_targets(targets, intents).is_empty());
+    }
+
+    /// The last path segment of a compound receiver is evidence of its type:
+    /// `self.repo.save()` → `Repo::save`, `self.price_rules().apply()` →
+    /// `PriceRules::apply` (snake_case getter/field named after its type).
+    #[test]
+    fn test_resolve_rust_compound_receiver_by_last_segment_type() {
+        let targets = vec![
+            rust_method("save", "shop::store::Repo", "src/store.rs"),
+            rust_method("save", "shop::Draft", "src/lib.rs"),
+            rust_method("apply", "shop::rules::PriceRules", "src/rules.rs"),
+        ];
+        let intents = vec![
+            receiver_call("save", "self.repo"),
+            receiver_call("apply", "self.price_rules()"),
+        ];
+        assert_eq!(
+            rust_call_targets(targets, intents),
+            vec!["shop::rules::PriceRules::apply", "shop::store::Repo::save"]
+        );
+    }
+
+    /// A plain identifier receiver keeps the pre-existing resolution ladder
+    /// (including the name-only fallback) — only compound receivers, which
+    /// the Rust parser used to drop entirely, are evidence-only.
+    #[test]
+    fn test_resolve_rust_identifier_receiver_unchanged() {
+        let targets = vec![rust_method(
+            "adjust",
+            "shop::pricing::PriceAdjuster",
+            "src/pricing.rs",
+        )];
+        let intents = vec![receiver_call("adjust", "adjuster")];
+        assert_eq!(
+            rust_call_targets(targets, intents),
+            vec!["shop::pricing::PriceAdjuster::adjust"]
         );
     }
 

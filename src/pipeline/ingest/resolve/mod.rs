@@ -301,6 +301,23 @@ fn push_relationship(
     }
 }
 
+/// The caller-side context call intents of `entity` are resolved from.
+fn caller_scope(entity: &ResolutionEntity) -> calls::CallerScope<'_> {
+    calls::CallerScope {
+        file_path: &entity.file_path,
+        enclosing_class: entity.enclosing_class.as_deref(),
+        enclosing_class_fqn: entity.enclosing_class_fqn.as_deref(),
+        is_rust: matches!(
+            entity.kind,
+            EntityKind::RustFunction
+                | EntityKind::RustMethod
+                | EntityKind::RustConstant
+                | EntityKind::RustStatic
+                | EntityKind::RustMacroDef
+        ),
+    }
+}
+
 /// Maps a single reference intent to its resolved target UUID (if any) and
 /// the relationship type the intent produces.
 fn resolve_intent(
@@ -322,13 +339,10 @@ fn resolve_intent(
                 line: 0,
                 arg_count: *arg_count,
             };
-            let resolved = calls::resolve_single_call_intent(
-                &call_intent,
-                &entity.file_path,
-                entity.enclosing_class.as_deref(),
-                ctx,
-            )
-            .map(|uuid| calls::redirect_class_call_to_constructor(uuid, &entity.file_path, ctx));
+            let resolved =
+                calls::resolve_single_call_intent(&call_intent, &caller_scope(entity), ctx).map(
+                    |uuid| calls::redirect_class_call_to_constructor(uuid, &entity.file_path, ctx),
+                );
             (resolved, RelationshipType::Calls)
         }
         ReferenceIntent::Extends { parent, .. } => (
@@ -374,12 +388,8 @@ fn resolve_intent(
                 line: 0,
                 arg_count: None,
             };
-            let resolved = calls::resolve_single_call_intent(
-                &call_intent,
-                &entity.file_path,
-                entity.enclosing_class.as_deref(),
-                ctx,
-            );
+            let resolved =
+                calls::resolve_single_call_intent(&call_intent, &caller_scope(entity), ctx);
             (resolved, RelationshipType::Calls)
         }
         ReferenceIntent::VclBackendRef { backend_name, .. } => (
