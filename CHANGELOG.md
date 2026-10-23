@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(rust)**: `self.method()` calls produce `CALLS` edges (#36). The Rust parser only accepted a plain identifier as a method-call receiver, so every call through `self`, a field path (`self.repo.save()`) or a call chain (`a.b().c()`, `x.iter().map(..).sum()`, `self.fetch().await?.decode()`) was dropped, and methods reached only that way were reported by `find_callers` as unused. Receivers are now rendered as a compact path (`self`, `self.repo`, `a.b()`) with arguments, `.await`, `?`, parentheses and borrows stripped. Turbofish method calls (`x.collect::<Vec<_>>()`) are captured too. On this repository, `rust_method` entities with no caller drop from 137 to 44.
+- **Fixed(resolve)**: Calls on Rust compound receivers resolve from evidence only. `self.m()` binds to the enclosing type through its crate-anchored `enclosing_class_fqn` (the short-name probe never matched `<crate>::<module>::<Type>::<method>`), then its parents, and is terminal: a derived `self.clone()` never binds to an unrelated `clone`. Other compound receivers bind to `<Type>::<method>`, where `Type` is the last path segment in CamelCase (`self.repo` → `Repo`, `self.price_rules()` → `PriceRules`). They never use the name-only homonym fallback, which would bind std calls such as `.iter().collect()` or `.as_str()` to the only user method sharing the name. Plain identifier receivers keep the previous ladder. In every language, an explicit `self.m()` / `this.m()` that misses the exact FQN probe now looks the method up on the enclosing type (class/member index) before any homonym fallback.
+- **Test**: Rust E2E tests 36–43 (`tests/testing_files/rust/self_calls/`): `self`, `self.field` and call-chain receivers, same-file and cross-module homonym helpers, and std `collect` / `as_str` traps; parser unit tests for every receiver shape; resolver unit tests with crate-anchored FQNs.
+- **Upgrade**: Existing indexes keep the missing edges until Rust files are re-indexed (`knot-indexer --clean`).
+
+---
+
 ## v1.11.7
 
 - **Fixed(db)**: `qdrant-client` no longer prints to stdout. It `println!`ed a warning when the server minor version is more than one ahead (Qdrant 1.20 against client 1.17) or when the server was unreachable, corrupting `knot -o json` output and the `knot-mcp` stdio JSON-RPC stream. Every client is now built by a shared builder that skips the compatibility check.
