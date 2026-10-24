@@ -1753,3 +1753,62 @@ class HttpUtil {
         "loadIntoHttpServer should call restartHttpServer"
     );
 }
+
+/// `(method, arg_count)` of every call the lexical scanner finds in `source`.
+fn groovy_call_arities(source: &str) -> Vec<(String, Option<usize>)> {
+    super::refs::extract_method_calls(source, &[])
+        .into_iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::Call {
+                method, arg_count, ..
+            } => Some((method, arg_count)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Issue #38: parenthesized calls carry their argument count; commas inside
+/// strings, closures, lists and nested calls do not separate arguments, and
+/// a trailing closure is one more argument.
+#[test]
+fn test_groovy_call_carries_arg_count() {
+    let source = r#"
+        foo.bar(1, 2)
+        baz()
+        render("a, b", [1, 2], { x, y -> x }, other.call(3, 4))
+        items.each(1) { println it }
+    "#;
+    let arities = groovy_call_arities(source);
+    for expected in [
+        ("bar", Some(2)),
+        ("baz", Some(0)),
+        ("render", Some(4)),
+        ("call", Some(2)),
+        ("each", Some(2)),
+    ] {
+        assert!(
+            arities.contains(&(expected.0.to_string(), expected.1)),
+            "expected {expected:?} in {arities:?}"
+        );
+    }
+}
+
+/// Named arguments are collected into one Map parameter, a spread expands to
+/// an unknown number of arguments, an argument list continuing on the next
+/// line cannot be counted from one line, and a call without parentheses has
+/// no argument list to count: all of them carry no arity.
+#[test]
+fn test_groovy_uncertain_arg_count_is_none() {
+    let source = "configure(name: 'x', size: 2)\nlog(*parts)\nemit(a,\n  b)\nsay 'hello', 2\n";
+    let arities = groovy_call_arities(source);
+    for method in ["configure", "log", "emit", "say"] {
+        assert!(
+            arities.contains(&(method.to_string(), None)),
+            "expected ({method}, None) in {arities:?}"
+        );
+    }
+    assert!(
+        groovy_call_arities("check(ok ? a : b, x)").contains(&("check".to_string(), Some(2))),
+        "a ternary is not a named argument"
+    );
+}

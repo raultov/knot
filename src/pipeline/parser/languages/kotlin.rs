@@ -503,6 +503,63 @@ fn extract_receiver_and_method(
     }
 }
 
+/// Number of arguments of a Kotlin `call_expression`: its `value_argument`s
+/// plus a trailing lambda. `None` when a spread argument (`*values`) makes the
+/// count unknown, or when the call has no argument list at all.
+///
+/// `f(a) { ... }` parses as a call wrapping `f(a)` with the lambda attached to
+/// the outer node, so the lambda of an enclosing call whose only other child
+/// is this one is counted here.
+fn kotlin_argument_count(node: Node<'_>) -> Option<usize> {
+    let mut count = count_own_arguments(node)?;
+    if let Some(parent) = node.parent()
+        && parent.kind() == "call_expression"
+        && parent.child(0) == Some(node)
+    {
+        let mut cursor = parent.walk();
+        let rest: Vec<Node<'_>> = parent.named_children(&mut cursor).skip(1).collect();
+        if !rest.is_empty() && rest.iter().all(|c| c.kind() == "annotated_lambda") {
+            count += rest.len();
+        }
+    }
+    Some(count)
+}
+
+/// Arguments written directly on `node`: `value_arguments` and trailing
+/// lambdas. `None` with no argument list or with a spread argument.
+fn count_own_arguments(node: Node<'_>) -> Option<usize> {
+    let mut count = 0;
+    let mut has_arguments = false;
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "value_arguments" => {
+                has_arguments = true;
+                let mut args_cursor = child.walk();
+                for arg in child.named_children(&mut args_cursor) {
+                    if arg.kind() != "value_argument" {
+                        continue;
+                    }
+                    let mut arg_cursor = arg.walk();
+                    if arg
+                        .named_children(&mut arg_cursor)
+                        .any(|c| c.kind() == "spread_expression")
+                    {
+                        return None;
+                    }
+                    count += 1;
+                }
+            }
+            "annotated_lambda" => {
+                has_arguments = true;
+                count += 1;
+            }
+            _ => {}
+        }
+    }
+    has_arguments.then_some(count)
+}
+
 /// Extract call intents from a SINGLE Kotlin node without recursive descent.
 ///
 /// This is the non-recursive version of `extract_call_intents_kotlin`,
@@ -545,7 +602,7 @@ pub(crate) fn extract_single_call_intent_kotlin(node: Node<'_>, source: &[u8]) -
                 method,
                 receiver,
                 line,
-                arg_count: None,
+                arg_count: kotlin_argument_count(node),
             });
         }
     }
@@ -828,6 +885,49 @@ mod tests {
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].method, "getUser");
         assert!(intents[0].receiver.as_ref().unwrap().contains("Config"));
+    }
+
+    /// `(method, arg_count)` of every call intent in `body`.
+    fn call_arities(body: &str) -> Vec<(String, Option<usize>)> {
+        let code = format!("fun main() {{ {body} }}");
+        let tree = parse_kotlin(&code);
+        let mut intents = Vec::new();
+        extract_call_intents_kotlin(tree.root_node(), code.as_bytes(), &mut intents);
+        intents
+            .into_iter()
+            .map(|i| (i.method, i.arg_count))
+            .collect()
+    }
+
+    /// Issue #38: calls carry their argument count so overload
+    /// disambiguation can run for Kotlin.
+    #[test]
+    fn test_call_carries_arg_count() {
+        let arities = call_arities(
+            "foo.bar(1, 2); baz(); f(a = 1, /* c */ b = 2); m.transform(1) { it }; run { x }",
+        );
+        for expected in [
+            ("bar", Some(2)),
+            ("baz", Some(0)),
+            ("f", Some(2)),
+            ("transform", Some(2)),
+            ("run", Some(1)),
+        ] {
+            assert!(
+                arities.contains(&(expected.0.to_string(), expected.1)),
+                "expected {expected:?} in {arities:?}"
+            );
+        }
+    }
+
+    /// A spread argument (`*values`) expands to an unknown number of
+    /// arguments.
+    #[test]
+    fn test_spread_argument_has_unknown_arg_count() {
+        assert_eq!(
+            call_arities("listOf(1, *values)"),
+            vec![("listOf".to_string(), None)]
+        );
     }
 
     // --- Inheritance extraction tests ---

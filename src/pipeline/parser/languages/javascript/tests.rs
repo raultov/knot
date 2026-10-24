@@ -241,3 +241,55 @@ fn test_js_require_destructure_emits_refs() {
         intents
     );
 }
+
+/// `(method, receiver, arg_count)` of every call intent in `body`.
+fn call_arities(body: &str) -> Vec<(String, Option<String>, Option<usize>)> {
+    let code = format!("function test() {{ {body} }}");
+    let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(&code)
+        .expect("Failed to parse JavaScript code");
+    let mut intents = Vec::new();
+    extract_reference_intents_javascript(tree.root_node(), code.as_bytes(), &mut intents);
+    intents
+        .into_iter()
+        .filter_map(|i| match i {
+            ReferenceIntent::Call {
+                method,
+                receiver,
+                arg_count,
+                ..
+            } => Some((method, receiver, arg_count)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Issue #38: calls carry their argument count (comments excluded). The
+/// callback references found among the arguments are not calls with that
+/// arity, so they carry none.
+#[test]
+fn test_call_carries_arg_count() {
+    let arities = call_arities("foo.bar(1, 2); baz(); qux(a, /* c */ b); app.use(this.handler);");
+    for expected in [
+        ("bar", Some("foo"), Some(2)),
+        ("baz", None, Some(0)),
+        ("qux", None, Some(2)),
+        ("use", Some("app"), Some(1)),
+        ("handler", Some("this"), None),
+    ] {
+        let expected = (
+            expected.0.to_string(),
+            expected.1.map(str::to_string),
+            expected.2,
+        );
+        assert!(
+            arities.contains(&expected),
+            "expected {expected:?} in {arities:?}"
+        );
+    }
+}
+
+/// A spread argument (`...xs`) expands to an unknown number of arguments.
+#[test]
+fn test_spread_argument_has_unknown_arg_count() {
+    assert!(call_arities("f(a, ...xs);").contains(&("f".to_string(), None, None)));
+}

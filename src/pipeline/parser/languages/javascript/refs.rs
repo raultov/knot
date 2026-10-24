@@ -164,6 +164,27 @@ fn bind_call_intent(receiver: &str, line: usize) -> Option<CallIntent> {
     })
 }
 
+/// Number of arguments of a `call_expression`, comments excluded. `None`
+/// when a spread argument (`...xs`) makes the count unknown, or for a tagged
+/// template (`` tag`...` ``). Recorded for TypeScript and JavaScript alike; the
+/// resolver decides whether arity is binding for the language.
+fn argument_count(call: Node<'_>) -> Option<usize> {
+    let args = call.child_by_field_name("arguments")?;
+    if args.kind() != "arguments" {
+        return None;
+    }
+    let mut cursor = args.walk();
+    let mut count = 0;
+    for arg in args.named_children(&mut cursor) {
+        match arg.kind() {
+            "comment" => {}
+            "spread_element" => return None,
+            _ => count += 1,
+        }
+    }
+    Some(count)
+}
+
 fn call_expression_intents(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
     let line = node.start_position().row + 1;
     let (method_name, receiver, is_bind_call) = scan_callee(node, source);
@@ -180,7 +201,7 @@ fn call_expression_intents(node: Node<'_>, source: &[u8], intents: &mut Vec<Call
                 method,
                 receiver,
                 line,
-                arg_count: None,
+                arg_count: argument_count(node),
             });
         }
     }

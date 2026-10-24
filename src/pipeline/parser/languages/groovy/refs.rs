@@ -79,6 +79,69 @@ fn read_word<'a>(
     (word, after_word)
 }
 
+/// Number of arguments of a parenthesized call, given the text from its `(`
+/// to the end of the line. Commas inside strings, closures, lists, maps and
+/// nested calls do not separate arguments, and a trailing closure
+/// (`each(1) { ... }`) is one more argument.
+///
+/// `None` whenever the count is uncertain: named arguments (Groovy collects
+/// them into a single `Map` parameter), a spread (`*parts`), or an argument
+/// list that does not close on this line.
+fn argument_count(text: &str) -> Option<usize> {
+    let body = text.strip_prefix('(')?;
+    let mut depth = 0usize;
+    let mut args: Vec<&str> = Vec::new();
+    let mut arg_start = 0;
+    let mut chars = body.char_indices().peekable();
+    let mut close = None;
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' | '\'' => skip_string_literal(&mut chars, c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth > 0 => depth -= 1,
+            ')' => {
+                close = Some(i);
+                break;
+            }
+            ',' if depth == 0 => {
+                args.push(&body[arg_start..i]);
+                arg_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    let last = &body[arg_start..close];
+    if !(args.is_empty() && last.trim().is_empty()) {
+        args.push(last);
+    }
+    if args.iter().any(|arg| is_named_or_spread_argument(arg)) {
+        return None;
+    }
+    let trailing_closure = body[close + 1..].trim_start().starts_with('{');
+    Some(args.len() + usize::from(trailing_closure))
+}
+
+/// `name: value` / `'name': value` (a named argument) or `*values` (a spread).
+fn is_named_or_spread_argument(arg: &str) -> bool {
+    let arg = arg.trim();
+    if arg.starts_with('*') {
+        return true;
+    }
+    let key_end = match arg.chars().next() {
+        Some(q @ ('"' | '\'')) => arg[1..].find(q).map(|i| i + 2),
+        Some(c) if c.is_alphabetic() || c == '_' => Some(
+            arg.find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(arg.len()),
+        ),
+        _ => None,
+    };
+    key_end.is_some_and(|end| {
+        let rest = arg[end..].trim_start();
+        rest.starts_with(':') && !rest.starts_with("::")
+    })
+}
+
 fn receiver_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<ReferenceIntent> {
     let dot_rest = after_trimmed.strip_prefix('.')?;
     let dot_trimmed = dot_rest.trim_start();
@@ -89,7 +152,7 @@ fn receiver_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<Ref
             method: next_word.to_string(),
             receiver: Some(word.to_string()),
             line: line_num,
-            arg_count: None,
+            arg_count: argument_count(after_next),
         })
     } else {
         None
@@ -106,7 +169,7 @@ fn bare_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<Referen
             method: word.to_string(),
             receiver: None,
             line: line_num,
-            arg_count: None,
+            arg_count: argument_count(after_trimmed),
         });
     }
 

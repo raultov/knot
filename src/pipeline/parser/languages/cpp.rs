@@ -82,16 +82,13 @@ pub(crate) fn extract_reference_intents_cpp(
 fn extract_call_expr_intent(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
     let line = node.start_position().row + 1;
 
+    // Comments inside the argument list are named nodes too (issue #38).
     let arg_count = node.child_by_field_name("arguments").map(|args_node| {
-        let mut count = 0;
-        let mut child = args_node.child(0);
-        while let Some(c) = child {
-            if c.is_named() {
-                count += 1;
-            }
-            child = c.next_sibling();
-        }
-        count
+        let mut cursor = args_node.walk();
+        args_node
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() != "comment")
+            .count()
     });
 
     if let Some(function_node) = node.child_by_field_name("function") {
@@ -271,6 +268,27 @@ mod tests {
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
         parser
+    }
+
+    /// Issue #38: comments inside an argument list are not arguments.
+    #[test]
+    fn test_call_arg_count_excludes_comments() {
+        let code = "void f() { obj.draw(1, /* width */ 2); reset(); }";
+        let tree = get_parser().parse(code, None).unwrap();
+        let mut intents = Vec::new();
+        extract_call_intents_cpp(tree.root_node(), code.as_bytes(), &mut intents);
+        let arities: Vec<(String, Option<usize>)> = intents
+            .into_iter()
+            .map(|i| (i.method, i.arg_count))
+            .collect();
+        assert!(
+            arities.contains(&("draw".to_string(), Some(2))),
+            "{arities:?}"
+        );
+        assert!(
+            arities.contains(&("reset".to_string(), Some(0))),
+            "{arities:?}"
+        );
     }
 
     #[test]
