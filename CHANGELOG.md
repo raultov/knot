@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.11.9
 
 - **Fixed(resolve)**: Overload disambiguation never crosses classes (#35). Overloads share one FQN, so FQN lookups returned an arbitrary overload, and `disambiguate_overload` then compared the simple receiver name (`Foo.bar`) with full FQNs (`com.x.Foo.bar`). That comparison never matched, so it fell back to "any method with this name and arity" anywhere in the index. With `bar(int)` declared after `bar(int, int)`, a call `foo.bar(1, 2)` bound to `com.other.Other.bar` about half the time, depending on UUID order. The resolver now keeps every overload per FQN (`fqn_overloads`). Among them it picks the exact-arity overload, then a variable-arity one (varargs, default parameters), then the nearest supertype overload with the call's arity. If none fits, it keeps the receiver's own method. Untyped receivers matched by FQN segment go through the same step.
 - **Fixed(resolve)**: Arity filters the name-only homonym fallback but no longer resolves a call by itself. "The only `isNotNull` with one parameter in the repository" used to become the target of every `x.isNotNull(y)` call, from any class.
