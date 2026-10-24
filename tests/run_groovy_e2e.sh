@@ -1093,6 +1093,103 @@ assert_groovy_override_pairs H2 "CompactRowLayout.layoutRow" \
     "String layoutRow(String row) -> String layoutRow(String row, int indent = 2)" \
     "A default parameter keeps the shorter override linked"
 
+# ═══════════════════════════════════════════════════════════
+# GROUP I: Overload calls bind by arity (issue #38)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group I: Overload calls bind by arity ──${NC}"
+
+REPO_I="groovy_overload_calls_e2e"
+COLL_I="knot_groovy_overload_calls_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow/ocalls" "$TMP_REPO_DIR/src/main/groovy/nextflow/other"
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/ocalls/Formatter.groovy" << 'GROOVY'
+package nextflow.ocalls
+
+class Formatter {
+    String format(String text, int width) { text }
+
+    String format(String text) { text }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/ocalls/ConsoleLog.groovy" << 'GROOVY'
+package nextflow.ocalls
+
+/** A trailing array parameter accepts varargs in Groovy. */
+class ConsoleLog {
+    void log(String[] parts) { println parts.join(' ') }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/other/OtherFormatter.groovy" << 'GROOVY'
+package nextflow.other
+
+/** Same name and arity as Formatter.format in another class. */
+class OtherFormatter {
+    String format(String text, int width) { text }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/ocalls/Report.groovy" << 'GROOVY'
+package nextflow.ocalls
+
+class Report {
+    String wide(Formatter formatter) {
+        formatter.format('x', 80)
+    }
+
+    String narrow(Formatter formatter) {
+        formatter.format('x')
+    }
+
+    void joined(ConsoleLog sink) {
+        sink.log('a', 'b', 'c')
+    }
+}
+GROOVY
+
+run_indexer "$REPO_I" "$COLL_I" "--clean"
+
+# Overloads share their FQN, so each Calls row is reported as
+# `<target declaration line><<caller>`.
+assert_groovy_overload_callers() {
+    local id="$1" entity="$2" expected="$3" description="$4"
+    echo ""
+    echo "Test $id: $description ($entity callers exactly [$expected])..."
+    local cli_actual
+    cli_actual=$(call_cli "$REPO_I" "$COLL_I" callers "$entity" -r "$REPO_I" -o json \
+        | jq -r '.calls[] | "\(.target_start_line)<\(.name)"' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$cli_actual" = "$expected" ]; then
+        echo -e "${GREEN}✓ CLI: $entity callers [$cli_actual]${NC}"
+    else
+        echo -e "${RED}✗ CLI: $entity callers expected [$expected], got [$cli_actual]${NC}"
+        FAILED=1
+    fi
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$REPO_I\"}}}"
+    local mcp_expected mcp_actual
+    mcp_expected=$(echo "$expected" | tr ',' '\n' | sed 's/^[0-9]*<//' | LC_ALL=C sort -u | paste -sd, -)
+    mcp_actual=$(call_mcp "$REPO_I" "$COLL_I" "$request" \
+        | jq -r '.result.content[0].text' \
+        | awk '/^## /{ on = ($0 ~ /^## Calls/) } on && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$mcp_actual" = "$mcp_expected" ]; then
+        echo -e "${GREEN}✓ MCP: $entity callers [$mcp_actual]${NC}"
+    else
+        echo -e "${RED}✗ MCP: $entity callers expected [$mcp_expected], got [$mcp_actual]${NC}"
+        FAILED=1
+    fi
+}
+
+assert_groovy_overload_callers I1 "nextflow.ocalls.Formatter.format" "4<wide,6<narrow" \
+    "Each call binds to the receiver's overload with matching arity"
+assert_groovy_overload_callers I2 "nextflow.other.OtherFormatter.format" "" \
+    "A same-name/same-arity method in another class gets no caller"
+assert_groovy_overload_callers I3 "nextflow.ocalls.ConsoleLog.log" "5<joined" \
+    "A trailing array parameter accepts any number of arguments"
+
 # ── Final result ─────────────────────────────────────────
 echo -e "\n${BLUE}========================================${NC}"
 if [ "$FAILED" -eq 0 ]; then

@@ -492,6 +492,58 @@ assert_override_pairs 19 "ConsoleEventSink.onSinkEvent" \
     "(handler: (String, Int) -> Unit) -> (handler: (String, Int) -> Unit)|(name: String, handler: (String, Int) -> Unit) -> (name: String, handler: (String, Int) -> Unit)" \
     "Function-typed parameters count as a single parameter"
 
+# Tests 20-26: calls carry their argument count, so overloads bind by arity
+# within the receiver class and its supertypes (issue #38). Fixture:
+# testing_files/kotlin/overload_calls/. Overloads share their FQN, so each
+# Calls row is reported as `<target declaration line><<caller>`. Kotlin
+# FQNs carry no package, hence the bare `Class.method` names.
+assert_overload_callers() {
+    local id=$1
+    local fqn=$2
+    local expected=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description ($fqn callers exactly [$expected])..."
+    local cli_actual
+    cli_actual=$(cargo run --release --bin knot -- callers "$fqn" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '.calls[] | "\(.target_start_line)<\(.name)"' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$cli_actual" != "$expected" ]; then
+        echo -e "${RED}✗ CLI: $fqn callers expected [$expected], got [$cli_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: $fqn callers [$cli_actual]${NC}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$fqn\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_expected
+    local mcp_actual
+    mcp_expected=$(echo "$expected" | tr ',' '\n' | sed 's/^[0-9]*<//' | LC_ALL=C sort -u | paste -sd, -)
+    mcp_actual=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk '/^## /{ on = ($0 ~ /^## Calls/) } on && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$mcp_actual" != "$mcp_expected" ]; then
+        echo -e "${RED}✗ MCP: $fqn callers expected [$mcp_expected], got [$mcp_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: $fqn callers [$mcp_actual]${NC}"
+}
+
+assert_overload_callers 20 "Foo.bar" "4<sumPair,6<single" \
+    "Each call binds to the receiver's overload with matching arity"
+assert_overload_callers 21 "Other.bar" "" \
+    "A same-name/same-arity method in another class gets no caller"
+assert_overload_callers 22 "Base.scale" "10<scalePair" \
+    "An inherited overload with matching arity wins over the receiver's own"
+assert_overload_callers 23 "Child.scale" "" \
+    "The receiver's different-arity overload is not bound"
+assert_overload_callers 24 "Other.scale" "" \
+    "Inherited-overload lookup never crosses into an unrelated class"
+assert_overload_callers 25 "Mapper.transform" "19<mapped,21<plain" \
+    "A trailing lambda counts as an argument"
+assert_overload_callers 26 "Padder.pad" "26<padShort,26<padWide" \
+    "A default parameter accepts both arities"
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -516,6 +568,7 @@ echo "  ✓ Kotlin EXTENDS/IMPLEMENTS extraction (v0.10.0)"
 echo "  ✓ Kotlin anonymous object implements (v0.11.0)"
 echo "  ✓ Kotlin enum class classification (v0.11.0)"
 echo "  ✓ Kotlin method signature fragment search (: Int)"
+echo "  ✓ Overload calls bind by arity (trailing lambdas, defaults, supertypes)"
 echo ""
 echo "Entity types supported:"
 echo "  - KotlinClass"

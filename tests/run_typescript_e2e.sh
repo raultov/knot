@@ -527,6 +527,49 @@ else
     exit 1
 fi
 
+# Tests 14-16: calls carry their argument count, so overload signatures
+# bind by arity within the receiver class (issue #38). Fixtures:
+# overload_calls.ts, legacy_arity.js. Overloads share their FQN, so each
+# Calls row is reported as `<target declaration line><<caller>`.
+assert_overload_callers() {
+    local id=$1
+    local fqn=$2
+    local expected=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description ($fqn callers exactly [$expected])..."
+    local cli_actual
+    cli_actual=$(cargo run --release --bin knot -- callers "$fqn" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '.calls[] | "\(.target_start_line)<\(.name)"' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$cli_actual" != "$expected" ]; then
+        echo -e "${RED}✗ CLI: $fqn callers expected [$expected], got [$cli_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: $fqn callers [$cli_actual]${NC}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$fqn\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_expected
+    local mcp_actual
+    mcp_expected=$(echo "$expected" | tr ',' '\n' | sed 's/^[0-9]*<//' | LC_ALL=C sort -u | paste -sd, -)
+    mcp_actual=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk '/^## /{ on = ($0 ~ /^## Calls/) } on && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$mcp_actual" != "$mcp_expected" ]; then
+        echo -e "${RED}✗ MCP: $fqn callers expected [$mcp_expected], got [$mcp_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: $fqn callers [$mcp_actual]${NC}"
+}
+
+assert_overload_callers 14 "Foo.bar" "3<single,4<sumPair" \
+    "Each call binds to the overload signature with matching arity"
+assert_overload_callers 15 "Other.bar" "" \
+    "A same-name/same-arity method in another class gets no caller"
+assert_overload_callers 16 "legacyPad" "3<padDefault" \
+    "JavaScript calls with fewer arguments than declared still bind"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -548,6 +591,7 @@ echo "  ✓ TS import / import-as capture (TsImportFoo, TsImportQux)"
 echo "  ✓ TS alias should NOT have callers (TsImportBar)"
 echo "  ✓ TS explore_file shows Imports / Referenced Types section"
 echo "  ✓ TS embedding recall: doc-less hook ranks first for its paraphrase"
+echo "  ✓ Overload signatures bind by arity; JavaScript arity is never binding"
 echo ""
 
 exit 0
