@@ -36,7 +36,7 @@ pub use delete::DeleteExt;
 pub use query::QueryExt;
 pub use query_repo::{RepoIdentity, RepoQueryExt};
 pub use query_subgraph::SubgraphQueryExt;
-pub use upsert::UpsertExt;
+pub use upsert::{EntityMappings, UpsertExt};
 
 #[cfg(test)]
 pub(crate) mod test_utils {

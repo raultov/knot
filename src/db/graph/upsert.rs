@@ -2,9 +2,23 @@ use super::{GraphDb, utils};
 use crate::models::{EmbeddedEntity, RelationshipType, ResolutionEntity};
 use anyhow::{Context, Result};
 use neo4rs::{BoltType, query};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::info;
 use uuid::Uuid;
+/// The entity context relationship resolution runs against: the local
+/// repository plus every dependency repository it may call into.
+#[derive(Debug, Default)]
+pub struct EntityMappings {
+    pub fqn_to_uuid: HashMap<String, Uuid>,
+    pub name_to_uuids: HashMap<String, Vec<Uuid>>,
+    /// Entities that belong to a dependency repository, not the local one.
+    pub dependency_uuids: HashSet<Uuid>,
+    /// Simple names of the types the local repository declares. A receiver
+    /// type with one of these names is the local type, so a dependency's
+    /// same-named type can never be the target of a call on it (issue #34).
+    pub local_type_names: HashSet<String>,
+}
+
 fn group_entities_by_kind(entities: &[EmbeddedEntity]) -> HashMap<String, Vec<&EmbeddedEntity>> {
     let mut groups: HashMap<String, Vec<&EmbeddedEntity>> = HashMap::new();
     for e in entities {
@@ -55,7 +69,8 @@ pub trait UpsertExt {
     async fn load_entity_mappings(
         &self,
         repo_names: &[String],
-    ) -> Result<(HashMap<String, Uuid>, HashMap<String, Vec<Uuid>>)>;
+        local_repo: &str,
+    ) -> Result<EntityMappings>;
     async fn upsert_entities(&self, entities: &[EmbeddedEntity]) -> Result<()>;
     async fn upsert_relationships(&self, entities: &[ResolutionEntity]) -> Result<()>;
     async fn upsert_calls(&self, entities: &[EmbeddedEntity]) -> Result<()>;
@@ -91,13 +106,14 @@ impl UpsertExt for GraphDb {
     /// This is called before resolving reference intents to hydrate the global
     /// context with entities from unchanged files that weren't reparsed.
     /// Supports loading from multiple repositories for cross-repository dependency analysis.
-    /// Returns two hashmaps for fast lookup during relationship resolution.
+    /// `local_repo` tells the local entities from the dependency ones.
     async fn load_entity_mappings(
         &self,
         repo_names: &[String],
-    ) -> Result<(HashMap<String, Uuid>, HashMap<String, Vec<Uuid>>)> {
+        local_repo: &str,
+    ) -> Result<EntityMappings> {
         if repo_names.is_empty() {
-            return Ok((HashMap::new(), HashMap::new()));
+            return Ok(EntityMappings::default());
         }
         info!(
             "Loading entity mappings from Neo4j for {} repo(s): {}",
@@ -109,13 +125,15 @@ impl UpsertExt for GraphDb {
             "MATCH (e:Entity)
              WHERE e.repo_name = $repo_names[0]
              RETURN e.name AS name, e.uuid AS uuid_str, 
-                    COALESCE(e.fqn, e.name) AS fqn"
+                    COALESCE(e.fqn, e.name) AS fqn,
+                    e.repo_name AS repo_name, COALESCE(e.kind, '') AS kind"
                 .to_string()
         } else {
             "MATCH (e:Entity)
              WHERE e.repo_name IN $repo_names
              RETURN e.name AS name, e.uuid AS uuid_str, 
-                    COALESCE(e.fqn, e.name) AS fqn"
+                    COALESCE(e.fqn, e.name) AS fqn,
+                    e.repo_name AS repo_name, COALESCE(e.kind, '') AS kind"
                 .to_string()
         };
         let mut stream = self
@@ -123,8 +141,7 @@ impl UpsertExt for GraphDb {
             .execute(query(&cipher).param("repo_names", repo_names.to_vec()))
             .await
             .context("Failed to query entity mappings from Neo4j")?;
-        let mut fqn_to_uuid: HashMap<String, Uuid> = HashMap::new();
-        let mut name_to_uuids: HashMap<String, Vec<Uuid>> = HashMap::new();
+        let mut mappings = EntityMappings::default();
         while let Some(row) = stream
             .next()
             .await
@@ -133,20 +150,27 @@ impl UpsertExt for GraphDb {
             let name: String = row.get("name").context("Missing 'name' field")?;
             let uuid_str: String = row.get("uuid_str").context("Missing 'uuid_str' field")?;
             let fqn: String = row.get("fqn").context("Missing 'fqn' field")?;
+            let repo_name: String = row.get("repo_name").context("Missing 'repo_name' field")?;
+            let kind: String = row.get("kind").context("Missing 'kind' field")?;
             let uuid = Uuid::parse_str(&uuid_str)
                 .with_context(|| format!("Invalid UUID string: {}", uuid_str))?;
+            if repo_name != local_repo {
+                mappings.dependency_uuids.insert(uuid);
+            } else if crate::cli_tools::kinds::TYPE_KINDS.contains(&kind.as_str()) {
+                mappings.local_type_names.insert(name.clone());
+            }
             // Populate fqn -> uuid mapping
-            fqn_to_uuid.insert(fqn, uuid);
+            mappings.fqn_to_uuid.insert(fqn, uuid);
             // Populate name -> uuids mapping (multiple entities can have the same name)
-            name_to_uuids.entry(name).or_default().push(uuid);
+            mappings.name_to_uuids.entry(name).or_default().push(uuid);
         }
         info!(
             "Loaded {} FQN mappings and {} name mappings from {} repo(s)",
-            fqn_to_uuid.len(),
-            name_to_uuids.len(),
+            mappings.fqn_to_uuid.len(),
+            mappings.name_to_uuids.len(),
             repo_names.len()
         );
-        Ok((fqn_to_uuid, name_to_uuids))
+        Ok(mappings)
     }
     /// Upsert a batch of entity nodes into Neo4j.
     ///
@@ -534,13 +558,13 @@ mod tests {
             .await
             .expect("Failed to connect to Neo4j");
         let result = graph_db
-            .load_entity_mappings(&["nonexistent-repo".to_string()])
+            .load_entity_mappings(&["nonexistent-repo".to_string()], "nonexistent-repo")
             .await;
         assert!(result.is_ok());
-        let (fqn_map, name_map) = result.unwrap();
+        let mappings = result.unwrap();
         // Both maps should be empty for a nonexistent repo
-        assert_eq!(fqn_map.len(), 0);
-        assert_eq!(name_map.len(), 0);
+        assert_eq!(mappings.fqn_to_uuid.len(), 0);
+        assert_eq!(mappings.name_to_uuids.len(), 0);
     }
     #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
     #[tokio::test]

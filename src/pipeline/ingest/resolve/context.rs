@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
@@ -57,6 +57,34 @@ pub struct ResolutionContext<'a> {
     /// FQN → every entity declaring it, for FQNs shared by several overloads
     /// (`com.x.Foo.bar` for both `bar(int)` and `bar(int, int)`). Sorted.
     pub fqn_overloads: &'a HashMap<String, Vec<Uuid>>,
+    /// Entities of the dependency repositories loaded for cross-repo
+    /// resolution. Empty when a single repository is resolved.
+    pub dependency_uuids: &'a HashSet<Uuid>,
+    /// Simple names of the types the local repository declares.
+    pub local_type_names: &'a HashSet<String>,
+}
+
+impl ResolutionContext<'_> {
+    /// `true` when `uuid` belongs to a dependency repository while the local
+    /// repository declares its own type named like `type_name`. The receiver
+    /// is then the local type, so a dependency member is never the target,
+    /// even when the local type does not declare (or the index does not
+    /// hold) the member: macro-generated, derived, annotation-processed
+    /// (issue #34). Dependency candidates stay eligible for a receiver type
+    /// the local repository does not declare.
+    pub(crate) fn is_shadowed_dependency(&self, uuid: &Uuid, type_name: &str) -> bool {
+        self.dependency_uuids.contains(uuid)
+            && self.local_type_names.contains(simple_type_name(type_name))
+    }
+}
+
+/// `com.x.Base<T>` → `Base`, `crate::Base` → `Base`.
+pub(crate) fn simple_type_name(type_ref: &str) -> &str {
+    let without_generics = type_ref.split('<').next().unwrap_or(type_ref).trim();
+    without_generics
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(without_generics)
 }
 
 /// Index key for an FQN: its last two segments joined by `.`, whatever the

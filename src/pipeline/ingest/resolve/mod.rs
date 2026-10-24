@@ -15,7 +15,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::db::graph::{GraphDb, RepoQueryExt, UpsertExt};
+use crate::db::graph::{EntityMappings, GraphDb, RepoQueryExt, UpsertExt};
 use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEntity};
 
 pub use context::{ResolutionContext, RunMetrics};
@@ -39,7 +39,9 @@ pub async fn resolve_and_save_relationships(
         repos_to_load.dedup();
 
         info!("Loading global entity context from Neo4j for relationship resolution...");
-        let (fqn_to_uuid, name_to_uuids) = graph_db.load_entity_mappings(&repos_to_load).await?;
+        let mappings = graph_db
+            .load_entity_mappings(&repos_to_load, &cfg.repo_name)
+            .await?;
 
         if !cfg.dependency_repos.is_empty() || !auto_deps.is_empty() {
             info!(
@@ -52,11 +54,11 @@ pub async fn resolve_and_save_relationships(
 
         info!(
             "Resolving reference intents with global context ({} FQNs, {} names)...",
-            fqn_to_uuid.len(),
-            name_to_uuids.len()
+            mappings.fqn_to_uuid.len(),
+            mappings.name_to_uuids.len()
         );
 
-        let metrics = resolve_reference_intents_with_context(entities, fqn_to_uuid, name_to_uuids);
+        let metrics = resolve_reference_intents_with_mappings(entities, mappings);
 
         info!("Creating typed relationships in Neo4j...");
         graph_db.upsert_relationships(entities).await?;
@@ -149,14 +151,27 @@ struct LookupMaps {
     alias_map: HashMap<Uuid, Uuid>,
     class_member_index: HashMap<String, Vec<(String, Uuid)>>,
     fqn_overloads: HashMap<String, Vec<Uuid>>,
+    dependency_uuids: HashSet<Uuid>,
+    local_type_names: HashSet<String>,
 }
 
 impl LookupMaps {
-    fn build(
-        entities: &[ResolutionEntity],
-        mut fqn_to_uuid: HashMap<String, Uuid>,
-        mut name_to_uuids: HashMap<String, Vec<Uuid>>,
-    ) -> Self {
+    fn build(entities: &[ResolutionEntity], mappings: EntityMappings) -> Self {
+        let EntityMappings {
+            mut fqn_to_uuid,
+            mut name_to_uuids,
+            dependency_uuids,
+            mut local_type_names,
+        } = mappings;
+        // The batch is always the local repository.
+        local_type_names.extend(
+            entities
+                .iter()
+                .filter(|e| {
+                    crate::cli_tools::kinds::TYPE_KINDS.contains(&e.kind.to_string().as_str())
+                })
+                .map(|e| e.name.clone()),
+        );
         let uuid_to_file: HashMap<Uuid, String> = entities
             .iter()
             .map(|e| (e.uuid, e.file_path.clone()))
@@ -248,6 +263,8 @@ impl LookupMaps {
             alias_map,
             class_member_index,
             fqn_overloads,
+            dependency_uuids,
+            local_type_names,
         }
     }
 
@@ -263,6 +280,8 @@ impl LookupMaps {
             uuid_to_name: Some(&self.uuid_to_name),
             class_member_index: &self.class_member_index,
             fqn_overloads: &self.fqn_overloads,
+            dependency_uuids: &self.dependency_uuids,
+            local_type_names: &self.local_type_names,
         }
     }
 }
@@ -272,7 +291,23 @@ pub fn resolve_reference_intents_with_context(
     fqn_to_uuid: HashMap<String, Uuid>,
     name_to_uuids: HashMap<String, Vec<Uuid>>,
 ) -> RunMetrics {
-    let maps = LookupMaps::build(entities, fqn_to_uuid, name_to_uuids);
+    resolve_reference_intents_with_mappings(
+        entities,
+        EntityMappings {
+            fqn_to_uuid,
+            name_to_uuids,
+            ..EntityMappings::default()
+        },
+    )
+}
+
+/// Resolve the batch against `mappings`: the local repository plus any
+/// dependency repositories loaded for cross-repo resolution.
+pub fn resolve_reference_intents_with_mappings(
+    entities: &mut [ResolutionEntity],
+    mappings: EntityMappings,
+) -> RunMetrics {
+    let maps = LookupMaps::build(entities, mappings);
     let ctx = maps.context();
     let metrics = RunMetrics::new(entities.len() as u64);
 

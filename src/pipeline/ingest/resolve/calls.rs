@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
-use super::context::ResolutionContext;
+use super::context::{ResolutionContext, simple_type_name};
 use crate::models::{CallIntent, EntityKind};
 
 /// Re-pick the overload of an already resolved method when its arity does
@@ -104,7 +104,7 @@ fn inherited_overload(
                 .flat_map(|(fqn, uuid)| {
                     overloads_of(fqn, uuid, ctx)
                         .iter()
-                        .filter(|u| matches_arity(u))
+                        .filter(|u| matches_arity(u) && !ctx.is_shadowed_dependency(u, parent))
                         .map(move |u| (fqn.as_str(), *u))
                 })
                 .collect();
@@ -115,15 +115,6 @@ fn inherited_overload(
         }
     }
     None
-}
-
-/// `com.x.Base<T>` → `Base`, `crate::Base` → `Base`.
-fn simple_type_name(type_ref: &str) -> &str {
-    let without_generics = type_ref.split('<').next().unwrap_or(type_ref).trim();
-    without_generics
-        .rsplit(['.', ':'])
-        .next()
-        .unwrap_or(without_generics)
 }
 
 /// Disambiguate candidates by scoring each one's FQN against the segments of a
@@ -210,6 +201,13 @@ pub(crate) fn lookup_fqn(
     }
     let colon_fqn = format!("{}::{}", class, method);
     fqn_to_uuid.get(&colon_fqn).copied()
+}
+
+/// [`lookup_fqn`], except that a dependency member is never returned for a
+/// type the local repository declares under the same name (issue #34).
+fn lookup_local_fqn(class: &str, method: &str, ctx: &ResolutionContext) -> Option<Uuid> {
+    lookup_fqn(class, method, ctx.fqn_to_uuid)
+        .filter(|uuid| !ctx.is_shadowed_dependency(uuid, class))
 }
 
 /// `true` when `needle` occurs in `fqn` as a run of whole FQN segments: each
@@ -362,7 +360,7 @@ fn lookup_method_in_class_hierarchy(
     caller_file_path: &str,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
-    if let Some(uuid) = lookup_fqn(class_name, method, ctx.fqn_to_uuid) {
+    if let Some(uuid) = lookup_local_fqn(class_name, method, ctx) {
         return Some(uuid);
     }
 
@@ -384,6 +382,7 @@ fn lookup_method_in_class_hierarchy(
                     return None;
                 }
                 lookup_fqn_by_fqn(class_fqn, method, ctx.fqn_to_uuid)
+                    .filter(|uuid| !ctx.is_shadowed_dependency(uuid, class_name))
                     .map(|uuid| (class_fqn.as_str(), uuid))
             })
             .collect();
@@ -416,6 +415,12 @@ fn lookup_fqn_by_fqn(
 /// 1. a same-file candidate;
 /// 2. receiver-chain disambiguation (only when a receiver is available);
 /// 3. a callee name declared exactly once.
+///
+/// Dependency candidates shadowed by a local type the receiver may denote
+/// (see [`receiver_type_names`]) are discarded (issue #34), and the name then
+/// no longer counts as declared once: the discarded candidate proves the
+/// receiver's real member is not indexed, so the one left over belongs to
+/// some other type.
 fn resolve_homonym_fallback(
     uuids: &[Uuid],
     arg_count: Option<usize>,
@@ -424,9 +429,20 @@ fn resolve_homonym_fallback(
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
     let declared_arity = |uuid: &Uuid| ctx.uuid_to_arg_count.and_then(|arities| arities.get(uuid));
-    let candidates: Vec<Uuid> = uuids
+    let receiver_types = receiver.map(receiver_type_names);
+    let unshadowed: Vec<Uuid> = uuids
         .iter()
         .copied()
+        .filter(|uuid| {
+            !receiver_types.as_ref().is_some_and(|(class, capitalized)| {
+                ctx.is_shadowed_dependency(uuid, class)
+                    || ctx.is_shadowed_dependency(uuid, capitalized)
+            })
+        })
+        .collect();
+    let declared_once = uuids.len() == 1 && unshadowed.len() == 1;
+    let candidates: Vec<Uuid> = unshadowed
+        .into_iter()
         .filter(|uuid| match (arg_count, declared_arity(uuid)) {
             (Some(call_arity), Some(&arity)) => arity == call_arity,
             _ => true,
@@ -443,7 +459,7 @@ fn resolve_homonym_fallback(
     {
         return Some(u);
     }
-    if uuids.len() == 1 {
+    if declared_once {
         return candidates.first().copied();
     }
     None
@@ -553,13 +569,13 @@ fn resolve_implicit_this_call(
     // same-named type in another module (Rust FQNs are crate-anchored, so the
     // short-name probe below cannot match them).
     if let Some(class_fqn) = caller.enclosing_class_fqn
-        && let Some(uuid) = lookup_fqn(class_fqn, &intent.method, ctx.fqn_to_uuid)
+        && let Some(uuid) = lookup_local_fqn(class_fqn, &intent.method, ctx)
     {
         return Some(disambiguate_overload(uuid, intent, ctx));
     }
 
     let enclosing_class = caller.enclosing_class?;
-    if let Some(uuid) = lookup_fqn(enclosing_class, &intent.method, ctx.fqn_to_uuid) {
+    if let Some(uuid) = lookup_local_fqn(enclosing_class, &intent.method, ctx) {
         return Some(disambiguate_overload(uuid, intent, ctx));
     }
 
@@ -579,7 +595,7 @@ fn resolve_implicit_this_call(
         && let Some(parents) = ctx.extends_map.get(enclosing_class)
     {
         for parent in parents {
-            if let Some(uuid) = lookup_fqn(parent, &intent.method, ctx.fqn_to_uuid) {
+            if let Some(uuid) = lookup_local_fqn(parent, &intent.method, ctx) {
                 return Some(uuid);
             }
         }
@@ -598,7 +614,7 @@ fn lookup_method_by_class_and_name(
     caller_file_path: &str,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
-    if let Some(uuid) = lookup_fqn(class_name, method, ctx.fqn_to_uuid) {
+    if let Some(uuid) = lookup_local_fqn(class_name, method, ctx) {
         return Some(uuid);
     }
 
@@ -610,7 +626,10 @@ fn lookup_method_by_class_and_name(
     let suffix_colon = format!("::{class_name}::{method}");
     let candidates: Vec<(&str, Uuid)> = entries
         .iter()
-        .filter(|(fqn, _)| fqn.ends_with(&suffix_dot) || fqn.ends_with(&suffix_colon))
+        .filter(|(fqn, uuid)| {
+            (fqn.ends_with(&suffix_dot) || fqn.ends_with(&suffix_colon))
+                && !ctx.is_shadowed_dependency(uuid, class_name)
+        })
         .map(|(fqn, uuid)| (fqn.as_str(), *uuid))
         .collect();
     pick_deterministic_candidate(&candidates, Some((caller_file_path, ctx.uuid_to_file)))
@@ -649,35 +668,36 @@ fn resolve_static_receiver_call(
     None
 }
 
+/// The type names a receiver expression may denote: its last dotted segment
+/// (`engine.chatter` → `chatter`) and that segment capitalized (`Chatter`),
+/// for receivers named after their type.
+fn receiver_type_names(receiver: &str) -> (&str, String) {
+    let receiver_class = receiver.rsplit('.').next().map_or(receiver, str::trim);
+    let mut chars = receiver_class.chars();
+    let capitalized = chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    });
+    (receiver_class, capitalized)
+}
+
 fn resolve_receiver_call(
     intent: &CallIntent,
     caller_file_path: &str,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
     let receiver = intent.receiver.as_ref()?;
-    let receiver_class = if receiver.contains('.') {
-        receiver
-            .split('.')
-            .next_back()
-            .map(|s| s.trim())
-            .unwrap_or(receiver)
-    } else {
-        receiver
+    let (receiver_class, capitalized) = receiver_type_names(receiver);
+    let shadowed = |uuid: &Uuid| {
+        ctx.is_shadowed_dependency(uuid, receiver_class)
+            || ctx.is_shadowed_dependency(uuid, &capitalized)
     };
 
     if !receiver_class.is_empty() {
-        if let Some(uuid) = lookup_fqn(receiver_class, &intent.method, ctx.fqn_to_uuid) {
+        if let Some(uuid) = lookup_local_fqn(receiver_class, &intent.method, ctx) {
             return Some(disambiguate_overload(uuid, intent, ctx));
         }
 
-        let mut chars = receiver_class.chars();
-        let capitalized = if let Some(first) = chars.next() {
-            first.to_uppercase().to_string() + chars.as_str()
-        } else {
-            receiver_class.to_string()
-        };
-
-        if let Some(uuid) = lookup_fqn(&capitalized, &intent.method, ctx.fqn_to_uuid) {
+        if let Some(uuid) = lookup_local_fqn(&capitalized, &intent.method, ctx) {
             return Some(disambiguate_overload(uuid, intent, ctx));
         }
 
@@ -698,10 +718,11 @@ fn resolve_receiver_call(
         let candidates: Vec<(&str, Uuid)> = ctx
             .fqn_to_uuid
             .iter()
-            .filter(|(fqn, _)| {
+            .filter(|(fqn, uuid)| {
                 needles
                     .iter()
                     .any(|needle| contains_on_segment_boundary(fqn, needle))
+                    && !shadowed(uuid)
             })
             .map(|(fqn, uuid)| (fqn.as_str(), *uuid))
             .collect();
@@ -1314,6 +1335,123 @@ mod tests {
         assert_eq!(
             entities[0].relationships,
             vec![(helper_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    /// Resolve the local `batch` against itself plus the dependency
+    /// entities `(fqn, name)`, loaded from the graph as in a cross-repo run;
+    /// `local_types` are local type names loaded from the graph (declared in
+    /// files outside the batch). Returns the FQNs `batch[caller]` calls,
+    /// dependency targets prefixed with `dep:`.
+    fn cross_repo_targets(
+        mut batch: Vec<ResolutionEntity>,
+        caller: usize,
+        dependencies: &[(&str, &str)],
+        local_types: &[&str],
+    ) -> Vec<String> {
+        let mut mappings = crate::db::graph::EntityMappings::default();
+        let mut dep_fqns: HashMap<Uuid, String> = HashMap::new();
+        for (fqn, name) in dependencies {
+            let uuid = Uuid::new_v4();
+            mappings.fqn_to_uuid.insert(fqn.to_string(), uuid);
+            mappings
+                .name_to_uuids
+                .entry(name.to_string())
+                .or_default()
+                .push(uuid);
+            mappings.dependency_uuids.insert(uuid);
+            dep_fqns.insert(uuid, format!("dep:{fqn}"));
+        }
+        mappings
+            .local_type_names
+            .extend(local_types.iter().map(|t| t.to_string()));
+        crate::pipeline::ingest::resolve::resolve_reference_intents_with_mappings(
+            &mut batch, mappings,
+        );
+        let mut targets: Vec<String> = batch[caller]
+            .relationships
+            .iter()
+            .filter_map(|(uuid, _)| {
+                dep_fqns.get(uuid).cloned().or_else(|| {
+                    batch
+                        .iter()
+                        .find(|e| e.uuid == *uuid)
+                        .map(|e| e.fqn.clone())
+                })
+            })
+            .collect();
+        targets.sort();
+        targets
+    }
+
+    /// Issue #34 (knot-lite): the consumer's own `Tool`, whose `handle` is
+    /// generated by a macro and so not indexed, must not bind
+    /// `Tool::handle(..)` to the dependency's same-named `Tool::handle`, not
+    /// even when `handle` is declared nowhere else. A type only the
+    /// dependency declares still resolves across repositories.
+    #[test]
+    fn test_local_type_shadows_dependency_homonym() {
+        let local_tool = mock_resolution_entity_with_kind(
+            "Tool",
+            "lite::tools::Tool",
+            None,
+            "src/tools.rs",
+            EntityKind::RustStruct,
+        );
+        let mut dispatch = mock_resolution_entity_with_kind(
+            "dispatch",
+            "lite::dispatch",
+            None,
+            "src/main.rs",
+            EntityKind::RustFunction,
+        );
+        dispatch.reference_intents = vec![
+            receiver_call("handle", "Tool"),
+            receiver_call("ping", "Shared"),
+        ];
+        let dependencies = [
+            ("core::tools::Tool::handle", "handle"),
+            ("core::tools::Tool", "Tool"),
+            ("core::Shared::ping", "ping"),
+        ];
+        assert_eq!(
+            cross_repo_targets(vec![local_tool, dispatch], 1, &dependencies, &[]),
+            vec!["dep:core::Shared::ping"]
+        );
+    }
+
+    /// The Java variant: the local `AuditLog` is declared in a file outside
+    /// the batch (known from the graph). A declared-type receiver
+    /// (`AuditLog`), an untyped one (`auditLog`) and a homonym `record` of an
+    /// unrelated local class must all stay unresolved.
+    #[test]
+    fn test_local_type_from_graph_shadows_dependency_homonym() {
+        let mut audit = java_method("com.app.AuditController", "audit", "(String event)");
+        audit.reference_intents = vec![receiver_call("record", "AuditLog")];
+        let mut audit_untyped = java_method("com.app.AuditController", "auditUntyped", "()");
+        audit_untyped.reference_intents = vec![receiver_call("record", "auditLog")];
+        let other = java_method("com.app.Recorder", "record", "(String event)");
+        let dependencies = [("com.lib.AuditLog.record", "record")];
+        for caller in [0, 1] {
+            let batch = vec![audit.clone(), audit_untyped.clone(), other.clone()];
+            assert!(
+                cross_repo_targets(batch, caller, &dependencies, &["AuditLog"]).is_empty(),
+                "caller {caller}"
+            );
+        }
+    }
+
+    /// Without a local type of that name, the dependency member is the only
+    /// sensible target and keeps resolving (the existing cross-repo
+    /// behaviour).
+    #[test]
+    fn test_dependency_type_resolves_without_local_homonym() {
+        let mut audit = java_method("com.app.AuditController", "audit", "(String event)");
+        audit.reference_intents = vec![receiver_call("record", "AuditLog")];
+        let dependencies = [("com.lib.AuditLog.record", "record")];
+        assert_eq!(
+            cross_repo_targets(vec![audit], 0, &dependencies, &[]),
+            vec!["dep:com.lib.AuditLog.record"]
         );
     }
 
