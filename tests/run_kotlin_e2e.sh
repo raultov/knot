@@ -495,8 +495,8 @@ assert_override_pairs 19 "ConsoleEventSink.onSinkEvent" \
 # Tests 20-26: calls carry their argument count, so overloads bind by arity
 # within the receiver class and its supertypes (issue #38). Fixture:
 # testing_files/kotlin/overload_calls/. Overloads share their FQN, so each
-# Calls row is reported as `<target declaration line><<caller>`. Kotlin
-# FQNs carry no package, hence the bare `Class.method` names.
+# Calls row is reported as `<target declaration line><<caller>`.
+KOCALLS_PKG="com.example.kocalls"
 assert_overload_callers() {
     local id=$1
     local fqn=$2
@@ -529,20 +529,49 @@ assert_overload_callers() {
     echo -e "${GREEN}✓ MCP: $fqn callers [$mcp_actual]${NC}"
 }
 
-assert_overload_callers 20 "Foo.bar" "4<sumPair,6<single" \
+assert_overload_callers 20 "$KOCALLS_PKG.x.Foo.bar" "4<sumPair,6<single" \
     "Each call binds to the receiver's overload with matching arity"
-assert_overload_callers 21 "Other.bar" "" \
+assert_overload_callers 21 "$KOCALLS_PKG.other.Other.bar" "" \
     "A same-name/same-arity method in another class gets no caller"
-assert_overload_callers 22 "Base.scale" "10<scalePair" \
+assert_overload_callers 22 "$KOCALLS_PKG.x.Base.scale" "10<scalePair" \
     "An inherited overload with matching arity wins over the receiver's own"
-assert_overload_callers 23 "Child.scale" "" \
+assert_overload_callers 23 "$KOCALLS_PKG.x.Child.scale" "" \
     "The receiver's different-arity overload is not bound"
-assert_overload_callers 24 "Other.scale" "" \
+assert_overload_callers 24 "$KOCALLS_PKG.other.Other.scale" "" \
     "Inherited-overload lookup never crosses into an unrelated class"
-assert_overload_callers 25 "Mapper.transform" "19<mapped,21<plain" \
+assert_overload_callers 25 "$KOCALLS_PKG.x.Mapper.transform" "19<mapped,21<plain" \
     "A trailing lambda counts as an argument"
-assert_overload_callers 26 "Padder.pad" "26<padShort,26<padWide" \
+assert_overload_callers 26 "$KOCALLS_PKG.x.Padder.pad" "26<padShort,26<padWide" \
     "A default parameter accepts both arities"
+
+# Tests 27-30: FQNs carry the package, so same-named types in different
+# packages stay distinct (issue #39). Fixture:
+# testing_files/kotlin/package_collision/: `Source` and `Config : Source`
+# declared in both com.example.kpkg.a and com.example.kpkg.b.
+KPKG="com.example.kpkg"
+assert_overload_callers 27 "$KPKG.a.Config.load" "8<readA" \
+    "A package-qualified FQN reaches only that package's method"
+assert_overload_callers 28 "$KPKG.b.Config.load" "8<readB" \
+    "The same-named method of another package keeps its own callers"
+
+assert_package_overrides() {
+    local id=$1
+    local pkg=$2
+
+    echo ""
+    echo "Test $id: $KPKG.$pkg.Config.load overrides only $KPKG.$pkg.Source.load..."
+    local actual
+    actual=$(cargo run --release --bin knot -- callers "$KPKG.$pkg.Config.load" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '.overrides[] | "\(.name)@\(.file_path):\(.start_line)"' | LC_ALL=C sort -u | paste -sd, -)
+    local expected="load@package_collision/$pkg/Config.kt:4"
+    if [ "$actual" != "$expected" ]; then
+        echo -e "${RED}✗ $KPKG.$pkg.Config.load overrides expected [$expected], got [$actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ $KPKG.$pkg.Config.load overrides [$actual]${NC}"
+}
+assert_package_overrides 29 a
+assert_package_overrides 30 b
 
 # Step 5: Success
 echo ""
@@ -569,6 +598,7 @@ echo "  ✓ Kotlin anonymous object implements (v0.11.0)"
 echo "  ✓ Kotlin enum class classification (v0.11.0)"
 echo "  ✓ Kotlin method signature fragment search (: Int)"
 echo "  ✓ Overload calls bind by arity (trailing lambdas, defaults, supertypes)"
+echo "  ✓ Package-qualified FQNs keep same-named types apart (calls, OVERRIDES)"
 echo ""
 echo "Entity types supported:"
 echo "  - KotlinClass"
