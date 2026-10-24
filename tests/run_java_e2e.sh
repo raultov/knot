@@ -748,6 +748,53 @@ if [ "$ADJUST_DEPS" != "StandardAdjuster.computeValue" ]; then
 fi
 echo -e "${GREEN}✓ CLI: StandardAdjuster.adjust calls StandardAdjuster.computeValue${NC}"
 
+# Tests 42-46: overload disambiguation never crosses classes (issue #35).
+# Fixture: testing_files/java/overload_calls/. Overloads share their FQN, so
+# each Calls row is reported as `<target declaration line><<caller>`.
+OCALLS_PKG="com.example.knot.ocalls"
+assert_overload_callers() {
+    local id=$1
+    local fqn=$2
+    local expected=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description ($fqn callers exactly [$expected])..."
+    local cli_actual
+    cli_actual=$(cargo run --release --bin knot -- callers "$fqn" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '.calls[] | "\(.target_start_line)<\(.name)"' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$cli_actual" != "$expected" ]; then
+        echo -e "${RED}✗ CLI: $fqn callers expected [$expected], got [$cli_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: $fqn callers [$cli_actual]${NC}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$fqn\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_expected
+    local mcp_actual
+    mcp_expected=$(echo "$expected" | tr ',' '\n' | sed 's/^[0-9]*<//' | LC_ALL=C sort -u | paste -sd, -)
+    mcp_actual=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk '/^## /{ on = ($0 ~ /^## Calls/) } on && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$mcp_actual" != "$mcp_expected" ]; then
+        echo -e "${RED}✗ MCP: $fqn callers expected [$mcp_expected], got [$mcp_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: $fqn callers [$mcp_actual]${NC}"
+}
+
+assert_overload_callers 42 "$OCALLS_PKG.x.Foo.bar" "4<sumPair,8<single" \
+    "Each call binds to the receiver's overload with matching arity"
+assert_overload_callers 43 "$OCALLS_PKG.other.Other.bar" "" \
+    "A same-name/same-arity method in another class gets no caller"
+assert_overload_callers 44 "$OCALLS_PKG.x.Base.scale" "4<scalePair" \
+    "An inherited overload with matching arity wins over the receiver's own"
+assert_overload_callers 45 "$OCALLS_PKG.x.Child.scale" "" \
+    "The receiver's different-arity overload is not bound"
+assert_overload_callers 46 "$OCALLS_PKG.other.Other.scale" "" \
+    "Inherited-overload lookup never crosses into an unrelated class"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -772,6 +819,7 @@ echo "  ✓ Interface calls never bind to an implementation containing the inter
 echo "  ✓ Dispatched calls in both directions, siblings excluded"
 echo "  ✓ OVERRIDES match overloads by arity and parameter types (generics included)"
 echo "  ✓ Search caller summary matches find_callers (homonyms, dispatched calls)"
+echo "  ✓ Overload disambiguation stays within the receiver class and its supertypes"
 echo ""
 
 exit 0

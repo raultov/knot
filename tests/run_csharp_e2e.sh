@@ -355,7 +355,7 @@ assert_cypher_count "A12a. csharp_interface count" \
     "5"
 assert_cypher_count "A12b. csharp_class count" \
     "MATCH (e:Entity) WHERE e.kind = 'csharp_class' AND e.repo_name = '$REPO_NAME' RETURN count(e) AS cnt" \
-    "14"
+    "19"
 assert_cypher_count "A12c. csharp_record count" \
     "MATCH (e:Entity) WHERE e.kind = 'csharp_record' AND e.repo_name = '$REPO_NAME' RETURN count(e) AS cnt" \
     "5"
@@ -556,6 +556,46 @@ assert_override_pairs "D27b. EmailNotifier.Notify overloads override only their 
 assert_override_pairs "D27c. CounterStore.Put overloads match type parameters of IEntryStore<T>" \
     "MyApp.Overloads.CounterStore.Put" \
     "(List<int> entries) -> (List<T> entries)|(int entry) -> (T entry)|(string key, int entry) -> (string key, T entry)"
+
+# D27d-g: overload calls bind within the receiver class and its supertypes,
+# never to a same-name/same-arity method of another class (issue #35). Each
+# CALLS edge is identified by the target's `<fqn><signature>`.
+assert_call_targets() {
+    local label="$1" caller="$2" method="$3" expected="$4"
+    local actual
+    actual=$(run_neo4j_cypher \
+        "MATCH (a:Entity)-[:CALLS]->(b:Entity) WHERE a.fqn = '$caller' AND a.repo_name = '$REPO_NAME' AND b.name = '$method' RETURN b.fqn + b.signature AS target ORDER BY target" \
+        | tr -d '"' | paste -sd'|' -)
+    echo ""
+    echo "$label..."
+    if [ "$actual" = "$expected" ]; then
+        echo -e "${GREEN}✓ $label${NC}"
+    else
+        echo -e "${RED}✗ $label: expected '$expected', got '$actual'${NC}"
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+assert_call_targets "D27d. Report.Wide calls the two-parameter Formatter.Format" \
+    "MyApp.Overloads.Calls.Report.Wide" "Format" \
+    "MyApp.Overloads.Calls.Formatter.Format(string text, int width)"
+assert_call_targets "D27e. Report.Narrow calls the one-parameter Formatter.Format" \
+    "MyApp.Overloads.Calls.Report.Narrow" "Format" \
+    "MyApp.Overloads.Calls.Formatter.Format(string text)"
+assert_call_targets "D27f. Report.ScalePair calls the inherited BaseScaler.Scale" \
+    "MyApp.Overloads.Calls.Report.ScalePair" "Scale" \
+    "MyApp.Overloads.Calls.BaseScaler.Scale(int a, int b)"
+
+echo ""
+echo "D27g. OtherFormatter (same names and arities) has no caller..."
+OTHER_CALLERS=$(run_neo4j_cypher \
+    "MATCH (a:Entity)-[:CALLS]->(b:Entity) WHERE b.fqn STARTS WITH 'MyApp.Overloads.Other.OtherFormatter.' AND b.repo_name = '$REPO_NAME' RETURN count(a)" | tr -d '"')
+if [ "$OTHER_CALLERS" = "0" ]; then
+    echo -e "${GREEN}✓ D27g. OtherFormatter has no caller${NC}"
+else
+    echo -e "${RED}✗ D27g. OtherFormatter has $OTHER_CALLERS caller(s)${NC}"
+    FAILURES=$((FAILURES + 1))
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # E · Comments and attributes
