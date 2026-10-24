@@ -5,6 +5,14 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(kotlin)**: Kotlin FQNs carry the package (#39). Entities were indexed as `Config` / `Config.load` whatever their `package`, so same-named classes in different packages shared FQNs: `fqn_to_uuid` and the `OVERRIDES` type index kept only one of them, calls and override edges could bind to the wrong class, and `find_callers` could not address either one by package. Every Kotlin entity now gets the `package_header` prefix, as Java already did (`com.example.app.Config.load`, top-level `com.example.app.bootstrap`). Members also record their package-qualified enclosing type (`enclosing_class_fqn`), so implicit-`this` calls keep resolving exactly and the `CONTAINS` auto-link matches the type by FQN.
+- **Test**: Kotlin E2E tests 27–30 (fixture `testing_files/kotlin/package_collision/`: `Source` and `Config : Source` in two packages): each package-qualified `Config.load` lists only its own caller and overrides only its own `Source.load`. Tests 20–26 now query package-qualified FQNs. Extractor unit tests for package-qualified FQNs and `enclosing_class_fqn`.
+- **Upgrade**: All Kotlin FQNs (and so their entity UUIDs) change. Re-index Kotlin repositories with `knot-indexer --clean`; an incremental run would mix old and new FQNs. Queries by `Class.method` keep working through the FQN-suffix tier of `find_callers`.
+
+---
+
 ## v1.11.12
 
 - **Fixed(resolve)**: Calls on types outside the indexed repositories no longer bind to unrelated same-named repository methods (#32). When no type-based lookup matched, the homonym fallback bound a call to any method whose name was declared exactly once, so `String.valueOf(id)` and `modelMapper.map(..)` (a field typed `org.modelmapper.ModelMapper`) became `CALLS` edges to an unrelated `SomeFilter.valueOf` / `SomeEventMapper.map`, showing up in `explore_file`, `find_callers` and the search caller summary. A receiver whose last segment is a capitalized identifier, and no segment of whose path names an indexed entity (`String`, `ModelMapper`, `java.util.Objects`, `std::string::String`), now skips the receiver-chain and declared-once steps. A same-file homonym still wins (`Self::build()`), and an indexed segment keeps the receiver in the repository (`StringUtils.INSTANCE`, a Kotlin `object` called from Java). Lowercase receivers with no known type keep the previous behaviour, tracked in #42.
