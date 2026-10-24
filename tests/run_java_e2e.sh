@@ -795,6 +795,40 @@ assert_overload_callers 45 "$OCALLS_PKG.x.Child.scale" "" \
 assert_overload_callers 46 "$OCALLS_PKG.other.Other.scale" "" \
     "Inherited-overload lookup never crosses into an unrelated class"
 
+# Tests 47-50: calls on types outside the indexed repository stay unresolved
+# (issue #32). Fixture: testing_files/java/external_calls/. `String` (JDK) and
+# `ModelMapper` (third-party) are declared nowhere in the repository, which
+# holds exactly one unrelated `map` and one unrelated `valueOf`.
+EXT_PKG="com.example.knot.extcalls"
+assert_overload_callers 47 "$EXT_PKG.other.SomeEventMapper.map" "" \
+    "A call on a field of a third-party type never binds to a repo homonym"
+assert_overload_callers 48 "$EXT_PKG.other.SomeFilter.valueOf" "" \
+    "A static call on a JDK type never binds to a repo homonym"
+assert_overload_callers 49 "$EXT_PKG.codes.CodeTable.lookup" "4<translate" \
+    "A call on a repo type still resolves"
+
+echo ""
+echo "Test 50: explore_file lists no repo homonym of an external call in Imports / Referenced Types..."
+EXT_FILE="external_calls/com/example/knot/extcalls/app/ExampleResource.java"
+EXT_CLI=$(cargo run --release --bin knot -- explore "$EXT_FILE" -r "$REPO_NAME" -o markdown 2>/dev/null)
+EXT_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$EXT_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+EXT_MCP=$(echo "$EXT_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text')
+for EXT_SOURCE in CLI MCP; do
+    if [ "$EXT_SOURCE" = "CLI" ]; then EXT_OUT="$EXT_CLI"; else EXT_OUT="$EXT_MCP"; fi
+    EXT_REFS=$(echo "$EXT_OUT" | awk '/^## /{ on = ($0 ~ /^## Imports/) } on && /^- /')
+    if ! echo "$EXT_REFS" | grep -q "extcalls/codes/CodeTable.java"; then
+        echo -e "${RED}✗ $EXT_SOURCE: CodeTable missing from Imports / Referenced Types${NC}"
+        echo "$EXT_OUT"
+        exit 1
+    fi
+    if echo "$EXT_REFS" | grep -q "extcalls/other/"; then
+        echo -e "${RED}✗ $EXT_SOURCE: an external call bound to a repo homonym:${NC}"
+        echo "$EXT_REFS"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ $EXT_SOURCE: Imports / Referenced Types lists CodeTable only${NC}"
+done
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -820,6 +854,7 @@ echo "  ✓ Dispatched calls in both directions, siblings excluded"
 echo "  ✓ OVERRIDES match overloads by arity and parameter types (generics included)"
 echo "  ✓ Search caller summary matches find_callers (homonyms, dispatched calls)"
 echo "  ✓ Overload disambiguation stays within the receiver class and its supertypes"
+echo "  ✓ Calls on JDK / third-party types never bind to repo homonyms"
 echo ""
 
 exit 0
