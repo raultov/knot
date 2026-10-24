@@ -82,6 +82,7 @@ pub(crate) fn enrich_and_create_entity<'a>(
             enclosing_class_fqn: None,
         };
         fqns.apply_java_package();
+        fqns.apply_kotlin_package();
         fqns.apply_cpp_namespace();
         fqns.apply_csharp_scope();
         let FqnEnrichment {
@@ -225,6 +226,26 @@ impl FqnEnrichment<'_> {
             && let Some(pkg) = self.package_prefix
         {
             self.fqn = format!("{}.{}", pkg, self.fqn);
+        }
+    }
+
+    /// Kotlin: prefix the FQN with the package (issue #39) and record the
+    /// member's package-qualified enclosing type, so implicit-`this` calls
+    /// and the CONTAINS auto-link match it by FQN rather than by bare name.
+    fn apply_kotlin_package(&mut self) {
+        if self.lang_name != "kotlin" {
+            return;
+        }
+        if let Some(pkg) = self.package_prefix {
+            self.fqn = format!("{}.{}", pkg, self.fqn);
+        }
+        if self.enclosing_class.is_some() {
+            self.enclosing_class_fqn = self
+                .fqn
+                .strip_suffix(self.name)
+                .and_then(|prefix| prefix.strip_suffix('.'))
+                .filter(|prefix| !prefix.is_empty())
+                .map(str::to_string);
         }
     }
 

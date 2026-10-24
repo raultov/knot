@@ -4,7 +4,7 @@ use tree_sitter::{Language, Parser, Query, QueryCursor};
 
 use crate::models::ParsedEntity;
 use crate::pipeline::parser::context::{ClassContext, extract_class_contexts};
-use crate::pipeline::parser::languages::java;
+use crate::pipeline::parser::languages::{java, kotlin};
 use crate::pipeline::parser::utils::*;
 
 /// Deterministic richness of one match's captures: how much of an entity's
@@ -64,11 +64,12 @@ pub(crate) fn extract_entities(
     extract_class_contexts(tree.root_node(), source_bytes, &mut class_contexts);
 
     // Extract the package / file-scoped namespace name for FQN prefixing.
-    // Java contributes its `package` declaration; C# its file-scoped
-    // namespace (C# 10+), which has no body and cannot be reached by the
-    // ancestor walk (plan §3.2).
+    // Java and Kotlin contribute their `package` declaration; C# its
+    // file-scoped namespace (C# 10+), which has no body and cannot be
+    // reached by the ancestor walk (plan §3.2).
     let package_prefix = match lang_name {
         "java" => java::extract_package_name(tree.root_node(), source_bytes),
+        "kotlin" => kotlin::extract_package_name(tree.root_node(), source_bytes),
         "csharp" => crate::pipeline::parser::languages::csharp::extract_file_scoped_namespace(
             tree.root_node(),
             source_bytes,

@@ -2294,6 +2294,54 @@ fn test_extract_entities_kotlin_annotated_class_fqn_not_doubled() {
     assert_eq!(fqn_of(&entities, "run"), "KService.run");
 }
 
+fn extract_kotlin(source: &str) -> Vec<ParsedEntity> {
+    extract_entities(
+        source,
+        tree_sitter_kotlin_ng::LANGUAGE.into(),
+        include_str!("../../../../queries/kotlin.scm"),
+        "kotlin",
+        "/Config.kt",
+        "test-repo",
+    )
+    .unwrap()
+}
+
+/// Issue #39: Kotlin FQNs carry the package, so same-named types in
+/// different packages no longer collide.
+#[test]
+fn test_extract_entities_kotlin_package_fqn() {
+    let source = "package com.example.app\n\nclass Config {\n    fun load(): String = \"x\"\n}\n\nobject Registry {\n    fun lookup() {}\n}\n\nfun bootstrap() {}\n";
+    let entities = extract_kotlin(source);
+    assert_eq!(fqn_of(&entities, "Config"), "com.example.app.Config");
+    assert_eq!(fqn_of(&entities, "load"), "com.example.app.Config.load");
+    assert_eq!(fqn_of(&entities, "Registry"), "com.example.app.Registry");
+    assert_eq!(
+        fqn_of(&entities, "lookup"),
+        "com.example.app.Registry.lookup"
+    );
+    assert_eq!(fqn_of(&entities, "bootstrap"), "com.example.app.bootstrap");
+}
+
+/// Members record their package-qualified enclosing type, so implicit
+/// `this` calls and the CONTAINS auto-link match it by FQN; top-level
+/// declarations have none.
+#[test]
+fn test_extract_entities_kotlin_enclosing_class_fqn() {
+    let source = "package com.example.app\n\nclass Config {\n    fun load(): String = \"x\"\n}\n\nfun bootstrap() {}\n";
+    let entities = extract_kotlin(source);
+    let enclosing = |name: &str| {
+        entities
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap()
+            .enclosing_class_fqn
+            .clone()
+    };
+    assert_eq!(enclosing("load").as_deref(), Some("com.example.app.Config"));
+    assert_eq!(enclosing("Config"), None);
+    assert_eq!(enclosing("bootstrap"), None);
+}
+
 #[test]
 fn test_extract_entities_java_interface_extends() {
     let source = "interface Child extends Parent {}";

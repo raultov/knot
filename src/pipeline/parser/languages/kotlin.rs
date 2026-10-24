@@ -2,6 +2,17 @@ use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 
+/// The file's `package` header (`com.example.app`), if any.
+pub(crate) fn extract_package_name(root: Node<'_>, source: &[u8]) -> Option<String> {
+    let header = root
+        .children(&mut root.walk())
+        .find(|c| c.kind() == "package_header")?;
+    let name = header
+        .children(&mut header.walk())
+        .find(|c| c.kind() == "qualified_identifier")?;
+    Some(node_text(name, source).split_whitespace().collect())
+}
+
 /// Recursively extract all call intents from Kotlin.
 pub(crate) fn collect_all_reference_intents_kotlin(
     node: Node<'_>,
