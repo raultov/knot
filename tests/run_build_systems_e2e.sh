@@ -439,6 +439,9 @@ else
 fi
 
 # Test 19: Repository node has build_system = "nuget"
+# Every fixture manifest sits at the root, so they tie on depth; the tie
+# breaks on the relative path and `App.csproj` sorts first. The pick used to
+# depend on parse order and flipped between nuget/cargo/maven/gradle.
 echo ""
 echo "Test 19: Repository node build_system = nuget..."
 BUILD_SYSTEM=$(docker exec knot_neo4j_e2e cypher-shell -u neo4j -p e2e_test_password \
