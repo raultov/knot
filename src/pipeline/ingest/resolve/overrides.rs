@@ -34,6 +34,7 @@ use uuid::Uuid;
 
 use crate::models::{EntityKind, RelationshipType, ResolutionEntity};
 
+pub(super) use params::{DeclaredArity, declared_arity};
 use params::{ParamList, match_params};
 
 /// A method declared by an override-capable type.

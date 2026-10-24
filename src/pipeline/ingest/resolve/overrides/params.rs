@@ -93,6 +93,52 @@ impl ParamList {
     }
 }
 
+/// How many arguments a declared signature accepts at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::pipeline::ingest::resolve) enum DeclaredArity {
+    /// Exactly this many arguments.
+    Fixed(usize),
+    /// A range: a variadic parameter (`String... parts`, `vararg`, `params`,
+    /// `...rest`, `*args`) or an omittable one (default value, TS `x?`).
+    Variable,
+    /// No balanced parameter list was found.
+    Unparsed,
+}
+
+/// The call-site arity `signature` declares, used as the target arity of
+/// call resolution. Unlike counting commas, generic arguments
+/// (`Map<String, Integer>`) and annotation arguments (`@Named("a", b)`) do
+/// not add parameters.
+pub(in crate::pipeline::ingest::resolve) fn declared_arity(
+    signature: &str,
+    method_name: &str,
+) -> DeclaredArity {
+    let Some(body) = parameter_list_body(signature, method_name) else {
+        return DeclaredArity::Unparsed;
+    };
+    let params: Vec<&str> = split_top_level(body, ',')
+        .into_iter()
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "void")
+        .collect();
+    if params.iter().any(|p| accepts_variable_arity(p)) {
+        DeclaredArity::Variable
+    } else {
+        DeclaredArity::Fixed(params.len())
+    }
+}
+
+/// `true` for a parameter that is variadic or may be omitted.
+fn accepts_variable_arity(raw: &str) -> bool {
+    let decl = strip_annotations(raw).trim();
+    let first_word = decl.split_whitespace().next().unwrap_or("");
+    decl.contains("...")
+        || decl.starts_with('*')
+        || matches!(first_word, "vararg" | "params")
+        || parse_param(raw).is_some_and(|p| p.has_default)
+        || find_top_level(decl, |_, c, next| c == '?' && next == ':').is_some()
+}
+
 /// Matches the parameters of an overriding method (`sub`) against a supertype
 /// declaration (`sup`). Returns `None` when the arities or a parameter type
 /// rule the override out, otherwise a specificity score: the number of type
@@ -446,6 +492,53 @@ mod tests {
 
     fn arity(signature: &str, name: &str) -> usize {
         parse(signature, name).params.len()
+    }
+
+    /// Issue #35: the call-site arity used by call resolution.
+    #[test]
+    fn declared_arity_counts_fixed_parameters() {
+        use DeclaredArity::Fixed;
+        for (signature, expected) in [
+            ("()", Fixed(0)),
+            ("(void)", Fixed(0)),
+            ("(int a, int b)", Fixed(2)),
+            ("(Map<String, Integer> values)", Fixed(1)),
+            (
+                "(@Named(\"a\") int a, @Named(\"b\") int b, int c)",
+                Fixed(3),
+            ),
+            ("(value: T, other: Map<K, V>)", Fixed(2)),
+            ("(string message, int priority)", Fixed(2)),
+            ("(final List<String>[] items)", Fixed(1)),
+        ] {
+            assert_eq!(declared_arity(signature, "m"), expected, "{signature}");
+        }
+    }
+
+    #[test]
+    fn declared_arity_detects_variable_parameters() {
+        for signature in [
+            "(String... parts)",
+            "(String fmt, Object... args)",
+            "(vararg values: Int)",
+            "(params int[] values)",
+            "(name: String = \"x\")",
+            "(int a, int b = 2)",
+            "(x?: number)",
+            "(...rest: string[])",
+            "(self, *args, **kwargs)",
+        ] {
+            assert_eq!(
+                declared_arity(signature, "m"),
+                DeclaredArity::Variable,
+                "{signature}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_arity_unparsed_without_parameter_list() {
+        assert_eq!(declared_arity("m", "m"), DeclaredArity::Unparsed);
     }
 
     fn bases(signature: &str, name: &str) -> Vec<Option<String>> {

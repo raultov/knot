@@ -4,38 +4,117 @@ use uuid::Uuid;
 use super::context::ResolutionContext;
 use crate::models::{CallIntent, EntityKind};
 
+/// Re-pick the overload of an already resolved method when its arity does
+/// not match the call's argument count.
+///
+/// Overloads share one FQN, so every FQN-keyed lookup returns a single,
+/// arbitrary overload (issue #35). The candidates are, in order:
+///
+/// 1. an overload sharing `fqn_uuid`'s FQN (same class, same name) with
+///    exactly the call's arity;
+/// 2. when `fqn_uuid`'s declared arity contradicts the call, an overload of
+///    that FQN with variable arity (varargs, default parameters);
+/// 3. same-named methods of that class's supertypes with the call's arity,
+///    nearest first.
+///
+/// Otherwise `fqn_uuid` is kept: a same-name/same-arity method of an
+/// unrelated class is never a better answer than the receiver's own method.
 pub(crate) fn disambiguate_overload(
     fqn_uuid: Uuid,
     intent: &CallIntent,
     ctx: &ResolutionContext,
-    expected_enclosing_class: Option<&str>,
 ) -> Uuid {
-    if let Some(ac) = intent.arg_count
-        && let Some(ac_map) = ctx.uuid_to_arg_count
-        && ac_map.get(&fqn_uuid) != Some(&ac)
-        && let Some(uuids) = ctx.name_to_uuids.get(&intent.method)
+    let (Some(arg_count), Some(ac_map)) = (intent.arg_count, ctx.uuid_to_arg_count) else {
+        return fqn_uuid;
+    };
+    if ac_map.get(&fqn_uuid) == Some(&arg_count) {
+        return fqn_uuid;
+    }
+    let Some(fqn) = ctx.uuid_to_fqn.and_then(|fqns| fqns.get(&fqn_uuid)) else {
+        return fqn_uuid;
+    };
+    let matches_arity = |uuid: &Uuid| ac_map.get(uuid) == Some(&arg_count);
+    let overloads = overloads_of(fqn, &fqn_uuid, ctx);
+
+    if let Some(&overload) = overloads.iter().find(|u| matches_arity(u)) {
+        return overload;
+    }
+    if ac_map.contains_key(&fqn_uuid)
+        && let Some(&variable) = overloads.iter().find(|u| !ac_map.contains_key(u))
     {
-        if let Some(class_name) = expected_enclosing_class
-            && let Some(fqn_map) = ctx.uuid_to_fqn
-        {
-            let dot_fqn = format!("{}.{}", class_name, intent.method);
-            let colon_fqn = format!("{}::{}", class_name, intent.method);
+        return variable;
+    }
+    inherited_overload(fqn, &intent.method, matches_arity, ctx).unwrap_or(fqn_uuid)
+}
 
-            if let Some(&better) = uuids.iter().find(|&&u| {
-                ac_map.get(&u) == Some(&ac)
-                    && fqn_map
-                        .get(&u)
-                        .is_some_and(|fqn| *fqn == dot_fqn || *fqn == colon_fqn)
-            }) {
-                return better;
+/// Every declaration of `fqn` — all of its overloads, or just the one the
+/// FQN map knows.
+fn overloads_of<'a>(fqn: &str, uuid: &'a Uuid, ctx: &'a ResolutionContext) -> &'a [Uuid] {
+    ctx.fqn_overloads
+        .get(fqn)
+        .map_or(std::slice::from_ref(uuid), Vec::as_slice)
+}
+
+/// Breadth-first over the supertypes of the class declaring `method_fqn`:
+/// the nearest supertype declaring `method` with a matching overload wins.
+/// Several same-named supertypes (in different packages) are ranked by
+/// [`pick_deterministic_candidate`].
+fn inherited_overload(
+    method_fqn: &str,
+    method: &str,
+    matches_arity: impl Fn(&Uuid) -> bool,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    let class_fqn = method_fqn
+        .strip_suffix(method)?
+        .trim_end_matches(['.', ':']);
+    let class_name = simple_type_name(class_fqn);
+
+    let mut visited: HashSet<String> = HashSet::from([class_name.to_string()]);
+    let mut queue: VecDeque<String> = VecDeque::from([class_name.to_string()]);
+    while let Some(class) = queue.pop_front() {
+        let Some(parents) = ctx.extends_map.get(&class) else {
+            continue;
+        };
+        for parent in parents.iter().map(|p| simple_type_name(p)) {
+            if !visited.insert(parent.to_string()) {
+                continue;
             }
-        }
-
-        if let Some(&better) = uuids.iter().find(|u| ac_map.get(u) == Some(&ac)) {
-            return better;
+            let suffix_dot = format!(".{parent}.{method}");
+            let suffix_colon = format!("::{parent}::{method}");
+            let candidates: Vec<(&str, Uuid)> = ctx
+                .class_member_index
+                .get(&format!("{parent}.{method}"))
+                .into_iter()
+                .flatten()
+                .filter(|(fqn, _)| {
+                    fqn == &format!("{parent}.{method}")
+                        || fqn.ends_with(&suffix_dot)
+                        || fqn.ends_with(&suffix_colon)
+                })
+                .flat_map(|(fqn, uuid)| {
+                    overloads_of(fqn, uuid, ctx)
+                        .iter()
+                        .filter(|u| matches_arity(u))
+                        .map(move |u| (fqn.as_str(), *u))
+                })
+                .collect();
+            if let Some(uuid) = pick_deterministic_candidate(&candidates, None) {
+                return Some(uuid);
+            }
+            queue.push_back(parent.to_string());
         }
     }
-    fqn_uuid
+    None
+}
+
+/// `com.x.Base<T>` → `Base`, `crate::Base` → `Base`.
+fn simple_type_name(type_ref: &str) -> &str {
+    let without_generics = type_ref.split('<').next().unwrap_or(type_ref).trim();
+    without_generics
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(without_generics)
 }
 
 /// Disambiguate candidates by scoring each one's FQN against the segments of a
@@ -199,22 +278,6 @@ pub(crate) fn pick_deterministic_candidate(
         .map(|(_, _, uuid)| uuid)
 }
 
-pub(crate) fn find_by_arg_count(
-    uuids: &[Uuid],
-    arg_count: usize,
-    uuid_to_arg_count: &HashMap<Uuid, usize>,
-) -> Option<Uuid> {
-    let matches: Vec<&Uuid> = uuids
-        .iter()
-        .filter(|u| uuid_to_arg_count.get(u) == Some(&arg_count))
-        .collect();
-    if matches.len() == 1 {
-        Some(*matches[0])
-    } else {
-        None
-    }
-}
-
 /// Redirect a resolved class call UUID to its constructor (`__init__`) when applicable.
 ///
 /// For languages where class instantiation is semantically equivalent to invoking
@@ -334,12 +397,16 @@ fn lookup_fqn_by_fqn(
 }
 
 /// Fallback ladder for homonym candidates that share the callee's method name
-/// (neither FQN nor receiver lookup matched):
+/// (neither FQN nor receiver lookup matched).
 ///
-/// 1. arg-count match, preferring a same-file candidate;
-/// 2. same-file match;
-/// 3. receiver-chain disambiguation (only when a receiver is available);
-/// 4. a single unambiguous candidate.
+/// When the call's argument count is known, candidates whose declared arity
+/// contradicts it are discarded first. Arity only narrows the candidates; it
+/// is never evidence on its own: "the only `isEmpty` with one parameter" in
+/// a repository is not the target of every `x.isEmpty(y)` (issue #35). Then:
+///
+/// 1. a same-file candidate;
+/// 2. receiver-chain disambiguation (only when a receiver is available);
+/// 3. a callee name declared exactly once.
 fn resolve_homonym_fallback(
     uuids: &[Uuid],
     arg_count: Option<usize>,
@@ -347,32 +414,28 @@ fn resolve_homonym_fallback(
     caller_file_path: &str,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
-    if let (Some(ac), Some(ac_map)) = (arg_count, ctx.uuid_to_arg_count) {
-        if let Some(&same_file_ac_uuid) = uuids.iter().find(|&&u| {
-            ac_map.get(&u) == Some(&ac)
-                && ctx
-                    .uuid_to_file
-                    .get(&u)
-                    .is_some_and(|f| f == caller_file_path)
-        }) {
-            return Some(same_file_ac_uuid);
-        }
-        if let Some(u) = find_by_arg_count(uuids, ac, ac_map) {
-            return Some(u);
-        }
-    }
+    let declared_arity = |uuid: &Uuid| ctx.uuid_to_arg_count.and_then(|arities| arities.get(uuid));
+    let candidates: Vec<Uuid> = uuids
+        .iter()
+        .copied()
+        .filter(|uuid| match (arg_count, declared_arity(uuid)) {
+            (Some(call_arity), Some(&arity)) => arity == call_arity,
+            _ => true,
+        })
+        .collect();
+
     if let Some(same_file_uuid) =
-        find_entity_in_same_file(uuids, caller_file_path, ctx.uuid_to_file)
+        find_entity_in_same_file(&candidates, caller_file_path, ctx.uuid_to_file)
     {
         return Some(same_file_uuid);
     }
     if let Some(receiver) = receiver
-        && let Some(u) = disambiguate_by_receiver_chain(uuids, receiver, ctx)
+        && let Some(u) = disambiguate_by_receiver_chain(&candidates, receiver, ctx)
     {
         return Some(u);
     }
     if uuids.len() == 1 {
-        return uuids.first().copied();
+        return candidates.first().copied();
     }
     None
 }
@@ -389,7 +452,7 @@ fn resolve_super_call(
         if let Some(uuid) =
             lookup_method_in_class_hierarchy(parent, &intent.method, caller_file_path, ctx)
         {
-            return Some(disambiguate_overload(uuid, intent, ctx, Some(parent)));
+            return Some(disambiguate_overload(uuid, intent, ctx));
         }
     }
     None
@@ -463,7 +526,7 @@ fn resolve_rust_compound_receiver_call(
     }
     let type_name = snake_to_camel(segment);
     let uuid = lookup_method_by_class_and_name(&type_name, &intent.method, caller.file_path, ctx)?;
-    Some(disambiguate_overload(uuid, intent, ctx, Some(&type_name)))
+    Some(disambiguate_overload(uuid, intent, ctx))
 }
 
 fn resolve_implicit_this_call(
@@ -483,17 +546,12 @@ fn resolve_implicit_this_call(
     if let Some(class_fqn) = caller.enclosing_class_fqn
         && let Some(uuid) = lookup_fqn(class_fqn, &intent.method, ctx.fqn_to_uuid)
     {
-        return Some(disambiguate_overload(uuid, intent, ctx, Some(class_fqn)));
+        return Some(disambiguate_overload(uuid, intent, ctx));
     }
 
     let enclosing_class = caller.enclosing_class?;
     if let Some(uuid) = lookup_fqn(enclosing_class, &intent.method, ctx.fqn_to_uuid) {
-        return Some(disambiguate_overload(
-            uuid,
-            intent,
-            ctx,
-            Some(enclosing_class),
-        ));
+        return Some(disambiguate_overload(uuid, intent, ctx));
     }
 
     // An explicit `self.m()` / `this.m()` names a method of the enclosing
@@ -505,12 +563,7 @@ fn resolve_implicit_this_call(
         && let Some(uuid) =
             lookup_method_by_class_and_name(enclosing_class, &intent.method, caller.file_path, ctx)
     {
-        return Some(disambiguate_overload(
-            uuid,
-            intent,
-            ctx,
-            Some(enclosing_class),
-        ));
+        return Some(disambiguate_overload(uuid, intent, ctx));
     }
 
     if intent.receiver.as_deref() == Some("self")
@@ -574,7 +627,7 @@ fn resolve_static_receiver_call(
         if let Some(uuid) =
             lookup_method_by_class_and_name(class_name, &intent.method, caller_file_path, ctx)
         {
-            return Some(disambiguate_overload(uuid, intent, ctx, Some(class_name)));
+            return Some(disambiguate_overload(uuid, intent, ctx));
         }
         let parents = ctx.extends_map.get(class_name).into_iter().flatten();
         for parent in parents {
@@ -605,12 +658,7 @@ fn resolve_receiver_call(
 
     if !receiver_class.is_empty() {
         if let Some(uuid) = lookup_fqn(receiver_class, &intent.method, ctx.fqn_to_uuid) {
-            return Some(disambiguate_overload(
-                uuid,
-                intent,
-                ctx,
-                Some(receiver_class),
-            ));
+            return Some(disambiguate_overload(uuid, intent, ctx));
         }
 
         let mut chars = receiver_class.chars();
@@ -621,7 +669,7 @@ fn resolve_receiver_call(
         };
 
         if let Some(uuid) = lookup_fqn(&capitalized, &intent.method, ctx.fqn_to_uuid) {
-            return Some(disambiguate_overload(uuid, intent, ctx, Some(&capitalized)));
+            return Some(disambiguate_overload(uuid, intent, ctx));
         }
 
         let needles = [
@@ -651,7 +699,7 @@ fn resolve_receiver_call(
         if let Some(uuid) =
             pick_deterministic_candidate(&candidates, Some((caller_file_path, ctx.uuid_to_file)))
         {
-            return Some(uuid);
+            return Some(disambiguate_overload(uuid, intent, ctx));
         }
     }
 
@@ -1202,8 +1250,12 @@ mod tests {
         assert_eq!(entities[0].relationships.len(), 0);
     }
 
+    /// Arity is a filter, not evidence (issue #35): two `add` homonyms in
+    /// other files, one of them with the call's arity, are still ambiguous.
+    /// The repository-wide "unique by arity" pick bound every `x.isEmpty(y)`
+    /// to the only one-parameter `isEmpty` of an unrelated class.
     #[test]
-    fn test_resolve_fallback_arg_count_disambiguation() {
+    fn test_resolve_fallback_arg_count_alone_is_not_evidence() {
         let mut caller = mock_resolution_entity("main", "App.main", None);
         let mut callee1 =
             mock_resolution_entity_at("add", "Calc.add", Some("Calc"), "test/calc.java");
@@ -1223,8 +1275,230 @@ mod tests {
         let mut entities = vec![caller, callee1, callee2];
         resolve_reference_intents(&mut entities);
 
-        assert_eq!(entities[0].relationships.len(), 1);
-        assert_eq!(entities[0].relationships[0].0, entities[1].uuid);
+        assert!(entities[0].relationships.is_empty());
+    }
+
+    /// A same-file homonym is only bound when its arity does not contradict
+    /// the call, so a test method `chat()` calling `api().chat(request)` no
+    /// longer gets a false self-recursion edge.
+    #[test]
+    fn test_resolve_fallback_same_file_respects_arity() {
+        let mut caller =
+            mock_resolution_entity_at("chat", "ApiIT.chat", Some("ApiIT"), "test/ApiIT.java");
+        caller.signature = Some("()".to_string());
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "chat".to_string(),
+            receiver: None,
+            line: 10,
+            arg_count: Some(1),
+        });
+        let mut helper =
+            mock_resolution_entity_at("chat", "ApiIT.chat", Some("ApiIT"), "test/ApiIT.java");
+        helper.signature = Some("(String prompt)".to_string());
+        let mut other = mock_resolution_entity_at("chat", "Api.chat", Some("Api"), "test/Api.java");
+        other.signature = Some("(Request request)".to_string());
+
+        let helper_uuid = helper.uuid;
+        let mut entities = vec![caller, helper, other];
+        resolve_reference_intents(&mut entities);
+
+        assert_eq!(
+            entities[0].relationships,
+            vec![(helper_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    /// A Java method `<class_fqn>.<name><params>` declared in `<Class>.java`.
+    fn java_method(class_fqn: &str, name: &str, params: &str) -> ResolutionEntity {
+        let class = class_fqn.rsplit('.').next().unwrap();
+        let mut entity = mock_resolution_entity_at(
+            name,
+            &format!("{class_fqn}.{name}"),
+            Some(class),
+            &format!("src/{class}.java"),
+        );
+        entity.signature = Some(params.to_string());
+        entity
+    }
+
+    /// Resolve one call `<receiver>.<method>(<arg_count> args)` issued from
+    /// `com.app.App.main` and return the signature + FQN of every target.
+    fn overload_targets(
+        targets: Vec<ResolutionEntity>,
+        receiver: &str,
+        method: &str,
+        arg_count: usize,
+    ) -> Vec<String> {
+        let mut caller = java_method("com.app.App", "main", "()");
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: method.to_string(),
+            receiver: Some(receiver.to_string()),
+            line: 1,
+            arg_count: Some(arg_count),
+        });
+        let mut entities = targets;
+        entities.push(caller);
+        resolve_reference_intents(&mut entities);
+        let caller = entities.last().unwrap();
+        caller
+            .relationships
+            .iter()
+            .filter_map(|(uuid, _)| entities.iter().find(|e| e.uuid == *uuid))
+            .map(|e| format!("{}{}", e.fqn, e.signature.as_deref().unwrap_or("")))
+            .collect()
+    }
+
+    /// Issue #35: overloads share one FQN and `fqn_to_uuid` keeps only the
+    /// last one declared. With the wrong-arity overload last, the call used
+    /// to bind to a same-name/same-arity method of an unrelated class (or to
+    /// the wrong overload), depending on random UUID order. Both declaration
+    /// orders, repeated so a lucky UUID order cannot hide the bug.
+    #[test]
+    fn test_overload_disambiguation_stays_in_receiver_class() {
+        for wrong_arity_last in [true, false] {
+            for _ in 0..20 {
+                let pair = java_method("com.x.Foo", "bar", "(int a, int b)");
+                let single = java_method("com.x.Foo", "bar", "(int a)");
+                let mut targets = vec![java_method("com.other.Other", "bar", "(int a, int b)")];
+                if wrong_arity_last {
+                    targets.extend([pair, single]);
+                } else {
+                    targets.extend([single, pair]);
+                }
+                assert_eq!(
+                    overload_targets(targets, "Foo", "bar", 2),
+                    vec!["com.x.Foo.bar(int a, int b)"],
+                    "wrong_arity_last={wrong_arity_last}"
+                );
+            }
+        }
+    }
+
+    /// An untyped lowercase receiver (`foo.bar(1, 2)` → `Foo.bar`) matched by
+    /// FQN segment still picks the overload with the call's arity.
+    #[test]
+    fn test_overload_disambiguation_on_untyped_receiver() {
+        for _ in 0..20 {
+            let targets = vec![
+                java_method("com.x.Foo", "bar", "(int a, int b)"),
+                java_method("com.x.Foo", "bar", "(int a)"),
+            ];
+            assert_eq!(
+                overload_targets(targets, "foo", "bar", 2),
+                vec!["com.x.Foo.bar(int a, int b)"]
+            );
+        }
+    }
+
+    /// An overload with the call's arity inherited from a supertype wins over
+    /// the receiver's own different-arity overload, and a same-named method
+    /// of an unrelated class never does.
+    #[test]
+    fn test_overload_disambiguation_walks_supertypes() {
+        for _ in 0..20 {
+            let mut child_class = mock_resolution_entity_with_kind(
+                "Child",
+                "com.x.Child",
+                None,
+                "src/Child.java",
+                EntityKind::Class,
+            );
+            child_class
+                .reference_intents
+                .push(ReferenceIntent::Extends {
+                    parent: "com.x.Base".to_string(),
+                    line: 1,
+                });
+            let targets = vec![
+                java_method("com.other.Other", "scale", "(int a, int b)"),
+                java_method("com.x.Base", "scale", "(int a, int b)"),
+                child_class,
+                java_method("com.x.Child", "scale", "(int a)"),
+            ];
+            assert_eq!(
+                overload_targets(targets, "Child", "scale", 2),
+                vec!["com.x.Base.scale(int a, int b)"]
+            );
+        }
+    }
+
+    /// With no overload of the call's arity in the receiver class or its
+    /// supertypes, the receiver's own method is kept instead of jumping to
+    /// another class (varargs, defaults and unparsed signatures land here).
+    #[test]
+    fn test_overload_disambiguation_keeps_candidate_without_match() {
+        for _ in 0..20 {
+            let targets = vec![
+                java_method("com.other.Other", "log", "(String a, String b)"),
+                java_method("com.x.Foo", "log", "(String... parts)"),
+            ];
+            assert_eq!(
+                overload_targets(targets, "Foo", "log", 2),
+                vec!["com.x.Foo.log(String... parts)"]
+            );
+        }
+    }
+
+    /// A varargs method accepts any arity: the arity filter of the homonym
+    /// fallback never rules it out, and an exact-arity overload beats it.
+    #[test]
+    fn test_varargs_method_is_never_ruled_out_by_arity() {
+        for _ in 0..20 {
+            let mut caller = java_method("com.app.App", "main", "()");
+            caller.reference_intents.push(ReferenceIntent::Call {
+                method: "format".to_string(),
+                receiver: None,
+                line: 1,
+                arg_count: Some(3),
+            });
+            let varargs = java_method("com.x.Text", "format", "(String fmt, Object... args)");
+            let varargs_uuid = varargs.uuid;
+            let mut entities = vec![varargs, caller];
+            resolve_reference_intents(&mut entities);
+            assert_eq!(
+                entities[1].relationships,
+                vec![(varargs_uuid, RelationshipType::Calls)]
+            );
+
+            let targets = vec![
+                java_method("com.x.Text", "join", "(String... parts)"),
+                java_method("com.x.Text", "join", "(String a, String b)"),
+            ];
+            assert_eq!(
+                overload_targets(targets.clone(), "Text", "join", 2),
+                vec!["com.x.Text.join(String a, String b)"]
+            );
+            assert_eq!(
+                overload_targets(targets, "Text", "join", 3),
+                vec!["com.x.Text.join(String... parts)"],
+                "only the varargs overload accepts three arguments"
+            );
+        }
+    }
+
+    /// Target arity comes from the #30 parameter parser: commas inside
+    /// generics and annotation arguments do not count as parameters.
+    #[test]
+    fn test_overload_disambiguation_counts_generic_parameters() {
+        for _ in 0..20 {
+            let targets = vec![
+                java_method("com.x.Foo", "put", "(int a, int b)"),
+                java_method("com.x.Foo", "put", "(Map<String, Integer> values)"),
+                java_method(
+                    "com.x.Foo",
+                    "put",
+                    "(@Named(\"a\") int a, @Named(\"b\") int b, int c)",
+                ),
+            ];
+            assert_eq!(
+                overload_targets(targets.clone(), "Foo", "put", 1),
+                vec!["com.x.Foo.put(Map<String, Integer> values)"]
+            );
+            assert_eq!(
+                overload_targets(targets, "Foo", "put", 3),
+                vec!["com.x.Foo.put(@Named(\"a\") int a, @Named(\"b\") int b, int c)"]
+            );
+        }
     }
 
     // ============================================================

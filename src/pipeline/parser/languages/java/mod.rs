@@ -228,6 +228,17 @@ pub(crate) fn extract_call_intents_java(
     );
 }
 
+/// Number of arguments of a `method_invocation` (comments excluded).
+fn argument_count(invocation: Node<'_>) -> Option<usize> {
+    let args = invocation.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let count = args
+        .named_children(&mut cursor)
+        .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+        .count();
+    Some(count)
+}
+
 /// Extract call intents from a SINGLE Java node without recursive descent.
 ///
 /// This is the non-recursive version of `extract_call_intents_java`,
@@ -243,6 +254,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
         let mut method_name: Option<String> = None;
         let mut receiver: Option<String> = None;
         let line = node.start_position().row + 1;
+        let arg_count = argument_count(node);
 
         // Parse method_invocation structure:
         // - Has optional receiver (identifier or "this")
@@ -282,7 +294,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                     method,
                     receiver: resolved_receiver,
                     line,
-                    arg_count: None,
+                    arg_count,
                 });
             }
         } else if let Some(method) = method_name {
@@ -291,7 +303,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                 method,
                 receiver: None,
                 line,
-                arg_count: None,
+                arg_count,
             });
             // Revert receiver since it's not a receiver
         } else if let Some(receiver_val) = receiver {
@@ -300,7 +312,7 @@ pub(crate) fn extract_single_call_intent_java(node: Node<'_>, source: &[u8]) -> 
                 method: receiver_val,
                 receiver: None,
                 line,
-                arg_count: None,
+                arg_count,
             });
         }
     } else if node.kind() == "method_reference" {
@@ -443,6 +455,39 @@ fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `(method, arg_count)` of every call intent in `body`.
+    fn call_arities(body: &str) -> Vec<(String, Option<usize>)> {
+        let code = format!("void test() {{ {body} }}");
+        let tree = crate::pipeline::parser::test_utils::parse_java_snippet(&code)
+            .expect("Failed to parse Java code");
+        let mut intents: Vec<CallIntent> = Vec::new();
+        extract_call_intents_java(tree.root_node(), code.as_bytes(), &mut intents);
+        intents
+            .into_iter()
+            .map(|i| (i.method, i.arg_count))
+            .collect()
+    }
+
+    /// Issue #35: method invocations carry their argument count so overload
+    /// disambiguation can run for Java.
+    #[test]
+    fn test_method_invocation_carries_arg_count() {
+        let arities =
+            call_arities("foo.bar(1, 2); baz(); this.qux(a, /* c */ map.get(k)); s.f(x -> x, y);");
+        for expected in [
+            ("bar", Some(2)),
+            ("baz", Some(0)),
+            ("qux", Some(2)),
+            ("get", Some(1)),
+            ("f", Some(2)),
+        ] {
+            assert!(
+                arities.contains(&(expected.0.to_string(), expected.1)),
+                "expected {expected:?} in {arities:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_extract_single_call_intent_java_method_invocation() {

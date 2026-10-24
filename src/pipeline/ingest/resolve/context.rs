@@ -54,6 +54,9 @@ pub struct ResolutionContext<'a> {
     /// FQN ends that way. Turns the "method of a type named `Class`" lookup
     /// into a hash probe instead of a scan over every FQN.
     pub class_member_index: &'a HashMap<String, Vec<(String, Uuid)>>,
+    /// FQN → every entity declaring it, for FQNs shared by several overloads
+    /// (`com.x.Foo.bar` for both `bar(int)` and `bar(int, int)`). Sorted.
+    pub fqn_overloads: &'a HashMap<String, Vec<Uuid>>,
 }
 
 /// Index key for an FQN: its last two segments joined by `.`, whatever the

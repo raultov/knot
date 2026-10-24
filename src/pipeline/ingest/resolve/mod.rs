@@ -148,6 +148,7 @@ struct LookupMaps {
     extends_map: HashMap<String, Vec<String>>,
     alias_map: HashMap<Uuid, Uuid>,
     class_member_index: HashMap<String, Vec<(String, Uuid)>>,
+    fqn_overloads: HashMap<String, Vec<Uuid>>,
 }
 
 impl LookupMaps {
@@ -164,9 +165,29 @@ impl LookupMaps {
         let uuid_to_arg_count: HashMap<Uuid, usize> = entities
             .iter()
             .filter_map(|e| {
-                count_params_from_signature(e.signature.as_deref()?).map(|c| (e.uuid, c))
+                // Variable-arity methods (varargs, defaults) get no entry: an
+                // unknown arity never rules a candidate out.
+                let signature = e.signature.as_deref()?;
+                let count = match overrides::declared_arity(signature, &e.name) {
+                    overrides::DeclaredArity::Fixed(count) => Some(count),
+                    overrides::DeclaredArity::Variable => None,
+                    overrides::DeclaredArity::Unparsed => count_params_from_signature(signature),
+                };
+                count.map(|c| (e.uuid, c))
             })
             .collect();
+
+        // Overloads share one FQN, so `fqn_to_uuid` keeps a single one of
+        // them; this map keeps them all (issue #35). Sorted for a
+        // deterministic pick among same-arity overloads.
+        let mut fqn_overloads: HashMap<String, Vec<Uuid>> = HashMap::new();
+        for e in entities {
+            fqn_overloads.entry(e.fqn.clone()).or_default().push(e.uuid);
+        }
+        fqn_overloads.retain(|_, uuids| uuids.len() > 1);
+        for uuids in fqn_overloads.values_mut() {
+            uuids.sort();
+        }
 
         let uuid_to_fqn: HashMap<Uuid, String> =
             entities.iter().map(|e| (e.uuid, e.fqn.clone())).collect();
@@ -226,6 +247,7 @@ impl LookupMaps {
             extends_map,
             alias_map,
             class_member_index,
+            fqn_overloads,
         }
     }
 
@@ -240,6 +262,7 @@ impl LookupMaps {
             uuid_to_kind: Some(&self.uuid_to_kind),
             uuid_to_name: Some(&self.uuid_to_name),
             class_member_index: &self.class_member_index,
+            fqn_overloads: &self.fqn_overloads,
         }
     }
 }
