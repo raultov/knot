@@ -5,6 +5,18 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.11.10
+
+- **Fixed(kotlin, typescript, groovy)**: Calls carry their argument count (#38), so the overload disambiguation from #35 now applies to these languages. A call binds to the receiver's overload with the matching arity instead of whichever overload the FQN map held. Kotlin counts a trailing lambda as one argument; TypeScript binds to the matching overload signature; Groovy counts parenthesized calls, including a trailing closure. The count is left unknown, never guessed, for spreads (`*xs`, `...xs`), Groovy named arguments and argument lists that continue on the next line.
+- **Fixed(resolve)**: Arity never constrains JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`), where callers may pass fewer or more arguments than declared: neither a JavaScript caller's argument count nor a JavaScript target's parameters rule a candidate out. A trailing Groovy array parameter (`String[] parts`) accepts varargs. A leading `this` parameter is not a call-site argument: TypeScript `this: Window` is not counted, and a C# extension method accepts both `x.M(a)` and `Ext.M(x, a)`.
+- **Fixed(cpp)**: Comments inside an argument list are no longer counted as arguments.
+- **Fixed(resolve)**: An inherited overload with the call's arity is only preferred over the receiver's own same-named method in Java, Kotlin, Groovy and C#, where overloads span the class hierarchy. In TypeScript a subclass method replaces the inherited one whatever its arity, so the receiver's own method is kept.
+- **Measured** (`master` vs fix, same source): puppeteer (TypeScript, 19.6k entities) drops 164 false edges, such as `array.pop()` → `ScriptInjector.pop(statement)` ×13, `map.set(k, v)` → `set(emitter)` ×56 and assert `ok(x)` → `HTTPResponse.ok()` ×19. Another 14 calls move to the matching overload signature or the right class (`this.#cache.readMetadata(browser)` → `Cache.readMetadata` instead of a self-call). job-watch-ui (TSX) drops 27 false edges, such as testing-library `render(<App />)` → `ErrorBoundary.render()`.
+- **Test**: Kotlin E2E tests 20–26 (`tests/testing_files/kotlin/overload_calls/`), TypeScript E2E tests 14–16 (`overload_calls.ts`, `legacy_arity.js`) and Groovy E2E group I; parser unit tests for each language's count; resolver unit tests for the JavaScript, Groovy and `this` rules.
+- **Upgrade**: Existing indexes keep the old edges until re-indexed with `--clean`.
+
+---
+
 ## v1.11.9
 
 - **Fixed(resolve)**: Overload disambiguation never crosses classes (#35). Overloads share one FQN, so FQN lookups returned an arbitrary overload, and `disambiguate_overload` then compared the simple receiver name (`Foo.bar`) with full FQNs (`com.x.Foo.bar`). That comparison never matched, so it fell back to "any method with this name and arity" anywhere in the index. With `bar(int)` declared after `bar(int, int)`, a call `foo.bar(1, 2)` bound to `com.other.Other.bar` about half the time, depending on UUID order. The resolver now keeps every overload per FQN (`fqn_overloads`). Among them it picks the exact-arity overload, then a variable-arity one (varargs, default parameters), then the nearest supertype overload with the call's arity. If none fits, it keeps the receiver's own method. Untyped receivers matched by FQN segment go through the same step.
