@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.11.13
 
 - **Fixed(kotlin)**: Kotlin FQNs carry the package (#39). Entities were indexed as `Config` / `Config.load` whatever their `package`, so same-named classes in different packages shared FQNs: `fqn_to_uuid` and the `OVERRIDES` type index kept only one of them, calls and override edges could bind to the wrong class, and `find_callers` could not address either one by package. Every Kotlin entity now gets the `package_header` prefix, as Java already did (`com.example.app.Config.load`, top-level `com.example.app.bootstrap`). Members also record their package-qualified enclosing type (`enclosing_class_fqn`), so implicit-`this` calls keep resolving exactly and the `CONTAINS` auto-link matches the type by FQN.
 - **Test**: Kotlin E2E tests 27–30 (fixture `testing_files/kotlin/package_collision/`: `Source` and `Config : Source` in two packages): each package-qualified `Config.load` lists only its own caller and overrides only its own `Source.load`. Tests 20–26 now query package-qualified FQNs. Extractor unit tests for package-qualified FQNs and `enclosing_class_fqn`.
