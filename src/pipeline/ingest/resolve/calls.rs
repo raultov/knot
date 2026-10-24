@@ -416,6 +416,11 @@ fn lookup_fqn_by_fqn(
 /// 2. receiver-chain disambiguation (only when a receiver is available);
 /// 3. a callee name declared exactly once.
 ///
+/// Steps 2 and 3 are skipped for a receiver of an external type (see
+/// [`is_external_type_receiver`]): `String.valueOf(..)` or a field typed as
+/// a library class never binds to a repository method that merely shares
+/// the callee's name (issue #32).
+///
 /// Dependency candidates shadowed by a local type the receiver may denote
 /// (see [`receiver_type_names`]) are discarded (issue #34), and the name then
 /// no longer counts as declared once: the discarded candidate proves the
@@ -453,6 +458,9 @@ fn resolve_homonym_fallback(
         find_entity_in_same_file(&candidates, caller_file_path, ctx.uuid_to_file)
     {
         return Some(same_file_uuid);
+    }
+    if receiver.is_some_and(|r| is_external_type_receiver(r, ctx)) {
+        return None;
     }
     if let Some(receiver) = receiver
         && let Some(u) = disambiguate_by_receiver_chain(&candidates, receiver, ctx)
@@ -678,6 +686,27 @@ fn receiver_type_names(receiver: &str) -> (&str, String) {
         first.to_uppercase().chain(chars).collect()
     });
     (receiver_class, capitalized)
+}
+
+/// `true` when the receiver names a type nothing in the loaded repositories
+/// declares: its last segment is a capitalized identifier (`String`,
+/// `ModelMapper`, `java.util.Objects`, `std::string::String`) and no segment
+/// of its path names an indexed entity. Such a type comes from the JDK, the
+/// standard library or a third-party package, so its members are not
+/// indexed (issue #32). An indexed segment keeps the receiver in the repo:
+/// `StringUtils.INSTANCE` is a Kotlin `object` seen from Java. Lowercase
+/// receivers carry no type evidence and are not covered.
+fn is_external_type_receiver(receiver: &str, ctx: &ResolutionContext) -> bool {
+    let name = simple_type_name(receiver);
+    let names_type = name.chars().next().is_some_and(char::is_uppercase)
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$');
+    let path = receiver.split('<').next().unwrap_or(receiver);
+    names_type
+        && !path
+            .split(['.', ':'])
+            .any(|segment| ctx.name_to_uuids.contains_key(segment.trim()))
 }
 
 fn resolve_receiver_call(
@@ -1452,6 +1481,124 @@ mod tests {
         assert_eq!(
             cross_repo_targets(vec![audit], 0, &dependencies, &[]),
             vec!["dep:com.lib.AuditLog.record"]
+        );
+    }
+
+    /// Issue #32: a receiver of a type no indexed repository declares (JDK,
+    /// standard library, third-party package) never binds to the only
+    /// repository method sharing the callee's name, whether the type is
+    /// named statically (`String.valueOf`), through a field's declared type
+    /// (`ModelMapper`) or by a qualified name.
+    #[test]
+    fn test_external_type_receiver_skips_unique_homonym() {
+        for (receiver, method) in [
+            ("String", "valueOf"),
+            ("ModelMapper", "map"),
+            ("java.util.Objects", "requireNonNull"),
+            ("std::string::String", "from"),
+        ] {
+            let mut caller = java_method("com.app.ExampleResource", "read", "(Entity e)");
+            caller.reference_intents = vec![receiver_call(method, receiver)];
+            let homonym = java_method("com.other.SomeEventMapper", method, "(Object value)");
+            let mut entities = vec![caller, homonym];
+            resolve_reference_intents(&mut entities);
+            assert!(entities[0].relationships.is_empty(), "{receiver}.{method}");
+        }
+    }
+
+    /// A capitalized receiver naming an indexed entity (a C# property) is
+    /// not known to be external, and a same-file homonym (`Self::build()`)
+    /// still wins: both keep the fallback.
+    #[test]
+    fn test_indexed_or_same_file_receiver_keeps_homonym_fallback() {
+        let mut place = mock_resolution_entity_with_kind(
+            "Place",
+            "Shop.OrderService.Place",
+            Some("OrderService"),
+            "src/OrderService.cs",
+            EntityKind::CSharpMethod,
+        );
+        place.reference_intents = vec![receiver_call("Save", "Repository")];
+        let property = mock_resolution_entity_with_kind(
+            "Repository",
+            "Shop.OrderService.Repository",
+            Some("OrderService"),
+            "src/OrderService.cs",
+            EntityKind::CSharpProperty,
+        );
+        let save = mock_resolution_entity_with_kind(
+            "Save",
+            "Shop.OrderRepository.Save",
+            Some("OrderRepository"),
+            "src/OrderRepository.cs",
+            EntityKind::CSharpMethod,
+        );
+        let save_uuid = save.uuid;
+        let mut entities = vec![place, property, save];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[0].relationships,
+            vec![(save_uuid, RelationshipType::Calls)]
+        );
+
+        let mut checkout = mock_resolution_entity_with_kind(
+            "checkout",
+            "shop::Cart::checkout",
+            Some("Cart"),
+            "src/cart.rs",
+            EntityKind::RustFunction,
+        );
+        checkout.reference_intents = vec![receiver_call("build", "Self")];
+        let build = mock_resolution_entity_with_kind(
+            "build",
+            "shop::Cart::build",
+            Some("Cart"),
+            "src/cart.rs",
+            EntityKind::RustFunction,
+        );
+        let build_uuid = build.uuid;
+        let other = mock_resolution_entity_with_kind(
+            "build",
+            "shop::Order::build",
+            Some("Order"),
+            "src/order.rs",
+            EntityKind::RustFunction,
+        );
+        let mut entities = vec![checkout, build, other];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[0].relationships,
+            vec![(build_uuid, RelationshipType::Calls)]
+        );
+    }
+
+    /// Java reaches a Kotlin `object` through its synthetic `INSTANCE`: the
+    /// unindexed last segment is not external because `StringUtils` is
+    /// indexed, so the receiver chain still binds the call.
+    #[test]
+    fn test_indexed_receiver_segment_keeps_receiver_chain() {
+        let mut greet = java_method("com.example.java.JavaUser", "greet", "(String name)");
+        greet.reference_intents = vec![receiver_call("capitalize", "StringUtils.INSTANCE")];
+        let object = mock_resolution_entity_with_kind(
+            "StringUtils",
+            "com.example.kotlin.StringUtils",
+            None,
+            "src/StringUtils.kt",
+            EntityKind::KotlinObject,
+        );
+        let capitalize = mock_resolution_entity_at(
+            "capitalize",
+            "com.example.kotlin.StringUtils.capitalize",
+            Some("StringUtils"),
+            "src/StringUtils.kt",
+        );
+        let other = java_method("com.example.text.Words", "capitalize", "(String word)");
+        let capitalize_uuid = capitalize.uuid;
+        let mut entities = vec![greet, object, capitalize, other];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[0].relationships,
+            vec![(capitalize_uuid, RelationshipType::Calls)]
         );
     }
 
