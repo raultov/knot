@@ -646,7 +646,7 @@ mod tests {
         // Heap's algorithm over the indices.
         let mut order: Vec<usize> = (0..n).collect();
         let mut counters = vec![0; n];
-        let mut check = |order: &[usize]| {
+        let check = |order: &[usize]| {
             let permuted: Vec<&ResolutionEntity> = order.iter().map(|&i| refs[i]).collect();
             assert_eq!(
                 select_primary_identity(&permuted, "/repo").map(|e| e.fqn.as_str()),
