@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(resolve)**: Overload disambiguation never crosses classes (#35). Overloads share one FQN, so FQN lookups returned an arbitrary overload, and `disambiguate_overload` then compared the simple receiver name (`Foo.bar`) with full FQNs (`com.x.Foo.bar`). That comparison never matched, so it fell back to "any method with this name and arity" anywhere in the index. With `bar(int)` declared after `bar(int, int)`, a call `foo.bar(1, 2)` bound to `com.other.Other.bar` about half the time, depending on UUID order. The resolver now keeps every overload per FQN (`fqn_overloads`). Among them it picks the exact-arity overload, then a variable-arity one (varargs, default parameters), then the nearest supertype overload with the call's arity. If none fits, it keeps the receiver's own method. Untyped receivers matched by FQN segment go through the same step.
+- **Fixed(resolve)**: Arity filters the name-only homonym fallback but no longer resolves a call by itself. "The only `isNotNull` with one parameter in the repository" used to become the target of every `x.isNotNull(y)` call, from any class.
+- **Fixed(java)**: Method invocations carry their argument count (`arg_count`), so overload disambiguation and the arity filter now apply to Java. The declared arity is read with the #30 parameter parser: commas inside generics and annotations are not counted, and varargs/defaults count as variable arity.
+- **Measured** on spring-ai (27.7k entities, `master` vs fix, same source): 1,006 calls move to the correct overload of the same class, 6 move to an inherited overload, and about 4,200 name-only false edges disappear (for example, AssertJ `isNotNull()` bound to `FilterExpressionBuilder.isNotNull(String)` ×1,431).
+- **Test**: Java E2E tests 42–46 (`tests/testing_files/java/overload_calls/`) and C# E2E D27d–g (`Overloads/Calls.cs`, `OtherCalls.cs`). Resolver unit tests cover both declaration orders (repeated so UUID order cannot hide the bug), supertypes, varargs, untyped receivers and arity as a filter. Parser/params unit tests cover `arg_count` and `declared_arity`.
+- **Upgrade**: Existing indexes keep the wrong edges until re-indexed with `--clean`.
+
+---
+
 ## v1.11.8
 
 - **Fixed(rust)**: `self.method()` calls produce `CALLS` edges (#36). The Rust parser only accepted a plain identifier as a method-call receiver, so every call through `self`, a field path (`self.repo.save()`) or a call chain (`a.b().c()`, `x.iter().map(..).sum()`, `self.fetch().await?.decode()`) was dropped, and methods reached only that way were reported by `find_callers` as unused. Receivers are now rendered as a compact path (`self`, `self.repo`, `a.b()`) with arguments, `.await`, `?`, parentheses and borrows stripped. Turbofish method calls (`x.collect::<Vec<_>>()`) are captured too. On this repository, `rust_method` entities with no caller drop from 137 to 44.
