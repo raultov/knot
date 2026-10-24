@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.11.12
 
 - **Fixed(resolve)**: Calls on types outside the indexed repositories no longer bind to unrelated same-named repository methods (#32). When no type-based lookup matched, the homonym fallback bound a call to any method whose name was declared exactly once, so `String.valueOf(id)` and `modelMapper.map(..)` (a field typed `org.modelmapper.ModelMapper`) became `CALLS` edges to an unrelated `SomeFilter.valueOf` / `SomeEventMapper.map`, showing up in `explore_file`, `find_callers` and the search caller summary. A receiver whose last segment is a capitalized identifier, and no segment of whose path names an indexed entity (`String`, `ModelMapper`, `java.util.Objects`, `std::string::String`), now skips the receiver-chain and declared-once steps. A same-file homonym still wins (`Self::build()`), and an indexed segment keeps the receiver in the repository (`StringUtils.INSTANCE`, a Kotlin `object` called from Java). Lowercase receivers with no known type keep the previous behaviour, tracked in #42.
 - **Test**: Java E2E tests 47–50 (fixture `testing_files/java/external_calls/`): no caller on the repository homonyms of a third-party and a JDK call, a call on a repository type still resolves, and `explore_file` lists no homonym under Imports / Referenced Types. Resolver unit tests for external receivers (static, declared-type, qualified, Rust path) and for receivers that keep the fallback (an indexed C# property, `Self`, `StringUtils.INSTANCE`).
