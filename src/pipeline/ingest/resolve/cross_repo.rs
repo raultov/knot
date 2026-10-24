@@ -92,21 +92,21 @@ pub async fn link_cross_repo_dependencies(
 
 /// Pick the primary `ProjectIdentity` for a repository.
 ///
-/// NuGet's `PackageId` marker outranks the depth tie — a published package
-/// wins over a depth-equal non-package project. Marker-aware selection is
-/// build-system-agnostic in effect: only the NuGet parser emits the marker,
-/// so non-NuGet identities participate in the unmodified `min_by_key` arm
-/// that cross-repo e2e Test 8 pins for Maven/Gradle/Cargo/npm.
+/// The candidates are ranked by a total order, so the pick never depends on
+/// the order the parallel parser emitted them:
+///
+/// 1. NuGet's `PackageId` marker — a published package wins over a
+///    non-package project. Only the NuGet parser emits the marker, so the
+///    other build systems are ranked by the next keys alone;
+/// 2. the shallowest manifest (cross-repo e2e Test 8 pins this for
+///    Maven/Gradle/Cargo/npm);
+/// 3. the relative manifest path, then the FQN. Several manifests at the
+///    repository root used to tie on depth and the first one parsed won, so
+///    the repository's identity flipped between indexing runs.
 fn select_primary_identity<'a>(
     project_identities: &[&'a ResolutionEntity],
     repo_path: &str,
 ) -> Option<&'a ResolutionEntity> {
-    if let Some(marked) = project_identities
-        .iter()
-        .find(|e| has_package_id_marker(&e.signature))
-    {
-        return Some(*marked);
-    }
     project_identities
         .iter()
         .min_by_key(|e| {
@@ -116,7 +116,12 @@ fn select_primary_identity<'a>(
             } else {
                 p
             };
-            rel_path.components().count().saturating_sub(1)
+            (
+                !has_package_id_marker(&e.signature),
+                rel_path.components().count(),
+                rel_path.to_path_buf(),
+                e.fqn.as_str(),
+            )
         })
         .copied()
 }
@@ -613,6 +618,112 @@ mod tests {
             Some("nuget:root-app"),
             "shallowest wins when no marker is present"
         );
+    }
+
+    fn project_identity(fqn: &str, file_path: &str, signature: &str) -> ResolutionEntity {
+        ResolutionEntity {
+            uuid: uuid::Uuid::new_v4(),
+            name: fqn.rsplit(':').next().unwrap_or(fqn).to_string(),
+            fqn: fqn.to_string(),
+            file_path: file_path.to_string(),
+            kind: EntityKind::ProjectIdentity,
+            enclosing_class: None,
+            enclosing_class_fqn: None,
+            signature: Some(signature.to_string()),
+            reference_intents: vec![],
+            relationships: vec![],
+            alias_module_path: None,
+            original_export_name: None,
+            default_export: None,
+            is_test_context: false,
+        }
+    }
+
+    /// Every permutation of `identities` must select the same FQN.
+    fn assert_order_independent(identities: &[ResolutionEntity], expected: &str) {
+        let refs: Vec<&ResolutionEntity> = identities.iter().collect();
+        let n = refs.len();
+        // Heap's algorithm over the indices.
+        let mut order: Vec<usize> = (0..n).collect();
+        let mut counters = vec![0; n];
+        let mut check = |order: &[usize]| {
+            let permuted: Vec<&ResolutionEntity> = order.iter().map(|&i| refs[i]).collect();
+            assert_eq!(
+                select_primary_identity(&permuted, "/repo").map(|e| e.fqn.as_str()),
+                Some(expected),
+                "input order {:?}",
+                permuted.iter().map(|e| e.fqn.as_str()).collect::<Vec<_>>()
+            );
+        };
+        check(&order);
+        let mut i = 0;
+        while i < n {
+            if counters[i] < i {
+                let swap = if i % 2 == 0 { 0 } else { counters[i] };
+                order.swap(swap, i);
+                check(&order);
+                counters[i] += 1;
+                i = 0;
+            } else {
+                counters[i] = 0;
+                i += 1;
+            }
+        }
+    }
+
+    /// Several manifests at the repository root (the build_systems fixture:
+    /// `App.csproj`, `Cargo.toml`, `ClassLib.csproj`, `build.gradle`,
+    /// `pom.xml`) tie on depth. The pick used to depend on the order the
+    /// parallel parser emitted them, so the repository's identity flipped
+    /// between runs. Ties now break on the relative manifest path.
+    #[test]
+    fn test_primary_selection_is_independent_of_input_order() {
+        let root_manifests = [
+            project_identity(
+                "nuget:App",
+                "/repo/App.csproj",
+                "version: 1.0.0, build_system: nuget",
+            ),
+            project_identity(
+                "cargo:fixture",
+                "/repo/Cargo.toml",
+                "version: 0.1.0, build_system: cargo",
+            ),
+            project_identity(
+                "nuget:ClassLib",
+                "/repo/ClassLib.csproj",
+                "version: 1.0.0, build_system: nuget",
+            ),
+            project_identity(
+                "gradle:com.x:app",
+                "/repo/build.gradle",
+                "version: 1.0, build_system: gradle",
+            ),
+            project_identity(
+                "maven:com.x:app",
+                "/repo/pom.xml",
+                "version: 1.0, build_system: maven",
+            ),
+        ];
+        assert_order_independent(&root_manifests, "nuget:App");
+    }
+
+    /// Several `<PackageId>`-marked projects: still deterministic, the
+    /// shallowest marked one wins, then the path.
+    #[test]
+    fn test_primary_selection_among_marked_identities_is_deterministic() {
+        let marked = "version: 1.0.0, build_system: nuget, identity: package_id";
+        let identities = [
+            project_identity("nuget:Deep", "src/a/b/Deep.csproj", marked),
+            project_identity("nuget:Zeta", "src/Zeta/Zeta.csproj", marked),
+            project_identity("nuget:Alpha", "src/Alpha/Alpha.csproj", marked),
+            project_identity(
+                "cargo:root",
+                "Cargo.toml",
+                "version: 0.1.0, build_system: cargo",
+            ),
+        ];
+        assert_order_independent(&identities, "nuget:Alpha");
     }
 
     #[test]
