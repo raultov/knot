@@ -15,7 +15,9 @@ use crate::models::{CallIntent, EntityKind};
 /// 2. when `fqn_uuid`'s declared arity contradicts the call, an overload of
 ///    that FQN with variable arity (varargs, default parameters);
 /// 3. same-named methods of that class's supertypes with the call's arity,
-///    nearest first.
+///    nearest first — only in languages where overloads span the class
+///    hierarchy (Java, Kotlin, Groovy, C#); elsewhere a subclass method
+///    replaces the inherited one whatever its arity.
 ///
 /// Otherwise `fqn_uuid` is kept: a same-name/same-arity method of an
 /// unrelated class is never a better answer than the receiver's own method.
@@ -43,6 +45,13 @@ pub(crate) fn disambiguate_overload(
         && let Some(&variable) = overloads.iter().find(|u| !ac_map.contains_key(u))
     {
         return variable;
+    }
+    let overloads_span_hierarchy = ctx
+        .uuid_to_file
+        .get(&fqn_uuid)
+        .is_some_and(|file| super::overrides::overloads_span_hierarchy(file));
+    if !overloads_span_hierarchy {
+        return fqn_uuid;
     }
     inherited_overload(fqn, &intent.method, matches_arity, ctx).unwrap_or(fqn_uuid)
 }
@@ -1422,6 +1431,47 @@ mod tests {
         }
     }
 
+    /// Overloads span the class hierarchy only in Java, Kotlin, Groovy and C#.
+    /// In TypeScript a subclass method replaces the inherited one whatever
+    /// its arity, so the receiver's own method is kept (issue #38).
+    #[test]
+    fn test_overload_disambiguation_typescript_keeps_own_method() {
+        for _ in 0..20 {
+            let ts_method = |class: &str, params: &str| {
+                let mut e = mock_resolution_entity_at(
+                    "scale",
+                    &format!("{class}.scale"),
+                    Some(class),
+                    &format!("src/{class}.ts"),
+                );
+                e.signature = Some(params.to_string());
+                e
+            };
+            let mut child_class = mock_resolution_entity_with_kind(
+                "Child",
+                "Child",
+                None,
+                "src/Child.ts",
+                EntityKind::Class,
+            );
+            child_class
+                .reference_intents
+                .push(ReferenceIntent::Extends {
+                    parent: "Base".to_string(),
+                    line: 1,
+                });
+            let targets = vec![
+                ts_method("Base", "(a: number, b: number)"),
+                child_class,
+                ts_method("Child", "(a: number, b?: number)"),
+            ];
+            assert_eq!(
+                overload_targets(targets, "Child", "scale", 2),
+                vec!["Child.scale(a: number, b?: number)"]
+            );
+        }
+    }
+
     /// With no overload of the call's arity in the receiver class or its
     /// supertypes, the receiver's own method is kept instead of jumping to
     /// another class (varargs, defaults and unparsed signatures land here).
@@ -1437,6 +1487,66 @@ mod tests {
                 vec!["com.x.Foo.log(String... parts)"]
             );
         }
+    }
+
+    /// A method declared in `file_path` with `params`, called with
+    /// `call_arity` arguments from `caller_file` without a receiver: the FQN
+    /// of every target it binds to.
+    fn bare_call_targets(
+        caller_file: &str,
+        file_path: &str,
+        params: &str,
+        call_arity: usize,
+    ) -> Vec<String> {
+        let mut caller = mock_resolution_entity_at("main", "app.main", None, caller_file);
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "helper".to_string(),
+            receiver: None,
+            line: 1,
+            arg_count: Some(call_arity),
+        });
+        let mut helper = mock_resolution_entity_at("helper", "lib.helper", None, file_path);
+        helper.signature = Some(params.to_string());
+        let mut entities = vec![helper, caller];
+        resolve_reference_intents(&mut entities);
+        entities[1]
+            .relationships
+            .iter()
+            .filter_map(|(uuid, _)| entities.iter().find(|e| e.uuid == *uuid))
+            .map(|e| e.fqn.clone())
+            .collect()
+    }
+
+    /// Issue #38: JavaScript never enforces arity, so neither a JS caller's
+    /// argument count nor a JS target's declared parameters rule a candidate
+    /// out. TypeScript does enforce it.
+    #[test]
+    fn test_javascript_arity_is_never_binding() {
+        assert_eq!(
+            bare_call_targets("src/a.js", "src/a.js", "(a, b)", 1),
+            vec!["lib.helper"]
+        );
+        assert_eq!(
+            bare_call_targets("src/a.ts", "src/b.mjs", "(a, b)", 1),
+            vec!["lib.helper"]
+        );
+        assert!(bare_call_targets("src/a.ts", "src/a.ts", "(a: number, b: number)", 1).is_empty());
+    }
+
+    /// A trailing array parameter of a Groovy method is a varargs parameter;
+    /// in Java it is a plain array.
+    #[test]
+    fn test_groovy_trailing_array_parameter_is_varargs() {
+        assert_eq!(
+            bare_call_targets(
+                "src/A.groovy",
+                "src/A.groovy",
+                "void helper(String[] parts)",
+                3
+            ),
+            vec!["lib.helper"]
+        );
+        assert!(bare_call_targets("src/A.java", "src/A.java", "(String[] parts)", 3).is_empty());
     }
 
     /// A varargs method accepts any arity: the arity filter of the homonym

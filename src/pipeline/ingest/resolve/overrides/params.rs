@@ -116,16 +116,36 @@ pub(in crate::pipeline::ingest::resolve) fn declared_arity(
     let Some(body) = parameter_list_body(signature, method_name) else {
         return DeclaredArity::Unparsed;
     };
-    let params: Vec<&str> = split_top_level(body, ',')
+    let mut params: Vec<&str> = split_top_level(body, ',')
         .into_iter()
         .map(str::trim)
         .filter(|p| !p.is_empty() && *p != "void")
         .collect();
+    if let Some(first) = params.first().map(|p| strip_annotations(p).trim_start()) {
+        if first.starts_with("this:") || first.starts_with("this :") {
+            // TypeScript `this` parameter: types `this`, never passed.
+            params.remove(0);
+        } else if first.starts_with("this ") {
+            // C# extension method: the receiver of `x.M(a)`, but an argument
+            // of the static form `Ext.M(x, a)`.
+            return DeclaredArity::Variable;
+        }
+    }
     if params.iter().any(|p| accepts_variable_arity(p)) {
         DeclaredArity::Variable
     } else {
         DeclaredArity::Fixed(params.len())
     }
+}
+
+/// `true` when the last declared parameter has an array type (`String[]`).
+pub(in crate::pipeline::ingest::resolve) fn last_param_is_array(
+    signature: &str,
+    method_name: &str,
+) -> bool {
+    ParamList::parse(signature, method_name, false)
+        .and_then(|list| list.params.last().and_then(|p| p.ty.clone()))
+        .is_some_and(|ty| ty.array_dims > 0)
 }
 
 /// `true` for a parameter that is variadic or may be omitted.
@@ -539,6 +559,21 @@ mod tests {
     #[test]
     fn declared_arity_unparsed_without_parameter_list() {
         assert_eq!(declared_arity("m", "m"), DeclaredArity::Unparsed);
+    }
+
+    /// Issue #38: a TypeScript `this` parameter only types `this` and is
+    /// never passed; a C# extension method's `this` parameter is the
+    /// receiver of `x.M(a)` but an argument of `Ext.M(x, a)`.
+    #[test]
+    fn declared_arity_leading_this_parameter() {
+        assert_eq!(
+            declared_arity("(this: Window, ev: Event)", "m"),
+            DeclaredArity::Fixed(1)
+        );
+        assert_eq!(
+            declared_arity("(this string text, int width)", "m"),
+            DeclaredArity::Variable
+        );
     }
 
     fn bases(signature: &str, name: &str) -> Vec<Option<String>> {

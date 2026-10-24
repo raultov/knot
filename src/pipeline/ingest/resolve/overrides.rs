@@ -34,8 +34,9 @@ use uuid::Uuid;
 
 use crate::models::{EntityKind, RelationshipType, ResolutionEntity};
 
-pub(super) use params::{DeclaredArity, declared_arity};
+pub(super) use params::DeclaredArity;
 use params::{ParamList, match_params};
+use params::{declared_arity, last_param_is_array};
 
 /// A method declared by an override-capable type.
 struct MethodEntry<'a> {
@@ -60,9 +61,48 @@ fn has_extension(file_path: &str, extensions: &[&str]) -> bool {
     extensions.iter().any(|ext| file_path.ends_with(ext))
 }
 
+/// JavaScript sources: a call may pass fewer arguments than declared (the
+/// rest are `undefined`) or more (they are ignored), so arity never rules a
+/// call target out.
+const JAVASCRIPT_EXTENSIONS: &[&str] = &[".js", ".mjs", ".cjs", ".jsx"];
+
+/// Whether the argument count of a call written in `file_path` constrains
+/// its target (issue #38). False for JavaScript.
+pub(super) fn call_arity_is_binding(file_path: &str) -> bool {
+    !has_extension(file_path, JAVASCRIPT_EXTENSIONS)
+}
+
+/// The call-site arity of a method declared in `file_path`, with the
+/// language rules [`declared_arity`] cannot see from the signature alone:
+/// JavaScript parameters are all optional, and a trailing Groovy array
+/// parameter accepts varargs.
+pub(super) fn declared_call_arity(
+    signature: &str,
+    method_name: &str,
+    file_path: &str,
+) -> DeclaredArity {
+    if !call_arity_is_binding(file_path) {
+        return DeclaredArity::Variable;
+    }
+    if has_extension(file_path, DEFAULTS_EXPAND_ARITY_EXTENSIONS)
+        && last_param_is_array(signature, method_name)
+    {
+        return DeclaredArity::Variable;
+    }
+    declared_arity(signature, method_name)
+}
+
 /// Returns `true` if the file path ends in an override-capable extension.
 fn is_override_capable_file(file_path: &str) -> bool {
     has_extension(file_path, OVERRIDE_CAPABLE_EXTENSIONS)
+}
+
+/// Whether overloads declared in `file_path` span the class hierarchy, so a
+/// call may bind to an inherited overload rather than the receiver's own
+/// same-named method. True for the override-capable languages (Java, Kotlin,
+/// Groovy, C#); in TypeScript a subclass method replaces the inherited one.
+pub(super) fn overloads_span_hierarchy(file_path: &str) -> bool {
+    is_override_capable_file(file_path)
 }
 
 /// Method-like kinds that can override/implement a supertype method.

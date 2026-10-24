@@ -168,7 +168,7 @@ impl LookupMaps {
                 // Variable-arity methods (varargs, defaults) get no entry: an
                 // unknown arity never rules a candidate out.
                 let signature = e.signature.as_deref()?;
-                let count = match overrides::declared_arity(signature, &e.name) {
+                let count = match overrides::declared_call_arity(signature, &e.name, &e.file_path) {
                     overrides::DeclaredArity::Fixed(count) => Some(count),
                     overrides::DeclaredArity::Variable => None,
                     overrides::DeclaredArity::Unparsed => count_params_from_signature(signature),
@@ -360,7 +360,8 @@ fn resolve_intent(
                 method: method.clone(),
                 receiver: receiver.clone(),
                 line: 0,
-                arg_count: *arg_count,
+                arg_count: arg_count
+                    .filter(|_| overrides::call_arity_is_binding(&entity.file_path)),
             };
             let resolved =
                 calls::resolve_single_call_intent(&call_intent, &caller_scope(entity), ctx).map(
