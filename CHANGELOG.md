@@ -5,6 +5,14 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(resolve)**: Same-named Java/Kotlin types in different packages resolve through the caller's imports and package (#45). A call on a receiver typed `Config` bound to whichever `Config` had the lexicographically smallest FQN, and a type reference or `extends` to an ambiguous name produced no edge at all. Java and Kotlin entities now carry their file's package and imports (`ImportScope`: single-type imports keyed by simple name or Kotlin `as` alias, and on-demand imports; static imports are left out). An unqualified, capitalized type name is pinned, in Java/Kotlin precedence order, to a single-type import, then a type of the caller's own package, then an on-demand import. A pinned type binds calls only within itself and its own supertypes (the extends map is now also keyed by FQN, so a pinned type never borrows the parents of a homonym), applies to receivers named after their type (Kotlin `config.load()` → `Config`), and resolves `extends` / type references to that exact FQN. A single-type import of a type no indexed repository declares leaves the call or reference unresolved instead of binding to a repository homonym. Files without imports (other languages) are unaffected.
+- **Test**: Java E2E tests 51–55 (fixture `testing_files/java/import_homonyms/`): explicit, same-package and on-demand imports pick `b.Config`, an inherited method comes from the imported type's own supertype, an external import binds nothing, and `extends` follows the import. Kotlin E2E tests 27–28 now include a consumer in a third package that imports each `Config`, one through an `as` alias. Parser unit test for Java/Kotlin import scopes; resolver unit tests for each precedence rule, inherited methods, external imports and type references.
+- **Upgrade**: Re-index Java and Kotlin repositories with `knot-indexer --clean`.
+
+---
+
 ## v1.11.15
 
 - **Fixed(groovy)**: Calls inside one-line methods are attached to them (#40). Lexical call references carry a line but no column, and a call was assigned to a method only when its line came strictly after the declaration line, so `String wide(Formatter f) { f.format('x', 80) }` had no outgoing `CALLS` edge and its callees looked unused. Turning the comparison inclusive would have reported the declaration as calls too: the method's own name and typed parameters such as `Formatter f`, which read like a command call. Declaration lines are now skipped and only the method body that opens on them (between its `{` and the matching `}`) is rescanned, so one-line methods, calls inside a one-line closure and calls after the `{` of a multi-line method's first line all reach their method. A call on the declaration line of a method nested in another one no longer falls back to the outer method either. Synthesized property accessors, which start on the property line, never take a closure-valued property's calls.
