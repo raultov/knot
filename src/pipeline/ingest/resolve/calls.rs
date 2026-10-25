@@ -588,25 +588,14 @@ fn resolve_implicit_this_call(
     }
 
     // An explicit `self.m()` / `this.m()` names a method of the enclosing
-    // type even when its FQN is module-qualified. Without this the call
-    // falls through to the name-only homonym fallback and may bind to a
-    // same-named method of another type. A bare `m()` is not covered: in
-    // Rust it is a free-function call, never a method of the enclosing type.
-    if explicit_receiver
-        && let Some(uuid) =
-            lookup_method_by_class_and_name(enclosing_class, &intent.method, caller.file_path, ctx)
-    {
-        return Some(disambiguate_overload(uuid, intent, ctx));
-    }
-
-    if intent.receiver.as_deref() == Some("self")
-        && let Some(parents) = ctx.extends_map.get(enclosing_class)
-    {
-        for parent in parents {
-            if let Some(uuid) = lookup_local_fqn(parent, &intent.method, ctx) {
-                return Some(uuid);
-            }
-        }
+    // type or of one of its supertypes, even when its FQN is
+    // module-qualified. Without this the call falls through to the
+    // name-only homonym fallback and may bind to a same-named method of
+    // another type, or stay unresolved when several types declare it
+    // (issue #41). A bare `m()` is not covered: in Rust it is a
+    // free-function call, never a method of the enclosing type.
+    if explicit_receiver {
+        return resolve_in_type_hierarchy(enclosing_class, intent, caller.file_path, ctx);
     }
     None
 }
@@ -652,13 +641,21 @@ fn resolve_static_receiver_call(
     if !receiver.chars().next().is_some_and(|c| c.is_uppercase()) {
         return None;
     }
+    resolve_in_type_hierarchy(receiver, intent, caller_file_path, ctx)
+}
 
-    // Breadth-first over the receiver type and its `extends` ancestors, so a
-    // method inherited from a parent type (e.g. a sub-interface field calling
-    // a method declared on its super-interface) still resolves. The nearest
-    // declaring type wins.
-    let mut visited: HashSet<&str> = HashSet::from([receiver]);
-    let mut queue: VecDeque<&str> = VecDeque::from([receiver]);
+/// Breadth-first over `class` and its `extends` ancestors, so a method
+/// inherited from a parent type (e.g. a sub-interface field calling a
+/// method declared on its super-interface) still resolves. The nearest
+/// declaring type wins.
+fn resolve_in_type_hierarchy(
+    class: &str,
+    intent: &CallIntent,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<Uuid> {
+    let mut visited: HashSet<&str> = HashSet::from([class]);
+    let mut queue: VecDeque<&str> = VecDeque::from([class]);
     while let Some(class_name) = queue.pop_front() {
         if let Some(uuid) =
             lookup_method_by_class_and_name(class_name, &intent.method, caller_file_path, ctx)
@@ -1714,6 +1711,65 @@ mod tests {
                 vec!["com.x.Base.scale(int a, int b)"]
             );
         }
+    }
+
+    /// Issue #41: `this.url()` in a subclass binds to the method inherited
+    /// from its superclass, even when an unrelated class declares a
+    /// same-named method — through every supertype level, nearest first.
+    #[test]
+    fn test_this_call_walks_supertypes() {
+        let ts_class = |name: &str, parent: Option<&str>| {
+            let mut class = mock_resolution_entity_with_kind(
+                name,
+                name,
+                None,
+                &format!("src/{name}.ts"),
+                EntityKind::Class,
+            );
+            if let Some(parent) = parent {
+                class.reference_intents.push(ReferenceIntent::Extends {
+                    parent: parent.to_string(),
+                    line: 1,
+                });
+            }
+            class
+        };
+        let ts_method = |class: &str, name: &str| {
+            mock_resolution_entity_at(
+                name,
+                &format!("{class}.{name}"),
+                Some(class),
+                &format!("src/{class}.ts"),
+            )
+        };
+        let mut delete_cookie = ts_method("CdpPage", "deleteCookie");
+        delete_cookie.reference_intents = vec![receiver_call("url", "this")];
+        let mut reload = ts_method("CdpPage", "reload");
+        reload.reference_intents = vec![receiver_call("close", "this")];
+        let page_url = ts_method("Page", "url");
+        let base_close = ts_method("Base", "close");
+        let (page_url_uuid, base_close_uuid) = (page_url.uuid, base_close.uuid);
+        let mut entities = vec![
+            delete_cookie,
+            reload,
+            ts_class("CdpPage", Some("Page")),
+            ts_class("Page", Some("Base")),
+            ts_class("Base", None),
+            ts_class("Frame", None),
+            page_url,
+            base_close,
+            ts_method("Frame", "url"),
+            ts_method("Frame", "close"),
+        ];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[0].relationships,
+            vec![(page_url_uuid, RelationshipType::Calls)]
+        );
+        assert_eq!(
+            entities[1].relationships,
+            vec![(base_close_uuid, RelationshipType::Calls)]
+        );
     }
 
     /// Overloads span the class hierarchy only in Java, Kotlin, Groovy and C#.
