@@ -570,6 +570,34 @@ assert_overload_callers 15 "Other.bar" "" \
 assert_overload_callers 16 "legacyPad" "3<padDefault" \
     "JavaScript calls with fewer arguments than declared still bind"
 
+# Tests 17-19: locals are not class members, and `this.m()` reaches the
+# inherited method (issue #41). Fixture: this_inherited/. `CdpPage extends
+# Page` calls `this.url()` from a method declaring `const url`; `Frame`
+# declares an unrelated homonym `url`.
+assert_overload_callers 17 "Page.url" "2<deleteCookie" \
+    "this.url() binds to the inherited method, not to a same-named local"
+assert_overload_callers 18 "Frame.url" "" \
+    "A homonym method of an unrelated class gets no caller"
+
+echo ""
+echo "Test 19: explore_file lists no method local as a constant..."
+LOCALS_FILE="this_inherited/CdpPage.ts"
+LOCALS_CLI=$(cargo run --release --bin knot -- explore "$LOCALS_FILE" -r "$REPO_NAME" -o json 2>/dev/null \
+    | jq -r '[.entities | .. | objects | select(has("kind")) | "\(.kind):\(.name)"] | join(",")')
+LOCALS_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$LOCALS_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+LOCALS_MCP=$(echo "$LOCALS_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+    | jq -r '.result.content[0].text')
+if ! echo "$LOCALS_CLI" | grep -q "method:deleteCookie" || echo "$LOCALS_CLI" | grep -q "constant:"; then
+    echo -e "${RED}✗ CLI: expected deleteCookie and no constant, got [$LOCALS_CLI]${NC}"
+    exit 1
+fi
+if ! echo "$LOCALS_MCP" | grep -q "deleteCookie" || echo "$LOCALS_MCP" | grep -qE '`(url|pageURL)`'; then
+    echo -e "${RED}✗ MCP: unexpected explore_file outline:${NC}"
+    echo "$LOCALS_MCP"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI & MCP: CdpPage.ts lists deleteCookie and no local constant${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -592,6 +620,7 @@ echo "  ✓ TS alias should NOT have callers (TsImportBar)"
 echo "  ✓ TS explore_file shows Imports / Referenced Types section"
 echo "  ✓ TS embedding recall: doc-less hook ranks first for its paraphrase"
 echo "  ✓ Overload signatures bind by arity; JavaScript arity is never binding"
+echo "  ✓ Method locals are not members; this.m() reaches the inherited method"
 echo ""
 
 exit 0
