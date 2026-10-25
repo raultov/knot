@@ -1812,3 +1812,94 @@ fn test_groovy_uncertain_arg_count_is_none() {
         "a ternary is not a named argument"
     );
 }
+
+/// Sorted `receiver.method` (or `method`) of every call attached to the
+/// Groovy method `name`.
+fn groovy_method_calls(entities: &[ParsedEntity], name: &str) -> Vec<String> {
+    let mut calls: Vec<String> = pick_entity(entities, name, EntityKind::GroovyMethod)
+        .reference_intents
+        .iter()
+        .filter_map(|r| match r {
+            ReferenceIntent::Call {
+                method, receiver, ..
+            } => Some(match receiver {
+                Some(receiver) => format!("{receiver}.{method}"),
+                None => method.clone(),
+            }),
+            _ => None,
+        })
+        .collect();
+    calls.sort();
+    calls
+}
+
+/// Issue #40: calls written on the declaration line of a one-line method
+/// belong to that method — receiver calls, bare calls and calls inside a
+/// one-line closure. The declaration itself (the method's own name, typed
+/// parameters that read like command calls) is never a call. The lexical
+/// scanner reports every `a.b()` as both `a.b` and a bare `b`, on any line.
+#[test]
+fn test_groovy_one_line_method_calls_are_attached() {
+    let source = r#"
+class Report {
+    String wide(Formatter formatter) { formatter.format('x', 80) }
+    String narrow(Formatter formatter) { pad(formatter.format('x', 20)) }
+    void joined(List<String> parts) { parts.each { log.log(it) } }
+    int countdown(int n) { n > 0 ? countdown(n - 1) : 0 }
+    String pad(String text) { text }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Report.groovy", "test-repo");
+    assert_eq!(
+        groovy_method_calls(&entities, "wide"),
+        vec!["format", "formatter.format"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "narrow"),
+        vec!["format", "formatter.format", "pad"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "joined"),
+        vec!["log", "log.log"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "countdown"),
+        vec!["countdown"]
+    );
+    assert!(groovy_method_calls(&entities, "pad").is_empty());
+}
+
+/// Calls after the body's `{` on a multi-line method's declaration line are
+/// attached too; the declaration's parameter types never are.
+#[test]
+fn test_groovy_calls_on_multi_line_declaration_line_are_attached() {
+    let source = r#"
+class Job {
+    void run(Context context) { prepare()
+        execute(context)
+    }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Job.groovy", "test-repo");
+    assert_eq!(
+        groovy_method_calls(&entities, "run"),
+        vec!["execute", "prepare"]
+    );
+}
+
+/// A closure-valued property synthesizes accessors starting on the property
+/// line; the closure's calls are not the accessors' calls.
+#[test]
+fn test_groovy_property_closure_calls_not_attached_to_accessors() {
+    let source = r#"
+class Hooks {
+    Closure handler = { notify() }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Hooks.groovy", "test-repo");
+    let accessor_calls: Vec<&ParsedEntity> = entities
+        .iter()
+        .filter(|e| e.kind == EntityKind::GroovyMethod && !e.reference_intents.is_empty())
+        .collect();
+    assert!(accessor_calls.is_empty(), "{accessor_calls:?}");
+}

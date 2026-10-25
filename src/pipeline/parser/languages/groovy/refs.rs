@@ -199,7 +199,7 @@ fn bare_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<Referen
     None
 }
 
-fn scan_line_for_calls(trimmed: &str, line_num: usize, refs: &mut Vec<ReferenceIntent>) {
+pub(super) fn scan_line_for_calls(trimmed: &str, line_num: usize, refs: &mut Vec<ReferenceIntent>) {
     let mut chars = trimmed.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if c == '"' || c == '\'' {
@@ -250,6 +250,49 @@ pub(super) fn extract_method_calls(
 
     refs
 }
+/// Index of the delimiter closing the one `text` opens with (`(` → `)`,
+/// `{` → `}`), skipping string literals and nested pairs.
+fn closing_index(text: &str, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' | '\'' => skip_string_literal(&mut chars, c),
+            c if c == open => depth += 1,
+            c if c == close => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The text inside a method body that opens on the method's declaration
+/// line: `String wide(Formatter f) { f.format('x', 80) }` →
+/// ` f.format('x', 80) `; up to the end of the line when the body continues
+/// on the next ones. `None` when the line does not declare `name(` (or
+/// `"name"(`) or the body does not open on it.
+pub(super) fn body_on_declaration_line<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let open_paren = line.match_indices(name).find_map(|(start, _)| {
+        if line[..start].chars().next_back().is_some_and(is_word) {
+            return None;
+        }
+        let after = start + name.len();
+        let rest = line[after..].trim_start_matches(['"', '\'']).trim_start();
+        rest.starts_with('(').then(|| line.len() - rest.len())
+    })?;
+    let close_paren = open_paren + closing_index(&line[open_paren..], '(', ')')?;
+    let open_brace = close_paren + line[close_paren..].find('{')?;
+    let body_end =
+        closing_index(&line[open_brace..], '{', '}').map_or(line.len(), |i| open_brace + i);
+    Some(&line[open_brace + 1..body_end])
+}
+
 /// Splits an identifier from the start of `s`, returns (identifier, rest).
 // Reserved for future FQN construction
 fn split_identifier(s: &str) -> Option<(&str, &str)> {

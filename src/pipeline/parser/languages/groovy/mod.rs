@@ -44,7 +44,7 @@ use methods::{
     try_extract_typed_method_multiline,
 };
 use properties::{GroovyPropertyDecl, try_extract_property};
-use refs::extract_method_calls;
+use refs::{body_on_declaration_line, extract_method_calls, scan_line_for_calls};
 use utils::{build_fqn, extract_package, extract_preceding_docstring, strip_comments_line};
 
 /// Extracts entities from a Groovy source file with the ad-hoc lexical parser.
@@ -432,6 +432,12 @@ fn fix_method_end_lines(entities: &mut [ParsedEntity], source: &str) {
 /// containing method. When methods are nested (e.g., hyperlinkUpdate inside
 /// showGrabbingFinishedMessage), the call is assigned to the deepest method,
 /// not the outer container.
+///
+/// Calls carry a line but no column, so a call on a method's declaration
+/// line cannot be told apart from the declaration itself (its own name,
+/// typed parameters that read like command calls). Those lines are skipped
+/// and only the body text opening on them is rescanned, so one-line methods
+/// keep their calls (issue #40).
 fn assign_method_call_references(source: &str, entities: &mut [ParsedEntity]) {
     let mut method_spans: Vec<(usize, usize, usize)> = entities
         .iter()
@@ -448,23 +454,35 @@ fn assign_method_call_references(source: &str, entities: &mut [ParsedEntity]) {
 
     let refs = extract_method_calls(source, entities);
 
-    // Assign each reference intent to the innermost containing method.
-    for method_ref in refs.iter() {
-        if let ReferenceIntent::Call { line, .. } = method_ref {
-            // Find all methods that contain this line
-            let mut candidates: Vec<(usize, usize, usize)> = method_spans
-                .iter()
-                .filter(|(m_start, m_end, _)| {
-                    let actual_end = if *m_end != *m_start { *m_end } else { *m_start };
-                    *line > *m_start && *line <= actual_end
-                })
-                .copied()
-                .collect();
-            // Pick the innermost: smallest (end - start) wins
-            candidates.sort_by_key(|(s, e, _)| e.saturating_sub(*s));
-            if let Some(&(_, _, m_eidx)) = candidates.first() {
-                entities[m_eidx].reference_intents.push(method_ref.clone());
-            }
+    for method_ref in refs {
+        if let ReferenceIntent::Call { line, .. } = method_ref
+            && let Some(m_eidx) = innermost_method(&method_spans, line)
+            && entities[m_eidx].start_line != line
+        {
+            entities[m_eidx].reference_intents.push(method_ref);
         }
     }
+
+    let lines: Vec<&str> = source.lines().collect();
+    for &(start, _, m_eidx) in &method_spans {
+        let Some(body) = lines
+            .get(start.wrapping_sub(1))
+            .and_then(|line| body_on_declaration_line(line, &entities[m_eidx].name))
+        else {
+            continue;
+        };
+        let mut calls = Vec::new();
+        scan_line_for_calls(body.trim(), start, &mut calls);
+        entities[m_eidx].reference_intents.extend(calls);
+    }
+}
+
+/// The innermost method span containing `line` (smallest `end - start`;
+/// the earliest start among equal spans).
+fn innermost_method(method_spans: &[(usize, usize, usize)], line: usize) -> Option<usize> {
+    method_spans
+        .iter()
+        .filter(|(start, end, _)| line >= *start && line <= *end)
+        .min_by_key(|(start, end, _)| end.saturating_sub(*start))
+        .map(|&(_, _, idx)| idx)
 }
