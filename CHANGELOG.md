@@ -5,6 +5,14 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(groovy)**: Calls inside one-line methods are attached to them (#40). Lexical call references carry a line but no column, and a call was assigned to a method only when its line came strictly after the declaration line, so `String wide(Formatter f) { f.format('x', 80) }` had no outgoing `CALLS` edge and its callees looked unused. Turning the comparison inclusive would have reported the declaration as calls too: the method's own name and typed parameters such as `Formatter f`, which read like a command call. Declaration lines are now skipped and only the method body that opens on them (between its `{` and the matching `}`) is rescanned, so one-line methods, calls inside a one-line closure and calls after the `{` of a multi-line method's first line all reach their method. A call on the declaration line of a method nested in another one no longer falls back to the outer method either. Synthesized property accessors, which start on the property line, never take a closure-valued property's calls.
+- **Test**: Groovy E2E Group J (tests J1–J4): one-line methods with receiver, bare and closure calls list their callers, and a declaration is never a call to the method itself. Parser unit tests for one-line methods, the first line of a multi-line method and closure-valued properties.
+- **Upgrade**: Re-index Groovy repositories with `knot-indexer --clean` to add the missing edges.
+
+---
+
 ## v1.11.14
 
 - **Fixed(typescript, javascript)**: Variables local to a function no longer become class members (#41). The `lexical_declaration` query matched declarations at any depth, so `const url = new URL(pageURL)` inside `CdpPage.deleteCookie` was indexed as the constant `CdpPage.url`. It captured `this.url()` calls meant for the inherited `Page.url()`, shared the FQN `Page.url` with the real method, appeared as a member in `explore_file` and search, and duplicated its initializer's `CALLS` edges. A JS/TS `const` / `let` / `var` declared inside a function, method or arrow body is no longer indexed; its initializer's calls stay on the enclosing entity. Module-level constants, class fields and local function definitions are unchanged.
