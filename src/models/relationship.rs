@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Represents a reference to another entity within source code.
 ///
@@ -154,6 +155,14 @@ pub enum ReferenceIntent {
         /// Line number where this unused declaration occurs.
         line: usize,
     },
+    /// An HTTP endpoint routes requests to its handler method.
+    /// Example: `@GET @Path("/{id}") Response read(..)`
+    RoutesTo {
+        /// UUID of the handler method, known when the endpoint is extracted.
+        handler: Uuid,
+        /// Line number of the handler declaration.
+        line: usize,
+    },
 }
 
 /// Represents a typed relationship edge in the dependency graph.
@@ -201,6 +210,9 @@ pub enum RelationshipType {
     ImportsVmod,
     /// VCL: `unused` declaration marks an entity as intentionally unreferenced.
     DeclaredUnused,
+    /// HTTP endpoint -> the handler method serving it.
+    /// Edge direction: `endpoint -[RoutesTo]-> handler`.
+    RoutesTo,
 }
 
 impl std::fmt::Display for RelationshipType {
@@ -225,6 +237,7 @@ impl std::fmt::Display for RelationshipType {
             RelationshipType::Includes => write!(f, "INCLUDES"),
             RelationshipType::ImportsVmod => write!(f, "IMPORTS_VMOD"),
             RelationshipType::DeclaredUnused => write!(f, "DECLARED_UNUSED"),
+            RelationshipType::RoutesTo => write!(f, "ROUTES_TO"),
         }
     }
 }

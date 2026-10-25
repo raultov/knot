@@ -145,6 +145,8 @@ pub enum EntityKind {
     // Markdown entities
     MarkdownDocument, // A full Markdown file or frontmatter
     MarkdownSection,  // A section under a Markdown heading
+    // HTTP endpoints served by JVM web frameworks (JAX-RS, Spring MVC)
+    HttpEndpoint, // GET /items/{id}
 }
 
 const KIND_LABELS: &[(EntityKind, &str)] = &[
@@ -258,6 +260,7 @@ const KIND_LABELS: &[(EntityKind, &str)] = &[
     (EntityKind::VccMethod, "vcc_method"),
     (EntityKind::MarkdownDocument, "markdown_document"),
     (EntityKind::MarkdownSection, "markdown_section"),
+    (EntityKind::HttpEndpoint, "http_endpoint"),
 ];
 
 impl std::fmt::Display for EntityKind {

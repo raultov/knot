@@ -93,6 +93,7 @@ pub(crate) fn collect_orphaned_references(
             ReferenceIntent::VclInclude { line, .. } => *line,
             ReferenceIntent::VclVmodImport { line, .. } => *line,
             ReferenceIntent::VclUnusedRef { line, .. } => *line,
+            ReferenceIntent::RoutesTo { line, .. } => *line,
         };
         let target_idx = find_nearest_entity_by_line(entities, orphan_line);
         entities[target_idx].reference_intents.push(intent);

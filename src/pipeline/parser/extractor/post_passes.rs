@@ -1,4 +1,5 @@
 use crate::models::{EntityKind, ParsedEntity};
+use crate::pipeline::parser::http_endpoints;
 use crate::pipeline::parser::languages::{javascript, kotlin, rust, typescript};
 use crate::pipeline::parser::orphans::collect_orphaned_references;
 use tree_sitter::Node;
@@ -161,4 +162,23 @@ pub(crate) fn run_post_passes<'a>(
             set_module_default_export(entities, target, lang_name, file_path, repo_name);
         }
     }
+
+    add_http_endpoints(tree_root, source_bytes, lang_name, entities);
+}
+
+/// Last pass: HTTP endpoints of Java/Kotlin handler methods (issue #33).
+/// They point at handlers by UUID and span a single line, so no earlier
+/// pass sees them.
+fn add_http_endpoints(
+    tree_root: Node<'_>,
+    source_bytes: &[u8],
+    lang_name: &str,
+    entities: &mut Vec<ParsedEntity>,
+) {
+    if !matches!(lang_name, "java" | "kotlin") {
+        return;
+    }
+    let constants = http_endpoints::extract_string_constants(tree_root, source_bytes, lang_name);
+    let endpoints = http_endpoints::extract_http_endpoints(entities, &constants);
+    entities.extend(endpoints);
 }

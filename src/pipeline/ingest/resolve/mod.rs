@@ -497,6 +497,7 @@ fn resolve_intent(
             resolve_plain(name, entity, ctx, metrics),
             RelationshipType::DeclaredUnused,
         ),
+        ReferenceIntent::RoutesTo { handler, .. } => (Some(*handler), RelationshipType::RoutesTo),
     }
 }
 
@@ -631,6 +632,33 @@ mod tests {
         resolve_reference_intents(&mut entities);
 
         assert_eq!(entities[0].relationships.len(), 1);
+    }
+
+    /// Issue #33: an endpoint routes to its handler by UUID, even when a
+    /// same-named method exists elsewhere.
+    #[test]
+    fn test_routes_to_binds_the_handler_uuid() {
+        let handler =
+            mock_resolution_entity("read", "com.a.ItemsResource.read", Some("ItemsResource"));
+        let homonym = mock_resolution_entity("read", "com.b.Other.read", Some("Other"));
+        let mut endpoint = mock_resolution_entity_with_kind(
+            "GET /items",
+            "com.a.ItemsResource.read[GET /items]",
+            Some("ItemsResource"),
+            "test/file.java",
+            EntityKind::HttpEndpoint,
+        );
+        endpoint.reference_intents.push(ReferenceIntent::RoutesTo {
+            handler: handler.uuid,
+            line: 3,
+        });
+        let handler_uuid = handler.uuid;
+        let mut entities = vec![endpoint, homonym, handler];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[0].relationships,
+            vec![(handler_uuid, RelationshipType::RoutesTo)]
+        );
     }
 
     #[test]
