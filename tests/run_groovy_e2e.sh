@@ -1153,13 +1153,15 @@ GROOVY
 run_indexer "$REPO_I" "$COLL_I" "--clean"
 
 # Overloads share their FQN, so each Calls row is reported as
-# `<target declaration line><<caller>`.
+# `<target declaration line><<caller>`. Queries $CALLERS_REPO / $CALLERS_COLL.
+CALLERS_REPO="$REPO_I"
+CALLERS_COLL="$COLL_I"
 assert_groovy_overload_callers() {
     local id="$1" entity="$2" expected="$3" description="$4"
     echo ""
     echo "Test $id: $description ($entity callers exactly [$expected])..."
     local cli_actual
-    cli_actual=$(call_cli "$REPO_I" "$COLL_I" callers "$entity" -r "$REPO_I" -o json \
+    cli_actual=$(call_cli "$CALLERS_REPO" "$CALLERS_COLL" callers "$entity" -r "$CALLERS_REPO" -o json \
         | jq -r '.calls[] | "\(.target_start_line)<\(.name)"' | LC_ALL=C sort -u | paste -sd, -)
     if [ "$cli_actual" = "$expected" ]; then
         echo -e "${GREEN}✓ CLI: $entity callers [$cli_actual]${NC}"
@@ -1168,10 +1170,10 @@ assert_groovy_overload_callers() {
         FAILED=1
     fi
 
-    local request="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$REPO_I\"}}}"
+    local request="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$entity\",\"repo_name\":\"$CALLERS_REPO\"}}}"
     local mcp_expected mcp_actual
     mcp_expected=$(echo "$expected" | tr ',' '\n' | sed 's/^[0-9]*<//' | LC_ALL=C sort -u | paste -sd, -)
-    mcp_actual=$(call_mcp "$REPO_I" "$COLL_I" "$request" \
+    mcp_actual=$(call_mcp "$CALLERS_REPO" "$CALLERS_COLL" "$request" \
         | jq -r '.result.content[0].text' \
         | awk '/^## /{ on = ($0 ~ /^## Calls/) } on && /^- \*\*`/' \
         | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -)
@@ -1189,6 +1191,61 @@ assert_groovy_overload_callers I2 "nextflow.other.OtherFormatter.format" "" \
     "A same-name/same-arity method in another class gets no caller"
 assert_groovy_overload_callers I3 "nextflow.ocalls.ConsoleLog.log" "5<joined" \
     "A trailing array parameter accepts any number of arguments"
+
+# ═══════════════════════════════════════════════════════════
+# GROUP J: Calls inside one-line methods (issue #40)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group J: Calls inside one-line methods ──${NC}"
+
+REPO_J="groovy_one_line_calls_e2e"
+COLL_J="knot_groovy_one_line_calls_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow/oneline"
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/oneline/Formatter.groovy" << 'GROOVY'
+package nextflow.oneline
+
+class Formatter {
+    String format(String text, int width) { text }
+
+    String format(String text) { text }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/oneline/ConsoleLog.groovy" << 'GROOVY'
+package nextflow.oneline
+
+class ConsoleLog {
+    void log(String[] parts) { println parts.join(' ') }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/oneline/Report.groovy" << 'GROOVY'
+package nextflow.oneline
+
+class Report {
+    String wide(Formatter formatter) { formatter.format('x', 80) }
+    String narrow(Formatter formatter) { formatter.format('x') }
+    void joined(ConsoleLog sink) { sink.log('a', 'b', 'c') }
+    void forEachPart(List<String> parts, ConsoleLog sink) { parts.each { sink.log(it) } }
+    String shout(String text) { upper(text) }
+    String upper(String text) { text.toUpperCase() }
+}
+GROOVY
+
+run_indexer "$REPO_J" "$COLL_J" "--clean"
+
+CALLERS_REPO="$REPO_J"
+CALLERS_COLL="$COLL_J"
+assert_groovy_overload_callers J1 "nextflow.oneline.Formatter.format" "4<wide,6<narrow" \
+    "Receiver calls in one-line methods bind by arity"
+assert_groovy_overload_callers J2 "nextflow.oneline.ConsoleLog.log" "4<forEachPart,4<joined" \
+    "A call inside a one-line closure belongs to the one-line method"
+assert_groovy_overload_callers J3 "nextflow.oneline.Report.upper" "9<shout" \
+    "A bare call in a one-line method resolves"
+assert_groovy_overload_callers J4 "nextflow.oneline.Report.wide" "" \
+    "A declaration is never a call to the method itself"
 
 # ── Final result ─────────────────────────────────────────
 echo -e "\n${BLUE}========================================${NC}"
