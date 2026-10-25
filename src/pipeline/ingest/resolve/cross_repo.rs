@@ -545,6 +545,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
         let unmarked_shallow = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -561,6 +562,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
         let identities = vec![&unmarked_shallow, &marked];
         let primary = select_primary_identity(&identities, "/repo");
@@ -594,6 +596,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
         let nested = ResolutionEntity {
             uuid: Uuid::new_v4(),
@@ -610,6 +613,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
         let identities = vec![&nested, &root];
         let primary = select_primary_identity(&identities, "/repo");
@@ -636,6 +640,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         }
     }
 

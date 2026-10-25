@@ -29,6 +29,7 @@ pub(crate) fn mock_resolution_entity_with_kind(
         original_export_name: None,
         default_export: None,
         is_test_context: false,
+        import_scope: None,
     }
 }
 

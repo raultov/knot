@@ -11,12 +11,13 @@ mod test_utils;
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
 use crate::config::Config;
 use crate::db::graph::{EntityMappings, GraphDb, RepoQueryExt, UpsertExt};
-use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEntity};
+use crate::models::{EntityKind, ImportScope, ReferenceIntent, RelationshipType, ResolutionEntity};
 
 pub use context::{ResolutionContext, RunMetrics};
 pub use cross_repo::link_cross_repo_dependencies;
@@ -137,6 +138,37 @@ fn resolve_vcl_include(
     calls::pick_deterministic_candidate(&candidates, None)
 }
 
+/// `extends` parents of every type, keyed by its simple name and, for
+/// package-qualified types, by its FQN too: a type pinned by the caller's
+/// imports walks its own supertypes even when another package declares a
+/// type with the same name (issue #45).
+fn build_extends_map(entities: &[ResolutionEntity]) -> HashMap<String, Vec<String>> {
+    entities
+        .iter()
+        .flat_map(|e| {
+            let parents: Vec<String> = e
+                .reference_intents
+                .iter()
+                .filter_map(|i| {
+                    if let ReferenceIntent::Extends { parent, .. } = i {
+                        Some(parent.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if parents.is_empty() {
+                return Vec::new();
+            }
+            let mut keys = vec![e.name.clone()];
+            if e.fqn != e.name {
+                keys.push(e.fqn.clone());
+            }
+            keys.into_iter().map(|key| (key, parents.clone())).collect()
+        })
+        .collect()
+}
+
 /// Owned lookup maps for reference resolution: the incoming global context
 /// seeded with the current batch, plus the per-batch derived maps.
 struct LookupMaps {
@@ -153,6 +185,7 @@ struct LookupMaps {
     fqn_overloads: HashMap<String, Vec<Uuid>>,
     dependency_uuids: HashSet<Uuid>,
     local_type_names: HashSet<String>,
+    import_scopes: HashMap<String, Arc<ImportScope>>,
 }
 
 impl LookupMaps {
@@ -213,26 +246,11 @@ impl LookupMaps {
         let uuid_to_name: HashMap<Uuid, String> =
             entities.iter().map(|e| (e.uuid, e.name.clone())).collect();
 
-        let extends_map: HashMap<String, Vec<String>> = entities
+        let extends_map = build_extends_map(entities);
+
+        let import_scopes: HashMap<String, Arc<ImportScope>> = entities
             .iter()
-            .filter_map(|e| {
-                let parents: Vec<String> = e
-                    .reference_intents
-                    .iter()
-                    .filter_map(|i| {
-                        if let ReferenceIntent::Extends { parent, .. } = i {
-                            Some(parent.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if parents.is_empty() {
-                    None
-                } else {
-                    Some((e.name.clone(), parents))
-                }
-            })
+            .filter_map(|e| Some((e.file_path.clone(), Arc::clone(e.import_scope.as_ref()?))))
             .collect();
 
         for e in entities.iter() {
@@ -265,6 +283,7 @@ impl LookupMaps {
             fqn_overloads,
             dependency_uuids,
             local_type_names,
+            import_scopes,
         }
     }
 
@@ -282,6 +301,7 @@ impl LookupMaps {
             fqn_overloads: &self.fqn_overloads,
             dependency_uuids: &self.dependency_uuids,
             local_type_names: &self.local_type_names,
+            import_scopes: &self.import_scopes,
         }
     }
 }
@@ -528,6 +548,19 @@ fn resolve_typed(
     ctx: &ResolutionContext<'_>,
     metrics: &RunMetrics,
 ) -> Option<Uuid> {
+    if let Some(pin) = calls::pinned_type(name, &entity.file_path, ctx) {
+        let target = match pin {
+            calls::TypePin::Indexed(type_fqn) => ctx.fqn_to_uuid.get(&type_fqn).copied(),
+            calls::TypePin::External => None,
+        };
+        let counter = if target.is_some() {
+            &metrics.references_resolved
+        } else {
+            &metrics.references_unresolved
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return target;
+    }
     non_calls::resolve_non_call_reference_typed(
         name,
         &entity.file_path,

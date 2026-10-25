@@ -74,6 +74,7 @@ pub(crate) mod test_utils {
             enclosing_class_fqn: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         }
     }
 

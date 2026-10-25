@@ -1,6 +1,6 @@
 mod scope;
 
-use crate::models::{CallIntent, ReferenceIntent};
+use crate::models::{CallIntent, ImportScope, ReferenceIntent};
 use crate::pipeline::parser::utils::{extract_new_expression_name, node_text};
 use scope::resolve_receiver_type_if_declared;
 use tree_sitter::Node;
@@ -380,6 +380,38 @@ pub(crate) fn extract_package_name(root: Node<'_>, source: &[u8]) -> Option<Stri
         child = c.next_sibling();
     }
     None
+}
+
+/// The file's package, single-type imports and on-demand imports. Static
+/// imports name members, not types, and are left out.
+pub(crate) fn extract_import_scope(root: Node<'_>, source: &[u8]) -> ImportScope {
+    let mut scope = ImportScope {
+        package: extract_package_name(root, source),
+        ..ImportScope::default()
+    };
+    for import in root
+        .children(&mut root.walk())
+        .filter(|c| c.kind() == "import_declaration")
+    {
+        let parts: Vec<Node<'_>> = import.children(&mut import.walk()).collect();
+        if parts.iter().any(|p| p.kind() == "static") {
+            continue;
+        }
+        let Some(path) = parts
+            .iter()
+            .find(|p| matches!(p.kind(), "scoped_identifier" | "identifier"))
+            .map(|p| node_text(*p, source).split_whitespace().collect::<String>())
+        else {
+            continue;
+        };
+        if parts.iter().any(|p| p.kind() == "asterisk") {
+            scope.wildcards.push(path);
+        } else {
+            let simple = path.rsplit('.').next().unwrap_or(&path).to_string();
+            scope.imports.push((simple, path));
+        }
+    }
+    scope
 }
 
 pub(crate) fn extract_class_inheritance_java(

@@ -59,6 +59,7 @@ fn make_test_parsed_entity(id: u32) -> ParsedEntity {
         relationships: Vec::new(),
         embed_text: format!("[RustStruct] TestEntity_{id}\nSignature: fn test_{id}()"),
         is_test_context: false,
+        import_scope: None,
     }
 }
 

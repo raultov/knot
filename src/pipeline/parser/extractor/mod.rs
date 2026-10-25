@@ -143,5 +143,16 @@ pub(crate) fn extract_entities(
         &covered_ranges,
     );
 
+    let import_scope = match lang_name {
+        "java" => Some(java::extract_import_scope(tree.root_node(), source_bytes)),
+        "kotlin" => Some(kotlin::extract_import_scope(tree.root_node(), source_bytes)),
+        _ => None,
+    };
+    if let Some(scope) = import_scope.map(std::sync::Arc::new) {
+        for entity in &mut entities {
+            entity.import_scope = Some(std::sync::Arc::clone(&scope));
+        }
+    }
+
     Ok(entities)
 }

@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
-use crate::models::EntityKind;
+use crate::models::{EntityKind, ImportScope};
 
 pub struct RunMetrics {
     pub entities_indexed: AtomicU64,
@@ -62,6 +63,8 @@ pub struct ResolutionContext<'a> {
     pub dependency_uuids: &'a HashSet<Uuid>,
     /// Simple names of the types the local repository declares.
     pub local_type_names: &'a HashSet<String>,
+    /// File path → package and imports of that file (Java, Kotlin).
+    pub import_scopes: &'a HashMap<String, Arc<ImportScope>>,
 }
 
 impl ResolutionContext<'_> {

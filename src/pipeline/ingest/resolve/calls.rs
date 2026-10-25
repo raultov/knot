@@ -641,7 +641,55 @@ fn resolve_static_receiver_call(
     if !receiver.chars().next().is_some_and(|c| c.is_uppercase()) {
         return None;
     }
-    resolve_in_type_hierarchy(receiver, intent, caller_file_path, ctx)
+    match pinned_type(receiver, caller_file_path, ctx) {
+        Some(TypePin::Indexed(type_fqn)) => {
+            resolve_in_type_hierarchy(&type_fqn, intent, caller_file_path, ctx)
+        }
+        Some(TypePin::External) => None,
+        None => resolve_in_type_hierarchy(receiver, intent, caller_file_path, ctx),
+    }
+}
+
+/// What the caller file's imports and package say about an unqualified,
+/// capitalized type name (issue #45).
+pub(crate) enum TypePin {
+    /// The name denotes this indexed type.
+    Indexed(String),
+    /// A single-type import binds the name to a type no indexed repository
+    /// declares.
+    External,
+}
+
+/// Java/Kotlin precedence: a single-type import (by name or Kotlin alias),
+/// then a type of the caller's own package, then an on-demand import.
+/// Same-package and on-demand candidates only count when indexed, since
+/// the name may equally come from `java.lang` or another implicit scope.
+/// `None` when the caller's file carries no imports (other languages) or
+/// nothing pins the name, so the name-based lookups apply unchanged.
+pub(crate) fn pinned_type(
+    name: &str,
+    caller_file_path: &str,
+    ctx: &ResolutionContext,
+) -> Option<TypePin> {
+    if !name.chars().next().is_some_and(char::is_uppercase)
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    {
+        return None;
+    }
+    let scope = ctx.import_scopes.get(caller_file_path)?;
+    if let Some(type_fqn) = scope.imported(name) {
+        return Some(if ctx.fqn_to_uuid.contains_key(type_fqn) {
+            TypePin::Indexed(type_fqn.to_string())
+        } else {
+            TypePin::External
+        });
+    }
+    scope
+        .implicit_candidates(name)
+        .find(|type_fqn| ctx.fqn_to_uuid.contains_key(type_fqn))
+        .map(TypePin::Indexed)
 }
 
 /// Breadth-first over `class` and its `extends` ancestors, so a method
@@ -713,6 +761,16 @@ fn resolve_receiver_call(
 ) -> Option<Uuid> {
     let receiver = intent.receiver.as_ref()?;
     let (receiver_class, capitalized) = receiver_type_names(receiver);
+    // A receiver named after a type the caller's file pins (`config` for an
+    // imported `com.b.Config`) binds within that type only: the name-based
+    // scan below would mix in same-named types of other packages.
+    match pinned_type(&capitalized, caller_file_path, ctx) {
+        Some(TypePin::Indexed(type_fqn)) => {
+            return resolve_in_type_hierarchy(&type_fqn, intent, caller_file_path, ctx);
+        }
+        Some(TypePin::External) => return None,
+        None => {}
+    }
     let shadowed = |uuid: &Uuid| {
         ctx.is_shadowed_dependency(uuid, receiver_class)
             || ctx.is_shadowed_dependency(uuid, &capitalized)
@@ -813,7 +871,9 @@ pub(crate) fn resolve_single_call_intent(
 mod tests {
     use super::super::test_utils::*;
     use super::*;
-    use crate::models::{EntityKind, ReferenceIntent, RelationshipType, ResolutionEntity};
+    use crate::models::{
+        EntityKind, ImportScope, ReferenceIntent, RelationshipType, ResolutionEntity,
+    };
     use crate::pipeline::ingest::resolve::resolve_reference_intents;
 
     #[test]
@@ -899,6 +959,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
 
         let rust_fn = ResolutionEntity {
@@ -916,6 +977,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
 
         let rust_caller = ResolutionEntity {
@@ -939,6 +1001,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
 
         let orphans_caller = ResolutionEntity {
@@ -961,6 +1024,7 @@ mod tests {
             original_export_name: None,
             default_export: None,
             is_test_context: false,
+            import_scope: None,
         };
 
         let orphans_fn_uuid = orphans_fn.uuid;
@@ -1597,6 +1661,159 @@ mod tests {
             entities[0].relationships,
             vec![(capitalize_uuid, RelationshipType::Calls)]
         );
+    }
+
+    /// `<package>/<Class>.java` for a JVM FQN `<package>.<Class>[.<member>]`.
+    fn jvm_entity(fqn: &str, class_fqn: &str, kind: EntityKind) -> ResolutionEntity {
+        let (package, class) = class_fqn.rsplit_once('.').unwrap();
+        let name = fqn.rsplit('.').next().unwrap();
+        let enclosing = (fqn != class_fqn).then_some(class);
+        mock_resolution_entity_with_kind(
+            name,
+            fqn,
+            enclosing,
+            &format!("src/{}/{class}.java", package.replace('.', "/")),
+            kind,
+        )
+    }
+
+    /// `com.a.Config` and `com.b.Config` both declare `load`; `reset` is
+    /// declared by `com.a.Config` and inherited by `com.b.Config` from
+    /// `com.b.Base`.
+    fn config_homonyms() -> Vec<ResolutionEntity> {
+        let mut b_config = jvm_entity("com.b.Config", "com.b.Config", EntityKind::Class);
+        b_config.reference_intents.push(ReferenceIntent::Extends {
+            parent: "Base".to_string(),
+            line: 1,
+        });
+        vec![
+            jvm_entity("com.a.Config", "com.a.Config", EntityKind::Class),
+            jvm_entity("com.a.Config.load", "com.a.Config", EntityKind::Method),
+            jvm_entity("com.a.Config.reset", "com.a.Config", EntityKind::Method),
+            b_config,
+            jvm_entity("com.b.Config.load", "com.b.Config", EntityKind::Method),
+            jvm_entity("com.b.Base", "com.b.Base", EntityKind::Class),
+            jvm_entity("com.b.Base.reset", "com.b.Base", EntityKind::Method),
+        ]
+    }
+
+    /// Resolve `intent` issued by `<package>.Caller.run` (whose file has
+    /// `scope`) against [`config_homonyms`]; returns the target FQNs.
+    fn scoped_targets(package: &str, scope: ImportScope, intent: ReferenceIntent) -> Vec<String> {
+        let mut caller = jvm_entity(
+            &format!("{package}.Caller.run"),
+            &format!("{package}.Caller"),
+            EntityKind::Method,
+        );
+        caller.import_scope = Some(std::sync::Arc::new(scope));
+        caller.reference_intents = vec![intent];
+        let mut entities = config_homonyms();
+        entities.push(caller);
+        resolve_reference_intents(&mut entities);
+        let caller = entities.last().unwrap();
+        caller
+            .relationships
+            .iter()
+            .map(|(uuid, _)| {
+                entities
+                    .iter()
+                    .find(|e| e.uuid == *uuid)
+                    .unwrap()
+                    .fqn
+                    .clone()
+            })
+            .collect()
+    }
+
+    fn import_scope(package: &str, imports: &[(&str, &str)], wildcards: &[&str]) -> ImportScope {
+        ImportScope {
+            package: Some(package.to_string()),
+            imports: imports
+                .iter()
+                .map(|(local, fqn)| (local.to_string(), fqn.to_string()))
+                .collect(),
+            wildcards: wildcards.iter().map(|w| w.to_string()).collect(),
+        }
+    }
+
+    /// Issue #45: a call on a type with homonyms in other packages binds to
+    /// the one the caller's file imports (by name or Kotlin alias), else to
+    /// its own package's, else to an on-demand import's — for declared-type
+    /// receivers (`Config`) and untyped ones named after the type (`config`).
+    #[test]
+    fn test_imports_pick_the_homonym_type() {
+        let b_import = [("Config", "com.b.Config")];
+        for (package, scope, receiver) in [
+            ("com.app", import_scope("com.app", &b_import, &[]), "Config"),
+            ("com.app", import_scope("com.app", &b_import, &[]), "config"),
+            (
+                "com.app",
+                import_scope("com.app", &[("BConfig", "com.b.Config")], &[]),
+                "BConfig",
+            ),
+            ("com.b", import_scope("com.b", &[], &[]), "Config"),
+            (
+                "com.app",
+                import_scope("com.app", &[], &["com.b"]),
+                "Config",
+            ),
+        ] {
+            assert_eq!(
+                scoped_targets(package, scope, receiver_call("load", receiver)),
+                vec!["com.b.Config.load"],
+                "{package} {receiver}"
+            );
+        }
+    }
+
+    /// The imported type's own supertypes are walked: `reset` binds to
+    /// `com.b.Base.reset`, never to the homonym `com.a.Config.reset`.
+    #[test]
+    fn test_imported_type_walks_its_own_supertypes() {
+        assert_eq!(
+            scoped_targets(
+                "com.app",
+                import_scope("com.app", &[("Config", "com.b.Config")], &[]),
+                receiver_call("reset", "Config")
+            ),
+            vec!["com.b.Base.reset"]
+        );
+    }
+
+    /// An import of a type no indexed repository declares pins the call to
+    /// that external type: no repository homonym is bound.
+    #[test]
+    fn test_external_import_binds_no_homonym() {
+        for receiver in ["Config", "config"] {
+            assert!(
+                scoped_targets(
+                    "com.app",
+                    import_scope("com.app", &[("Config", "org.lib.Config")], &[]),
+                    receiver_call("reset", receiver)
+                )
+                .is_empty(),
+                "{receiver}"
+            );
+        }
+    }
+
+    /// Type references follow the same imports: `Config` is ambiguous
+    /// without them and the imported one with them.
+    #[test]
+    fn test_imports_pick_the_referenced_homonym_type() {
+        let type_ref = || ReferenceIntent::TypeReference {
+            type_name: "Config".to_string(),
+            line: 1,
+        };
+        assert_eq!(
+            scoped_targets(
+                "com.app",
+                import_scope("com.app", &[("Config", "com.b.Config")], &[]),
+                type_ref()
+            ),
+            vec!["com.b.Config"]
+        );
+        assert!(scoped_targets("com.app", ImportScope::default(), type_ref()).is_empty());
     }
 
     /// A Java method `<class_fqn>.<name><params>` declared in `<Class>.java`.

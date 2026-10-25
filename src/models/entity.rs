@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{ReferenceIntent, RelationshipType};
+use super::{ImportScope, ReferenceIntent, RelationshipType};
 
 /// Namespace UUID for knot entity generation.
 /// All entity UUIDs are derived from this namespace using UUID v5.
@@ -388,6 +390,12 @@ pub struct ParsedEntity {
     /// Always `false` for non-Rust languages.
     pub is_test_context: bool,
 
+    /// Package and imports of the entity's file (Java, Kotlin), shared by
+    /// every entity of that file. Only call/type resolution reads it, so it
+    /// is neither persisted nor serialized.
+    #[serde(skip)]
+    pub import_scope: Option<Arc<ImportScope>>,
+
     /// Raw reference intents extracted from this entity.
     /// Populated during the parse stage; may be empty if no references were found.
     /// These are resolved to UUIDs during the ingest stage and converted to graph relationships.
@@ -429,6 +437,7 @@ pub struct ResolutionEntity {
     pub original_export_name: Option<String>,
     pub default_export: Option<String>,
     pub is_test_context: bool,
+    pub import_scope: Option<Arc<ImportScope>>,
 }
 
 impl From<&ParsedEntity> for ResolutionEntity {
@@ -448,6 +457,7 @@ impl From<&ParsedEntity> for ResolutionEntity {
             original_export_name: entity.original_export_name.clone(),
             default_export: entity.default_export.clone(),
             is_test_context: entity.is_test_context,
+            import_scope: entity.import_scope.clone(),
         }
     }
 }
@@ -525,6 +535,7 @@ impl ParsedEntity {
             default_export: None,
             enclosing_class_fqn: None,
             is_test_context: false,
+            import_scope: None,
             embed_text: String::new(),
         }
     }

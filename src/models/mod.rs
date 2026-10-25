@@ -8,12 +8,14 @@
 
 mod cli_args;
 mod entity;
+mod imports;
 mod relationship;
 mod repo_scope;
 mod subgraph;
 
 pub use cli_args::{Cli, Commands};
 pub use entity::{EmbeddedEntity, EntityKind, NAMESPACE_KNOT, ParsedEntity, ResolutionEntity};
+pub use imports::ImportScope;
 pub use relationship::{CallIntent, ReferenceIntent, RelationshipType};
 pub use repo_scope::RepoScope;
 pub use subgraph::{

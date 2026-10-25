@@ -236,6 +236,7 @@ mod tests {
             original_export_name: None,
             default_export: default_export.map(|s| s.to_string()),
             is_test_context: false,
+            import_scope: None,
         }
     }
 

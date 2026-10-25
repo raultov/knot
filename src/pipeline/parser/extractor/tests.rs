@@ -2725,3 +2725,51 @@ app.get("/", function (req, res) {
         vec!["CONFIG"]
     );
 }
+
+/// Issue #45: every Java/Kotlin entity carries its file's package and
+/// imports. Static imports name members, not types, and are left out; a
+/// Kotlin `as` alias becomes the local name.
+#[test]
+fn test_extract_entities_jvm_import_scope() {
+    let java = extract_java(
+        "package com.app;\n\nimport com.b.Config;\nimport com.c.*;\nimport static com.d.Util.helper;\n\nclass App {\n    void run() {}\n}\n",
+    );
+    let scope = java
+        .iter()
+        .find(|e| e.name == "run")
+        .and_then(|e| e.import_scope.clone())
+        .expect("Java import scope");
+    assert_eq!(
+        *scope,
+        crate::models::ImportScope {
+            package: Some("com.app".to_string()),
+            imports: vec![("Config".to_string(), "com.b.Config".to_string())],
+            wildcards: vec!["com.c".to_string()],
+        }
+    );
+
+    let kotlin = extract_kotlin(
+        "package com.app\n\nimport com.b.Config\nimport com.b.Source as BSource\nimport com.c.*\n\nclass App {\n    fun run() {}\n}\n",
+    );
+    let scope = kotlin
+        .iter()
+        .find(|e| e.name == "App")
+        .and_then(|e| e.import_scope.clone())
+        .expect("Kotlin import scope");
+    assert_eq!(
+        *scope,
+        crate::models::ImportScope {
+            package: Some("com.app".to_string()),
+            imports: vec![
+                ("Config".to_string(), "com.b.Config".to_string()),
+                ("BSource".to_string(), "com.b.Source".to_string()),
+            ],
+            wildcards: vec!["com.c".to_string()],
+        }
+    );
+    assert!(
+        extract_typescript("export class A {}")
+            .iter()
+            .all(|e| e.import_scope.is_none())
+    );
+}

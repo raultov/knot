@@ -1,4 +1,4 @@
-use crate::models::{CallIntent, EntityKind, ParsedEntity, ReferenceIntent};
+use crate::models::{CallIntent, EntityKind, ImportScope, ParsedEntity, ReferenceIntent};
 use crate::pipeline::parser::utils::node_text;
 use tree_sitter::Node;
 
@@ -11,6 +11,36 @@ pub(crate) fn extract_package_name(root: Node<'_>, source: &[u8]) -> Option<Stri
         .children(&mut header.walk())
         .find(|c| c.kind() == "qualified_identifier")?;
     Some(node_text(name, source).split_whitespace().collect())
+}
+
+/// The file's package, single-type imports (keyed by their `as` alias when
+/// present) and on-demand imports.
+pub(crate) fn extract_import_scope(root: Node<'_>, source: &[u8]) -> ImportScope {
+    let mut scope = ImportScope {
+        package: extract_package_name(root, source),
+        ..ImportScope::default()
+    };
+    for import in root
+        .children(&mut root.walk())
+        .filter(|c| c.kind() == "import")
+    {
+        let mut cursor = import.walk();
+        let mut names = import
+            .named_children(&mut cursor)
+            .map(|n| node_text(n, source).split_whitespace().collect::<String>());
+        let Some(path) = names.next() else {
+            continue;
+        };
+        if import.children(&mut import.walk()).any(|c| c.kind() == "*") {
+            scope.wildcards.push(path);
+        } else {
+            let local = names
+                .next()
+                .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
+            scope.imports.push((local, path));
+        }
+    }
+    scope
 }
 
 /// Recursively extract all call intents from Kotlin.
