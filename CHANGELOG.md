@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.11.14
 
 - **Fixed(typescript, javascript)**: Variables local to a function no longer become class members (#41). The `lexical_declaration` query matched declarations at any depth, so `const url = new URL(pageURL)` inside `CdpPage.deleteCookie` was indexed as the constant `CdpPage.url`. It captured `this.url()` calls meant for the inherited `Page.url()`, shared the FQN `Page.url` with the real method, appeared as a member in `explore_file` and search, and duplicated its initializer's `CALLS` edges. A JS/TS `const` / `let` / `var` declared inside a function, method or arrow body is no longer indexed; its initializer's calls stay on the enclosing entity. Module-level constants, class fields and local function definitions are unchanged.
 - **Fixed(resolve)**: An explicit `this.m()` / `self.m()` walks the enclosing type's supertypes breadth-first, nearest first, as static receivers already did. Previously only Python's `self` looked at direct parents, so in TypeScript, Java or Kotlin `this.url()` on an inherited method stayed unresolved, or fell back to a same-named method elsewhere, whenever several classes declared `url`.
