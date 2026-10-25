@@ -829,6 +829,35 @@ for EXT_SOURCE in CLI MCP; do
     echo -e "${GREEN}✓ $EXT_SOURCE: Imports / Referenced Types lists CodeTable only${NC}"
 done
 
+# Tests 51-55: same-named types in different packages resolve through the
+# caller's imports and package (issue #45). Fixture:
+# testing_files/java/import_homonyms/. `a.Config` and `b.Config` both declare
+# `load`; `b.Config` inherits `reset` from `b.Base`, `a.Config` declares its
+# own; `ExternalCaller` imports a `Config` no indexed repository declares.
+IMP_PKG="com.example.knot.imports"
+assert_overload_callers 51 "$IMP_PKG.a.Config.load" "" \
+    "A homonym type that no caller imports gets no caller"
+assert_overload_callers 52 "$IMP_PKG.b.Config.load" "4<loadImported,4<loadSame,4<loadWildcard" \
+    "Explicit import, same package and on-demand import all pick b.Config"
+assert_overload_callers 53 "$IMP_PKG.b.Base.reset" "4<resetImported" \
+    "The imported type's own supertype supplies an inherited method"
+assert_overload_callers 54 "$IMP_PKG.a.Config.reset" "" \
+    "Neither an inherited call nor an external import binds the homonym"
+
+echo ""
+echo "Test 55: Extends follows the import (ExtendedConfig extends b.Config only)..."
+for IMP_TYPE in a b; do
+    IMP_EXPECTED=""
+    [ "$IMP_TYPE" = "b" ] && IMP_EXPECTED="ExtendedConfig"
+    IMP_ACTUAL=$(cargo run --release --bin knot -- callers "$IMP_PKG.$IMP_TYPE.Config" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '[.extends[]?.name] | unique | join(",")')
+    if [ "$IMP_ACTUAL" != "$IMP_EXPECTED" ]; then
+        echo -e "${RED}✗ CLI: $IMP_PKG.$IMP_TYPE.Config extended by [$IMP_ACTUAL], expected [$IMP_EXPECTED]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: $IMP_PKG.$IMP_TYPE.Config extended by [$IMP_ACTUAL]${NC}"
+done
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -855,6 +884,7 @@ echo "  ✓ OVERRIDES match overloads by arity and parameter types (generics inc
 echo "  ✓ Search caller summary matches find_callers (homonyms, dispatched calls)"
 echo "  ✓ Overload disambiguation stays within the receiver class and its supertypes"
 echo "  ✓ Calls on JDK / third-party types never bind to repo homonyms"
+echo "  ✓ Same-named types in different packages resolve through imports and package"
 echo ""
 
 exit 0

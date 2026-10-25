@@ -547,12 +547,14 @@ assert_overload_callers 26 "$KOCALLS_PKG.x.Padder.pad" "26<padShort,26<padWide" 
 # Tests 27-30: FQNs carry the package, so same-named types in different
 # packages stay distinct (issue #39). Fixture:
 # testing_files/kotlin/package_collision/: `Source` and `Config : Source`
-# declared in both com.example.kpkg.a and com.example.kpkg.b.
+# declared in both com.example.kpkg.a and com.example.kpkg.b. `app/Consumer.kt`
+# reaches each one from a third package through its imports, one of them by
+# an `as` alias (issue #45).
 KPKG="com.example.kpkg"
-assert_overload_callers 27 "$KPKG.a.Config.load" "8<readA" \
-    "A package-qualified FQN reaches only that package's method"
-assert_overload_callers 28 "$KPKG.b.Config.load" "8<readB" \
-    "The same-named method of another package keeps its own callers"
+assert_overload_callers 27 "$KPKG.a.Config.load" "8<readA,8<useA" \
+    "A package-qualified FQN reaches only that package's method (alias import)"
+assert_overload_callers 28 "$KPKG.b.Config.load" "8<readB,8<useB" \
+    "The same-named method of another package keeps its own callers (import)"
 
 assert_package_overrides() {
     local id=$1
@@ -599,6 +601,7 @@ echo "  ✓ Kotlin enum class classification (v0.11.0)"
 echo "  ✓ Kotlin method signature fragment search (: Int)"
 echo "  ✓ Overload calls bind by arity (trailing lambdas, defaults, supertypes)"
 echo "  ✓ Package-qualified FQNs keep same-named types apart (calls, OVERRIDES)"
+echo "  ✓ Calls from other packages follow imports and aliases"
 echo ""
 echo "Entity types supported:"
 echo "  - KotlinClass"
