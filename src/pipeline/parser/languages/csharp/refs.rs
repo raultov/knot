@@ -31,7 +31,7 @@
 use std::collections::HashMap;
 
 use crate::models::{CallIntent, ReferenceIntent};
-use crate::pipeline::parser::utils::{is_capitalized, node_text};
+use crate::pipeline::parser::utils::{find_parent_by_kind_any, is_capitalized, node_text};
 use tree_sitter::Node;
 
 // ---------------------------------------------------------------------------
@@ -693,17 +693,6 @@ fn first_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
             return Some(c);
         }
         child = c.next_sibling();
-    }
-    None
-}
-
-fn find_parent_by_kind_any<'a>(node: Node<'a>, kinds: &[&str]) -> Option<Node<'a>> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if kinds.contains(&parent.kind()) {
-            return Some(parent);
-        }
-        current = parent.parent();
     }
     None
 }

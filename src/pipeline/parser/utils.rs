@@ -140,6 +140,18 @@ pub(crate) fn find_parent_by_kind<'a>(mut node: Node<'a>, kind: &str) -> Option<
     None
 }
 
+/// The nearest ancestor of `node` whose kind is one of `kinds`.
+pub(crate) fn find_parent_by_kind_any<'a>(node: Node<'a>, kinds: &[&str]) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if kinds.contains(&parent.kind()) {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
+}
+
 /// Convert extracted `CallIntent`s into `ReferenceIntent::Call` items.
 pub(crate) fn convert_call_intents_to_reference_intents<F>(
     node: Node<'_>,
