@@ -575,6 +575,34 @@ assert_package_overrides() {
 assert_package_overrides 29 a
 assert_package_overrides 30 b
 
+# Tests 31-32: HTTP endpoint catalogue for Kotlin Spring controllers (issue
+# #33). Fixture: testing_files/kotlin/http_endpoints/. The class annotations
+# are parsed by the grammar as an expression before the class; the class
+# path uses a top-level `const val` template, a method path a companion one.
+KHTTP_PKG="com.example.khttp"
+echo ""
+echo "Test 31: Kotlin Spring controller endpoints..."
+KHTTP_ACTUAL=$(cargo run --release --bin knot -- endpoints --path /api/article -r "$REPO_NAME" -o json 2>/dev/null \
+    | jq -r '.endpoints[] | "\(.method) \(.path) \(.handler_fqn)"' | paste -sd, -)
+KHTTP_EXPECTED="GET /api/article $KHTTP_PKG.ArticleController.findAll,POST /api/article/drafts $KHTTP_PKG.ArticleController.create,POST /api/article/published $KHTTP_PKG.ArticleController.create,GET /api/article/{slug} $KHTTP_PKG.ArticleController.findOne"
+if [ "$KHTTP_ACTUAL" != "$KHTTP_EXPECTED" ]; then
+    echo -e "${RED}✗ CLI: expected [$KHTTP_EXPECTED], got [$KHTTP_ACTUAL]${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI: Kotlin endpoints [$KHTTP_ACTUAL]${NC}"
+
+echo ""
+echo "Test 32: MCP list_endpoints resolves a concrete URL to its Kotlin handler..."
+KHTTP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\",\"params\":{\"name\":\"list_endpoints\",\"arguments\":{\"method\":\"GET\",\"path\":\"/api/article/hello-kotlin\",\"repo_name\":\"$REPO_NAME\"}}}"
+KHTTP_MCP=$(echo "$KHTTP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text')
+if ! echo "$KHTTP_MCP" | grep -qF "| GET | \`/api/article/{slug}\` | \`$KHTTP_PKG.ArticleController.findOne\` |" \
+    || [ "$(echo "$KHTTP_MCP" | grep -c '^| GET')" != "1" ]; then
+    echo -e "${RED}✗ MCP: expected only GET /api/article/{slug}${NC}"
+    echo "$KHTTP_MCP"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: /api/article/hello-kotlin → ArticleController.findOne${NC}"
+
 # Step 5: Success
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -602,6 +630,7 @@ echo "  ✓ Kotlin method signature fragment search (: Int)"
 echo "  ✓ Overload calls bind by arity (trailing lambdas, defaults, supertypes)"
 echo "  ✓ Package-qualified FQNs keep same-named types apart (calls, OVERRIDES)"
 echo "  ✓ Calls from other packages follow imports and aliases"
+echo "  ✓ HTTP endpoint catalogue for Spring controllers"
 echo ""
 echo "Entity types supported:"
 echo "  - KotlinClass"

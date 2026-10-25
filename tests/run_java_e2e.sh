@@ -858,6 +858,79 @@ for IMP_TYPE in a b; do
     echo -e "${GREEN}✓ CLI: $IMP_PKG.$IMP_TYPE.Config extended by [$IMP_ACTUAL]${NC}"
 done
 
+# Tests 56-62: HTTP endpoint catalogue (issue #33). Fixture:
+# testing_files/java/http_endpoints/. JAX-RS ItemsResource (class @Path from
+# an interface constant, method @Path from a static final with a regex
+# variable, two verbs on one method, a sub-resource locator), Spring
+# OwnerController (class @RequestMapping, arrays, @RequestMapping(method)),
+# and a @FeignClient interface whose mappings are calls, not endpoints.
+HTTP_PKG="com.example.knot.http"
+assert_endpoints() {
+    local id=$1
+    local expected=$2
+    local description=$3
+    shift 3
+
+    echo ""
+    echo "Test $id: $description (endpoints $* exactly [$expected])..."
+    local actual
+    actual=$(cargo run --release --bin knot -- endpoints "$@" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '.endpoints[] | "\(.method) \(.path) \(.handler_fqn)"' | paste -sd, -)
+    if [ "$actual" != "$expected" ]; then
+        echo -e "${RED}✗ CLI: endpoints $* expected [$expected], got [$actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: endpoints $* [$actual]${NC}"
+}
+
+assert_endpoints 56 "GET /items $HTTP_PKG.ItemsResource.readAll,POST /items $HTTP_PKG.ItemsResource.write,PUT /items $HTTP_PKG.ItemsResource.write,GET /items/{id} $HTTP_PKG.ItemsResource.read" \
+    "JAX-RS class and method paths join, constants resolve, locators are skipped" --path /items
+assert_endpoints 57 "GET /api/owners $HTTP_PKG.OwnerController.listOwners,GET /api/owners/legacy $HTTP_PKG.OwnerController.legacyOwners,HEAD /api/owners/legacy $HTTP_PKG.OwnerController.legacyOwners,GET /api/owners/{ownerId} $HTTP_PKG.OwnerController.showOwner" \
+    "Spring class prefix, path arrays and @RequestMapping(method)" --path /api
+assert_endpoints 58 "GET /api/owners/{ownerId} $HTTP_PKG.OwnerController.showOwner" \
+    "A concrete URL finds its templated endpoint" --method get --path /api/owners/7
+assert_endpoints 59 "" "A @FeignClient interface serves no endpoint" --path /remote
+
+echo ""
+echo "Test 60: MCP list_endpoints renders the catalogue..."
+HTTP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"tools/call\",\"params\":{\"name\":\"list_endpoints\",\"arguments\":{\"path\":\"/items\",\"repo_name\":\"$REPO_NAME\"}}}"
+HTTP_MCP=$(echo "$HTTP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text')
+if ! echo "$HTTP_MCP" | grep -qF "| GET | \`/items/{id}\` | \`$HTTP_PKG.ItemsResource.read\` |"; then
+    echo -e "${RED}✗ MCP: list_endpoints row for GET /items/{id} missing${NC}"
+    echo "$HTTP_MCP"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: list_endpoints lists GET /items/{id} → ItemsResource.read${NC}"
+
+echo ""
+echo "Test 61: find_callers on a handler lists the endpoint routing to it..."
+HTTP_ROUTES=$(cargo run --release --bin knot -- callers "$HTTP_PKG.ItemsResource.read" -r "$REPO_NAME" -o json 2>/dev/null \
+    | jq -r '[.routes_to[]?.name] | join(",")')
+if [ "$HTTP_ROUTES" != "GET /items/{id}" ]; then
+    echo -e "${RED}✗ CLI: ItemsResource.read routes expected [GET /items/{id}], got [$HTTP_ROUTES]${NC}"
+    exit 1
+fi
+HTTP_CALLERS_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$HTTP_PKG.ItemsResource.read\",\"repo_name\":\"$REPO_NAME\"}}}"
+HTTP_CALLERS_MCP=$(echo "$HTTP_CALLERS_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text')
+if ! echo "$HTTP_CALLERS_MCP" | awk '/^## /{ on = ($0 ~ /^## HTTP routes/) } on' | grep -qF 'GET /items/{id}'; then
+    echo -e "${RED}✗ MCP: find_callers misses the HTTP routes section${NC}"
+    echo "$HTTP_CALLERS_MCP"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI & MCP: ItemsResource.read is routed from GET /items/{id}${NC}"
+
+echo ""
+echo "Test 62: explore_file groups the endpoints of a resource..."
+HTTP_EXPLORE_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"http_endpoints/com/example/knot/http/ItemsResource.java\",\"repo_name\":\"$REPO_NAME\"}}}"
+HTTP_EXPLORE=$(echo "$HTTP_EXPLORE_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text')
+HTTP_SECTION=$(echo "$HTTP_EXPLORE" | awk '/^## /{ on = ($0 ~ /^## HTTP Endpoints/) } on && /^- /' | grep -c '`')
+if [ "$HTTP_SECTION" != "4" ]; then
+    echo -e "${RED}✗ MCP: explore_file HTTP Endpoints section expected 4 entries, got $HTTP_SECTION${NC}"
+    echo "$HTTP_EXPLORE"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: explore_file lists the 4 endpoints of ItemsResource${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -885,6 +958,7 @@ echo "  ✓ Search caller summary matches find_callers (homonyms, dispatched cal
 echo "  ✓ Overload disambiguation stays within the receiver class and its supertypes"
 echo "  ✓ Calls on JDK / third-party types never bind to repo homonyms"
 echo "  ✓ Same-named types in different packages resolve through imports and package"
+echo "  ✓ HTTP endpoint catalogue (JAX-RS, Spring MVC) routed to handlers"
 echo ""
 
 exit 0
