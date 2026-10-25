@@ -2617,3 +2617,111 @@ fn test_extract_entities_markdown_section_fqn_chain() {
         usage.fqn
     );
 }
+
+fn extract_typescript(source: &str) -> Vec<ParsedEntity> {
+    extract_entities(
+        source,
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        include_str!("../../../../queries/typescript.scm"),
+        "typescript",
+        "/CdpPage.ts",
+        "test-repo",
+    )
+    .unwrap()
+}
+
+fn names_of_kind(entities: &[ParsedEntity], kind: EntityKind) -> Vec<&str> {
+    let mut names: Vec<&str> = entities
+        .iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| e.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// Issue #41: a `const` / `let` declared inside a method, function or arrow
+/// body is a local variable, not a member: it must not become a constant
+/// named `Class.local` that captures `this.local()` calls. Module-level
+/// constants, class fields and local function definitions stay indexed.
+#[test]
+fn test_extract_entities_typescript_skips_function_locals() {
+    let source = r#"
+export const TOP = 42;
+
+export class CdpPage extends Page {
+  timeout = 30;
+
+  async deleteCookie(name: string): Promise<void> {
+    const pageURL = this.url();
+    const url = new URL(pageURL);
+    let count = 0;
+    const helper = (n: number) => n + 1;
+    helper(count);
+  }
+}
+
+function topLevel() {
+  const local = 1;
+  return local;
+}
+
+export const handler = () => {
+  const inner = 2;
+  return inner;
+};
+"#;
+    let entities = extract_typescript(source);
+    assert_eq!(
+        names_of_kind(&entities, EntityKind::Constant),
+        vec!["TOP", "handler", "timeout"]
+    );
+    assert!(
+        entities.iter().all(|e| e.fqn != "CdpPage.url"),
+        "no class-scoped local: {:?}",
+        entities.iter().map(|e| &e.fqn).collect::<Vec<_>>()
+    );
+    assert!(names_of_kind(&entities, EntityKind::Function).contains(&"helper"));
+    let delete_cookie = entities.iter().find(|e| e.name == "deleteCookie").unwrap();
+    assert!(
+        delete_cookie
+            .reference_intents
+            .iter()
+            .any(|i| matches!(i, ReferenceIntent::Call { method, .. } if method == "url")),
+        "the method keeps the calls of its locals' initializers"
+    );
+}
+
+/// The JavaScript grammar shares the rule: locals of a method or a callback
+/// are not constants, module-level ones are.
+#[test]
+fn test_extract_entities_javascript_skips_function_locals() {
+    let source = r#"
+const CONFIG = { retries: 3 };
+
+class Page {
+  goto() {
+    const url = "x";
+    return url;
+  }
+}
+
+app.get("/", function (req, res) {
+  const user = "u";
+  res.send(user);
+});
+"#;
+    let entities = extract_entities(
+        source,
+        tree_sitter_javascript::LANGUAGE.into(),
+        include_str!("../../../../queries/javascript.scm"),
+        "javascript",
+        "/page.js",
+        "test-repo",
+    )
+    .unwrap();
+    assert_eq!(
+        names_of_kind(&entities, EntityKind::Constant),
+        vec!["CONFIG"]
+    );
+}

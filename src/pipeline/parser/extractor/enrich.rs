@@ -4,7 +4,9 @@ use crate::pipeline::parser::context::{ClassContext, compute_fqn_and_context};
 use crate::pipeline::parser::languages::{
     cpp, csharp, java, javascript, kotlin, markdown, python, typescript,
 };
-use crate::pipeline::parser::utils::{extract_decorator_references, extract_type_references};
+use crate::pipeline::parser::utils::{
+    extract_decorator_references, extract_type_references, find_parent_by_kind_any,
+};
 use tree_sitter::Node;
 
 use super::captures::CaptureState;
@@ -56,6 +58,10 @@ pub(crate) fn enrich_and_create_entity<'a>(
     let mut reference_intents = std::mem::take(&mut state.reference_intents);
 
     if let (Some(mut name), Some(kind)) = (name, kind) {
+        if is_function_local_variable(lang_name, &kind, entity_node) {
+            return;
+        }
+
         // Extract docstring and inline comments dynamically from the entity node
         let (docstring, inline_comments) = if let Some(node) = entity_node {
             extract_comments(node, source_bytes, lang_name, &kind, class_contexts)
@@ -85,31 +91,15 @@ pub(crate) fn enrich_and_create_entity<'a>(
         fqns.apply_kotlin_package();
         fqns.apply_cpp_namespace();
         fqns.apply_csharp_scope();
+        let markdown_name = fqns.apply_markdown_identity(repo_name, file_path);
         let FqnEnrichment {
-            mut fqn,
+            fqn,
             enclosing_class,
             enclosing_class_fqn,
             ..
         } = fqns;
-
-        // derive the document's display name from repo + file path, and the FQN from the file path so entities don't collide.
-        if lang_name == "markdown" {
-            if matches!(kind, EntityKind::MarkdownDocument) {
-                name = format!("{}::{}", repo_name, file_path);
-            }
-
-            fqn = match kind {
-                EntityKind::MarkdownDocument => file_path.to_string(),
-                EntityKind::MarkdownSection => {
-                    if let Some(node) = entity_node {
-                        let chain = markdown::build_markdown_fqn(node, source_bytes);
-                        format!("{}::{}", file_path, chain)
-                    } else {
-                        format!("{}::{}", file_path, name)
-                    }
-                }
-                _ => fqn,
-            };
+        if let Some(display_name) = markdown_name {
+            name = display_name;
         }
 
         // For classes, also extract extends/implements from AST
@@ -181,6 +171,29 @@ pub(crate) fn enrich_and_create_entity<'a>(
     }
 }
 
+/// JS/TS scopes whose `const` / `let` / `var` declarations are locals.
+const JS_FUNCTION_SCOPE_KINDS: &[&str] = &[
+    "function_declaration",
+    "generator_function_declaration",
+    "function_expression",
+    "function",
+    "generator_function",
+    "arrow_function",
+    "method_definition",
+    "class_static_block",
+];
+
+/// `true` for a JS/TS variable declared inside a function, method or arrow
+/// body: a local that nothing outside its body can reference. Indexed, it
+/// took the enclosing class's FQN (`CdpPage.url`) and captured
+/// `this.url()` calls meant for an inherited method (issue #41). The calls
+/// of its initializer stay on the enclosing entity.
+fn is_function_local_variable(lang_name: &str, kind: &EntityKind, node: Option<Node<'_>>) -> bool {
+    matches!(lang_name, "typescript" | "javascript")
+        && *kind == EntityKind::Constant
+        && node.is_some_and(|n| find_parent_by_kind_any(n, JS_FUNCTION_SCOPE_KINDS).is_some())
+}
+
 /// Extracts decorators/annotations from the entity node; Python additionally
 /// collects decorator names for display.
 fn extract_entity_decorators(
@@ -246,6 +259,30 @@ impl FqnEnrichment<'_> {
                 .and_then(|prefix| prefix.strip_suffix('.'))
                 .filter(|prefix| !prefix.is_empty())
                 .map(str::to_string);
+        }
+    }
+
+    /// Markdown: derive the FQN from the file path so entities of different
+    /// files don't collide. A document also takes the display name
+    /// `<repo>::<file>`, which is returned.
+    fn apply_markdown_identity(&mut self, repo_name: &str, file_path: &str) -> Option<String> {
+        if self.lang_name != "markdown" {
+            return None;
+        }
+        match self.kind {
+            EntityKind::MarkdownDocument => {
+                self.fqn = file_path.to_string();
+                Some(format!("{repo_name}::{file_path}"))
+            }
+            EntityKind::MarkdownSection => {
+                let chain = self.node.map_or_else(
+                    || self.name.to_string(),
+                    |node| markdown::build_markdown_fqn(node, self.source_bytes),
+                );
+                self.fqn = format!("{file_path}::{chain}");
+                None
+            }
+            _ => None,
         }
     }
 
