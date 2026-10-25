@@ -19,7 +19,7 @@ The indexer automatically builds:
 - **Graph Database** (Neo4j) — architectural relationships via call graphs
 
 This dual-database approach powers both:
-- **MCP (Model Context Protocol) Server** — Exposes four read-only tools (search, callers, explore, list_files/repos) to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.)
+- **MCP (Model Context Protocol) Server** — Exposes read-only tools (search, callers, explore, list_files, list_endpoints, repos, deps) to any LLM client (Claude, Gemini, ChatGPT, Cursor, etc.)
 - **CLI Tool** — Standalone `knot` command for terminal and scripting environments
 
 ### Knot in action
@@ -125,6 +125,7 @@ point them at any repository you have indexed to measure your own codebase.
 - **`explore_file`**: File anatomy inspection. Quickly see all classes, interfaces, methods, functions, constants, and other entities in a file with signatures and documentation. Attribute-usage markup tokens (`html_class`, `html_id`) are summarized in a separate section by default to avoid cluttering code lists; use `--include-markup` (CLI) or `include_markup: true` (MCP) to list them in full. Structured content returns `markup_count` and `markup_references` alongside `ambiguous_path_candidates`.
 - **`list_repo_dependencies`** (MCP) / **`knot deps`** (CLI): Dependency graph visualization. Show which repositories depend on each other, forward and reverse, with transitive resolution.
 - **`list_files`** (MCP) / **`knot files`** (CLI): Read-only file enumeration with entity counts, deterministically ordered. Accepts an optional `path` — a repo-relative directory prefix matched on a path boundary (`src/api` never matches `src/api-notes.md`) or a glob (`src/**/*_test.rs`). Prefixes and globs alike page the repository file list in pages of 2000 entries with per-page boundary filtering, ensuring no valid candidates are dropped. When output exceeds 2000 matches, a truncation notice is displayed below the table reporting the exact pre-truncation match count when known (or an explicit lower bound when the scan stopped early). JSON output carries `total_matches` and `total_is_lower_bound`. Pair with the new `--path`/`path` scope on `search_hybrid_context` to restrict a semantic search to a subtree.
+- **`list_endpoints`** (MCP) / **`knot endpoints`** (CLI): HTTP endpoint catalogue. Lists the endpoints Java and Kotlin code serves — JAX-RS (class/method `@Path` + `@GET`/`@POST`/…) and Spring MVC (class `@RequestMapping` + `@GetMapping`/… or `@RequestMapping(method = …)`) — as `<METHOD> <path>` with the handler method each one routes to. Class and method paths are joined, path arrays expand, path-variable patterns are dropped (`{id: [0-9]+}` → `{id}`), and string constants resolve whether declared in the same file or in another file of the repository (found through imports and package; Kotlin `const val` templates included). Filters: `method` (case-insensitive; `ANY`, a `@RequestMapping` without `method`, matches every method) and `path` (segment-wise prefix where an endpoint's `{variable}` segment matches any value, so a concrete URL such as `/api/owners/42` finds `GET /api/owners/{id}`). Each endpoint is an `http_endpoint` entity linked to its handler by a `ROUTES_TO` edge: `find_callers` on a handler lists it under **HTTP routes** (a handler reached only over HTTP is never reported as unused), `explore_file` groups a resource's endpoints under **HTTP Endpoints**, and `search_hybrid_context` finds them by route. Paths are relative to the application — the context path (`server.servlet.context-path`, `@ApplicationPath`) is deployment configuration and is not applied. Declarative clients (`@FeignClient`, `@RegisterRestClient` interfaces) are not endpoints, and interfaces generated at build time (OpenAPI generator) are not in the source tree. An unresolved constant stays visible as `<expression>`.
 - **`list_repositories`** / **`knot repos`**: Repository inventory. List every indexed repository along with its entity count, file count, build system, and primary language. Supports optional case-insensitive name filtering via `--filter` (CLI) or `filter` parameter (MCP). Useful for orientation, sanity-checking indexing runs, and discovering which languages and build systems are present in the workspace.
 
 **🧩 Reference Resolution**
@@ -375,7 +376,7 @@ Find all code that references a specific entity (dead code detection, impact ana
 
 Target resolution is **code-only by default**: documentation, configuration, build-system and Kubernetes/Helm entities (`markdown_section`, `config_property`, `build_dependency`, `cargo_package`, `project_identity`, `k8s_*`, `helm_*`, …) can never be presented as resolved targets. When the filter removes matches the response discloses them (`Non-code matches hidden — N entities …`) and names the fix (`kinds=all` to include them). A fuzzy query like `cargo` no longer fills the target list with `Cargo.toml` metadata. Fuzzy matching is also **case-insensitive**, so `hikari` finds `Hikari`-named artifacts. Queries shorter than 4 characters resolve by **anchored name prefix** rather than substring: `knot callers use` returns `useSearch`, `useSources`, `useSaveCv` and friends without dragging in every `*STATUSES` constant that merely contains `use`. Queries of 4+ characters keep the case-insensitive fuzzy substring fallback. Override the scope with `--kinds all` / MCP `kinds:"all"`, or pass an explicit allow-list (`--kinds callable`, `--kinds build_dependency`).
 
-The buckets cover every edge type the pipeline produces: Calls, Extends, Implements, References, **Macro calls** (Rust `MACRO_CALLS`), **DOM references** (JS → HTML element id), **CSS class usage** (JS → CSS class), script/stylesheet imports, the VCL edges (uses backend/probe/acl, includes, VMOD imports, declared-unused) plus Overridden by / Overrides / Dispatched calls — so `init_vec`'s macro call sites and `app-container`'s JS manipulators now show up instead of a false "may be unused".
+The buckets cover every edge type the pipeline produces: Calls, Extends, Implements, References, **Macro calls** (Rust `MACRO_CALLS`), **DOM references** (JS → HTML element id), **CSS class usage** (JS → CSS class), script/stylesheet imports, the VCL edges (uses backend/probe/acl, includes, VMOD imports, declared-unused), **HTTP routes** (`ROUTES_TO`: the endpoint serving a handler) plus Overridden by / Overrides / Dispatched calls — so `init_vec`'s macro call sites and `app-container`'s JS manipulators now show up instead of a false "may be unused".
 
 Every caller entry is **self-labeling**: the owning repository is printed next to each row as `(repo: <name>)` — in the CLI table, the Markdown answer, and the resolution block — so rows stay attributable when the scope spans multiple repositories:
 
@@ -751,6 +752,14 @@ Result: Ordered table of the files under src/hooks with their entity counts
 
 `search_hybrid_context` shares the same `path` parameter to scope results
 to that subtree.
+
+#### Tool 4c: `list_endpoints`
+**Catalogue the HTTP endpoints a service serves (Java/Kotlin: JAX-RS, Spring MVC)**
+
+```
+Query: method = "GET", path = "/api/owners/42", repo = "my-service"
+Result: | GET | /api/owners/{ownerId} | com.shop.web.OwnerController.showOwner | src/.../OwnerController.java:41 | my-service |
+```
 
 #### Tool 5: `list_repo_dependencies`
 **Traverse cross-repository dependency graphs**

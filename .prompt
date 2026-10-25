@@ -36,6 +36,13 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 
 **Do NOT use `grep` for these tasks.**
 
+### 1.2 🌐 `list_endpoints` — HTTP Endpoint Catalogue
+**Use this for:** the HTTP endpoints a Java/Kotlin service exposes (JAX-RS, Spring MVC) — `<METHOD> <path>` with the handler each one routes to; "which handler serves `GET /api/owners/42`?".
+
+**Filters:** `method` (case-insensitive; `ANY` endpoints match every method) and `path` (segment-wise prefix; an endpoint's `{variable}` segment matches any value, so a concrete URL finds its endpoint). Paths are relative to the application (no context path). Then run `find_callers` on the handler: its **HTTP routes** section lists the endpoints routing to it.
+
+**Do NOT use `grep` for these tasks.**
+
 ### 2. 🔗 `find_callers` — Dependency & Impact Analysis
 **Use this for:** Reverse dependency lookup, dead code detection, impact analysis before refactoring, understanding call chains across single or multiple repositories.
 

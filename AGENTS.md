@@ -255,6 +255,8 @@ Each language defines entity kinds (enum `EntityKind`). Common across all:
 
 Language-specific (e.g., Rust): `Macro`, `TypeAlias`, `Union`; Groovy: `Closure`, `GroovyTrait`; C++: `CppNamespace`; C#: `CSharpClass`, `CSharpInterface`, `CSharpStruct`, `CSharpRecord`, `CSharpEnum`, `CSharpMethod`, `CSharpConstructor`, `CSharpProperty`, `CSharpField`, `CSharpConstant`, `CSharpDelegate`, `CSharpEvent`, `CSharpIndexer`, `CSharpOperator`, `CSharpNamespace`, `CSharpLocalFunction`.
 
+HTTP endpoints (issue #33): `HttpEndpoint` (`http_endpoint`), one per `<METHOD> <path>` served by a Java/Kotlin handler.
+
 v1.2.5 additions: `CargoPackage`, `CargoFeature`, `WorkspaceMember`, `ConfigProperty`, `K8sDeployment`, `K8sService`, `K8sConfigMap`, `K8sSecret`, `K8sIngress`, `K8sNamespace`, `K8sResource`, `HelmChart`, `HelmValue`, `HelmTemplateVar`, `ProjectIdentity`.
 
 Reference intents (enum `ReferenceIntent`):
@@ -265,12 +267,14 @@ Reference intents (enum `ReferenceIntent`):
 - `ValueReference` — variable/class passed as keyword argument or referenced by value
 - `DomElementReference` — JavaScript references an HTML element by ID
 - `CssClassUsage` — JavaScript uses or manipulates a CSS class
+- `RoutesTo` — an HTTP endpoint routes to its handler (carries the handler UUID, set at parse time)
 
 Relationship types (enum `RelationshipType`):
 - `Calls`, `Extends`, `Implements`, `References`
 - `ReferencesDOM`, `UsesCSSClass`, `ImportsScript`, `ImportsStylesheet`
 - `MacroCalls`, `Contains`, `GenericBound` (Rust)
 - `DependsOn` — Repository-to-repository dependency edge (v1.2.5)
+- `RoutesTo` — HTTP endpoint → its handler method (JAX-RS / Spring MVC, issue #33)
 
 ---
 
