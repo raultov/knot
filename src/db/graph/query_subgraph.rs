@@ -41,6 +41,7 @@ const VALID_RELATIONSHIPS: &[&str] = &[
     "GENERIC_BOUND",
     "DEPENDS_ON",
     "OVERRIDES",
+    "ROUTES_TO",
 ];
 
 fn validate_relationship_types(relationships: &[&str]) -> Result<()> {

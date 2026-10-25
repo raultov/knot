@@ -146,6 +146,7 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
         ("includes", "VCL include", Color::Green),
         ("imports_vmod", "VMOD import", Color::Green),
         ("declared_unused", "Declared unused", Color::Green),
+        ("routes_to", "HTTP route", Color::Green),
         ("overridden_by", "Overridden by", Color::Yellow),
         ("overrides", "Overrides", Color::Cyan),
         ("dispatched_calls", "Dispatched call", Color::Blue),

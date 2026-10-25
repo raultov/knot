@@ -221,7 +221,7 @@ pub fn rank_root_candidates(mut candidates: Vec<RootCandidate>) -> Vec<RootCandi
 pub fn find_references_rel_labels() -> &'static str {
     "CALLS|EXTENDS|IMPLEMENTS|REFERENCES|MACRO_CALLS|REFERENCES_DOM|USES_CSS_CLASS\
      |IMPORTS_SCRIPT|IMPORTS_STYLESHEET|USES_BACKEND|USES_PROBE|USES_ACL\
-     |INCLUDES|IMPORTS_VMOD|DECLARED_UNUSED"
+     |INCLUDES|IMPORTS_VMOD|DECLARED_UNUSED|ROUTES_TO"
 }
 
 pub fn relationship_query(rel_labels: &str, repo_scoped: bool) -> String {
@@ -437,6 +437,25 @@ pub fn list_files_query(repo_scoped: bool) -> String {
          RETURN e.file_path AS file_path, e.repo_name AS repo_name, count(e) AS entity_count \
          ORDER BY e.repo_name, e.file_path \
          SKIP $skip \
+         LIMIT $limit"
+    )
+}
+
+/// HTTP endpoints (issue #33) with the handler each one routes to, ordered
+/// by `(repo_name, name)`. `limit` bounds the read.
+pub fn list_endpoints_query(repo_scoped: bool) -> String {
+    let repo_clause = if repo_scoped {
+        "WHERE e.repo_name IN $repo_names "
+    } else {
+        ""
+    };
+    format!(
+        "MATCH (e:Entity {{kind: 'http_endpoint'}}) \
+         {repo_clause}\
+         OPTIONAL MATCH (e)-[:ROUTES_TO]->(h:Entity) \
+         RETURN e.repo_name AS repo_name, e.name AS name, e.file_path AS file_path, \
+                e.start_line AS start_line, h.fqn AS handler_fqn \
+         ORDER BY e.repo_name, e.name \
          LIMIT $limit"
     )
 }
@@ -924,6 +943,30 @@ impl GraphDb {
         }
         Ok(collected)
     }
+
+    /// Run `q`, scoped to `repo_names` when any, and map every row with
+    /// `to_json` into a JSON array. `what` only feeds the error context.
+    async fn collect_json_rows(
+        &self,
+        mut q: neo4rs::Query,
+        repo_names: &[String],
+        what: &str,
+        to_json: impl Fn(neo4rs::Row) -> serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if !repo_names.is_empty() {
+            q = q.param("repo_names", repo_names.to_vec());
+        }
+        let mut rows = self
+            .graph
+            .execute(q)
+            .await
+            .context(format!("Failed to query Neo4j for {what}"))?;
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = rows.next().await {
+            results.push(to_json(row));
+        }
+        Ok(serde_json::json!(results))
+    }
 }
 
 /// Extension trait for query and read operations.
@@ -994,6 +1037,14 @@ pub trait QueryExt {
         prefix: &str,
         repo_names: &[String],
         skip: usize,
+        limit: usize,
+    ) -> Result<serde_json::Value>;
+
+    /// HTTP endpoints with their handlers (see [`list_endpoints_query`]),
+    /// at most `limit` rows.
+    async fn list_endpoints(
+        &self,
+        repo_names: &[String],
         limit: usize,
     ) -> Result<serde_json::Value>;
 
@@ -1182,6 +1233,7 @@ impl QueryExt for GraphDb {
             "includes": [],
             "imports_vmod": [],
             "declared_unused": [],
+            "routes_to": [],
             "overridden_by": [],
             "overrides": [],
             "dispatched_calls": []
@@ -1406,25 +1458,13 @@ impl QueryExt for GraphDb {
         // `ends_with_suffix_query` which only ever interpolates a string
         // literal, so SQL/Cipher injection is not possible here.
         let query_str = find_files_by_suffix_query(suffix_fragment, repo_names);
-        let mut q = query(&query_str);
-        if !repo_names.is_empty() {
-            q = q.param("repo_names", repo_names.to_vec());
-        }
-
-        let mut rows = self
-            .graph
-            .execute(q)
-            .await
-            .context("Failed to query Neo4j for files by suffix")?;
-
-        let mut results = Vec::new();
-        while let Ok(Some(row)) = rows.next().await {
-            results.push(serde_json::json!({
+        self.collect_json_rows(query(&query_str), repo_names, "files by suffix", |row| {
+            serde_json::json!({
                 "file_path": row.get::<String>("file_path").ok(),
                 "repo_name": row.get::<String>("repo_name").ok(),
-            }));
-        }
-        Ok(serde_json::json!(results))
+            })
+        })
+        .await
     }
 
     /// Read-only file listing (see [`list_files_query`]).
@@ -1459,6 +1499,26 @@ impl QueryExt for GraphDb {
             }));
         }
         Ok(serde_json::json!(results))
+    }
+
+    /// HTTP endpoints with their handlers (see [`list_endpoints_query`]).
+    async fn list_endpoints(
+        &self,
+        repo_names: &[String],
+        limit: usize,
+    ) -> Result<serde_json::Value> {
+        let query_str = list_endpoints_query(!repo_names.is_empty());
+        let q = query(&query_str).param("limit", limit as i64);
+        self.collect_json_rows(q, repo_names, "HTTP endpoints", |row| {
+            serde_json::json!({
+                "repo_name": row.get::<String>("repo_name").ok(),
+                "name": row.get::<String>("name").ok(),
+                "file_path": row.get::<String>("file_path").ok(),
+                "start_line": row.get::<i64>("start_line").ok(),
+                "handler_fqn": row.get::<String>("handler_fqn").ok(),
+            })
+        })
+        .await
     }
 
     /// Caller-recall bridge: `(caller_uuid, target_uuid)` edges. One
@@ -1622,6 +1682,7 @@ fn reference_bucket_key(rel_type: &str) -> Option<&'static str> {
         "INCLUDES" => Some("includes"),
         "IMPORTS_VMOD" => Some("imports_vmod"),
         "DECLARED_UNUSED" => Some("declared_unused"),
+        "ROUTES_TO" => Some("routes_to"),
         _ => None,
     }
 }
@@ -2100,6 +2161,7 @@ mod tests {
             "INCLUDES",
             "IMPORTS_VMOD",
             "DECLARED_UNUSED",
+            "ROUTES_TO",
         ] {
             assert!(labels.contains(label), "{label} missing from {labels}");
         }
@@ -2200,6 +2262,7 @@ mod tests {
             reference_bucket_key("DECLARED_UNUSED"),
             Some("declared_unused")
         );
+        assert_eq!(reference_bucket_key("ROUTES_TO"), Some("routes_to"));
         assert_eq!(reference_bucket_key("CONTAINS"), None);
         assert_eq!(reference_bucket_key("DEPENDS_ON"), None);
     }

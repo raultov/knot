@@ -5,6 +5,7 @@
 //! Both the CLI and MCP interfaces use these functions to avoid duplication.
 
 pub mod deps;
+pub mod endpoints;
 pub mod explore_file;
 pub mod find_callers;
 pub mod formatters;
@@ -20,6 +21,7 @@ pub use deps::{
     MAX_DEPTH_CEILING, collect_deps_diagnostics, format_deps_output,
     format_deps_output_with_diagnostics, resolve_max_depth, run_deps,
 };
+pub use endpoints::{format_endpoints_output, format_list_endpoints_markdown, run_list_endpoints};
 pub use explore_file::{format_file_entities, run_explore_file};
 pub use find_callers::{format_reference_entry, format_references_result, run_find_callers};
 pub use list_files::{format_files_output, format_list_files_markdown, run_list_files};
@@ -31,6 +33,23 @@ pub use search_hybrid_context::{
 pub use subgraph::{DEFAULT_MAX_NODES, SubgraphQueryParams, run_get_subgraph};
 
 // --- JSON helper functions shared across CLI formatters ---
+
+/// Pretty JSON for `--output json`; the Markdown rendering otherwise (the
+/// table and Markdown outputs of the listing commands are the same).
+pub(crate) fn format_json_or_markdown(
+    result: &serde_json::Value,
+    output: crate::config::OutputFormat,
+    markdown: fn(&serde_json::Value) -> String,
+) -> String {
+    match output {
+        crate::config::OutputFormat::Json => {
+            serde_json::to_string_pretty(result).unwrap_or_default()
+        }
+        crate::config::OutputFormat::Table | crate::config::OutputFormat::Markdown => {
+            markdown(result)
+        }
+    }
+}
 
 /// Extract the `start_line` field from a JSON entity as a string, defaulting to `"-"`.
 pub(crate) fn json_line_number(entity: &serde_json::Value) -> String {

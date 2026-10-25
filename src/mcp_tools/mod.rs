@@ -2,6 +2,7 @@
 
 pub mod explore_file;
 pub mod find_callers;
+pub mod list_endpoints;
 pub mod list_files;
 pub mod list_repo_dependencies;
 pub mod list_repositories;

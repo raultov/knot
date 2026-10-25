@@ -68,6 +68,7 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         ("includes", "File includes (VCL)"),
         ("imports_vmod", "VMOD imports (VCL)"),
         ("declared_unused", "Declared unused (VCL)"),
+        ("routes_to", "HTTP routes (endpoint → handler)"),
         ("overridden_by", "Overridden by (method implementations)"),
         ("overrides", "Overrides (declared supertype methods)"),
         (

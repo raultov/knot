@@ -238,11 +238,7 @@ pub fn format_files_output(
     result: &serde_json::Value,
     output: crate::config::OutputFormat,
 ) -> String {
-    use crate::config::OutputFormat;
-    match output {
-        OutputFormat::Json => serde_json::to_string_pretty(result).unwrap_or_default(),
-        OutputFormat::Table | OutputFormat::Markdown => format_list_files_markdown(result),
-    }
+    super::format_json_or_markdown(result, output, format_list_files_markdown)
 }
 
 /// Outcome of a paged scan over the graph's file listing.

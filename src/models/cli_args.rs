@@ -109,6 +109,27 @@ pub enum Commands {
         output: OutputFormat,
     },
 
+    /// List the HTTP endpoints the indexed code serves (JAX-RS / Spring MVC),
+    /// each with its handler, optionally filtered by method and path
+    Endpoints {
+        /// HTTP method filter, case-insensitive ('GET'); 'ANY' endpoints match all
+        #[arg(short, long)]
+        method: Option<String>,
+
+        /// Path filter, segment-wise prefix ('/api/owners'); '{var}' segments
+        /// of an endpoint match any value ('/api/owners/42')
+        #[arg(short, long)]
+        path: Option<String>,
+
+        /// Repository scope: one name, comma-separated list, or 'all'/'*'
+        #[arg(short, long)]
+        repo: Option<String>,
+
+        /// Output format (default: table)
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
+
     /// Show dependency graph for a repository (forward and reverse DEPENDS_ON edges)
     Deps {
         /// Repository name to show dependencies for

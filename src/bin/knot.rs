@@ -114,12 +114,9 @@ async fn main() -> anyhow::Result<()> {
             utils::print_with_pager(&formatted);
         }
 
-        Commands::Files { path, repo, output } => {
-            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
-            let json_result =
-                cli_tools::run_list_files(path.as_deref(), &target_repo, &graph_db).await?;
-            let formatted = cli_tools::format_files_output(&json_result, output);
-            utils::print_with_pager(&formatted);
+        command
+        @ (Commands::Files { .. } | Commands::Endpoints { .. } | Commands::Repos { .. }) => {
+            run_listing_command(command, &cfg, &graph_db).await?;
         }
 
         Commands::Deps {
@@ -132,16 +129,6 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::EmbedModel => unreachable!("handled before database connections"),
-
-        Commands::Repos { filter, output } => {
-            // `repos` only needs the graph database — no vector DB or embedder.
-            // We keep the standard initialization above to avoid splitting
-            // the binary's startup flow; the overhead is negligible compared
-            // to the network round-trips that follow.
-            let json_result = cli_tools::run_list_repos(filter.as_deref(), &graph_db).await?;
-            let formatted = cli_tools::format_repos_output(&json_result, output);
-            utils::print_with_pager(&formatted);
-        }
     }
 
     Ok(())
@@ -166,6 +153,46 @@ fn print_embed_model(cfg: &Config) -> anyhow::Result<()> {
         choice.dim,
         choice.default_collection("knot_entities")
     );
+    Ok(())
+}
+
+/// Run the read-only listing subcommands (`files`, `endpoints`, `repos`),
+/// which only need the graph database.
+async fn run_listing_command(
+    command: Commands,
+    cfg: &Config,
+    graph_db: &Arc<GraphDb>,
+) -> anyhow::Result<()> {
+    let formatted = match command {
+        Commands::Files { path, repo, output } => {
+            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
+            let json_result =
+                cli_tools::run_list_files(path.as_deref(), &target_repo, graph_db).await?;
+            cli_tools::format_files_output(&json_result, output)
+        }
+        Commands::Endpoints {
+            method,
+            path,
+            repo,
+            output,
+        } => {
+            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
+            let json_result = cli_tools::run_list_endpoints(
+                method.as_deref(),
+                path.as_deref(),
+                &target_repo,
+                graph_db,
+            )
+            .await?;
+            cli_tools::format_endpoints_output(&json_result, output)
+        }
+        Commands::Repos { filter, output } => {
+            let json_result = cli_tools::run_list_repos(filter.as_deref(), graph_db).await?;
+            cli_tools::format_repos_output(&json_result, output)
+        }
+        _ => unreachable!("only listing commands are routed here"),
+    };
+    utils::print_with_pager(&formatted);
     Ok(())
 }
 
