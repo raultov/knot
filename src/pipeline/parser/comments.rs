@@ -144,6 +144,47 @@ fn collect_nested_child_text(
     results
 }
 
+/// Kotlin annotations of a declaration. tree-sitter-kotlin-ng sometimes
+/// parses the annotations of a top-level declaration as an
+/// `annotated_expression` right before it (`@RequestMapping` and its
+/// `("/api")` arguments as an annotation plus a parenthesized expression),
+/// leaving the declaration without modifiers; those are recovered.
+fn kotlin_annotations(entity_node: Node<'_>, source: &[u8]) -> Vec<String> {
+    let own = collect_nested_child_text(entity_node, source, "modifiers", &["annotation"]);
+    if !own.is_empty() {
+        return own;
+    }
+    let Some(prev) = entity_node.prev_named_sibling() else {
+        return own;
+    };
+    if prev.kind() != "annotated_expression"
+        || prev.end_position().row + 1 < entity_node.start_position().row
+    {
+        return own;
+    }
+    let mut annotations = Vec::new();
+    let mut current = Some(prev);
+    while let Some(expr) = current.take() {
+        let mut cursor = expr.walk();
+        let children: Vec<Node<'_>> = expr.named_children(&mut cursor).collect();
+        let annotation_count = children.iter().filter(|c| c.kind() == "annotation").count();
+        for child in &children {
+            match child.kind() {
+                "annotation" => annotations.push(node_text(*child, source)),
+                "annotated_expression" => current = Some(*child),
+                _ if annotation_count > 0 => {
+                    // The annotation's arguments, split off by the parser.
+                    if let Some(last) = annotations.last_mut() {
+                        last.push_str(node_text(*child, source).trim());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    annotations
+}
+
 fn typescript_decorators(entity_node: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut decorators = Vec::new();
     let mut child = entity_node.child(0);
@@ -207,7 +248,7 @@ pub(crate) fn extract_decorators(
             "modifiers",
             &["annotation", "marker_annotation"],
         ),
-        "kotlin" => collect_nested_child_text(entity_node, source, "modifiers", &["annotation"]),
+        "kotlin" => kotlin_annotations(entity_node, source),
         "csharp" => {
             collect_nested_child_text(entity_node, source, "attribute_list", &["attribute"])
         }

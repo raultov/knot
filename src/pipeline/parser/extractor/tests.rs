@@ -2773,3 +2773,21 @@ fn test_extract_entities_jvm_import_scope() {
             .all(|e| e.import_scope.is_none())
     );
 }
+
+/// tree-sitter-kotlin-ng parses the annotations of some top-level classes
+/// as an expression before the class; they are still the class's
+/// decorators, arguments included (issue #33).
+#[test]
+fn test_extract_entities_kotlin_class_annotations_before_declaration() {
+    let entities = extract_kotlin(
+        "package a\n\n@RestController\n@RequestMapping(\"/api/article\")\nclass ArticleController(private val repo: Repo) {\n    @GetMapping(\"/{slug}\")\n    fun findOne(@PathVariable slug: String) = repo.find(slug)\n}\n",
+    );
+    let class = entities
+        .iter()
+        .find(|e| e.name == "ArticleController")
+        .unwrap();
+    assert_eq!(
+        class.decorators,
+        vec!["@RestController", "@RequestMapping(\"/api/article\")"]
+    );
+}
