@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(typescript, javascript)**: Variables local to a function no longer become class members (#41). The `lexical_declaration` query matched declarations at any depth, so `const url = new URL(pageURL)` inside `CdpPage.deleteCookie` was indexed as the constant `CdpPage.url`. It captured `this.url()` calls meant for the inherited `Page.url()`, shared the FQN `Page.url` with the real method, appeared as a member in `explore_file` and search, and duplicated its initializer's `CALLS` edges. A JS/TS `const` / `let` / `var` declared inside a function, method or arrow body is no longer indexed; its initializer's calls stay on the enclosing entity. Module-level constants, class fields and local function definitions are unchanged.
+- **Fixed(resolve)**: An explicit `this.m()` / `self.m()` walks the enclosing type's supertypes breadth-first, nearest first, as static receivers already did. Previously only Python's `self` looked at direct parents, so in TypeScript, Java or Kotlin `this.url()` on an inherited method stayed unresolved, or fell back to a same-named method elsewhere, whenever several classes declared `url`.
+- **Test**: TypeScript E2E tests 17–19 (fixture `testing_files/typescript/this_inherited/`): `this.url()` in `CdpPage extends Page` binds to `Page.url` despite a local `const url` and an unrelated `Frame.url`, and `explore_file` lists no local constant. Extractor unit tests for TS and JS locals (methods, functions, arrows, callbacks); resolver unit test for `this` calls through two supertype levels.
+- **Upgrade**: Re-index TypeScript/JavaScript repositories with `knot-indexer --clean` to drop the local-variable entities and their edges.
+
+---
+
 ## v1.11.13
 
 - **Fixed(kotlin)**: Kotlin FQNs carry the package (#39). Entities were indexed as `Config` / `Config.load` whatever their `package`, so same-named classes in different packages shared FQNs: `fqn_to_uuid` and the `OVERRIDES` type index kept only one of them, calls and override edges could bind to the wrong class, and `find_callers` could not address either one by package. Every Kotlin entity now gets the `package_header` prefix, as Java already did (`com.example.app.Config.load`, top-level `com.example.app.bootstrap`). Members also record their package-qualified enclosing type (`enclosing_class_fqn`), so implicit-`this` calls keep resolving exactly and the `CONTAINS` auto-link matches the type by FQN.
