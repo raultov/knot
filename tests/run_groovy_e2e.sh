@@ -14,6 +14,9 @@
 #                        entities linked via OVERRIDES to interface getters
 #   H. Overload-aware OVERRIDES — arity, parameter types and default
 #                        parameters pick the overridden declaration (issue #30)
+#   I. Overload calls — calls bind to the overload with matching arity (issue #38)
+#   J. One-line methods — calls on a method's declaration line (issue #40)
+#   K. Receiver calls — `a.b()` is never also a bare call `b()` (issue #43)
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -1246,6 +1249,51 @@ assert_groovy_overload_callers J3 "nextflow.oneline.Report.upper" "9<shout" \
     "A bare call in a one-line method resolves"
 assert_groovy_overload_callers J4 "nextflow.oneline.Report.wide" "" \
     "A declaration is never a call to the method itself"
+
+# ═══════════════════════════════════════════════════════════
+# GROUP K: A receiver call is not also a bare call (issue #43)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group K: Receiver calls are not bare calls ──${NC}"
+
+REPO_K="groovy_receiver_not_bare_e2e"
+COLL_K="knot_groovy_receiver_not_bare_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow/bare"
+
+# `render` is declared exactly once in the repository.
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/bare/Template.groovy" << 'GROOVY'
+package nextflow.bare
+
+class Template {
+    String render(String text, int width) { text }
+}
+GROOVY
+
+# `Canvas` is not indexed, so `Canvas.render(..)` is an external call; only
+# `template.render(..)` reaches the repository's `render`.
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/bare/Page.groovy" << 'GROOVY'
+package nextflow.bare
+
+class Page {
+    String show() {
+        Canvas.render('x', 80)
+    }
+
+    String inline() { Canvas.render('y', 40) }
+
+    String preview(Template template) {
+        template.render('x', 80)
+    }
+}
+GROOVY
+
+run_indexer "$REPO_K" "$COLL_K" "--clean"
+
+CALLERS_REPO="$REPO_K"
+CALLERS_COLL="$COLL_K"
+assert_groovy_overload_callers K1 "nextflow.bare.Template.render" "4<preview" \
+    "A call on an external type never binds by its bare method name"
 
 # ── Final result ─────────────────────────────────────────
 echo -e "\n${BLUE}========================================${NC}"
