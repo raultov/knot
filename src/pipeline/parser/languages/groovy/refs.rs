@@ -142,18 +142,25 @@ fn is_named_or_spread_argument(arg: &str) -> bool {
     })
 }
 
-fn receiver_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<ReferenceIntent> {
+/// `receiver.method(` → the call, plus the text after `method` so the caller
+/// can skip the method name.
+fn receiver_call<'a>(
+    word: &str,
+    after_trimmed: &'a str,
+    line_num: usize,
+) -> Option<(ReferenceIntent, &'a str)> {
     let dot_rest = after_trimmed.strip_prefix('.')?;
     let dot_trimmed = dot_rest.trim_start();
     let (next_word, rest) = split_identifier(dot_trimmed)?;
     let after_next = rest.trim_start();
     if after_next.starts_with('(') {
-        Some(ReferenceIntent::Call {
+        let call = ReferenceIntent::Call {
             method: next_word.to_string(),
             receiver: Some(word.to_string()),
             line: line_num,
             arg_count: argument_count(after_next),
-        })
+        };
+        Some((call, rest))
     } else {
         None
     }
@@ -216,8 +223,12 @@ pub(super) fn scan_line_for_calls(trimmed: &str, line_num: usize, refs: &mut Vec
         }
 
         let after_trimmed = after_word.trim_start();
-        if let Some(r) = receiver_call(word, after_trimmed, line_num) {
+        if let Some((r, rest)) = receiver_call(word, after_trimmed, line_num) {
             refs.push(r);
+            // The method name is part of this call: scanned again, it would
+            // be reported as a bare call too (issue #43).
+            let method_end = trimmed.len() - rest.len();
+            while chars.next_if(|&(j, _)| j < method_end).is_some() {}
         } else if let Some(r) = bare_call(word, after_trimmed, line_num) {
             refs.push(r);
         }

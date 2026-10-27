@@ -1852,21 +1852,59 @@ class Report {
     let entities = extract_entities_groovy(source, "Report.groovy", "test-repo");
     assert_eq!(
         groovy_method_calls(&entities, "wide"),
-        vec!["format", "formatter.format"]
+        vec!["formatter.format"]
     );
     assert_eq!(
         groovy_method_calls(&entities, "narrow"),
-        vec!["format", "formatter.format", "pad"]
+        vec!["formatter.format", "pad"]
     );
-    assert_eq!(
-        groovy_method_calls(&entities, "joined"),
-        vec!["log", "log.log"]
-    );
+    assert_eq!(groovy_method_calls(&entities, "joined"), vec!["log.log"]);
     assert_eq!(
         groovy_method_calls(&entities, "countdown"),
         vec!["countdown"]
     );
     assert!(groovy_method_calls(&entities, "pad").is_empty());
+}
+
+/// Issue #43: a receiver call `a.b(...)` is reported once, with its
+/// receiver, never also as a bare call `b(...)` that the resolver would bind
+/// by name alone. Only the method name right after the receiver is consumed:
+/// a chained call and a call nested in the arguments are still reported.
+#[test]
+fn test_groovy_receiver_call_is_not_also_a_bare_call() {
+    let source = r#"
+class Report {
+    String wide(Formatter formatter) {
+        formatter.format('x', 80)
+    }
+    String chained(Builder builder) {
+        builder.indent(2).render()
+    }
+    String nested(Formatter formatter) {
+        pad(formatter.format(other.trim()))
+    }
+    String selfCall() {
+        this.wide(null)
+    }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Report.groovy", "test-repo");
+    assert_eq!(
+        groovy_method_calls(&entities, "wide"),
+        vec!["formatter.format"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "chained"),
+        vec!["builder.indent", "render"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "nested"),
+        vec!["formatter.format", "other.trim", "pad"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "selfCall"),
+        vec!["this.wide"]
+    );
 }
 
 /// Calls after the body's `{` on a multi-line method's declaration line are
