@@ -1868,8 +1868,10 @@ class Report {
 
 /// Issue #43: a receiver call `a.b(...)` is reported once, with its
 /// receiver, never also as a bare call `b(...)` that the resolver would bind
-/// by name alone. Only the method name right after the receiver is consumed:
-/// a chained call and a call nested in the arguments are still reported.
+/// by name alone. The receiver keeps its whole dotted path
+/// (`StringUtils.INSTANCE`), which the resolver needs to tell an indexed
+/// Kotlin `object` from an external type. A chained call and a call nested
+/// in the arguments are still reported.
 #[test]
 fn test_groovy_receiver_call_is_not_also_a_bare_call() {
     let source = r#"
@@ -1885,6 +1887,9 @@ class Report {
     }
     String selfCall() {
         this.wide(null)
+    }
+    int kotlinObject(String text) {
+        StringUtils.INSTANCE.countWords(text)
     }
 }
 "#;
@@ -1904,6 +1909,10 @@ class Report {
     assert_eq!(
         groovy_method_calls(&entities, "selfCall"),
         vec!["this.wide"]
+    );
+    assert_eq!(
+        groovy_method_calls(&entities, "kotlinObject"),
+        vec!["StringUtils.INSTANCE.countWords"]
     );
 }
 
