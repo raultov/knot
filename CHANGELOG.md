@@ -5,6 +5,14 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(groovy)**: A receiver call `a.b(..)` is no longer also reported as a bare call `b(..)` (#43). The lexical call scanner matched `a.b(` as a receiver call, then read `b` again as the next word and reported it a second time without a receiver. That copy went through the bare-name fallback, which binds a callee name declared exactly once in the repository whatever the receiver's type, so `Canvas.render('x', 80)` on an unindexed type became a caller of the repository's only `Template.render` — the external-type guard from #32 applies only to calls that carry their receiver. The scanner now skips the method name after a receiver call; chained calls (`a.b().c()`) and calls nested in the arguments are still reported.
+- **Test**: Groovy E2E Group K (test K1): a call on an unindexed type, on its own line and in a one-line method, is not a caller of the repository's unique same-named method, while a call through a receiver of the declaring type is. Parser unit test for plain, chained, nested and `this.` receiver calls.
+- **Upgrade**: Re-index Groovy repositories with `knot-indexer --clean` to drop the false `CALLS` edges.
+
+---
+
 ## v1.12.0
 
 - **Added(java, kotlin)**: HTTP endpoint catalogue (#33, phase 1). JAX-RS (class/method `@Path` + `@GET`/`@POST`/`@PUT`/`@DELETE`/`@PATCH`/`@HEAD`/`@OPTIONS`) and Spring MVC (class `@RequestMapping` + `@GetMapping`/`@PostMapping`/`@PutMapping`/`@DeleteMapping`/`@PatchMapping` or `@RequestMapping(method = …)`) handlers produce one `http_endpoint` entity per `<METHOD> <path>`, linked to the handler by a new `ROUTES_TO` edge. Class and method paths are joined and normalized, path arrays expand, path-variable patterns are dropped (`{id: [0-9]+}` → `{id}`), and a `@RequestMapping` without `method` is `ANY`. Paths built from string constants resolve: literals, `+` concatenation, Kotlin `const val` templates, constants of the same file (Java `static final` fields and interface constants, Kotlin top-level/object/companion `const val`) and constants declared in another file of the repository, located through the endpoint file's imports and package, then among the parsed files or by the `<package>/<Type>.java|.kt` layout (so an incremental run that re-parses only the controller still resolves them). Declarative clients (`@FeignClient`, `@RegisterRestClient` interfaces) are not endpoints. Paths are relative to the application: the context path is not applied.
