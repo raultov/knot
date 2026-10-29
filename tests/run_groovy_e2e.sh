@@ -17,6 +17,7 @@
 #   I. Overload calls — calls bind to the overload with matching arity (issue #38)
 #   J. One-line methods — calls on a method's declaration line (issue #40)
 #   K. Receiver calls — `a.b()` is never also a bare call `b()` (issue #43)
+#   L. Trailing closures — closure-only calls produce CALLS edges (issue #44)
 #
 # Usage: ./tests/run_groovy_e2e.sh
 # Requirements: docker, docker-compose
@@ -1294,6 +1295,49 @@ CALLERS_REPO="$REPO_K"
 CALLERS_COLL="$COLL_K"
 assert_groovy_overload_callers K1 "nextflow.bare.Template.render" "4<preview" \
     "A call on an external type never binds by its bare method name"
+
+# ═══════════════════════════════════════════════════════════
+# GROUP L: Calls whose only argument is a trailing closure (issue #44)
+# ═══════════════════════════════════════════════════════════
+echo -e "\n${BLUE}── Group L: Trailing-closure-only calls ──${NC}"
+
+REPO_L="groovy_trailing_closure_e2e"
+COLL_L="knot_groovy_trailing_closure_e2e"
+
+rm -rf "$TMP_REPO_DIR"
+mkdir -p "$TMP_REPO_DIR/src/main/groovy/nextflow/closure"
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/closure/Pipeline.groovy" << 'GROOVY'
+package nextflow.closure
+
+class Pipeline {
+    void stage(Closure action) { action.call() }
+}
+GROOVY
+
+cat > "$TMP_REPO_DIR/src/main/groovy/nextflow/closure/Job.groovy" << 'GROOVY'
+package nextflow.closure
+
+class Job {
+    void run(Pipeline pipeline) {
+        pipeline.stage { println 'run' }
+    }
+    void locked() {
+        withLock { notify() }
+    }
+    void withLock(Closure action) { action.call() }
+    void notify() { }
+}
+GROOVY
+
+run_indexer "$REPO_L" "$COLL_L" "--clean"
+
+CALLERS_REPO="$REPO_L"
+CALLERS_COLL="$COLL_L"
+assert_groovy_overload_callers L1 "nextflow.closure.Pipeline.stage" "4<run" \
+    "A repository method called only with a trailing closure has a caller"
+assert_groovy_overload_callers L2 "nextflow.closure.Job.withLock" "10<locked" \
+    "A bare trailing-closure call with a parenthesized call in its body resolves"
 
 # ── Final result ─────────────────────────────────────────
 echo -e "\n${BLUE}========================================${NC}"
