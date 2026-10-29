@@ -1,3 +1,5 @@
+use super::inheritance::try_extract_type_declaration;
+
 /// Tries to extract class, interface, enum, or trait declarations
 /// Scans forward from `line_num` to find the matching closing `}` of the method body.
 // Reserved for future method body parsing
@@ -189,6 +191,18 @@ pub(super) fn try_extract_typed_method(line: &str) -> Option<(String, String)> {
         }
 
         let paren_idx = line.find('(').unwrap();
+
+        // A bare call inside an already-open block (`withLock { notify() }`)
+        // is not a declaration. Keep one-line type bodies intact: their class
+        // header also opens before the method, and constructors have one token.
+        if let Some(open_brace) = line[..paren_idx].rfind('{') {
+            let candidate = line[open_brace + 1..paren_idx].trim();
+            if !candidate.contains(char::is_whitespace)
+                && try_extract_type_declaration(&line[..paren_idx]).is_none()
+            {
+                return None;
+            }
+        }
 
         // Reject assignment patterns like `def foo = bar(...)` — these are calls, not declarations
         if line[..paren_idx].contains('=') {

@@ -1793,6 +1793,55 @@ fn test_groovy_call_carries_arg_count() {
     }
 }
 
+/// Issue #44: a trailing closure can be the only argument, with or without a
+/// receiver. It counts as one argument just like a closure after parentheses.
+#[test]
+fn test_groovy_closure_only_call_carries_one_arg() {
+    let arities = groovy_call_arities("parts.each { log.log(it) }\nwithLock { notify() }");
+    for expected in [("each", Some(1)), ("withLock", Some(1))] {
+        assert!(
+            arities.contains(&(expected.0.to_string(), expected.1)),
+            "expected {expected:?} in {arities:?}"
+        );
+    }
+}
+
+/// A bare closure-only call and a parenthesized call in its body belong to the
+/// enclosing method; the body call is not a nested method declaration.
+#[test]
+fn test_groovy_bare_closure_only_call_is_attached_to_enclosing_method() {
+    let source = r#"
+class Worker {
+    void run() {
+        withLock { notify() }
+    }
+
+    void withLock(Closure action) { action.call() }
+    void notify() { }
+}
+"#;
+    let entities = extract_entities_groovy(source, "Worker.groovy", "test-repo");
+    assert_eq!(
+        groovy_method_calls(&entities, "run"),
+        vec!["notify", "withLock"]
+    );
+}
+
+/// Accepting `name { ... }` as a call must not turn assignments, control flow,
+/// type declarations or anonymous class bodies into calls.
+#[test]
+fn test_groovy_closure_only_call_has_no_false_positives() {
+    let arities = groovy_call_arities(
+        "b = { notify() }\nif (ready) { notify() }\nclass Worker { }\ndef handler = new Handler { notify() }",
+    );
+    for method in ["b", "ready", "Worker", "Handler"] {
+        assert!(
+            !arities.iter().any(|(name, _)| name == method),
+            "unexpected call to {method} in {arities:?}"
+        );
+    }
+}
+
 /// Named arguments are collected into one Map parameter, a spread expands to
 /// an unknown number of arguments, an argument list continuing on the next
 /// line cannot be counted from one line, and a call without parentheses has
@@ -1858,7 +1907,10 @@ class Report {
         groovy_method_calls(&entities, "narrow"),
         vec!["formatter.format", "pad"]
     );
-    assert_eq!(groovy_method_calls(&entities, "joined"), vec!["log.log"]);
+    assert_eq!(
+        groovy_method_calls(&entities, "joined"),
+        vec!["log.log", "parts.each"]
+    );
     assert_eq!(
         groovy_method_calls(&entities, "countdown"),
         vec!["countdown"]

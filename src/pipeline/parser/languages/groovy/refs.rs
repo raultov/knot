@@ -1,3 +1,4 @@
+use super::inheritance::try_extract_type_declaration;
 use crate::models::{ParsedEntity, ReferenceIntent};
 
 /// Scans source for method call patterns and returns reference intents.
@@ -157,12 +158,17 @@ fn receiver_call<'a>(
         let dot_trimmed = after.strip_prefix('.')?.trim_start();
         let (next_word, rest) = split_identifier(dot_trimmed)?;
         let after_next = rest.trim_start();
-        if after_next.starts_with('(') {
+        if after_next.starts_with('(') || after_next.starts_with('{') {
+            let arg_count = if after_next.starts_with('{') {
+                Some(1)
+            } else {
+                argument_count(after_next)
+            };
             let call = ReferenceIntent::Call {
                 method: next_word.to_string(),
                 receiver: Some(path.join(".")),
                 line: line_num,
-                arg_count: argument_count(after_next),
+                arg_count,
             };
             return Some((call, rest));
         }
@@ -185,10 +191,18 @@ fn bare_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<Referen
         });
     }
 
+    if after_trimmed.starts_with('{') {
+        return Some(ReferenceIntent::Call {
+            method: word.to_string(),
+            receiver: None,
+            line: line_num,
+            arg_count: Some(1),
+        });
+    }
+
     if !after_trimmed.is_empty()
         && !after_trimmed.starts_with('.')
         && !after_trimmed.starts_with('=')
-        && !after_trimmed.starts_with('{')
         && !after_trimmed.starts_with(')')
         && !after_trimmed.starts_with(':')
         && !after_trimmed.starts_with(';')
@@ -212,6 +226,8 @@ fn bare_call(word: &str, after_trimmed: &str, line_num: usize) -> Option<Referen
 }
 
 pub(super) fn scan_line_for_calls(trimmed: &str, line_num: usize, refs: &mut Vec<ReferenceIntent>) {
+    let is_type_declaration = try_extract_type_declaration(trimmed).is_some();
+    let mut previous_word = None;
     let mut chars = trimmed.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if c == '"' || c == '\'' {
@@ -224,6 +240,7 @@ pub(super) fn scan_line_for_calls(trimmed: &str, line_num: usize, refs: &mut Vec
 
         let (word, after_word) = read_word(trimmed, i, c, &mut chars);
         if GROOVY_KEYWORDS.contains(&word) {
+            previous_word = Some(word);
             continue;
         }
 
@@ -236,8 +253,16 @@ pub(super) fn scan_line_for_calls(trimmed: &str, line_num: usize, refs: &mut Vec
             let method_end = trimmed.len() - rest.len();
             while chars.next_if(|&(j, _)| j < method_end).is_some() {}
         } else if let Some(r) = bare_call(word, after_trimmed, line_num) {
-            refs.push(r);
+            // A type name followed by its body's `{` is a declaration, not a
+            // closure-only call (`class Worker {` / `class Foo extends Bar {`).
+            // The same applies to an anonymous class body (`new Handler {`).
+            let is_type_body = (is_type_declaration || previous_word == Some("new"))
+                && after_trimmed.starts_with('{');
+            if !is_type_body {
+                refs.push(r);
+            }
         }
+        previous_word = Some(word);
     }
 }
 
