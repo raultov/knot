@@ -5,6 +5,14 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.12.2
+
+- **Fixed(groovy)**: Calls whose only argument is a trailing closure are detected (#44). Both receiver calls (`parts.each { ... }`) and bare DSL-style calls (`withLock { ... }`) now produce a `CALLS` intent with arity one, so repository methods invoked only through this syntax no longer look unused to `find_callers`. Calls with parentheses followed by a closure keep their existing arity calculation, and assignments, control flow, type declarations, paren-less anonymous class bodies (`new Handler { ... }`) and closure-valued properties do not become calls.
+- **Test**: Groovy E2E Group L (tests L1–L2) resolves receiver and bare repository methods called only with a trailing closure through both CLI and MCP, including a parenthesized call inside the closure body. Parser unit tests cover receiver and bare closure-only calls, their arity, one-line methods, call attribution and false-positive guards.
+- **Upgrade**: Re-index Groovy repositories with `knot-indexer --clean` to add the missing `CALLS` edges.
+
+---
+
 ## v1.12.1
 
 - **Fixed(groovy)**: A receiver call `a.b(..)` is no longer also reported as a bare call `b(..)` (#43). The lexical call scanner matched `a.b(` as a receiver call, then read `b` again as the next word and reported it a second time without a receiver. That copy went through the bare-name fallback, which binds a callee name declared exactly once in the repository whatever the receiver's type, so `Canvas.render('x', 80)` on an unindexed type became a caller of the repository's only `Template.render` — the external-type guard from #32 applies only to calls that carry their receiver. The scanner now skips the receiver path and the method name after a receiver call, and the receiver keeps its whole dotted path (`StringUtils.INSTANCE.countWords(..)` → receiver `StringUtils.INSTANCE`, so a Kotlin `object` called from Groovy still resolves); chained calls (`a.b().c()`) and calls nested in the arguments are still reported.
