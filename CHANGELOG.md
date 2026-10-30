@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.12.4
+
+- **Fixed(typescript)**: Class members no longer take the decorators of an earlier member (#47). tree-sitter-typescript emits member decorators as siblings in `class_body`, and the fallback scanned the class body forwards from its first child, so every member after the first decorated one reported that member's decorators (`plain`, `reset` and `update` all showed `@computed` in a MobX store). The scan now walks backwards from the member, collecting only the contiguous decorators written directly before it, skipping comments and anonymous tokens (so `@Component(...) export class X` keeps its decorators) and stopping at any other node. `explore_file`, search and the stored `decorators` field are corrected for decorator-heavy classes (MobX stores, Angular components, NestJS controllers).
+- **Test**: TypeScript E2E test 22 (fixture `testing_files/typescript/decorators/cart.store.ts`) checks per-member decorators through CLI and MCP. Unit tests cover per-member decorators on the TypeScript and TSX grammars (including a comment between decorators) and decorators before `export class`.
+- **Chore(ci)**: Build the `aarch64-apple-darwin` release artifact on `macos-15`. dist 0.31 defaults to `macos-14`, whose runner image GitHub retires on 2026-11-02; its brownout failed the v1.12.3 release, so v1.12.3 has no GitHub Release binaries (it is on crates.io).
+- **Upgrade**: Re-index TypeScript repositories with `knot-indexer --clean` to correct the stored decorators.
+
+---
+
 ## v1.12.3
 
 - **Fixed(typescript, javascript)**: Function locals and parameters passed as arguments no longer produce cross-module calls to unrelated fields (#48). In `extract_callback_arguments`, identifiers declared in an enclosing function scope (parameters, `const`/`let`/`var`, destructuring patterns, `for`/`for..of`/`for..in` loops, and `catch` clauses) are treated as values rather than callback references; module-level declarations and imports (`app.use(authHandler)`) continue to be recorded as callbacks.
