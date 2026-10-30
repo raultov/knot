@@ -606,6 +606,31 @@ assert_overload_callers 20 "ProductCardComponent.snapshot" "2<render" \
 assert_overload_callers 21 "PromoBanner.coupon" "" \
     "A parameter argument does not become a cross-module field call"
 
+# Test 22: each class member reports only the decorators written directly
+# before it, never those of an earlier member (issue #47). Fixture:
+# decorators/cart.store.ts.
+echo ""
+echo "Test 22: explore_file reports per-member decorators..."
+DECORATORS_FILE="decorators/cart.store.ts"
+DECORATORS_EXPECTED="helper:,plain:,reset:@action,total:@computed,update:"
+DECORATORS_CLI=$(cargo run --release --bin knot -- explore "$DECORATORS_FILE" -r "$REPO_NAME" -o json 2>/dev/null \
+    | jq -r '[.entities | .. | objects | select(has("kind") and (.name | IN("helper","total","plain","reset","update")))
+        | "\(.name):\((.decorators // []) | join("|"))"] | unique | join(",")')
+if [ "$DECORATORS_CLI" != "$DECORATORS_EXPECTED" ]; then
+    echo -e "${RED}✗ CLI: decorators expected [$DECORATORS_EXPECTED], got [$DECORATORS_CLI]${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ CLI: decorators [$DECORATORS_CLI]${NC}"
+DECORATORS_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_file\",\"arguments\":{\"file_path\":\"$DECORATORS_FILE\",\"repo_name\":\"$REPO_NAME\"}}}"
+DECORATORS_MCP=$(echo "$DECORATORS_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+    | jq -r '.result.content[0].text')
+if [ "$(echo "$DECORATORS_MCP" | grep -c '@computed')" -ne 1 ] || [ "$(echo "$DECORATORS_MCP" | grep -c '@action')" -ne 1 ]; then
+    echo -e "${RED}✗ MCP: expected exactly one @computed and one @action:${NC}"
+    echo "$DECORATORS_MCP"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: exactly one @computed and one @action${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -630,6 +655,7 @@ echo "  ✓ TS embedding recall: doc-less hook ranks first for its paraphrase"
 echo "  ✓ Overload signatures bind by arity; JavaScript arity is never binding"
 echo "  ✓ Method locals are not members; this.m() reaches the inherited method"
 echo "  ✓ Function locals and parameters passed as arguments do not bind cross-module fields"
+echo "  ✓ Class members report only their own decorators"
 echo ""
 
 exit 0
