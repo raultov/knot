@@ -598,6 +598,14 @@ if ! echo "$LOCALS_MCP" | grep -q "deleteCookie" || echo "$LOCALS_MCP" | grep -q
 fi
 echo -e "${GREEN}✓ CLI & MCP: CdpPage.ts lists deleteCookie and no local constant${NC}"
 
+# Tests 20-21: locals and parameters passed as arguments are values, not
+# receiverless callbacks. They must never bind to same-named fields in an
+# unrelated module (issue #48). Fixture: callback_arguments/.
+assert_overload_callers 20 "ProductCardComponent.snapshot" "2<render" \
+    "A local argument does not become a cross-module field call"
+assert_overload_callers 21 "PromoBanner.coupon" "" \
+    "A parameter argument does not become a cross-module field call"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -621,6 +629,7 @@ echo "  ✓ TS explore_file shows Imports / Referenced Types section"
 echo "  ✓ TS embedding recall: doc-less hook ranks first for its paraphrase"
 echo "  ✓ Overload signatures bind by arity; JavaScript arity is never binding"
 echo "  ✓ Method locals are not members; this.m() reaches the inherited method"
+echo "  ✓ Function locals and parameters passed as arguments do not bind cross-module fields"
 echo ""
 
 exit 0
