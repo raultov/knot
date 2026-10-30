@@ -198,32 +198,26 @@ fn typescript_decorators(entity_node: Node<'_>, source: &[u8]) -> Vec<String> {
         child = c.next_sibling();
     }
 
-    if decorators.is_empty()
-        && let Some(parent) = entity_node.parent()
-    {
-        let mut pchild = parent.child(0);
-        let mut found_decorator_section = false;
-
-        while let Some(c) = pchild {
-            if c.id() == entity_node.id() {
-                break;
-            }
-
-            if c.kind() == "decorator" {
-                let decorator_text = node_text(c, source);
+    if decorators.is_empty() {
+        // tree-sitter-typescript emits member decorators as siblings in
+        // `class_body` (and exported-class decorators before `export`), so
+        // walk backwards from the entity: only the decorators written
+        // directly before it belong to it, never an earlier member's (#47).
+        // Comments and anonymous tokens (`export`, `;`) are skipped; any
+        // other node ends the run.
+        let mut sibling = entity_node.prev_sibling();
+        while let Some(s) = sibling {
+            if s.kind() == "decorator" {
+                let decorator_text = node_text(s, source);
                 if !decorator_text.is_empty() {
                     decorators.push(decorator_text);
-                    found_decorator_section = true;
                 }
-            } else if found_decorator_section
-                && !c.utf8_text(source).unwrap_or("").trim().is_empty()
-                && !matches!(c.kind(), "comment" | "line_comment" | "block_comment")
-            {
+            } else if s.is_named() && !s.kind().contains("comment") {
                 break;
             }
-
-            pchild = c.next_sibling();
+            sibling = s.prev_sibling();
         }
+        decorators.reverse();
     }
     decorators
 }
@@ -582,6 +576,88 @@ class AppComponent {
             assert!(decorators[0].contains("Component"));
         } else {
             panic!("Could not find class declaration in TypeScript code");
+        }
+    }
+
+    /// Decorators written before `export` belong to the exported class.
+    #[test]
+    fn test_extract_decorators_typescript_exported_class() {
+        let code =
+            "@Injectable()\n@Component({ selector: 'app-root' })\nexport class AppComponent {}\n";
+        let lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let class_node = find_class(tree.root_node()).expect("class declaration");
+        assert_eq!(
+            extract_decorators(class_node, code.as_bytes(), "typescript"),
+            vec!["@Injectable()", "@Component({ selector: 'app-root' })"]
+        );
+    }
+
+    /// `(method name, decorators)` of every `method_definition` in `code`.
+    fn method_decorators(code: &str, lang: tree_sitter::Language) -> Vec<(String, Vec<String>)> {
+        fn walk(node: Node<'_>, source: &[u8], out: &mut Vec<(String, Vec<String>)>) {
+            if node.kind() == "method_definition"
+                && let Some(name) = node.child_by_field_name("name")
+            {
+                out.push((
+                    node_text(name, source),
+                    extract_decorators(node, source, "typescript"),
+                ));
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk(child, source, out);
+            }
+        }
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let mut out = Vec::new();
+        walk(tree.root_node(), code.as_bytes(), &mut out);
+        out
+    }
+
+    /// Issue #47: a class member takes only the decorators written directly
+    /// before it, never those of an earlier member.
+    #[test]
+    fn test_typescript_member_decorators_do_not_leak() {
+        let code = r#"
+export class CartStore {
+  constructor() { makeObservable(this); }
+  helper(): void {}
+  @computed
+  get total(): number { return 1; }
+  get plain(): number { return 2; }
+  @action
+  // the action resets the cart
+  @bound
+  reset(): void {}
+  update(): void {}
+}
+"#;
+        let expected: Vec<(String, Vec<String>)> = [
+            ("constructor", vec![]),
+            ("helper", vec![]),
+            ("total", vec!["@computed"]),
+            ("plain", vec![]),
+            ("reset", vec!["@action", "@bound"]),
+            ("update", vec![]),
+        ]
+        .into_iter()
+        .map(|(name, decorators)| {
+            (
+                name.to_string(),
+                decorators.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect();
+        for lang in [
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
+            tree_sitter_typescript::LANGUAGE_TSX,
+        ] {
+            assert_eq!(method_decorators(code, lang.into()), expected);
         }
     }
 
