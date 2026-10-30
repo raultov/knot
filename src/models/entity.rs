@@ -467,9 +467,7 @@ impl From<&ParsedEntity> for ResolutionEntity {
 
 impl From<&EmbeddedEntity> for ResolutionEntity {
     fn from(ee: &EmbeddedEntity) -> Self {
-        let mut e = ResolutionEntity::from(&ee.entity);
-        e.signature = ee.entity.signature.clone();
-        e
+        ResolutionEntity::from(&ee.entity)
     }
 }
 

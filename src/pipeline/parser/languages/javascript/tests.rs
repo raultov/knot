@@ -242,10 +242,9 @@ fn test_js_require_destructure_emits_refs() {
     );
 }
 
-/// `(method, receiver, arg_count)` of every call intent in `body`.
-fn call_arities(body: &str) -> Vec<(String, Option<String>, Option<usize>)> {
-    let code = format!("function test() {{ {body} }}");
-    let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(&code)
+/// `(method, receiver, arg_count)` of every call intent in `code`.
+fn call_arities_from_code(code: &str) -> Vec<(String, Option<String>, Option<usize>)> {
+    let tree = crate::pipeline::parser::test_utils::parse_javascript_snippet(code)
         .expect("Failed to parse JavaScript code");
     let mut intents = Vec::new();
     extract_reference_intents_javascript(tree.root_node(), code.as_bytes(), &mut intents);
@@ -261,6 +260,11 @@ fn call_arities(body: &str) -> Vec<(String, Option<String>, Option<usize>)> {
             _ => None,
         })
         .collect()
+}
+
+/// `(method, receiver, arg_count)` of every call intent in `body`.
+fn call_arities(body: &str) -> Vec<(String, Option<String>, Option<usize>)> {
+    call_arities_from_code(&format!("function test() {{ {body} }}"))
 }
 
 /// Issue #38: calls carry their argument count (comments excluded). The
@@ -292,4 +296,39 @@ fn test_call_carries_arg_count() {
 #[test]
 fn test_spread_argument_has_unknown_arg_count() {
     assert!(call_arities("f(a, ...xs);").contains(&("f".to_string(), None, None)));
+}
+
+/// Issue #48: a local passed as an argument is a value, not a callback.
+#[test]
+fn test_local_argument_is_not_callback_intent() {
+    let arities = call_arities("const snapshot = [1]; applyDiscount(snapshot, 10);");
+    assert!(arities.contains(&("applyDiscount".to_string(), None, Some(2))));
+    assert!(!arities.iter().any(|(method, _, _)| method == "snapshot"));
+}
+
+/// Issue #48: parameters, destructured locals, catch bindings and loop
+/// bindings are values too. An imported or module-level callback remains a
+// callback reference because it is not declared inside the enclosing function.
+#[test]
+fn test_function_bindings_are_not_callback_intents() {
+    let arities = call_arities_from_code(
+        r#"
+        function logCoupon(coupon) { console.log(coupon); }
+        function consumeBindings(state, items) {
+            const { snapshot } = state;
+            applyDiscount(snapshot);
+            for (const item of items) { consume(item); }
+            try { consume(state); } catch (error) { report(error); }
+        }
+        "#,
+    );
+    for local in ["coupon", "snapshot", "item", "error"] {
+        assert!(
+            !arities.iter().any(|(method, _, _)| method == local),
+            "unexpected callback intent for local {local}: {arities:?}"
+        );
+    }
+
+    let arities = call_arities("app.use(authHandler);");
+    assert!(arities.contains(&("authHandler".to_string(), None, None)));
 }

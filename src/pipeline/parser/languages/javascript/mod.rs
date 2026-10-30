@@ -26,7 +26,8 @@ mod tests;
 
 pub(crate) use dom_css::{collect_dom_css_references, handle_dom_css_capture};
 pub(crate) use imports::{
-    collect_import_intents_javascript, extract_require_module_path, scan_module_exports_target,
+    collect_import_intents_javascript, collect_require_binding_names, extract_require_module_path,
+    scan_module_exports_target,
 };
 pub(crate) use inheritance::extract_class_inheritance_js;
 pub(crate) use jsx::{extract_jsx_component_invocation, extract_jsx_html_attributes};

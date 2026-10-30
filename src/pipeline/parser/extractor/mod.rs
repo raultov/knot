@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Language, Parser, Query, QueryCursor};
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
-use crate::models::ParsedEntity;
+use crate::models::{ImportScope, ParsedEntity};
 use crate::pipeline::parser::context::{ClassContext, extract_class_contexts};
-use crate::pipeline::parser::languages::{java, kotlin};
+use crate::pipeline::parser::languages::{java, javascript, kotlin, typescript};
 use crate::pipeline::parser::utils::*;
 
 /// Deterministic richness of one match's captures: how much of an entity's
@@ -18,6 +18,32 @@ fn entity_richness(e: &ParsedEntity) -> usize {
         + e.inline_comments.len()
         + usize::from(!e.reference_intents.is_empty())
         + usize::from(!e.embed_text.is_empty())
+}
+
+/// Local names an ES module or CommonJS file imports. Receiverless call
+/// resolution uses these to keep unrelated modules isolated (issue #48).
+fn javascript_import_scope(
+    root: Node<'_>,
+    source: &[u8],
+    entities: &[ParsedEntity],
+) -> ImportScope {
+    let mut module_bindings: Vec<String> = typescript::scan_import_module_aliases(root, source)
+        .into_iter()
+        .map(|(local_name, _, _, _)| local_name)
+        .collect();
+    module_bindings.extend(javascript::collect_require_binding_names(root, source));
+    module_bindings.extend(
+        entities
+            .iter()
+            .filter(|entity| entity.alias_module_path.is_some())
+            .map(|entity| entity.name.clone()),
+    );
+    module_bindings.sort();
+    module_bindings.dedup();
+    ImportScope {
+        module_bindings,
+        ..ImportScope::default()
+    }
 }
 
 mod captures;
@@ -146,6 +172,11 @@ pub(crate) fn extract_entities(
     let import_scope = match lang_name {
         "java" => Some(java::extract_import_scope(tree.root_node(), source_bytes)),
         "kotlin" => Some(kotlin::extract_import_scope(tree.root_node(), source_bytes)),
+        "javascript" | "typescript" => Some(javascript_import_scope(
+            tree.root_node(),
+            source_bytes,
+            &entities,
+        )),
         _ => None,
     };
     if let Some(scope) = import_scope.map(std::sync::Arc::new) {

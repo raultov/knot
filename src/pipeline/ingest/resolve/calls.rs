@@ -502,6 +502,9 @@ pub(crate) struct CallerScope<'a> {
     /// The caller is Rust code: compound receivers are resolved by
     /// [`resolve_rust_compound_receiver_call`].
     pub is_rust: bool,
+    /// The caller is an ES module or CommonJS file: receiverless calls obey
+    /// file/import visibility instead of repository-global name fallback.
+    pub is_javascript: bool,
 }
 
 /// `true` for a receiver the Rust parser renders from a compound expression:
@@ -832,15 +835,68 @@ fn resolve_receiver_call(
     None
 }
 
+/// Whether a JavaScript/TypeScript receiverless call may target `uuid`.
+/// Cross-file targets require an import binding, and fields/constants are
+/// never callable targets. Same-file import aliases stay eligible so the
+/// alias pass can redirect them to their imported function (issue #48).
+fn javascript_bare_call_candidate(
+    uuid: &Uuid,
+    caller_file_path: &str,
+    imported: bool,
+    ctx: &ResolutionContext,
+) -> bool {
+    let same_file = ctx
+        .uuid_to_file
+        .get(uuid)
+        .is_some_and(|file| file == caller_file_path);
+    if !same_file && !imported {
+        return false;
+    }
+    let callable = ctx
+        .uuid_to_kind
+        .and_then(|kinds| kinds.get(uuid))
+        .is_some_and(|kind| {
+            matches!(
+                kind,
+                EntityKind::Function | EntityKind::Method | EntityKind::Class
+            )
+        });
+    callable || (same_file && ctx.alias_map.contains_key(uuid))
+}
+
 fn resolve_bare_call(
     intent: &CallIntent,
-    caller_file_path: &str,
+    caller: &CallerScope<'_>,
     ctx: &ResolutionContext,
 ) -> Option<Uuid> {
     if intent.receiver.is_some() {
         return None;
     }
+    let caller_file_path = caller.file_path;
     let uuids = ctx.name_to_uuids.get(&intent.method)?;
+    if caller.is_javascript {
+        let imported = ctx
+            .import_scopes
+            .get(caller_file_path)
+            .is_some_and(|scope| {
+                scope
+                    .module_bindings
+                    .iter()
+                    .any(|binding| binding == &intent.method)
+            });
+        let candidates: Vec<Uuid> = uuids
+            .iter()
+            .copied()
+            .filter(|uuid| javascript_bare_call_candidate(uuid, caller_file_path, imported, ctx))
+            .collect();
+        return resolve_homonym_fallback(
+            &candidates,
+            intent.arg_count,
+            None,
+            caller_file_path,
+            ctx,
+        );
+    }
     resolve_homonym_fallback(uuids, intent.arg_count, None, caller_file_path, ctx)
 }
 
@@ -864,7 +920,7 @@ pub(crate) fn resolve_single_call_intent(
     resolve_implicit_this_call(intent, caller, ctx)
         .or_else(|| resolve_static_receiver_call(intent, caller_file_path, ctx))
         .or_else(|| resolve_receiver_call(intent, caller_file_path, ctx))
-        .or_else(|| resolve_bare_call(intent, caller_file_path, ctx))
+        .or_else(|| resolve_bare_call(intent, caller, ctx))
 }
 
 #[cfg(test)]
@@ -895,6 +951,97 @@ mod tests {
         assert_eq!(
             entities[0].relationships[0],
             (entities[1].uuid, RelationshipType::Calls)
+        );
+    }
+
+    /// Issue #48: JavaScript modules do not see declarations from unrelated
+    /// files, and a receiverless call can never target a class field.
+    #[test]
+    fn test_js_bare_call_does_not_bind_cross_file_field() {
+        let mut caller = mock_resolution_entity_with_kind(
+            "update",
+            "CartStore.update",
+            Some("CartStore"),
+            "orders.ts",
+            EntityKind::Method,
+        );
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "snapshot".to_string(),
+            receiver: None,
+            line: 6,
+            arg_count: None,
+        });
+        let field = mock_resolution_entity_with_kind(
+            "snapshot",
+            "ProductCardComponent.snapshot",
+            Some("ProductCardComponent"),
+            "catalog.ts",
+            EntityKind::Constant,
+        );
+
+        let mut entities = vec![caller, field];
+        resolve_reference_intents(&mut entities);
+        assert!(entities[0].relationships.is_empty());
+    }
+
+    /// A cross-file JavaScript function requires an import binding; a
+    /// same-file function remains visible without one.
+    #[test]
+    fn test_js_bare_call_uses_module_scope() {
+        let imported = mock_resolution_entity_with_kind(
+            "applyDiscount",
+            "applyDiscount",
+            None,
+            "discount.ts",
+            EntityKind::Function,
+        );
+        let local = mock_resolution_entity_with_kind(
+            "formatTotal",
+            "formatTotal",
+            None,
+            "orders.ts",
+            EntityKind::Function,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "update",
+            "update",
+            None,
+            "orders.ts",
+            EntityKind::Function,
+        );
+        caller.reference_intents = vec![
+            ReferenceIntent::Call {
+                method: "applyDiscount".to_string(),
+                receiver: None,
+                line: 6,
+                arg_count: Some(2),
+            },
+            ReferenceIntent::Call {
+                method: "formatTotal".to_string(),
+                receiver: None,
+                line: 7,
+                arg_count: Some(1),
+            },
+        ];
+        let imported_uuid = imported.uuid;
+        let local_uuid = local.uuid;
+
+        let mut entities = vec![caller, imported, local];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[0].relationships,
+            vec![(local_uuid, RelationshipType::Calls)]
+        );
+
+        entities[0].import_scope = Some(std::sync::Arc::new(ImportScope {
+            module_bindings: vec!["applyDiscount".to_string()],
+            ..ImportScope::default()
+        }));
+        resolve_reference_intents(&mut entities);
+        assert!(
+            entities[0]
+                .relationships
+                .contains(&(imported_uuid, RelationshipType::Calls))
         );
     }
 
@@ -1733,6 +1880,7 @@ mod tests {
                 .map(|(local, fqn)| (local.to_string(), fqn.to_string()))
                 .collect(),
             wildcards: wildcards.iter().map(|w| w.to_string()).collect(),
+            module_bindings: Vec::new(),
         }
     }
 
@@ -2057,6 +2205,12 @@ mod tests {
         call_arity: usize,
     ) -> Vec<String> {
         let mut caller = mock_resolution_entity_at("main", "app.main", None, caller_file);
+        if caller_file != file_path {
+            caller.import_scope = Some(std::sync::Arc::new(ImportScope {
+                module_bindings: vec!["helper".to_string()],
+                ..ImportScope::default()
+            }));
+        }
         caller.reference_intents.push(ReferenceIntent::Call {
             method: "helper".to_string(),
             receiver: None,

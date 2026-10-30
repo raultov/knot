@@ -222,3 +222,48 @@ pub(crate) fn scan_module_exports_target(root: Node<'_>, source: &[u8]) -> Optio
         None
     })
 }
+
+/// Local names bound by CommonJS `require(...)` declarators, including object
+/// destructuring (`const { helper, raw: alias } = require('./m')`).
+pub(crate) fn collect_require_binding_names(root: Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut bindings = Vec::new();
+    collect_require_bindings_recursive(root, source, &mut bindings);
+    bindings
+}
+
+fn collect_require_bindings_recursive(node: Node<'_>, source: &[u8], bindings: &mut Vec<String>) {
+    if node.kind() == "variable_declarator"
+        && extract_require_module_path(node, source).is_some()
+        && let Some(name_node) = node.child_by_field_name("name")
+    {
+        collect_require_pattern_bindings(name_node, source, bindings);
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_require_bindings_recursive(child, source, bindings);
+    }
+}
+
+fn collect_require_pattern_bindings(node: Node<'_>, source: &[u8], bindings: &mut Vec<String>) {
+    match node.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => {
+            bindings.push(node_text(node, source));
+        }
+        "pair_pattern" => {
+            if let Some(value) = node.child_by_field_name("value") {
+                collect_require_pattern_bindings(value, source, bindings);
+            }
+        }
+        "assignment_pattern" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                collect_require_pattern_bindings(left, source, bindings);
+            }
+        }
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_require_pattern_bindings(child, source, bindings);
+            }
+        }
+    }
+}

@@ -1,6 +1,7 @@
-/// The package and imports of one JVM source file (Java, Kotlin). Call and
-/// type resolution use them to tell same-named types of different packages
-/// apart (issue #45).
+/// The package and imports of one source file. JVM call and type resolution
+/// uses them to tell same-named types of different packages apart (issue #45);
+/// JavaScript/TypeScript resolution uses the module bindings to prevent
+/// receiverless calls from crossing module boundaries without an import.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportScope {
     /// The file's `package`, if any.
@@ -10,6 +11,9 @@ pub struct ImportScope {
     pub imports: Vec<(String, String)>,
     /// Packages imported on demand (`import com.x.*`).
     pub wildcards: Vec<String>,
+    /// Local names imported by a JavaScript/TypeScript module, including
+    /// CommonJS `require` aliases. Empty for JVM files.
+    pub module_bindings: Vec<String>,
 }
 
 impl ImportScope {
@@ -43,6 +47,7 @@ mod tests {
             package: Some("com.app".to_string()),
             imports: vec![("BConfig".to_string(), "com.b.Config".to_string())],
             wildcards: vec!["com.c".to_string()],
+            module_bindings: Vec::new(),
         };
         assert_eq!(scope.imported("BConfig"), Some("com.b.Config"));
         assert_eq!(scope.imported("Config"), None);

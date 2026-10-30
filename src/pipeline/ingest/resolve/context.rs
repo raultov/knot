@@ -63,8 +63,11 @@ pub struct ResolutionContext<'a> {
     pub dependency_uuids: &'a HashSet<Uuid>,
     /// Simple names of the types the local repository declares.
     pub local_type_names: &'a HashSet<String>,
-    /// File path → package and imports of that file (Java, Kotlin).
+    /// File path → package and imports of that file.
     pub import_scopes: &'a HashMap<String, Arc<ImportScope>>,
+    /// JavaScript/TypeScript import alias → resolved target. Alias entities
+    /// remain eligible receiverless-call targets in their declaring file.
+    pub alias_map: &'a HashMap<Uuid, Uuid>,
 }
 
 impl ResolutionContext<'_> {

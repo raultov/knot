@@ -2745,6 +2745,7 @@ fn test_extract_entities_jvm_import_scope() {
             package: Some("com.app".to_string()),
             imports: vec![("Config".to_string(), "com.b.Config".to_string())],
             wildcards: vec!["com.c".to_string()],
+            module_bindings: Vec::new(),
         }
     );
 
@@ -2765,13 +2766,29 @@ fn test_extract_entities_jvm_import_scope() {
                 ("BSource".to_string(), "com.b.Source".to_string()),
             ],
             wildcards: vec!["com.c".to_string()],
+            module_bindings: Vec::new(),
         }
     );
-    assert!(
-        extract_typescript("export class A {}")
-            .iter()
-            .all(|e| e.import_scope.is_none())
+}
+
+/// JavaScript/TypeScript import scopes retain local module bindings for
+/// receiverless call resolution (issue #48).
+#[test]
+fn test_extract_entities_typescript_module_import_scope() {
+    let entities = extract_typescript(
+        "import { helper as run } from './helpers';\nimport DefaultTool from './tool';\nexport function invoke() { run(); }\n",
     );
+    let scope = entities
+        .iter()
+        .find(|entity| entity.name == "invoke")
+        .and_then(|entity| entity.import_scope.clone())
+        .expect("TypeScript module import scope");
+    assert_eq!(
+        scope.module_bindings,
+        vec!["DefaultTool".to_string(), "run".to_string()]
+    );
+    assert!(scope.imports.is_empty());
+    assert!(scope.wildcards.is_empty());
 }
 
 /// tree-sitter-kotlin-ng parses the annotations of some top-level classes

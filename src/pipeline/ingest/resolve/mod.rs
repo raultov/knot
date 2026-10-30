@@ -302,6 +302,7 @@ impl LookupMaps {
             dependency_uuids: &self.dependency_uuids,
             local_type_names: &self.local_type_names,
             import_scopes: &self.import_scopes,
+            alias_map: &self.alias_map,
         }
     }
 }
@@ -393,6 +394,15 @@ fn caller_scope(entity: &ResolutionEntity) -> calls::CallerScope<'_> {
                 | EntityKind::RustStatic
                 | EntityKind::RustMacroDef
         ),
+        is_javascript: std::path::Path::new(&entity.file_path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension,
+                    "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts"
+                )
+            }),
     }
 }
 

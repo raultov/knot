@@ -262,6 +262,92 @@ pub(crate) fn extract_single_call_intent_javascript(
     intents
 }
 
+/// `true` when a binding pattern declares `name`. Default values and object
+/// pattern keys are uses, not bindings, so only the left/value side counts.
+fn binding_pattern_contains(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    match node.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => node_text(node, source) == name,
+        "pair_pattern" => node
+            .child_by_field_name("value")
+            .is_some_and(|value| binding_pattern_contains(value, name, source)),
+        "assignment_pattern" => node
+            .child_by_field_name("left")
+            .is_some_and(|left| binding_pattern_contains(left, name, source)),
+        _ => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .any(|child| binding_pattern_contains(child, name, source))
+        }
+    }
+}
+
+fn variable_declaration_binds(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    if !matches!(node.kind(), "lexical_declaration" | "variable_declaration") {
+        return false;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|child| child.kind() == "variable_declarator")
+        .filter_map(|declarator| declarator.child_by_field_name("name"))
+        .any(|pattern| binding_pattern_contains(pattern, name, source))
+}
+
+/// Declarations introduced by one lexical scope enclosing an identifier.
+fn scope_binds(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    match node.kind() {
+        "statement_block" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .any(|statement| variable_declaration_binds(statement, name, source))
+        }
+        "for_statement" => node
+            .child_by_field_name("initializer")
+            .is_some_and(|initializer| variable_declaration_binds(initializer, name, source)),
+        "for_in_statement" => node
+            .child_by_field_name("left")
+            .is_some_and(|left| binding_pattern_contains(left, name, source)),
+        "catch_clause" => node
+            .child_by_field_name("parameter")
+            .is_some_and(|parameter| binding_pattern_contains(parameter, name, source)),
+        _ => false,
+    }
+}
+
+fn is_function_node(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "function_declaration"
+            | "function_expression"
+            | "generator_function_declaration"
+            | "generator_function"
+            | "arrow_function"
+            | "method_definition"
+    )
+}
+
+/// `true` when `identifier` is bound by a parameter or local declaration of
+/// an enclosing function. Module-level declarations (`program`) and imports
+/// are excluded: `app.use(authHandler)` must still record a real callback.
+fn is_function_local(identifier: Node<'_>, name: &str, source: &[u8]) -> bool {
+    let mut current = identifier.parent();
+    while let Some(node) = current {
+        if scope_binds(node, name, source) {
+            return true;
+        }
+        if is_function_node(node) {
+            let binds_parameter = node
+                .child_by_field_name("parameters")
+                .or_else(|| node.child_by_field_name("parameter"))
+                .is_some_and(|parameters| binding_pattern_contains(parameters, name, source));
+            if binds_parameter {
+                return true;
+            }
+        }
+        current = node.parent();
+    }
+    false
+}
+
 /// Extract callback arguments from a call expression.
 ///
 /// Detects method references passed as arguments, e.g.:
@@ -298,6 +384,7 @@ pub(crate) fn extract_callback_arguments(
                 // Only treat as callback if it looks like a method name (not a keyword or literal)
                 if !is_reserved_keyword(&name)
                     && name.chars().next().is_some_and(|c| c.is_alphabetic())
+                    && !is_function_local(a, &name, source)
                 {
                     intents.push(CallIntent {
                         method: name,
