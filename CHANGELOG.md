@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.12.3
+
+- **Fixed(typescript, javascript)**: Function locals and parameters passed as arguments no longer produce cross-module calls to unrelated fields (#48). In `extract_callback_arguments`, identifiers declared in an enclosing function scope (parameters, `const`/`let`/`var`, destructuring patterns, `for`/`for..of`/`for..in` loops, and `catch` clauses) are treated as values rather than callback references; module-level declarations and imports (`app.use(authHandler)`) continue to be recorded as callbacks.
+- **Fixed(resolve)**: Receiverless JavaScript and TypeScript calls are restricted to module scope and callable entity kinds (#48). Source files track their imported bindings (`import` and `require`, including destructuring) in `ImportScope::module_bindings`. A receiverless call now only binds to declarations in the same file or imported bindings, and only targets callable entities (`Function`, `Method`, `Class` or same-file import aliases) — never class fields or constants of unrelated modules.
+- **Test**: TypeScript E2E tests 20–21 (fixture `testing_files/typescript/callback_arguments/`): verifying a local argument and a parameter passed to a function call do not create `CALLS` edges to cross-module fields. Unit tests cover function-scope binding exclusion, module-scope import tracking, and callable-only bare call resolution.
+- **Upgrade**: Re-index TypeScript and JavaScript repositories with `knot-indexer --clean` to remove false `CALLS` edges across modules.
+
+---
+
 ## v1.12.2
 
 - **Fixed(groovy)**: Calls whose only argument is a trailing closure are detected (#44). Both receiver calls (`parts.each { ... }`) and bare DSL-style calls (`withLock { ... }`) now produce a `CALLS` intent with arity one, so repository methods invoked only through this syntax no longer look unused to `find_callers`. Calls with parentheses followed by a closure keep their existing arity calculation, and assignments, control flow, type declarations, paren-less anonymous class bodies (`new Handler { ... }`) and closure-valued properties do not become calls.
