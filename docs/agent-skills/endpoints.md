@@ -72,7 +72,8 @@ the fluent `WebClient` / `RestClient` API (`.get().uri(…)`,
 URL path applied. An imperative call belongs to the method containing it. After every
 indexing run, knot links each client call to the endpoint it hits with an
 `HTTP_CALLS` edge, across every indexed repository and in any indexing
-order — no build dependency between client and server is needed.
+order — no build dependency between client and server is needed. Each
+recomputation is one transaction serialized across concurrent indexers.
 
 - `knot callers "<handler FQN>"` (or the endpoint name) lists the client
   calls under **HTTP callers (heuristic: client call → endpoint)**.

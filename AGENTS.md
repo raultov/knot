@@ -278,7 +278,7 @@ Relationship types (enum `RelationshipType`):
 - `MacroCalls`, `Contains`, `GenericBound` (Rust)
 - `DependsOn` — Repository-to-repository dependency edge (v1.2.5)
 - `RoutesTo` — HTTP endpoint → its handler method (JAX-RS / Spring MVC, issue #33)
-- `HTTP_CALLS` (graph-only, no enum variant) — HTTP client call → the endpoint it hits, `heuristic: true`; recomputed for the whole graph after every indexer run (`src/pipeline/ingest/resolve/http_calls.rs`, issue #46)
+- `HTTP_CALLS` (graph-only, no enum variant) — HTTP client call → the endpoint it hits, `heuristic: true`; recomputed for the whole graph after every indexer run, in one transaction serialized across concurrent indexers by a lock on the singleton `:HttpCallsLock` node; accepted by the subgraph query (`src/pipeline/ingest/resolve/http_calls.rs`, `src/db/graph/http_links.rs`, issue #46)
 
 ---
 
