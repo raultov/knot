@@ -5,6 +5,19 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.14.1
+
+- **Fixed(http)**: HTTP client links are relinked in one serialized transaction (#46). Every indexer run replaced all `HTTP_CALLS` edges in two separate statements after reading its inputs outside any transaction. Two runs finishing together, such as knot-server cluster nodes sharing Neo4j, could leave the edges missing for a moment, or keep a set computed from a stale snapshot until the next run. The relink pass now runs in one transaction:
+  - It records the repository facts, reads the endpoints and client calls, deletes the old edges and creates the new ones.
+  - It starts by locking the singleton `:HttpCallsLock` node, made unique by a new constraint created at startup, so a concurrent pass waits until the first commits.
+  - The last pass therefore sees every committed repository, and readers never see the edges half replaced.
+  - A failed pass is rolled back and retried up to three times.
+- **Added(graph)**: The subgraph query accepts `HTTP_CALLS`, so knot-server's graph API can draw client call → endpoint edges.
+- **Test**: The HTTP client E2E suite re-indexes its three repositories concurrently with `--clean`, twice, and checks that the links converge. Unit test for the subgraph relationship allow-list.
+- **Upgrade**: No re-index needed.
+
+---
+
 ## v1.14.0
 
 - **Added(java, kotlin)**: HTTP client calls are linked to the endpoints they hit (#46). Every routed method of a declarative client — OpenFeign (`@FeignClient`), MicroProfile REST Client (`@RegisterRestClient`), Spring HTTP interface (`@GetExchange`/`@HttpExchange`) — and every imperative call — `RestTemplate` (`getForObject`, `postForEntity`, `exchange(url, HttpMethod.X, …)`, …), `WebClient` / `RestClient` (`.get().uri(…)`, `.method(HttpMethod.X).uri(…)`, `uriBuilder` lambdas) — becomes an `http_client_call` entity named `<METHOD> <path>` with the client's base URL path applied. After every indexer run, `HTTP_CALLS` edges (`heuristic: true`) are recomputed across every indexed repository, so the links do not depend on indexing order and need no build dependency between client and server. A call links to the endpoint matching it best: same verb (or `ANY`), same segments with `{variable}` wildcards and at least one literal segment, the server's context path optional, the most literal endpoint winning (`/items/{id}` over `/items/export`); when the Feign service name or URL host matches a server's `spring.application.name` / `quarkus.application.name`, only that server's endpoints are candidates; a tie links nothing.
