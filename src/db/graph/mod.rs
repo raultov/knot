@@ -10,6 +10,7 @@
 mod connection;
 mod delete;
 mod http_links;
+mod incoming;
 mod query;
 mod query_repo;
 mod query_subgraph;
@@ -37,6 +38,7 @@ pub use delete::DeleteExt;
 pub use http_links::{
     HttpClientCallRow, HttpEndpointRow, HttpLinkExt, HttpLinkInputs, RelinkSummary, RepoHttpFacts,
 };
+pub use incoming::{IncomingEdge, IncomingEdgeExt};
 pub use query::QueryExt;
 pub use query_repo::{RepoIdentity, RepoQueryExt};
 pub use query_subgraph::SubgraphQueryExt;

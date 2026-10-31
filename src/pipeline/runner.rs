@@ -4,20 +4,23 @@
 //! all stages: discovery, parsing, preparation, embedding, ingestion, and relationship resolution.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::info;
 
 use crate::config::Config;
-use crate::db::{graph::GraphDb, graph::RepoQueryExt, graph::UpsertExt, vector::VectorDb};
+use crate::db::{
+    graph::GraphDb, graph::IncomingEdge, graph::IncomingEdgeExt, graph::RepoQueryExt,
+    graph::UpsertExt, vector::VectorDb,
+};
 use crate::models::{EmbeddedEntity, ParsedEntity, ResolutionEntity};
 use crate::pipeline::{
     embed::{Embedder, needs_reset},
     files::{
         calculate_files_to_delete, calculate_files_to_parse, classify_files_for_indexing,
-        update_index_state,
+        to_repo_relative, update_index_state,
     },
     ingest::{
         RunMetrics, ingest_batch, link_cross_repo_dependencies, link_http_calls, print_run_summary,
@@ -123,12 +126,15 @@ async fn run_pipeline_inner(
 
     // Clean stale data before re-indexing.
     progress.set_stage(IndexingStage::CleaningStaleData);
-    clean_stale_data(
+    let incoming_edges = clean_stale_data(
         vector_db,
         graph_db,
         cfg,
-        &deleted_files,
-        &modified_files,
+        StaleFiles {
+            deleted: &deleted_files,
+            modified: &modified_files,
+            repo_root: &repo_root,
+        },
         is_full_index,
     )
     .await?;
@@ -145,6 +151,19 @@ async fn run_pipeline_inner(
         );
         run_streaming_ingest(cfg, vector_db, graph_db, progress, &files_to_parse).await?
     };
+
+    // Edges from unchanged files into the re-indexed ones (issue #53): their
+    // targets were deleted and re-created, the files pointing at them were
+    // not re-parsed.
+    if !incoming_edges.is_empty() {
+        let restored = graph_db
+            .restore_incoming_edges(&cfg.repo_name, &incoming_edges)
+            .await?;
+        info!(
+            "Restored {restored} of {} edge(s) into re-indexed files",
+            incoming_edges.len()
+        );
+    }
 
     // Stage 7: Relationship Resolution
     // Cross-repo dependency linking: upsert Repository nodes and create DEPENDS_ON edges.
@@ -605,24 +624,30 @@ fn spawn_ingest_task(
     })
 }
 
+/// The files whose indexed data an incremental run must delete first.
+pub struct StaleFiles<'a> {
+    /// Repo-relative keys of the files deleted since the last run.
+    pub deleted: &'a [String],
+    /// Discovered paths (under `repo_root`) of the files modified since then.
+    pub modified: &'a [PathBuf],
+    /// Root the modified paths are relative to.
+    pub repo_root: &'a Path,
+}
+
 /// Clean stale data from databases based on files to delete.
 ///
 /// When `cfg.clean` is set or this is a full indexing run (no prior state on
 /// disk), the entire repository is wiped in a single bulk operation, otherwise
 /// only the files that already exist in the database (deleted and modified)
-/// are removed incrementally.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "function is verbose but correct — extraction deferred"
-)]
+/// are removed incrementally. Returns the edges from other files into the
+/// modified ones, to restore once they are re-indexed (issue #53).
 pub async fn clean_stale_data(
     vector_db: &VectorDb,
     graph_db: &GraphDb,
     cfg: &Config,
-    deleted_files: &[String],
-    modified_files: &[PathBuf],
+    stale: StaleFiles<'_>,
     is_full_index: bool,
-) -> Result<()> {
+) -> Result<Vec<IncomingEdge>> {
     use crate::db::graph::DeleteExt;
     use crate::db::vector::VectorDeleteExt;
 
@@ -640,22 +665,32 @@ pub async fn clean_stale_data(
             vector_db.delete_by_repo(&cfg.repo_name),
             graph_db.delete_by_repo(&cfg.repo_name),
         )?;
-    } else {
-        // Incremental: delete only modified and deleted files
-        let files_to_delete = calculate_files_to_delete(deleted_files, modified_files);
-
-        if !files_to_delete.is_empty() {
-            info!(
-                "Deleting {} stale file(s) from databases (incremental mode)",
-                files_to_delete.len()
-            );
-            tokio::try_join!(
-                vector_db.delete_by_file_paths(&cfg.repo_name, &files_to_delete),
-                graph_db.delete_by_file_paths(&cfg.repo_name, &files_to_delete),
-            )?;
-        }
+        return Ok(Vec::new());
     }
-    Ok(())
+
+    // Incremental: delete only modified and deleted files
+    let files_to_delete = calculate_files_to_delete(stale.deleted, stale.modified, stale.repo_root);
+    if files_to_delete.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Deleted files lose their edges for good; modified ones come back.
+    let modified_keys: Vec<String> = stale
+        .modified
+        .iter()
+        .map(|path| to_repo_relative(path, stale.repo_root))
+        .collect();
+    let incoming_edges = graph_db
+        .incoming_edges(&cfg.repo_name, &modified_keys)
+        .await?;
+    info!(
+        "Deleting {} stale file(s) from databases (incremental mode)",
+        files_to_delete.len()
+    );
+    tokio::try_join!(
+        vector_db.delete_by_file_paths(&cfg.repo_name, &files_to_delete),
+        graph_db.delete_by_file_paths(&cfg.repo_name, &files_to_delete),
+    )?;
+    Ok(incoming_edges)
 }
 
 /// Build configuration for the parsing stage.
