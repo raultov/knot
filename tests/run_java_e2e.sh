@@ -931,6 +931,39 @@ if [ "$HTTP_SECTION" != "4" ]; then
 fi
 echo -e "${GREEN}✓ MCP: explore_file lists the 4 endpoints of ItemsResource${NC}"
 
+# Tests 63-66: one overload is addressable by its parameter list (issue #37).
+# Fixture: testing_files/java/overload_calls/ — `Foo.bar(int, int)` (line 4)
+# and `Foo.bar(int)` (line 8) share their FQN.
+assert_overload_callers 63 "$OCALLS_PKG.x.Foo.bar(int,int)" "4<sumPair" \
+    "A parameter list addresses a single overload"
+assert_overload_callers 64 "$OCALLS_PKG.x.Foo.bar(int)" "8<single" \
+    "The other overload keeps its own callers"
+assert_overload_callers 65 "Foo.bar(int, int)" "4<sumPair" \
+    "A parameter list also narrows an FQN-suffix query"
+
+echo ""
+echo "Test 66: overloads are labelled by parameter list; an unknown one lists the declared overloads..."
+overload_mcp() {
+    echo "{\"jsonrpc\":\"2.0\",\"id\":66,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$1\",\"repo_name\":\"$REPO_NAME\"}}}" \
+        | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text'
+}
+OVERLOAD_BARE=$(overload_mcp "$OCALLS_PKG.x.Foo.bar")
+for label in "$OCALLS_PKG.x.Foo.bar(int, int)" "$OCALLS_PKG.x.Foo.bar(int)"; do
+    if ! echo "$OVERLOAD_BARE" | grep -qF "### Target: \`$label\`"; then
+        echo -e "${RED}✗ MCP: bare FQN does not label the overload $label:${NC}"
+        echo "$OVERLOAD_BARE"
+        exit 1
+    fi
+done
+OVERLOAD_MISS=$(overload_mcp "$OCALLS_PKG.x.Foo.bar(String)")
+if ! echo "$OVERLOAD_MISS" | grep -qF "No overload of" \
+    || ! echo "$OVERLOAD_MISS" | grep -qF "$OCALLS_PKG.x.Foo.bar(int)"; then
+    echo -e "${RED}✗ MCP: an unknown parameter list must list the declared overloads:${NC}"
+    echo "$OVERLOAD_MISS"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: both overloads labelled; Foo.bar(String) lists the declared overloads${NC}"
+
 # Tests 67-69: calls on untyped (`var`) receivers bind by name only with
 # evidence (issue #42). Fixture: testing_files/java/untyped_receivers/.
 UNTYPED_PKG="com.example.knot.untyped"
@@ -969,6 +1002,7 @@ echo "  ✓ Overload disambiguation stays within the receiver class and its supe
 echo "  ✓ Calls on JDK / third-party types never bind to repo homonyms"
 echo "  ✓ Same-named types in different packages resolve through imports and package"
 echo "  ✓ HTTP endpoint catalogue (JAX-RS, Spring MVC) routed to handlers"
+echo "  ✓ One overload addressable by its parameter list (Foo.bar(int, int))"
 echo "  ✓ Untyped (var) receivers bind by name only with package/import evidence"
 echo ""
 

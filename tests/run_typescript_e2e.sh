@@ -569,6 +569,11 @@ assert_overload_callers 15 "Other.bar" "" \
     "A same-name/same-arity method in another class gets no caller"
 assert_overload_callers 16 "legacyPad" "3<padDefault" \
     "JavaScript calls with fewer arguments than declared still bind"
+# Issue #37: a parameter list addresses one overload signature.
+assert_overload_callers 31 "Foo.bar(number, number)" "4<sumPair" \
+    "A parameter list addresses a single overload signature"
+assert_overload_callers 32 "Foo.bar(number)" "3<single" \
+    "The other overload signature keeps its own caller"
 
 # Tests 17-19: locals are not class members, and `this.m()` reaches the
 # inherited method (issue #41). Fixture: this_inherited/. `CdpPage extends
@@ -740,6 +745,7 @@ echo "  ✓ TS alias should NOT have callers (TsImportBar)"
 echo "  ✓ TS explore_file shows Imports / Referenced Types section"
 echo "  ✓ TS embedding recall: doc-less hook ranks first for its paraphrase"
 echo "  ✓ Overload signatures bind by arity; JavaScript arity is never binding"
+echo "  ✓ One overload addressable by its parameter list (Foo.bar(number, number))"
 echo "  ✓ Method locals are not members; this.m() reaches the inherited method"
 echo "  ✓ Function locals and parameters passed as arguments do not bind cross-module fields"
 echo "  ✓ Class members report only their own decorators"
