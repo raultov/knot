@@ -135,7 +135,7 @@ point them at any repository you have indexed to measure your own codebase.
 - **Java**: Full AST extraction with package-aware FQN resolution (e.g., `com.example.app.UserService`), class inheritance (`EXTENDS`), interface implementation (`IMPLEMENTS`), annotation tracking, and declared-type receiver resolution for fields (including `this.field`), record components, method/lambda/catch parameters, local, loop and try-with-resources variables, and pattern variables (`instanceof Type x`, `case Type x`). Scoping is respected: an inner declaration with the same name shadows the field even when its type is unknown (`var`, untyped lambda parameters, multi-catch), so the field's type is never applied to a different variable. Calls and method references (`expr::method`) on interface-typed fields resolve to the interface declaration regardless of variable naming, while hierarchy-aware resolution links inherited interface methods. Calls to overloaded methods bind by argument count within the receiver class and its supertypes (`foo.bar(1, 2)` → `Foo.bar(int, int)`, varargs and default parameters accepted), never to a same-name/same-arity method of an unrelated class. Arity narrows name-only candidates but never picks a target on its own.
 - **Kotlin**: Complete support for Kotlin codebases with classes, interfaces, objects, companion objects, functions, methods, and properties. Fully compatible with tree-sitter-kotlin-ng grammar. FQNs carry the file's `package` (`com.example.app.Config.load`, top-level functions `com.example.app.bootstrap`), so same-named types in different packages stay distinct for `find_callers`, `explore_file`, search and `OVERRIDES`. Calls carry their argument count (a trailing lambda counts as one), so calls to overloaded methods bind by arity within the receiver class and its supertypes.
 - **C#**: Full C# support via `tree-sitter-c-sharp`. Extracts classes, interfaces, structs, records (both `record class` and `record struct`), enums, methods, constructors, properties, fields (with `const` detection), delegates, events, indexers, operators, local functions, and namespaces with `CSharp*` entity kinds. Namespace-qualified FQNs (`MyApp.Services.UserService.GetUserAsync`) work across both file-scoped (C# 10+) and block-form namespaces, including nested namespaces and nested types. The `base_list` heuristic splits `: Base, IFace` into `EXTENDS`/`IMPLEMENTS` using the `IPascalCase` convention (structs and interfaces are deterministic), generic arguments are stripped (`IRepository<User>` → `IRepository`), XML doc comments (`///`) become docstrings, and attributes (`[Obsolete]`) are captured as decorators. Calls through field-typed receivers resolve to the exact implementation method, and C# `virtual`/`override` plus interface implementation produce method-level `OVERRIDES` edges. **MSBuild/NuGet**: `.csproj` files are parsed for project identity and dependencies (Central Package Management via `Directory.Packages.props` is supported); C# repos get `build_system: "nuget"` in the Repository node instead of the prior `"none"`.
-- **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files. Calls bind to the overload signature whose arity matches (`bar(a): T; bar(a, b): T`); a `this:` parameter is not counted. `this.m()` binds to the enclosing class's method or, failing that, to the nearest superclass declaring it. Each class member reports only the decorators written directly before it (`@computed`, `@action`, `@Get(...)`), never those of an earlier member
+- **TypeScript/TSX/CTS**: Complete support for modern JavaScript/TypeScript codebases, including CommonJS TypeScript files. Calls bind to the overload signature whose arity matches (`bar(a): T; bar(a, b): T`); a `this:` parameter is not counted. `this.m()` binds to the enclosing class's method or, failing that, to the nearest superclass declaring it. Each class member reports only the decorators written directly before it (`@computed`, `@action`, `@Get(...)`), never those of an earlier member. A `this.x` read, write or argument that is not called is a member access: it produces a `REFERENCES` edge to a field (so `find_callers` on a field lists its readers and writers as references, not invocations) and a `CALLS` edge only to a getter or method (`this.total`, `app.use(this.handler)`); `this.m()` stays a call
 - **JavaScript/Node.js**: Vanilla JS, Node.js, and module systems (`.js`, `.mjs`, `.cjs`, `.jsx`). Arity never constrains call resolution in JavaScript, where every parameter is optional. In both JavaScript and TypeScript, a `const` / `let` / `var` declared inside a function, method or arrow body is a local and is not indexed; module-level constants, class fields and local function definitions are. Function locals and parameters passed as call arguments are treated as values rather than callbacks, and receiverless calls obey module visibility (same-file or imported callable), so locals never bind to fields of unrelated modules
 - **Hybrid Web Ecosystem**: Cross-language linking between JavaScript, HTML, and CSS for full-stack SPA analysis
 - **HTML**: Custom elements (Web Components, Angular), `id` and `class` attribute indexing for cross-language CSS search
@@ -720,11 +720,28 @@ counts caveat tells you exactly what to do next: pass a fully qualified name to
 disambiguate homonyms, or raise `max_targets` (MCP parameter, default `25`,
 maximum `500`; CLI `--max-targets`) to opt into the full impact set.
 
-The same shown-vs-total contract applies to `search_hybrid_context`: when the
-`Sample callers:` / `Sample usages:` blocks under an entity list fewer entries
-than the reported count, the header reads
-`Sample callers — showing 3 of 21 (truncated):` instead of implying the sample
-is the complete set.
+The same shown-vs-total contract applies to `search_hybrid_context`: each
+relationship summary is one line, and when it lists fewer samples than the
+reported count it ends with `… +N more` instead of implying the sample is the
+complete set:
+
+```
+**Called by:** 21 location(s), 4 in tests: handle (same file), checkout in orders.ts, … +15 more
+```
+
+Search answers are kept compact for LLM agents (issue #50): a sample in the
+result's own file reads `name (same file)`, other samples show the file name
+only (the full path is one `find_callers` away); callers and usages in test code
+stay in the count but are reported as `N in tests` and listed only with
+`include_tests: true` (CLI `--include-tests`); `Calls:` lists are capped at 8
+items plus `+N more`; signatures print on one line and empty ones (`()`) are
+omitted; documentation keeps its first paragraph without `@param`/`@return`
+tags; and a result declared in a file already shown says `File: same as
+\`<earlier result>\``. Pass `detail: "brief"` (CLI `--detail brief`) for one
+line per result — `name (kind) — file:line — called by N, calls M` — then
+expand the hit you need with `find_callers`, `explore_file` or a `full` search.
+On the reference sample (8 queries over 4 repositories) `full` answers are 28%
+shorter than in v1.12 and `brief` answers 82% shorter.
 
 #### Tool 3: `explore_file`
 **Understand file structure**
