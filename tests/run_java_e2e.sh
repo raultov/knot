@@ -931,6 +931,16 @@ if [ "$HTTP_SECTION" != "4" ]; then
 fi
 echo -e "${GREEN}✓ MCP: explore_file lists the 4 endpoints of ItemsResource${NC}"
 
+# Tests 67-69: calls on untyped (`var`) receivers bind by name only with
+# evidence (issue #42). Fixture: testing_files/java/untyped_receivers/.
+UNTYPED_PKG="com.example.knot.untyped"
+assert_overload_callers 67 "$UNTYPED_PKG.other.EventConverter.convertPayload" "" \
+    "An untyped receiver never binds to a method of an unrelated, unimported type"
+assert_overload_callers 68 "$UNTYPED_PKG.other.LineRenderer.renderLine" "4<render" \
+    "var x = new ExternalType() types the receiver, even when a homonym type is imported"
+assert_overload_callers 69 "$UNTYPED_PKG.app.ScoreCard.computeScore" "4<score" \
+    "An untyped receiver still binds to the only candidate of the caller's package"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -959,6 +969,7 @@ echo "  ✓ Overload disambiguation stays within the receiver class and its supe
 echo "  ✓ Calls on JDK / third-party types never bind to repo homonyms"
 echo "  ✓ Same-named types in different packages resolve through imports and package"
 echo "  ✓ HTTP endpoint catalogue (JAX-RS, Spring MVC) routed to handlers"
+echo "  ✓ Untyped (var) receivers bind by name only with package/import evidence"
 echo ""
 
 exit 0
