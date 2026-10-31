@@ -4,7 +4,8 @@
 //! After each run the indexed repository's HTTP facts (service names,
 //! context paths) are recorded on its `:Repository` node, then every link
 //! of the graph is recomputed, so the result does not depend on the order
-//! repositories are indexed in. A call is linked when exactly one endpoint
+//! repositories are indexed in. The pass is one transaction serialized
+//! across concurrent indexers ([`HttpLinkExt::relink_http_calls`]). A call is linked when exactly one endpoint
 //! matches it best:
 //!
 //! - the verbs are equal, or either side is `ANY`;
@@ -57,16 +58,11 @@ pub async fn link_http_calls(graph_db: &GraphDb, cfg: &Config) -> Result<()> {
     let config = AppConfig::load(Path::new(&cfg.repo_path));
     let decorators = graph_db.application_path_decorators(&cfg.repo_name).await?;
     let facts = repo_http_facts(&cfg.repo_name, &config, &decorators);
-    graph_db.upsert_repo_http_facts(&facts).await?;
-
-    let inputs = graph_db.load_http_link_inputs().await?;
-    let links = match_http_calls(&inputs);
-    graph_db.replace_http_calls(&links).await?;
-    if !inputs.calls.is_empty() {
+    let summary = graph_db.relink_http_calls(&facts, match_http_calls).await?;
+    if summary.calls > 0 {
         info!(
             "Linked {} of {} HTTP client call(s) to endpoints",
-            links.len(),
-            inputs.calls.len()
+            summary.links, summary.calls
         );
     }
     Ok(())

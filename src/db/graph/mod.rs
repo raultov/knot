@@ -35,7 +35,7 @@ pub struct GraphDb {
 pub use connection::ConnectExt;
 pub use delete::DeleteExt;
 pub use http_links::{
-    HttpClientCallRow, HttpEndpointRow, HttpLinkExt, HttpLinkInputs, RepoHttpFacts,
+    HttpClientCallRow, HttpEndpointRow, HttpLinkExt, HttpLinkInputs, RelinkSummary, RepoHttpFacts,
 };
 pub use query::QueryExt;
 pub use query_repo::{RepoIdentity, RepoQueryExt};

@@ -37,6 +37,10 @@ fn index_statements() -> &'static [&'static str] {
         // graph after each run (issue #46).
         "CREATE INDEX entity_kind IF NOT EXISTS \
          FOR (e:Entity) ON (e.kind)",
+        // Singleton node whose lock serializes the HTTP_CALLS relink passes
+        // of concurrent indexers; unique so that MERGE cannot duplicate it.
+        "CREATE CONSTRAINT http_calls_lock_unique IF NOT EXISTS \
+         FOR (l:HttpCallsLock) REQUIRE l.name IS UNIQUE",
         "CREATE CONSTRAINT repo_name_unique IF NOT EXISTS \
          FOR (r:Repository) REQUIRE r.name IS UNIQUE",
         "CREATE INDEX repo_artifact IF NOT EXISTS \
