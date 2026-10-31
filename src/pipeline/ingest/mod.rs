@@ -9,6 +9,7 @@ mod resolve;
 
 pub use batch::ingest_batch;
 pub(crate) use resolve::cross_repo::{find_declaring_consumers, resolve_declared_dependencies};
+pub(crate) use resolve::overrides::{overload_params, params_address};
 pub use resolve::{
     RunMetrics, link_cross_repo_dependencies, print_run_summary, resolve_and_save_relationships,
     resolve_reference_intents, resolve_reference_intents_with_context,

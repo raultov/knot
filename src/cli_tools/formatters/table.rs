@@ -168,6 +168,10 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
         // legacy wording when there is no parseable resolution block.
         let outcome = match ResolutionView::from_references(references) {
             Some(view) if view.count() > 0 || view.total_targets() > 0 => "unused",
+            Some(view) if !view.overload_notice(false).is_empty() => {
+                no_ref_msg.push_str(&format!("{}\n", view.overload_notice(false)));
+                return no_ref_msg;
+            }
             Some(view) if view.hidden_non_code() > 0 => "hidden_only",
             Some(_) => "not_found",
             None => "legacy",

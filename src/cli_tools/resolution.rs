@@ -23,6 +23,9 @@ pub(crate) struct ResolutionView<'a> {
     kind_filter: &'a str,
     hidden_kinds: Vec<&'a str>,
     hidden_non_code: i64,
+    /// `resolution.overload`, present when the query carried a parameter
+    /// list (`Foo.bar(int, int)`, issue #37).
+    overload: Option<&'a Value>,
 }
 
 impl<'a> ResolutionView<'a> {
@@ -70,7 +73,66 @@ impl<'a> ResolutionView<'a> {
                 .get("hidden_non_code")
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
+            overload: resolution.get("overload"),
         })
+    }
+
+    /// The query's parameter list (`(int, int)`) when it addressed an
+    /// overload, matched or not.
+    fn overload_params(&self) -> Option<&'a str> {
+        self.overload?.get("params").and_then(Value::as_str)
+    }
+
+    fn overload_matched(&self) -> bool {
+        self.overload
+            .and_then(|o| o.get("matched"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// When the query's parameter list matched no overload: one line naming
+    /// the overloads that exist. Empty otherwise.
+    pub(crate) fn overload_notice(&self, markdown: bool) -> String {
+        let Some(params) = self.overload_params().filter(|_| !self.overload_matched()) else {
+            return String::new();
+        };
+        let candidates: Vec<&str> = self
+            .overload
+            .and_then(|o| o.get("candidates"))
+            .and_then(Value::as_array)
+            .map(|c| c.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let base = self
+            .query
+            .strip_suffix(')')
+            .and_then(|q| q.split_once('('))
+            .map_or(self.query, |(base, _)| base.trim());
+        let tick = if markdown { "`" } else { "" };
+        let listed: Vec<String> = candidates
+            .iter()
+            .map(|c| format!("{tick}{c}{tick}"))
+            .collect();
+        format!(
+            "No overload of {tick}{base}{tick} takes {tick}{params}{tick}. Declared overloads: {}.",
+            listed.join(", ")
+        )
+    }
+
+    /// FQNs shared by more than one resolved target: overloads, which are
+    /// labelled by their parameter list (see [`overload_label`]).
+    pub(crate) fn overloaded_fqns(&self) -> std::collections::HashSet<&'a str> {
+        let mut seen = std::collections::HashSet::new();
+        let mut shared = std::collections::HashSet::new();
+        for fqn in self
+            .targets
+            .iter()
+            .filter_map(|t| t.get("fqn").and_then(Value::as_str))
+        {
+            if !seen.insert(fqn) {
+                shared.insert(fqn);
+            }
+        }
+        shared
     }
 
     pub(crate) fn query(&self) -> &'a str {
@@ -165,12 +227,16 @@ impl<'a> ResolutionView<'a> {
     pub(crate) fn summary(&self) -> String {
         let count = self.count();
         let target_word = if count == 1 { "target" } else { "targets" };
-        format!(
+        let mut summary = format!(
             "Resolved to {} {} by {}",
             count,
             target_word,
             self.tier_label()
-        )
+        );
+        if let Some(params) = self.overload_params().filter(|_| self.overload_matched()) {
+            summary.push_str(&format!(" and parameter list {params}"));
+        }
+        summary
     }
 
     /// Caveat stating that the relationship-bucket counts cover only the
@@ -193,9 +259,15 @@ impl<'a> ResolutionView<'a> {
 
     /// One `- \`fqn\` (kind) at \`file:line\`  (repo: name)` bullet per resolved target.
     pub(crate) fn target_bullets(&self) -> String {
+        let overloaded = self.overloaded_fqns();
         let mut out = String::new();
         for target in self.targets {
-            let fqn = target.get("fqn").and_then(Value::as_str).unwrap_or("");
+            let fqn = overload_label(
+                target.get("fqn").and_then(Value::as_str).unwrap_or(""),
+                target.get("name").and_then(Value::as_str).unwrap_or(""),
+                target.get("signature").and_then(Value::as_str),
+                &overloaded,
+            );
             let kind = target.get("kind").and_then(Value::as_str).unwrap_or("");
             let file_path = target
                 .get("file_path")
@@ -217,10 +289,82 @@ impl<'a> ResolutionView<'a> {
     }
 }
 
+/// `fqn(int, int)` when `fqn` is shared by several resolved targets
+/// (overloads) and the signature carries a parameter list; `fqn` otherwise
+/// (issue #37).
+pub(crate) fn overload_label(
+    fqn: &str,
+    name: &str,
+    signature: Option<&str>,
+    overloaded: &std::collections::HashSet<&str>,
+) -> String {
+    match signature.filter(|_| overloaded.contains(fqn)) {
+        Some(signature) => match crate::pipeline::ingest::overload_params(signature, name) {
+            Some(params) => format!("{fqn}{params}"),
+            None => fqn.to_string(),
+        },
+        None => fqn.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn overload_resolution(overload: Value, targets: Value) -> Value {
+        json!({
+            "resolution": {
+                "query": "com.x.Foo.bar(String)",
+                "tier": "exact_fqn",
+                "targets": targets,
+                "overload": overload
+            }
+        })
+    }
+
+    /// Issue #37: overloads sharing an FQN are labelled by parameter list.
+    #[test]
+    fn target_bullets_label_overloads() {
+        let refs = overload_resolution(
+            json!(null),
+            json!([
+                {"fqn": "com.x.Foo.bar", "name": "bar", "signature": "(int a, int b)", "kind": "method", "file_path": "Foo.java", "start_line": 4},
+                {"fqn": "com.x.Foo.bar", "name": "bar", "signature": "(int a)", "kind": "method", "file_path": "Foo.java", "start_line": 8},
+                {"fqn": "com.x.Other.baz", "name": "baz", "signature": "(int a)", "kind": "method", "file_path": "Other.java", "start_line": 2}
+            ]),
+        );
+        let bullets = ResolutionView::from_references(&refs)
+            .unwrap()
+            .target_bullets();
+        assert!(bullets.contains("- `com.x.Foo.bar(int, int)` (method)"));
+        assert!(bullets.contains("- `com.x.Foo.bar(int)` (method)"));
+        assert!(bullets.contains("- `com.x.Other.baz` (method)"));
+    }
+
+    #[test]
+    fn overload_summary_and_notice() {
+        let matched = overload_resolution(
+            json!({"params": "(int, int)", "matched": true, "candidates": []}),
+            json!([{"fqn": "com.x.Foo.bar", "kind": "method", "file_path": "Foo.java", "start_line": 4}]),
+        );
+        let view = ResolutionView::from_references(&matched).unwrap();
+        assert_eq!(
+            view.summary(),
+            "Resolved to 1 target by exact FQN match and parameter list (int, int)"
+        );
+        assert!(view.overload_notice(true).is_empty());
+
+        let unmatched = overload_resolution(
+            json!({"params": "(String)", "matched": false, "candidates": ["com.x.Foo.bar(int)", "com.x.Foo.bar(int, int)"]}),
+            json!([]),
+        );
+        let view = ResolutionView::from_references(&unmatched).unwrap();
+        assert_eq!(
+            view.overload_notice(true),
+            "No overload of `com.x.Foo.bar` takes `(String)`. Declared overloads: `com.x.Foo.bar(int)`, `com.x.Foo.bar(int, int)`."
+        );
+    }
 
     fn sample() -> Value {
         json!({

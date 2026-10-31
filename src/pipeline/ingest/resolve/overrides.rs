@@ -37,6 +37,7 @@ use crate::models::{EntityKind, RelationshipType, ResolutionEntity};
 pub(super) use params::DeclaredArity;
 use params::{ParamList, match_params};
 use params::{declared_arity, last_param_is_array};
+pub(crate) use params::{overload_params, params_address};
 
 /// A method declared by an override-capable type.
 struct MethodEntry<'a> {

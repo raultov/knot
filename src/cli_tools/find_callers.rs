@@ -14,7 +14,8 @@ use crate::cli_tools::json_target_name;
 
 use crate::cli_tools::append_signature_if_present;
 use crate::cli_tools::format_file_line;
-use crate::cli_tools::resolution::ResolutionView;
+use crate::cli_tools::resolution::{ResolutionView, overload_label};
+use std::collections::HashSet;
 
 /// Main find_callers function called by both CLI and MCP
 ///
@@ -99,6 +100,10 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
                     entity_name
                 ))
             }
+            Some(view) if !view.overload_notice(true).is_empty() => {
+                output.push_str(&view.overload_notice(true));
+                output.push('\n');
+            }
             Some(view) if view.hidden_non_code() > 0 => output.push_str(&format!(
                 "No code entity matched `{}` — see the disclosure above; the name only \
                  hit documentation/config/build metadata.\n",
@@ -128,8 +133,10 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
     // targets happened to accumulate references: when 2 targets resolve
     // and only 1 has callers, the reader still needs to know which one.
     let mut multiple_targets = false;
+    let mut overloaded = std::collections::HashSet::new();
     if let Some(view) = ResolutionView::from_references(references) {
         multiple_targets = view.count() > 1 || view.total_targets() > 1;
+        overloaded = view.overloaded_fqns();
 
         // When the target resolution was truncated, the per-bucket counts
         // cover only the shown targets. State that explicitly (with the real
@@ -152,6 +159,7 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
                 entity_name,
                 arr,
                 multiple_targets || key == "dispatched_calls",
+                &overloaded,
             ));
         }
     }
@@ -230,6 +238,7 @@ fn format_relationship_bucket(
     entity_name: &str,
     arr: &[serde_json::Value],
     multiple_targets: bool,
+    overloaded: &HashSet<&str>,
 ) -> String {
     use std::collections::BTreeMap;
 
@@ -246,7 +255,12 @@ fn format_relationship_bucket(
 
     for (target_key, entities) in grouped {
         if let Some(target_key) = target_key.filter(|_| show_targets) {
-            output.push_str(&format_target_header(entities[0], entity_name, &target_key));
+            output.push_str(&format_target_header(
+                entities[0],
+                entity_name,
+                &target_key,
+                overloaded,
+            ));
         }
         for entity in entities {
             output.push_str(&format_reference_entry(entity));
@@ -256,15 +270,28 @@ fn format_relationship_bucket(
     output
 }
 
-/// `### Target:` section header plus the target signature line.
+/// `### Target:` section header plus the target signature line. A target
+/// whose FQN is shared by another resolved target (an overload) is labelled
+/// by its parameter list, `Foo.bar(int, int)` (issue #37).
 fn format_target_header(
     first_entity: &serde_json::Value,
     entity_name: &str,
     target_key: &str,
+    overloaded: &HashSet<&str>,
 ) -> String {
     // Prefer target_fqn when available — qualified identifiers
     // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
-    let target_name = json_target_name(first_entity, entity_name);
+    let target_name = overload_label(
+        &json_target_name(first_entity, entity_name),
+        first_entity
+            .get("target_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        first_entity
+            .get("target_signature")
+            .and_then(|v| v.as_str()),
+        overloaded,
+    );
     let target_repo = first_entity
         .get("target_repo_name")
         .and_then(|v| v.as_str());

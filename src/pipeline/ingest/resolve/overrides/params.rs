@@ -42,6 +42,22 @@ pub(super) struct TypeShape {
     array_dims: usize,
 }
 
+/// `List<String>[]`: the simple base name, its generic arguments and one `[]`
+/// per array dimension.
+impl std::fmt::Display for TypeShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.base)?;
+        if !self.args.is_empty() {
+            let args: Vec<String> = self.args.iter().map(ToString::to_string).collect();
+            write!(f, "<{}>", args.join(", "))?;
+        }
+        for _ in 0..self.array_dims {
+            f.write_str("[]")?;
+        }
+        Ok(())
+    }
+}
+
 /// One declared parameter. `ty` is `None` for untyped parameters (Groovy `def`
 /// or bare names), which match any type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +152,67 @@ pub(in crate::pipeline::ingest::resolve) fn declared_arity(
     } else {
         DeclaredArity::Fixed(params.len())
     }
+}
+
+/// The declared parameter types of `signature` as an overload address,
+/// `(int, List<String>)` (issue #37): simple type names, generic arguments
+/// kept, arrays and varargs as `[]`, `?` for an untyped parameter. `None`
+/// when no parameter list is found.
+pub(crate) fn overload_params(signature: &str, method_name: &str) -> Option<String> {
+    let list = ParamList::parse(signature, method_name, false)?;
+    let types: Vec<String> = list
+        .params
+        .iter()
+        .map(|p| {
+            p.ty.as_ref()
+                .map_or_else(|| "?".to_string(), ToString::to_string)
+        })
+        .collect();
+    Some(format!("({})", types.join(", ")))
+}
+
+/// Whether the parameter types of a query — the text between the
+/// parentheses of `Foo.bar(int, List<String>)` — address the overload
+/// declared by `signature` (issue #37): the same number of parameters, each
+/// with the same simple type name and array dimensions. Generic arguments are
+/// compared only when the query writes them, a `name: Type` query parameter
+/// (Kotlin, TypeScript) is read by its type, and an untyped declared
+/// parameter accepts any type.
+pub(crate) fn params_address(query_params: &str, signature: &str, method_name: &str) -> bool {
+    let Some(declared) = ParamList::parse(signature, method_name, false) else {
+        return false;
+    };
+    let query: Vec<&str> = split_top_level(query_params, ',')
+        .into_iter()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    query.len() == declared.params.len()
+        && query.iter().zip(&declared.params).all(|(text, param)| {
+            query_type(text).is_some_and(|q| param.ty.as_ref().is_none_or(|d| addresses(&q, d)))
+        })
+}
+
+/// The type of one query parameter: `Type`, `name: Type`, `String...`.
+fn query_type(text: &str) -> Option<TypeShape> {
+    let (text, variadic) = strip_modifiers(strip_annotations(text));
+    let text = match find_top_level(text, |prev, c, next| c == ':' && prev != ':' && next != ':') {
+        Some(colon) => &text[colon + 1..],
+        None => text,
+    };
+    parse_type(text, usize::from(variadic))
+}
+
+fn addresses(query: &TypeShape, declared: &TypeShape) -> bool {
+    query.base == declared.base
+        && query.array_dims == declared.array_dims
+        && (query.args.is_empty()
+            || (query.args.len() == declared.args.len()
+                && query
+                    .args
+                    .iter()
+                    .zip(&declared.args)
+                    .all(|(q, d)| addresses(q, d))))
 }
 
 /// `true` when the last declared parameter has an array type (`String[]`).
@@ -493,7 +570,9 @@ fn parse_type(text: &str, mut array_dims: usize) -> Option<TypeShape> {
         ),
         _ => (t, Vec::new()),
     };
-    let base: String = base.split_whitespace().collect();
+    // Multi-word types keep one space (`const uint8_t*`, `unsigned int`) so
+    // an overload address stays readable.
+    let base = base.split_whitespace().collect::<Vec<_>>().join(" ");
     let simple = base.rsplit('.').next().unwrap_or(&base).to_string();
     Some(TypeShape {
         base: simple,
@@ -723,6 +802,51 @@ mod tests {
                 Some("int".to_string())
             ]
         );
+    }
+
+    /// Issue #37: an overload's address is its declared parameter types.
+    #[test]
+    fn overload_params_render_declared_types() {
+        assert_eq!(
+            overload_params("(java.util.List<String> items, int... ids)", "m").as_deref(),
+            Some("(List<String>, int[])")
+        );
+        assert_eq!(
+            overload_params("(a: Int, vararg names: String)", "m").as_deref(),
+            Some("(Int, String[])")
+        );
+        assert_eq!(
+            overload_params("void write(const uint8_t* buf, size_t n)", "write").as_deref(),
+            Some("(const uint8_t*, size_t)")
+        );
+        assert_eq!(overload_params("()", "m").as_deref(), Some("()"));
+        assert_eq!(overload_params("(def x)", "m").as_deref(), Some("(?)"));
+        assert_eq!(overload_params("no parameter list", "m"), None);
+    }
+
+    /// Issue #37: a query's parameter list addresses the overloads whose
+    /// declared types match, with or without generic arguments.
+    #[test]
+    fn params_address_matches_declared_types() {
+        let sig = "(List<String> items, int count)";
+        assert!(params_address("List<String>, int", sig, "m"));
+        assert!(params_address("List,int", sig, "m"));
+        assert!(params_address(" java.util.List<String> , int ", sig, "m"));
+        assert!(!params_address("List<Integer>, int", sig, "m"));
+        assert!(!params_address("List<String>", sig, "m"));
+        assert!(!params_address("int, List<String>", sig, "m"));
+        assert!(params_address("", "()", "m"));
+        assert!(params_address("String...", "(String... parts)", "m"));
+        assert!(params_address("String[]", "(vararg parts: String)", "m"));
+        assert!(!params_address("String", "(String... parts)", "m"));
+        assert!(params_address(
+            "number, number",
+            "(a: number, b?: number): number",
+            "bar"
+        ));
+        assert!(params_address("b: number", "(a: number)", "m"));
+        assert!(params_address("Anything", "(def x)", "m"));
+        assert!(!params_address("int", "no parameter list", "m"));
     }
 
     #[test]

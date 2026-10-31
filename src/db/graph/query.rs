@@ -60,6 +60,10 @@ pub struct TargetRow {
     /// Repository the resolved target belongs to (`""` when the node predates
     /// repo attribution). Makes `resolution.targets[]` self-labeling.
     pub repo_name: String,
+    /// Declared signature, used to address one overload by its parameter
+    /// list (issue #37). Absent for entities without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// Minimum length of the query string for Fuzzy match to be enabled.
@@ -589,9 +593,40 @@ pub fn reference_target_query(predicate: &str, repo_scoped: bool) -> String {
         "MATCH (target:Entity)
          WHERE {repo_clause}({predicate})
          RETURN target.uuid, target.name, target.fqn, target.kind, target.file_path,
-                target.start_line, target.repo_name
+                target.start_line, target.repo_name, target.signature
          ORDER BY target.fqn"
     )
+}
+
+/// `Foo.bar(int, int)` → `("Foo.bar", "int, int")`: a query ending in a
+/// balanced parameter list addresses one overload (issue #37). `None` for a
+/// plain name and for an unbalanced signature prefix (`create(User,boolean`).
+pub fn split_overload_query(name: &str) -> Option<(&str, &str)> {
+    let without_close = name.strip_suffix(')')?;
+    let open = name.find('(')?;
+    let base = name[..open].trim();
+    if base.is_empty() {
+        return None;
+    }
+    let params = &without_close[open + 1..];
+    let mut depth = 0i32;
+    for c in params.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 0 => return None,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    (depth == 0).then_some((base, params))
+}
+
+/// What a `Foo.bar(int, int)` query resolved to: the parameter list, and —
+/// when no overload of `Foo.bar` takes it — the overloads that exist.
+struct OverloadQuery {
+    params: String,
+    matched: bool,
+    candidates: Vec<String>,
 }
 
 /// Outcome of resolving a subgraph root by name: the ranked winner, the
@@ -653,6 +688,10 @@ fn finalize_targets(
         hidden_kinds: Vec::new(),
     }
 }
+
+/// Maximum number of declared overloads listed when a parameter list
+/// matches none of them.
+const OVERLOAD_CANDIDATES_CAP: usize = 10;
 
 /// Maximum number of distinct hidden kinds named in the disclosure; the
 /// full picture is always recoverable via `kinds=all`.
@@ -747,6 +786,66 @@ impl GraphDb {
         Ok(links)
     }
 
+    /// [`Self::resolve_reference_targets`], plus overload addressing (issue
+    /// #37): `Foo.bar(int, int)` resolves `Foo.bar` with the usual tiers and
+    /// keeps the overloads whose declared parameters match. When none does,
+    /// the full query walks the ladder as before (signature prefix, fuzzy);
+    /// if that finds nothing either, the declared overloads are reported.
+    async fn resolve_query_targets(
+        &self,
+        name: &str,
+        repo_names: &[String],
+        max_targets: usize,
+        kind_filter: &crate::cli_tools::kinds::KindFilter,
+    ) -> Result<(ResolvedTargets, Option<OverloadQuery>)> {
+        let Some((base, params)) = split_overload_query(name) else {
+            let resolved = self
+                .resolve_reference_targets(name, repo_names, max_targets, kind_filter)
+                .await?;
+            return Ok((resolved, None));
+        };
+        let base_resolved = self
+            .resolve_reference_targets(base, repo_names, MAX_TARGETS_CEILING, kind_filter)
+            .await?;
+        let (matching, others): (Vec<TargetRow>, Vec<TargetRow>) =
+            base_resolved.targets.into_iter().partition(|target| {
+                target.signature.as_deref().is_some_and(|sig| {
+                    crate::pipeline::ingest::params_address(params, sig, &target.name)
+                })
+            });
+        let mut overload = OverloadQuery {
+            params: format!("({})", params.trim()),
+            matched: !matching.is_empty(),
+            candidates: Vec::new(),
+        };
+        if overload.matched {
+            let mut resolved = finalize_targets(matching, base_resolved.tier, max_targets);
+            resolved.hidden_non_code = base_resolved.hidden_non_code;
+            resolved.hidden_kinds = base_resolved.hidden_kinds;
+            return Ok((resolved, Some(overload)));
+        }
+
+        let fallback = self
+            .resolve_reference_targets(name, repo_names, max_targets, kind_filter)
+            .await?;
+        if !fallback.targets.is_empty() || others.is_empty() {
+            return Ok((fallback, None));
+        }
+        overload.candidates = others
+            .iter()
+            .take(OVERLOAD_CANDIDATES_CAP)
+            .map(|target| {
+                let params = target
+                    .signature
+                    .as_deref()
+                    .and_then(|sig| crate::pipeline::ingest::overload_params(sig, &target.name))
+                    .unwrap_or_default();
+                format!("{}{params}", target.fqn)
+            })
+            .collect();
+        Ok((fallback, Some(overload)))
+    }
+
     async fn resolve_reference_targets(
         &self,
         name: &str,
@@ -792,6 +891,7 @@ impl GraphDb {
                 let file_path = row.get::<String>("target.file_path").unwrap_or_default();
                 let start_line = row.get::<i64>("target.start_line").unwrap_or(0);
                 let repo_name = row.get::<String>("target.repo_name").unwrap_or_default();
+                let signature = row.get::<String>("target.signature").ok();
 
                 targets.push(TargetRow {
                     uuid,
@@ -801,6 +901,7 @@ impl GraphDb {
                     file_path,
                     start_line,
                     repo_name,
+                    signature,
                 });
             }
 
@@ -1180,8 +1281,8 @@ impl QueryExt for GraphDb {
         let max_targets = max_targets.clamp(1, MAX_TARGETS_CEILING);
 
         // Stage 1: Resolve targets
-        let resolved = self
-            .resolve_reference_targets(entity_name, repo_names, max_targets, &kind_filter)
+        let (resolved, overload) = self
+            .resolve_query_targets(entity_name, repo_names, max_targets, &kind_filter)
             .await?;
 
         let target_uuids: Vec<String> = resolved.targets.iter().map(|t| t.uuid.clone()).collect();
@@ -1205,6 +1306,13 @@ impl QueryExt for GraphDb {
             "hidden_kinds": resolved.hidden_kinds,
             "targets": resolved.targets
         });
+        if let Some(overload) = overload {
+            results["resolution"]["overload"] = serde_json::json!({
+                "params": overload.params,
+                "matched": overload.matched,
+                "candidates": overload.candidates,
+            });
+        }
 
         Ok(results)
     }
@@ -2051,6 +2159,7 @@ mod tests {
             file_path: "f.rs".to_string(),
             start_line: 1,
             repo_name: "repo".to_string(),
+            signature: None,
         }
     }
 
@@ -2505,6 +2614,7 @@ mod tests {
             file_path: "src/shared_util.ts".to_string(),
             start_line: 3,
             repo_name: "scope_alpha".to_string(),
+            signature: None,
         };
         let serialized = serde_json::to_string(&row).expect("serialize TargetRow");
         assert!(serialized.contains("\"repo_name\":\"scope_alpha\""));
@@ -2908,6 +3018,7 @@ mod tests {
                 file_path: format!("src/file_{}.rs", i),
                 start_line: i as i64,
                 repo_name: String::new(),
+                signature: None,
             })
             .collect()
     }
@@ -2948,6 +3059,30 @@ mod tests {
         let resolved =
             finalize_targets(dummy_targets(5), MatchTier::FqnSuffix, DEFAULT_MAX_TARGETS);
         assert!(matches!(resolved.tier, MatchTier::FqnSuffix));
+    }
+
+    /// Issue #37: only a balanced trailing parameter list addresses an
+    /// overload; a signature prefix keeps its existing tier.
+    #[test]
+    fn split_overload_query_requires_a_balanced_suffix() {
+        use super::split_overload_query;
+        assert_eq!(
+            split_overload_query("com.x.Foo.bar(int, int)"),
+            Some(("com.x.Foo.bar", "int, int"))
+        );
+        assert_eq!(split_overload_query("bar()"), Some(("bar", "")));
+        assert_eq!(
+            split_overload_query("run(Function<A, B> f)"),
+            Some(("run", "Function<A, B> f"))
+        );
+        assert_eq!(
+            split_overload_query("apply((Int) -> Unit)"),
+            Some(("apply", "(Int) -> Unit"))
+        );
+        assert_eq!(split_overload_query("create(User,boolean"), None);
+        assert_eq!(split_overload_query("Foo.bar"), None);
+        assert_eq!(split_overload_query("(int)"), None);
+        assert_eq!(split_overload_query("a(b)c(d)"), None);
     }
 
     #[test]
