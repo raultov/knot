@@ -241,6 +241,7 @@ pub fn relationship_query(rel_labels: &str, repo_scoped: bool) -> String {
          RETURN type(r) AS rel_type,
                 entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                 entity.repo_name AS repo_name,
+                coalesce(entity.is_test_context, false) AS is_test_context,
                 target.name AS target_name, target.fqn AS target_fqn,
                 target.file_path AS target_file_path,
                 target.start_line AS target_start_line, target.signature AS target_signature,
@@ -264,6 +265,7 @@ pub fn overridden_by_query(repo_scoped: bool) -> String {
            AND entity.uuid <> target.uuid
          RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                 entity.repo_name AS repo_name,
+                coalesce(entity.is_test_context, false) AS is_test_context,
                 target.name AS target_name, target.fqn AS target_fqn,
                 target.file_path AS target_file_path,
                 target.start_line AS target_start_line, target.signature AS target_signature,
@@ -292,6 +294,7 @@ pub fn overrides_query(repo_scoped: bool) -> String {
                 target.file_path AS `entity.file_path`, target.start_line AS `entity.start_line`,
                 target.signature AS `entity.signature`,
                 target.repo_name AS repo_name,
+                coalesce(target.is_test_context, false) AS is_test_context,
                 entity.name AS target_name, entity.fqn AS target_fqn,
                 entity.file_path AS target_file_path,
                 entity.start_line AS target_start_line, entity.signature AS target_signature,
@@ -328,6 +331,7 @@ pub fn dispatched_calls_query(repo_scoped: bool) -> String {
          MATCH (entity:Entity)-[:CALLS]->(bound)
          RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                 entity.repo_name AS repo_name,
+                coalesce(entity.is_test_context, false) AS is_test_context,
                 bound.name AS target_name, bound.fqn AS target_fqn,
                 bound.file_path AS target_file_path,
                 bound.start_line AS target_start_line, bound.signature AS target_signature,
@@ -354,6 +358,7 @@ pub fn http_calls_query(repo_scoped: bool) -> String {
            {repo_filter}
          RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
                 entity.repo_name AS repo_name,
+                coalesce(entity.is_test_context, false) AS is_test_context,
                 target.name AS target_name, target.fqn AS target_fqn,
                 target.file_path AS target_file_path,
                 target.start_line AS target_start_line, target.signature AS target_signature,
@@ -1785,6 +1790,7 @@ fn parse_reference_row(row: neo4rs::Row) -> serde_json::Value {
         "start_line": row.get::<i64>("entity.start_line").ok(),
         "signature": row.get::<String>("entity.signature").ok(),
         "repo_name": row.get::<String>("repo_name").ok(),
+        "is_test_context": row.get::<bool>("is_test_context").unwrap_or(false),
         "target_name": row.get::<String>("target_name").ok(),
         "target_fqn": row.get::<String>("target_fqn").ok(),
         "target_file_path": row.get::<String>("target_file_path").ok(),
