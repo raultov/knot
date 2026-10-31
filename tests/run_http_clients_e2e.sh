@@ -12,6 +12,7 @@
 # 3. Verifies `find_callers` on each handler lists its HTTP callers (CLI + MCP)
 # 4. Verifies ambiguous and unrelated endpoints get no HTTP caller
 # 5. Re-indexes the client (no changes) and verifies the links are stable
+# 6. Re-indexes the three repositories concurrently and verifies the links converge
 #
 # Usage: ./tests/run_http_clients_e2e.sh
 # Requirements: docker, docker-compose
@@ -78,7 +79,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
-    echo -e "${YELLOW}[1/5] Starting Docker containers...${NC}"
+    echo -e "${YELLOW}[1/6] Starting Docker containers...${NC}"
     cd "$SCRIPT_DIR"
     docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
     if [ -d "$E2E_DATA_DIR" ]; then
@@ -86,13 +87,13 @@ if [[ -z "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
     fi
     docker compose -f "$COMPOSE_FILE" up -d
 else
-    echo -e "${YELLOW}[1/5] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
+    echo -e "${YELLOW}[1/6] Skipping Docker start (KNOT_E2E_EXTERNAL_DB set; expecting shared DB)${NC}"
 fi
 
 if [[ -n "${KNOT_E2E_EXTERNAL_DB:-}" ]]; then
-    echo -e "${YELLOW}[2/5] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
+    echo -e "${YELLOW}[2/6] Skipping wait (KNOT_E2E_EXTERNAL_DB set; orchestrator manages readiness)${NC}"
 else
-    echo -e "${YELLOW}[2/5] Waiting for services to be ready...${NC}"
+    echo -e "${YELLOW}[2/6] Waiting for services to be ready...${NC}"
 
     wait_for_port() {
         local port=$1
@@ -150,7 +151,7 @@ index_repo() {
 }
 
 # The client goes first: the links must appear once the servers exist.
-echo -e "${YELLOW}[3/5] Indexing shop-client, items-server, billing-server...${NC}"
+echo -e "${YELLOW}[3/6] Indexing shop-client, items-server, billing-server...${NC}"
 index_repo shop-client --clean
 index_repo items-server --clean
 index_repo billing-server --clean
@@ -229,11 +230,11 @@ run_link_assertions() {
         "WebClient URI built by a uriBuilder lambda"
 }
 
-echo -e "${YELLOW}[4/5] Validating HTTP callers...${NC}"
+echo -e "${YELLOW}[4/6] Validating HTTP callers...${NC}"
 run_link_assertions 1
 
 echo ""
-echo "Test 301: the client method keeps its own callers; explore_file lists the client calls..."
+echo "Test 401: the client method keeps its own callers; explore_file lists the client calls..."
 CHECKOUT=$(./target/release/knot callers "com.example.shop.ItemsClient.fetch" -r all -o json 2>/dev/null \
     | jq -r '[.calls[]?.name] | join(",")')
 if [ "$CHECKOUT" != "checkout" ]; then
@@ -249,7 +250,7 @@ fi
 echo -e "${GREEN}✓ CLI: checkout → ItemsClient.fetch; ItemsClient.java lists GET /api/items/{id}${NC}"
 
 echo ""
-echo "Test 302: imperative calls are listed in their file; Map.put / Map.remove are not HTTP calls..."
+echo "Test 402: imperative calls are listed in their file; Map.put / Map.remove are not HTTP calls..."
 STOCK_CALLS=$(./target/release/knot explore "src/main/java/com/example/shop/StockGateway.java" -r shop-client -o json 2>/dev/null \
     | jq -r '[.. | objects | select(.kind? == "http_client_call") | .name] | sort | join(",")')
 if [ "$STOCK_CALLS" != "DELETE /api/items/{id},GET /api/items/{id}/stock" ]; then
@@ -259,9 +260,24 @@ if [ "$STOCK_CALLS" != "DELETE /api/items/{id},GET /api/items/{id}/stock" ]; the
 fi
 echo -e "${GREEN}✓ CLI: [$STOCK_CALLS]${NC}"
 
-echo -e "${YELLOW}[5/5] Re-indexing shop-client (no changes): links must be stable...${NC}"
+echo -e "${YELLOW}[5/6] Re-indexing shop-client (no changes): links must be stable...${NC}"
 index_repo shop-client
 run_link_assertions 2
+
+# Every run recomputes the links of the whole graph: concurrent runs (cluster
+# nodes sharing Neo4j) must serialize, so the last one sees every repository.
+echo -e "${YELLOW}[6/6] Re-indexing the three repositories concurrently (--clean): links must converge...${NC}"
+for round in 1 2; do
+    index_repo shop-client --clean &
+    client_pid=$!
+    index_repo items-server --clean &
+    items_pid=$!
+    index_repo billing-server --clean &
+    billing_pid=$!
+    wait "$client_pid" "$items_pid" "$billing_pid"
+    echo "Round $round done"
+done
+run_link_assertions 3
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -275,6 +291,7 @@ echo "  ✓ Base URLs and placeholders resolved from application.yml / .properti
 echo "  ✓ Context paths read from the server configuration (optional in the client path)"
 echo "  ✓ Service-name narrowing; ambiguous calls are not linked"
 echo "  ✓ Links independent of indexing order and stable on re-index"
+echo "  ✓ Concurrent indexer runs converge to the same links"
 echo ""
 
 exit 0
