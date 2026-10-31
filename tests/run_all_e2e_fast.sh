@@ -37,7 +37,7 @@ echo -e "${BLUE}========================================${NC}"
 FAILED_TESTS=()
 PASSED_TESTS=()
 
-# All 22 suites now use the shared DB. Order matches CI.
+# All 23 suites now use the shared DB. Order matches CI.
 SUITES=(
     "run_typescript_e2e.sh"
     "run_java_e2e.sh"
@@ -55,6 +55,7 @@ SUITES=(
     "run_cross_repo_dep_e2e.sh"
     "run_repo_scope_e2e.sh"
     "run_http_clients_e2e.sh"
+    "run_incremental_e2e.sh"
     "run_cross_lang_ref_e2e.sh"
     "run_cpp_e2e.sh"
     "run_markdown_e2e.sh"
