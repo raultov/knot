@@ -461,8 +461,8 @@ knot-indexer --watch --repo-path /path/to/your/repo --neo4j-password secret
 - Tracks file content via SHA-256 hashes in `.knot/index_state.json`
 - Stores the downloaded `fastembed` model in `.knot/fastembed_cache/` to keep the workspace clean
 - Automatically detects: modified, added, and deleted files
-- Only re-parses and re-embeds changed files
-- Preserves graph relationships to unchanged files
+- Only re-parses and re-embeds changed files; a modified file's previous entities are deleted first, so an entity that moved or was removed never lingers as a duplicate
+- Preserves graph relationships to unchanged files: edges from unchanged files (or other repositories) into a modified file are re-pointed at its re-indexed entities (same file, FQN, kind and signature); edges into entities that no longer exist are dropped
 - Processes entities in memory-efficient 512-entity chunks
 
 **Performance:**

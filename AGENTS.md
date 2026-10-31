@@ -40,6 +40,7 @@ cargo test
 ./tests/run_cross_repo_dep_e2e.sh    # Cross-repo dependency linking
 ./tests/run_repo_scope_e2e.sh        # Repository scope selection (all / multi-repo)
 ./tests/run_http_clients_e2e.sh      # HTTP client calls → endpoints (HTTP_CALLS)
+./tests/run_incremental_e2e.sh       # Incremental re-index: modified files replaced, edges re-pointed
 ```
 
 **Quick Commands:**
@@ -230,6 +231,8 @@ RUST_LOG=info  # debug, info, warn, error
 
 ### Incremental Indexing
 Default behavior: only re-parses changed files. Tracked via `.knot/index_state.json` (SHA-256 hashes).
+
+Database `file_path` values are repo-relative, while discovered paths live under the repo root: always convert with `to_repo_relative` before deleting by path (issue #53). Entity UUIDs include the start line, so a modified file's entities are deleted and re-created; `clean_stale_data` captures the edges from other files into them and the runner re-points them after ingestion (`src/db/graph/incoming.rs`).
 
 ```bash
 ./target/release/knot-indexer          # Incremental (fast)
