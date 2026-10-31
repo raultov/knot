@@ -96,6 +96,34 @@ pub(crate) fn json_entities_array(result: &serde_json::Value) -> Vec<serde_json:
     }
 }
 
+/// A signature on one line (`(\n    a: A,\n    b: B,\n)` → `(a: A, b: B)`),
+/// or `None` when it carries nothing: empty or `()` (issue #50).
+pub(crate) fn compact_signature(signature: &str) -> Option<String> {
+    let mut compact = signature.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (from, to) in [("( ", "("), (" )", ")"), (",)", ")")] {
+        compact = compact.replace(from, to);
+    }
+    (!compact.is_empty() && compact != "()").then_some(compact)
+}
+
+/// The first paragraph of `docstring` on one line, stopping at a blank line
+/// or a tag line (`@param`, `@return`) (issue #50).
+pub(crate) fn doc_summary(docstring: &str) -> String {
+    let mut paragraph = String::new();
+    for line in docstring.lines().map(str::trim) {
+        if line.starts_with('@') || (line.is_empty() && !paragraph.is_empty()) {
+            break;
+        }
+        if !line.is_empty() {
+            if !paragraph.is_empty() {
+                paragraph.push(' ');
+            }
+            paragraph.push_str(line);
+        }
+    }
+    paragraph
+}
+
 /// Append a signature line to `output` if the entity has a non-empty `signature` field.
 pub(crate) fn append_signature_if_present(output: &mut String, entity: &serde_json::Value) {
     if let Some(signature) = entity
@@ -209,6 +237,32 @@ mod tests {
     fn test_json_entities_array_empty_object_returns_empty() {
         let arr = json_entities_array(&json!({"entities": []}));
         assert!(arr.is_empty());
+    }
+
+    // --- compact_signature / doc_summary (issue #50) ---
+
+    #[test]
+    fn test_compact_signature() {
+        assert_eq!(
+            compact_signature("(\n    a: A,\n    b: B,\n)").as_deref(),
+            Some("(a: A, b: B)")
+        );
+        assert_eq!(
+            compact_signature("public void f(int x)").as_deref(),
+            Some("public void f(int x)")
+        );
+        assert_eq!(compact_signature("()"), None);
+        assert_eq!(compact_signature(" \n "), None);
+    }
+
+    #[test]
+    fn test_doc_summary_keeps_first_paragraph_without_tags() {
+        assert_eq!(
+            doc_summary("\n  First line\n  second line.\n\n  Next paragraph."),
+            "First line second line."
+        );
+        assert_eq!(doc_summary("Does x.\n@return y"), "Does x.");
+        assert_eq!(doc_summary("  \n "), "");
     }
 
     // --- append_signature_if_present ---

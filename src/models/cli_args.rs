@@ -42,6 +42,16 @@ pub enum Commands {
         #[arg(short, long)]
         path: Option<String>,
 
+        /// Markdown detail level: 'full' (every section) or 'brief' (one
+        /// line per result with its location and relationship counts)
+        #[arg(long, default_value = "full", value_parser = ["full", "brief"])]
+        detail: String,
+
+        /// List callers and usages from test code in the samples instead of
+        /// only counting them
+        #[arg(long)]
+        include_tests: bool,
+
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,

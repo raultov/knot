@@ -12,7 +12,7 @@ use crate::models::RepoScope;
 
 use crate::cli_tools::json_entities_array;
 
-use crate::cli_tools::append_signature_if_present;
+use crate::cli_tools::{compact_signature, doc_summary};
 
 use crate::cli_tools::format_file_line;
 
@@ -690,18 +690,20 @@ fn append_entity_groups(output: &mut String, entities: &[&serde_json::Value]) {
         if items.is_empty() {
             continue;
         }
-        output.push_str(&format!("## {}\n\n", bucket.header));
-        for entity in items {
-            output.push_str(&format_entity_summary(entity));
-        }
+        append_entity_group(output, bucket.header, &items);
     }
 
     if !others.is_empty() {
-        output.push_str(&format!("## {OTHERS_HEADER}\n\n"));
-        for entity in others {
-            output.push_str(&format_entity_summary(entity));
-        }
+        append_entity_group(output, OTHERS_HEADER, &others);
     }
+}
+
+fn append_entity_group(output: &mut String, header: &str, entities: &[&serde_json::Value]) {
+    output.push_str(&format!("## {header}\n\n"));
+    for entity in entities {
+        output.push_str(&format_entity_summary(entity));
+    }
+    output.push('\n');
 }
 
 /// Render the markup section either as a compact summary or in full when opt-in.
@@ -755,38 +757,73 @@ fn append_markup_section(
     }
 }
 
-/// Append the "Imports / Referenced Types" section, deduplicating on
-/// `(name, kind, file_path)`.
+/// Append the "Imports / Referenced Types" section: one line per declaring
+/// file listing the names it provides, in first-appearance order (issue
+/// #50). Names declared nowhere in the index share a single path-less line.
 fn append_outgoing_references(output: &mut String, outgoing_refs: &[serde_json::Value]) {
     if outgoing_refs.is_empty() {
         return;
     }
 
-    output.push_str("## Imports / Referenced Types\n\n");
-    let mut seen = std::collections::HashSet::new();
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
     for entry in outgoing_refs {
         let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let fp = entry
+        if name.is_empty() {
+            continue;
+        }
+        let file = entry
             .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let line_num = entry.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
-
-        let key = format!("{}:{}:{}", name, kind, fp);
-        if !seen.insert(key) {
-            continue;
+        let idx = match groups.iter().position(|(f, _)| *f == file) {
+            Some(idx) => idx,
+            None => {
+                groups.push((file, Vec::new()));
+                groups.len() - 1
+            }
+        };
+        if !groups[idx].1.contains(&name) {
+            groups[idx].1.push(name);
         }
-        if line_num > 0 && !fp.is_empty() {
-            output.push_str(&format!("- {} ({}) — {}:{}\n", name, kind, fp, line_num));
+    }
+
+    output.push_str("## Imports / Referenced Types\n\n");
+    for (file, names) in groups {
+        let names = names.join(", ");
+        if file.is_empty() {
+            output.push_str(&format!("- {names}\n"));
         } else {
-            output.push_str(&format!("- {} ({})\n", name, kind));
+            output.push_str(&format!("- `{file}`: {names}\n"));
         }
     }
     output.push('\n');
 }
 
-/// Format entity summary as Markdown
+/// Longest documentation preview, in characters.
+const DOC_PREVIEW_MAX_CHARS: usize = 200;
+
+/// The first sentence of `docstring`'s first paragraph ([`doc_summary`]),
+/// read across line breaks so a multi-line JSDoc never stops mid-sentence
+/// (issue #50). Capped at [`DOC_PREVIEW_MAX_CHARS`].
+fn doc_preview(docstring: &str) -> String {
+    let paragraph = doc_summary(docstring);
+    // A sentence ends at `.`, `!` or `?` followed by whitespace and an
+    // uppercase letter (so `e.g. foo` and `v1.2` do not end it).
+    let chars: Vec<(usize, char)> = paragraph.char_indices().collect();
+    let sentence_end = chars.windows(3).find_map(|w| {
+        (matches!(w[0].1, '.' | '!' | '?') && w[1].1.is_whitespace() && w[2].1.is_uppercase())
+            .then_some(w[1].0)
+    });
+    let sentence = &paragraph[..sentence_end.unwrap_or(paragraph.len())];
+    if sentence.chars().count() <= DOC_PREVIEW_MAX_CHARS {
+        return sentence.to_string();
+    }
+    let cut: String = sentence.chars().take(DOC_PREVIEW_MAX_CHARS).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// Format entity summary as Markdown: `- **`name`** (line N): `signature``,
+/// then its decorators and documentation preview, if any.
 fn format_entity_summary(entity: &serde_json::Value) -> String {
     let mut output = String::new();
 
@@ -795,6 +832,14 @@ fn format_entity_summary(entity: &serde_json::Value) -> String {
 
         if let Some(start_line) = entity.get("start_line").and_then(|v| v.as_i64()) {
             output.push_str(&format!(" (line {})", start_line));
+        }
+
+        if let Some(signature) = entity
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .and_then(compact_signature)
+        {
+            output.push_str(&format!(": `{signature}`"));
         }
 
         output.push('\n');
@@ -812,18 +857,14 @@ fn format_entity_summary(entity: &serde_json::Value) -> String {
             }
         }
 
-        append_signature_if_present(&mut output, entity);
-
-        if let Some(docstring) = entity
+        if let Some(preview) = entity
             .get("docstring")
             .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
+            .map(doc_preview)
+            .filter(|preview| !preview.is_empty())
         {
-            let doc_preview = docstring.lines().next().unwrap_or("");
-            output.push_str(&format!("  - Doc: {}\n", doc_preview));
+            output.push_str(&format!("  - Doc: {preview}\n"));
         }
-
-        output.push('\n');
     }
 
     output
@@ -956,17 +997,66 @@ mod tests {
         assert!(formatted.contains("public void myMethod(String param)"));
     }
 
+    /// Issue #50: the preview is the first sentence, read across line
+    /// breaks, so a multi-line JSDoc never stops mid-sentence.
     #[test]
     fn test_format_entity_summary_with_docstring() {
         let entity = json!({
             "name": "myMethod",
             "kind": "method",
-            "docstring": "First line of doc\nSecond line of doc"
+            "docstring": "Resets the cart, e.g. after\ncheckout. Second sentence.\n@param x the x"
         });
         let formatted = format_entity_summary(&entity);
         assert!(formatted.contains("myMethod"));
-        assert!(formatted.contains("First line of doc"));
-        assert!(!formatted.contains("Second line of doc"));
+        assert!(formatted.contains("  - Doc: Resets the cart, e.g. after checkout.\n"));
+        assert!(!formatted.contains("Second sentence"));
+        assert!(!formatted.contains("@param"));
+    }
+
+    #[test]
+    fn test_doc_preview_caps_long_sentences() {
+        let preview = doc_preview(&"word ".repeat(100));
+        assert!(preview.ends_with('…'));
+        assert!(preview.chars().count() <= DOC_PREVIEW_MAX_CHARS + 1);
+    }
+
+    /// Issue #50: the signature sits on the entity line, on one line; an
+    /// empty `()` signature is dropped.
+    #[test]
+    fn test_format_entity_summary_inlines_compact_signature() {
+        let entity = json!({
+            "name": "resolve",
+            "start_line": 7,
+            "signature": "(\n    a: A,\n    b: B,\n)"
+        });
+        assert_eq!(
+            format_entity_summary(&entity),
+            "- **`resolve`** (line 7): `(a: A, b: B)`\n"
+        );
+        let entity = json!({"name": "windowId", "start_line": 9, "signature": "()"});
+        assert_eq!(
+            format_entity_summary(&entity),
+            "- **`windowId`** (line 9)\n"
+        );
+    }
+
+    /// Issue #50: referenced types are grouped by their declaring file,
+    /// names only.
+    #[test]
+    fn test_outgoing_references_grouped_by_file() {
+        let refs = vec![
+            json!({"name": "Mouse", "kind": "class", "file_path": "src/Input.ts", "line": 3}),
+            json!({"name": "Binding", "kind": "class", "file_path": "src/Binding.ts", "line": 1}),
+            json!({"name": "Keyboard", "kind": "class", "file_path": "src/Input.ts", "line": 9}),
+            json!({"name": "Mouse", "kind": "class", "file_path": "src/Input.ts", "line": 3}),
+            json!({"name": "Unknown", "kind": "class"}),
+        ];
+        let mut output = String::new();
+        append_outgoing_references(&mut output, &refs);
+        assert_eq!(
+            output,
+            "## Imports / Referenced Types\n\n- `src/Input.ts`: Mouse, Keyboard\n- `src/Binding.ts`: Binding\n- Unknown\n\n"
+        );
     }
 
     #[test]

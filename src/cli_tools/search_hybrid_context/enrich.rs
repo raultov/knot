@@ -59,9 +59,11 @@ pub(crate) fn extract_implementer_names(implements_arr: &[serde_json::Value]) ->
         .collect()
 }
 
-pub(crate) fn format_reference_samples(references_arr: &[serde_json::Value]) -> Vec<String> {
-    references_arr
-        .iter()
+pub(crate) fn format_reference_samples<'a>(
+    references: impl IntoIterator<Item = &'a serde_json::Value>,
+) -> Vec<String> {
+    references
+        .into_iter()
         .take(3)
         .map(|e| {
             let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("?");
@@ -69,6 +71,49 @@ pub(crate) fn format_reference_samples(references_arr: &[serde_json::Value]) -> 
             format!("{} in {}", name, file)
         })
         .collect()
+}
+
+/// Whether a reference row lives in test code — the ranker's
+/// [`super::rank::is_test_path`] rule plus the Rust `#[cfg(test)]` flag.
+fn is_test_reference(row: &serde_json::Value) -> bool {
+    let file = row.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+    super::rank::is_test_path(file)
+        || row
+            .get("is_test_context")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+}
+
+/// Attach one relationship bucket to `entity` as `<prefix>_count` (every
+/// row, so it always equals the `find_callers` count) and `<prefix>_samples`
+/// (production rows only). Test rows are counted apart in
+/// `<prefix>_test_count` and sampled in `<prefix>_test_samples`, so the
+/// formatter can collapse them into `N in tests` (issue #50).
+fn insert_reference_bucket(
+    entity: &mut serde_json::Value,
+    prefix: &str,
+    rows: Option<&Vec<serde_json::Value>>,
+) {
+    let Some(rows) = rows.filter(|rows| !rows.is_empty()) else {
+        return;
+    };
+    let (tests, production): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
+        rows.iter().partition(|row| is_test_reference(row));
+    let Some(obj) = entity.as_object_mut() else {
+        return;
+    };
+    obj.insert(format!("{prefix}_count"), json!(rows.len()));
+    obj.insert(
+        format!("{prefix}_samples"),
+        json!(format_reference_samples(production)),
+    );
+    if !tests.is_empty() {
+        obj.insert(format!("{prefix}_test_count"), json!(tests.len()));
+        obj.insert(
+            format!("{prefix}_test_samples"),
+            json!(format_reference_samples(tests)),
+        );
+    }
 }
 
 pub(crate) fn enrich_single_entity(entity: &mut serde_json::Value, references: &serde_json::Value) {
@@ -90,46 +135,13 @@ pub(crate) fn enrich_single_entity(entity: &mut serde_json::Value, references: &
         }
     }
 
-    if let Some(references_arr) = references.get("references").and_then(|v| v.as_array())
-        && !references_arr.is_empty()
-    {
-        let usage_count = references_arr.len();
-        let samples = format_reference_samples(references_arr);
-        if let Some(obj) = entity.as_object_mut() {
-            obj.insert("type_usage_count".to_string(), json!(usage_count));
-            obj.insert("type_usage_samples".to_string(), json!(samples));
-        }
-    }
-
-    if let Some(calls_arr) = references.get("calls").and_then(|v| v.as_array())
-        && !calls_arr.is_empty()
-    {
-        let caller_count = calls_arr.len();
-        let samples = format_reference_samples(calls_arr);
-        if let Some(obj) = entity.as_object_mut() {
-            obj.insert("caller_count".to_string(), json!(caller_count));
-            obj.insert("caller_samples".to_string(), json!(samples));
-        }
-    }
-
+    let bucket = |key: &str| references.get(key).and_then(|v| v.as_array());
+    insert_reference_bucket(entity, "type_usage", bucket("references"));
+    insert_reference_bucket(entity, "caller", bucket("calls"));
     // Calls bound to an override or to a supertype method reach this entity
     // only through dynamic dispatch: reported apart from direct callers,
     // exactly like the "Dispatched calls" group of `find_callers`.
-    if let Some(dispatched_arr) = references
-        .get("dispatched_calls")
-        .and_then(|v| v.as_array())
-        && !dispatched_arr.is_empty()
-    {
-        let dispatched_count = dispatched_arr.len();
-        let samples = format_reference_samples(dispatched_arr);
-        if let Some(obj) = entity.as_object_mut() {
-            obj.insert(
-                "dispatched_caller_count".to_string(),
-                json!(dispatched_count),
-            );
-            obj.insert("dispatched_caller_samples".to_string(), json!(samples));
-        }
-    }
+    insert_reference_bucket(entity, "dispatched_caller", bucket("dispatched_calls"));
 }
 
 #[cfg(test)]
@@ -272,6 +284,37 @@ mod tests {
             Some(&json!(["adjust in StandardAdjuster.java"]))
         );
         assert!(entity.get("dispatched_caller_count").is_none());
+    }
+
+    /// Issue #50: test callers stay in the count but are sampled apart.
+    #[test]
+    fn test_enrich_single_entity_samples_test_callers_apart() {
+        let mut entity = json!({"name": "login"});
+        let references = json!({
+            "calls": [
+                {"name": "test_login", "file_path": "tests/login_test.rs"},
+                {"name": "handle", "file_path": "src/api.rs"},
+                {"name": "inline_case", "file_path": "src/auth.rs", "is_test_context": true},
+                {"name": "spec", "file_path": "src/login.spec.ts"}
+            ]
+        });
+
+        enrich_single_entity(&mut entity, &references);
+
+        assert_eq!(entity.get("caller_count"), Some(&json!(4)));
+        assert_eq!(
+            entity.get("caller_samples"),
+            Some(&json!(["handle in src/api.rs"]))
+        );
+        assert_eq!(entity.get("caller_test_count"), Some(&json!(3)));
+        assert_eq!(
+            entity.get("caller_test_samples"),
+            Some(&json!([
+                "test_login in tests/login_test.rs",
+                "inline_case in src/auth.rs",
+                "spec in src/login.spec.ts"
+            ]))
+        );
     }
 
     #[test]

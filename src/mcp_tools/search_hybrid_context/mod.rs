@@ -38,7 +38,8 @@ use crate::mcp_tools::repo_scope_from_args;
                    Returns Markdown-formatted results with file paths, line numbers, code snippets, and cross-repository dependencies. No side effects. \
                    \n\nUsage: Use as your FIRST step when exploring unfamiliar code or discovering architectural patterns. Do NOT use this to find all usages of a specific function—use the 'find_callers' tool for that instead. \
                    \n\nRanking contract: results are kind-aware — function/method/class/struct definitions outrank markdown docs, test files, config properties and build-dependency entities for natural-language queries; callers and helpers appear as context attached to a definition, never as substitutes. The shared entry point of the highest-ranked helpers outranks those helpers a loose paraphrase surfaces. \
-                   \n\nRelationship summary: each result's 'Called by' / 'Called via dispatch' counts come from the graph edges of that exact entity — the same edges 'find_callers' reports for its fully qualified name; same-named entities elsewhere never contribute. 'Calls' lists callees qualified with their owning type or module. \
+                   \n\nRelationship summary: each result's 'Called by' / 'Called via dispatch' counts come from the graph edges of that exact entity — the same edges 'find_callers' reports for its fully qualified name; same-named entities elsewhere never contribute. 'Calls' lists callees qualified with their owning type or module, capped at 8 plus '+N more'. Callers in test code count toward the totals but are shown as 'N in tests' unless 'include_tests' is true; a sample in the result's own file reads 'name (same file)'. \
+                   \n\nDetail: 'detail: \"brief\"' renders one line per result (kind, file:line, caller/callee counts) to scan many hits cheaply; expand the one you need with 'find_callers' / 'explore_file' or a default 'full' search. \
                    \n\nGeneric-verb guard: an entity merely named after a generic verb or noun (find/get/create/build/acquire/borrow/current/…) does not win on that name alone; the full name boost is paid only when the entity's container context (FQN) corroborates a second query token. \
                    \n\nRecall contract: entity embeds carry identifier tokens and the tokenized call names of the entity's body, so a paraphrase of what a definition does (even one with no doc comment) still surfaces it. Entities whose identifier shares a word with the query enter the candidate pool by token match alone. \
                    \n\nResult bound: 'max_results' is 1-100 (default 5) and is enforced — a larger request is clamped to 100 and the reply says so. There is no pagination: when the bound is not enough, narrow the scope with 'kinds' / 'path' / 'repo_name' or refine the query rather than raising the limit. \
@@ -82,6 +83,37 @@ pub struct SearchHybridContextTool {
         max_length = 500
     )]
     pub path: Option<String>,
+    #[json_schema(
+        description = "Optional detail level: 'full' (default) renders file, FQN, signature, docs and relationship summaries; 'brief' renders one line per result (kind, file:line, caller/callee counts). Scan with 'brief', then expand the hit you need with find_callers / explore_file or a 'full' search.",
+        min_length = 1,
+        max_length = 16
+    )]
+    pub detail: Option<String>,
+    #[json_schema(
+        description = "Optional: set to true to list callers and usages from test code in the samples. By default they are only counted ('N in tests'); the counts always include them."
+    )]
+    pub include_tests: Option<bool>,
+}
+
+/// Read `detail` / `include_tests` from the call arguments. An unknown
+/// `detail` value is an error rather than a silent fallback.
+pub(crate) fn parse_search_format(
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> std::result::Result<format::SearchFormat, String> {
+    let detail = match args.get("detail").and_then(|v| v.as_str()) {
+        None => format::Detail::default(),
+        Some(value) => format::Detail::parse(value).ok_or_else(|| {
+            format!("Invalid 'detail' value '{value}': expected 'full' or 'brief'")
+        })?,
+    };
+    let include_tests = args
+        .get("include_tests")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Ok(format::SearchFormat {
+        detail,
+        include_tests,
+    })
 }
 
 /// Read `max_results` from the call arguments and resolve it against the
@@ -126,6 +158,7 @@ impl SearchHybridContextTool {
         let repo = repo_scope_from_args(&args);
         let kinds = args.get("kinds").and_then(|v| v.as_str());
         let path = args.get("path").and_then(|v| v.as_str());
+        let search_format = parse_search_format(&args).map_err(CallToolError::from_message)?;
 
         // Check if in offline mode
         if let (None, None, None) = (&handler.vector_db, &handler.graph_db, &handler.embedder) {
@@ -165,7 +198,7 @@ impl SearchHybridContextTool {
 
         // Surface a clamp to the caller instead of silently adjusting the
         // advertised contract.
-        let mut formatted = format::format_search_results(&json_result);
+        let mut formatted = format::format_search_results_with(&json_result, search_format);
         if let Some(notice) = limit.notice() {
             formatted.push('\n');
             formatted.push_str(&notice);
@@ -270,6 +303,22 @@ mod tests {
         let limit = parse_max_results(args.as_object().unwrap());
         assert_eq!(limit.value, 20);
         assert!(!limit.was_clamped());
+    }
+
+    #[test]
+    fn parse_search_format_defaults_and_validates() {
+        let empty = serde_json::json!({"query": "x"});
+        let format = parse_search_format(empty.as_object().unwrap()).unwrap();
+        assert_eq!(format.detail, format::Detail::Full);
+        assert!(!format.include_tests);
+
+        let brief = serde_json::json!({"query": "x", "detail": "BRIEF", "include_tests": true});
+        let format = parse_search_format(brief.as_object().unwrap()).unwrap();
+        assert_eq!(format.detail, format::Detail::Brief);
+        assert!(format.include_tests);
+
+        let bad = serde_json::json!({"query": "x", "detail": "verbose"});
+        assert!(parse_search_format(bad.as_object().unwrap()).is_err());
     }
 
     #[test]

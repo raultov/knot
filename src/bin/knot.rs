@@ -58,6 +58,8 @@ async fn main() -> anyhow::Result<()> {
             repo,
             kinds,
             path,
+            detail,
+            include_tests,
             output,
         } => {
             report_search_clamp(max_results);
@@ -77,7 +79,11 @@ async fn main() -> anyhow::Result<()> {
                 },
             )
             .await?;
-            let formatted = utils::format_output(json_result, output);
+            let search_format = cli_tools::formatters::SearchFormat {
+                detail: cli_tools::formatters::Detail::parse(&detail).unwrap_or_default(),
+                include_tests,
+            };
+            let formatted = utils::format_output(json_result, output, search_format);
             utils::print_with_pager(&formatted);
         }
 

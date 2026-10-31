@@ -118,6 +118,7 @@ pub fn print_with_pager(content: &str) {
 pub fn format_output(
     json_value: serde_json::Value,
     output_format: crate::config::OutputFormat,
+    search_format: crate::cli_tools::formatters::SearchFormat,
 ) -> String {
     match output_format {
         crate::config::OutputFormat::Table => {
@@ -130,7 +131,7 @@ pub fn format_output(
             serde_json::to_string_pretty(&json_value).unwrap_or_default()
         }
         crate::config::OutputFormat::Markdown => {
-            crate::cli_tools::formatters::format_search_results(&json_value)
+            crate::cli_tools::formatters::format_search_results_with(&json_value, search_format)
         }
     }
 }
@@ -292,14 +293,22 @@ mod tests {
 
     #[test]
     fn test_format_output_null_returns_no_match_message() {
-        let result = format_output(serde_json::Value::Null, crate::config::OutputFormat::Table);
+        let result = format_output(
+            serde_json::Value::Null,
+            crate::config::OutputFormat::Table,
+            Default::default(),
+        );
         assert_eq!(result, "No matching code found for your query.");
     }
 
     #[test]
     fn test_format_output_json_pretty_print() {
         let json = serde_json::json!({"name": "Test", "kind": "class"});
-        let result = format_output(json.clone(), crate::config::OutputFormat::Json);
+        let result = format_output(
+            json.clone(),
+            crate::config::OutputFormat::Json,
+            Default::default(),
+        );
         assert!(result.contains("Test"));
         assert!(result.contains("class"));
     }
