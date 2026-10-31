@@ -839,6 +839,8 @@ fn resolve_receiver_call(
 /// Cross-file targets require an import binding, and fields/constants are
 /// never callable targets. Same-file import aliases stay eligible so the
 /// alias pass can redirect them to their imported function (issue #48).
+/// A target outside the batch (an unchanged file in an incremental run) has
+/// no known kind; its import binding is enough to keep it.
 fn javascript_bare_call_candidate(
     uuid: &Uuid,
     caller_file_path: &str,
@@ -855,7 +857,7 @@ fn javascript_bare_call_candidate(
     let callable = ctx
         .uuid_to_kind
         .and_then(|kinds| kinds.get(uuid))
-        .is_some_and(|kind| {
+        .is_none_or(|kind| {
             matches!(
                 kind,
                 EntityKind::Function | EntityKind::Method | EntityKind::Class
@@ -1042,6 +1044,41 @@ mod tests {
             entities[0]
                 .relationships
                 .contains(&(imported_uuid, RelationshipType::Calls))
+        );
+    }
+
+    /// Incremental runs resolve only the changed files, so an imported
+    /// function declared in an unchanged file has no known kind. The import
+    /// binding is enough evidence; only a known field/constant is rejected.
+    #[test]
+    fn test_js_bare_call_binds_imported_target_outside_the_batch() {
+        let mut caller = mock_resolution_entity_with_kind(
+            "update",
+            "update",
+            None,
+            "orders.ts",
+            EntityKind::Function,
+        );
+        caller.import_scope = Some(std::sync::Arc::new(ImportScope {
+            module_bindings: vec!["applyDiscount".to_string()],
+            ..ImportScope::default()
+        }));
+        caller.reference_intents.push(ReferenceIntent::Call {
+            method: "applyDiscount".to_string(),
+            receiver: None,
+            line: 1,
+            arg_count: None,
+        });
+        let unchanged = Uuid::new_v4();
+        let mut entities = vec![caller];
+        crate::pipeline::ingest::resolve::resolve_reference_intents_with_context(
+            &mut entities,
+            HashMap::from([("applyDiscount".to_string(), unchanged)]),
+            HashMap::from([("applyDiscount".to_string(), vec![unchanged])]),
+        );
+        assert_eq!(
+            entities[0].relationships,
+            vec![(unchanged, RelationshipType::Calls)]
         );
     }
 
