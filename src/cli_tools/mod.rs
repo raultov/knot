@@ -23,7 +23,10 @@ pub use deps::{
 };
 pub use endpoints::{format_endpoints_output, format_list_endpoints_markdown, run_list_endpoints};
 pub use explore_file::{format_file_entities, run_explore_file};
-pub use find_callers::{format_reference_entry, format_references_result, run_find_callers};
+pub use find_callers::{
+    CallersFormat, format_reference_entry, format_references_result, format_references_result_with,
+    run_find_callers,
+};
 pub use list_files::{format_files_output, format_list_files_markdown, run_list_files};
 pub use repos::{format_repos_output, run_list_repos};
 pub use search_hybrid_context::{

@@ -162,12 +162,27 @@ pub fn format_callers_output(
     json_value: serde_json::Value,
     output_format: crate::config::OutputFormat,
 ) -> String {
+    format_callers_output_with(
+        entity_name,
+        json_value,
+        output_format,
+        crate::cli_tools::CallersFormat::default(),
+    )
+}
+
+/// [`format_callers_output`] with an explicit Markdown format (issue #52).
+pub fn format_callers_output_with(
+    entity_name: &str,
+    json_value: serde_json::Value,
+    output_format: crate::config::OutputFormat,
+    format: crate::cli_tools::CallersFormat,
+) -> String {
     format_output_with_handlers(
         entity_name,
         json_value,
         output_format,
         crate::cli_tools::formatters::format_callers_table,
-        crate::cli_tools::format_references_result,
+        |name, value| crate::cli_tools::format_references_result_with(name, value, format),
     )
 }
 

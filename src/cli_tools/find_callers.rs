@@ -13,9 +13,22 @@ use crate::models::RepoScope;
 use crate::cli_tools::json_target_name;
 
 use crate::cli_tools::append_signature_if_present;
+use crate::cli_tools::compact_signature;
 use crate::cli_tools::format_file_line;
 use crate::cli_tools::resolution::{ResolutionView, overload_label};
-use std::collections::HashSet;
+use crate::cli_tools::search_hybrid_context::enrich::is_test_reference;
+use std::collections::{BTreeSet, HashSet};
+
+/// Name of the file-level entity holding a file's imports.
+const MODULE_ENTITY: &str = "<module>";
+
+/// How a `find_callers` Markdown answer is rendered (issue #52).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CallersFormat {
+    /// List the references made from test code instead of only counting
+    /// them.
+    pub include_tests: bool,
+}
 
 /// Main find_callers function called by both CLI and MCP
 ///
@@ -44,44 +57,64 @@ pub async fn run_find_callers(
     Ok(references)
 }
 
+/// The answer's buckets, in order: every relationship type the pipeline
+/// produces (see `find_references_rel_labels`) plus the two OVERRIDES
+/// projections, the calls that reach the target through dynamic dispatch and
+/// the HTTP client calls linked to the target endpoint or handler. Empty
+/// buckets are skipped, so repositories without web/VCL/macro edges render
+/// exactly as before.
+const REL_TYPES: &[(&str, &str)] = &[
+    ("calls", "Calls (function/method invocations)"),
+    ("extends", "Extends (class inheritance)"),
+    ("implements", "Implements (interface implementation)"),
+    ("references", "References (type annotations/usages)"),
+    ("macro_calls", "Macro calls (macro invocations)"),
+    ("references_dom", "DOM references (JS → HTML element id)"),
+    ("uses_css_class", "CSS class usage (JS → CSS class)"),
+    ("imports_script", "Script imports (HTML → JS file)"),
+    ("imports_stylesheet", "Stylesheet imports (HTML → CSS file)"),
+    ("uses_backend", "Backend usage (VCL)"),
+    ("uses_probe", "Probe usage (VCL)"),
+    ("uses_acl", "ACL usage (VCL)"),
+    ("includes", "File includes (VCL)"),
+    ("imports_vmod", "VMOD imports (VCL)"),
+    ("declared_unused", "Declared unused (VCL)"),
+    ("routes_to", "HTTP routes (endpoint → handler)"),
+    ("overridden_by", "Overridden by (method implementations)"),
+    ("overrides", "Overrides (declared supertype methods)"),
+    (
+        "dispatched_calls",
+        "Dispatched calls (bound to an override or supertype method)",
+    ),
+    (
+        "http_calls",
+        "HTTP callers (heuristic: client call → endpoint)",
+    ),
+];
+
+/// [`format_references_result_with`] in the default format: test code is
+/// counted, not listed.
 pub fn format_references_result(entity_name: &str, references: &serde_json::Value) -> String {
+    format_references_result_with(entity_name, references, CallersFormat::default())
+}
+
+/// The Markdown answer of `find_callers` (issue #52):
+/// - every count covers every reference, but a reference made from test
+///   code is listed only with [`CallersFormat::include_tests`];
+/// - an answer within one repository names it once, on the `Found` line,
+///   instead of on every row;
+/// - a file's `<module>` row (its import) is folded into its other rows;
+/// - one line per row, with its signature on that line when it says
+///   something.
+pub fn format_references_result_with(
+    entity_name: &str,
+    references: &serde_json::Value,
+    format: CallersFormat,
+) -> String {
     let mut output = format!("# References to `{}`\n\n", entity_name);
     output.push_str(&format_resolution_markdown(references));
 
-    // Every relationship type the pipeline produces (see
-    // `find_references_rel_labels`) plus the two OVERRIDES projections, the
-    // calls that reach the target through dynamic dispatch and the HTTP
-    // client calls linked to the target endpoint or handler.
-    // Empty buckets are skipped by the loop below, so repositories without
-    // web/VCL/macro edges render exactly as before.
-    let rel_types = [
-        ("calls", "Calls (function/method invocations)"),
-        ("extends", "Extends (class inheritance)"),
-        ("implements", "Implements (interface implementation)"),
-        ("references", "References (type annotations/usages)"),
-        ("macro_calls", "Macro calls (macro invocations)"),
-        ("references_dom", "DOM references (JS → HTML element id)"),
-        ("uses_css_class", "CSS class usage (JS → CSS class)"),
-        ("imports_script", "Script imports (HTML → JS file)"),
-        ("imports_stylesheet", "Stylesheet imports (HTML → CSS file)"),
-        ("uses_backend", "Backend usage (VCL)"),
-        ("uses_probe", "Probe usage (VCL)"),
-        ("uses_acl", "ACL usage (VCL)"),
-        ("includes", "File includes (VCL)"),
-        ("imports_vmod", "VMOD imports (VCL)"),
-        ("declared_unused", "Declared unused (VCL)"),
-        ("routes_to", "HTTP routes (endpoint → handler)"),
-        ("overridden_by", "Overridden by (method implementations)"),
-        ("overrides", "Overrides (declared supertype methods)"),
-        (
-            "dispatched_calls",
-            "Dispatched calls (bound to an override or supertype method)",
-        ),
-        (
-            "http_calls",
-            "HTTP callers (heuristic: client call → endpoint)",
-        ),
-    ];
+    let rel_types = REL_TYPES;
 
     let total_refs: usize = rel_types
         .iter()
@@ -128,10 +161,17 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         return output;
     }
 
-    output.push_str(&format!(
-        "Found {} reference(s) across all relationship types:\n\n",
-        total_refs
+    let single_repo = single_repo(references, rel_types);
+    output.push_str(&found_line(
+        references,
+        total_refs,
+        single_repo.as_deref(),
+        format,
     ));
+    let style = RowStyle {
+        label_repos: single_repo.is_none(),
+        include_tests: format.include_tests,
+    };
 
     // Whether the query resolved to more than one candidate. Homonym
     // attribution must be driven by the *resolution*, not by how many
@@ -153,7 +193,7 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         }
     }
 
-    for (key, label) in rel_types {
+    for &(key, label) in rel_types {
         if let Some(arr) = references.get(key).and_then(|v| v.as_array())
             && !arr.is_empty()
         {
@@ -166,11 +206,39 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
                 arr,
                 multiple_targets || matches!(key, "dispatched_calls" | "http_calls"),
                 &overloaded,
+                style,
             ));
         }
     }
 
     output
+}
+
+/// `Found N reference(s) …`, naming the repository of a single-repository
+/// answer and the references from test code that are not listed.
+fn found_line(
+    references: &serde_json::Value,
+    total_refs: usize,
+    single_repo: Option<&str>,
+    format: CallersFormat,
+) -> String {
+    let repo_label = single_repo
+        .map(|repo| format!(" (repo: {repo})"))
+        .unwrap_or_default();
+    let tests = REL_TYPES
+        .iter()
+        .filter_map(|(key, _)| references.get(key).and_then(|v| v.as_array()))
+        .flatten()
+        .filter(|row| is_test_reference(row))
+        .count();
+    let tests_note = if tests > 0 && !format.include_tests {
+        format!(" — {tests} in tests, counted but not listed (`include_tests` lists them)")
+    } else {
+        String::new()
+    };
+    format!(
+        "Found {total_refs} reference(s) across all relationship types{repo_label}{tests_note}:\n\n"
+    )
 }
 
 /// Render the `resolution` block (which targets the query resolved to, plus
@@ -245,6 +313,7 @@ fn format_relationship_bucket(
     arr: &[serde_json::Value],
     multiple_targets: bool,
     overloaded: &HashSet<&str>,
+    style: RowStyle,
 ) -> String {
     use std::collections::BTreeMap;
 
@@ -266,14 +335,129 @@ fn format_relationship_bucket(
                 entity_name,
                 &target_key,
                 overloaded,
+                style,
             ));
         }
-        for entity in entities {
-            output.push_str(&format_reference_entry(entity));
-        }
+        output.push_str(&format_group_rows(&entities, style));
+        output.push('\n');
     }
 
     output
+}
+
+/// How the rows of an answer are rendered.
+#[derive(Debug, Clone, Copy)]
+struct RowStyle {
+    /// Label every row with its repository: the answer spans several.
+    label_repos: bool,
+    include_tests: bool,
+}
+
+/// The rows of one target's references, one line each: imports folded,
+/// test code counted on a closing line unless listed.
+fn format_group_rows(entities: &[&serde_json::Value], style: RowStyle) -> String {
+    let files_with_rows: HashSet<&str> = entities
+        .iter()
+        .filter(|e| !is_module(e))
+        .filter_map(|e| file_of(e))
+        .collect();
+    let (folded, kept): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = entities
+        .iter()
+        .partition(|e| is_module(e) && file_of(e).is_some_and(|f| files_with_rows.contains(f)));
+    let (listed, tests): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = kept
+        .into_iter()
+        .partition(|e| style.include_tests || !is_test_reference(e));
+
+    let mut output: String = listed
+        .iter()
+        .map(|e| format_reference_row(e, style.label_repos))
+        .collect();
+    let mut notes = Vec::new();
+    if !tests.is_empty() {
+        let more = if listed.is_empty() { "" } else { "+" };
+        notes.push(format!(
+            "{more}{} in tests (`include_tests` lists them)",
+            tests.len()
+        ));
+    }
+    if !folded.is_empty() {
+        notes.push(format!(
+            "{} import row(s) folded into the rows of their file",
+            folded.len()
+        ));
+    }
+    if !notes.is_empty() {
+        output.push_str(&format!("- {}\n", notes.join("; ")));
+    }
+    output
+}
+
+fn file_of(entity: &serde_json::Value) -> Option<&str> {
+    entity.get("file_path").and_then(|v| v.as_str())
+}
+
+fn is_module(entity: &serde_json::Value) -> bool {
+    entity.get("name").and_then(|v| v.as_str()) == Some(MODULE_ENTITY)
+}
+
+/// `- **\`name\`** (kind) at \`path:line\`` and, when they say something, the
+/// repository label and the one-line signature.
+fn format_reference_row(entity: &serde_json::Value, label_repo: bool) -> String {
+    let name = entity.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+    let mut row = match entity.get("kind").and_then(|v| v.as_str()) {
+        Some(kind) => format!("- **`{name}`** ({kind})"),
+        None => format!("- **`{name}`**"),
+    };
+    if let Some(file_path) = entity.get("file_path").and_then(|v| v.as_str()) {
+        let path = match entity.get("start_line").and_then(|v| v.as_i64()) {
+            Some(start_line) => format!("{file_path}:{start_line}"),
+            None => file_path.to_string(),
+        };
+        let repo = entity
+            .get("repo_name")
+            .and_then(|v| v.as_str())
+            .filter(|_| label_repo);
+        row.push_str(" at ");
+        row.push_str(&format_file_line(&path, repo));
+    }
+    if let Some(signature) = entity
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .and_then(compact_signature)
+    {
+        row.push_str(&format!(" — `{signature}`"));
+    }
+    row.push('\n');
+    row
+}
+
+/// The repository every row and resolved target belongs to, when there is
+/// exactly one.
+fn single_repo(references: &serde_json::Value, rel_types: &[(&str, &str)]) -> Option<String> {
+    let rows = rel_types
+        .iter()
+        .filter_map(|(key, _)| references.get(key).and_then(|v| v.as_array()))
+        .flatten();
+    let row_repos = rows.flat_map(|row| {
+        ["repo_name", "target_repo_name"]
+            .into_iter()
+            .filter_map(move |field| row.get(field).and_then(|v| v.as_str()))
+    });
+    let target_repos = references
+        .pointer("/resolution/targets")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|target| target.get("repo_name").and_then(|v| v.as_str()));
+    let repos: BTreeSet<&str> = row_repos
+        .chain(target_repos)
+        .filter(|repo| !repo.is_empty())
+        .collect();
+    let mut repos = repos.into_iter();
+    match (repos.next(), repos.next()) {
+        (Some(repo), None) => Some(repo.to_string()),
+        _ => None,
+    }
 }
 
 /// `### Target:` section header plus the target signature line. A target
@@ -284,6 +468,7 @@ fn format_target_header(
     entity_name: &str,
     target_key: &str,
     overloaded: &HashSet<&str>,
+    style: RowStyle,
 ) -> String {
     // Prefer target_fqn when available — qualified identifiers
     // disambiguate homonyms (e.g., `WidgetA::new` vs `WidgetB::new`).
@@ -300,7 +485,8 @@ fn format_target_header(
     );
     let target_repo = first_entity
         .get("target_repo_name")
-        .and_then(|v| v.as_str());
+        .and_then(|v| v.as_str())
+        .filter(|_| style.label_repos);
 
     let mut output = format!(
         "### Target: `{}` at {}\n\n",
@@ -311,7 +497,7 @@ fn format_target_header(
     if let Some(target_sig) = first_entity
         .get("target_signature")
         .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
+        .and_then(compact_signature)
     {
         output.push_str(&format!("Signature: `{}`\n\n", target_sig));
     }
@@ -373,6 +559,136 @@ pub fn format_reference_entry(entity: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A callers row of `repo` (issue #52 fixtures).
+    fn row(name: &str, kind: &str, file: &str, line: i64, repo: &str) -> serde_json::Value {
+        json!({
+            "name": name, "kind": kind, "file_path": file, "start_line": line,
+            "repo_name": repo, "target_repo_name": repo,
+            "target_fqn": "com.x.Ledger.post", "target_file_path": "src/Ledger.java",
+            "target_start_line": 3
+        })
+    }
+
+    fn ledger_references(calls: Vec<serde_json::Value>) -> serde_json::Value {
+        json!({
+            "calls": calls,
+            "resolution": {
+                "query": "Ledger.post", "tier": "exact_fqn", "fuzzy": false, "truncated": false,
+                "total_targets": 1,
+                "targets": [{"name": "post", "fqn": "com.x.Ledger.post", "kind": "method",
+                             "file_path": "src/Ledger.java", "start_line": 3, "repo_name": "shop"}]
+            }
+        })
+    }
+
+    #[test]
+    fn test_callers_are_counted_and_listed_only_on_request() {
+        let mut test_row = row(
+            "postsEntry",
+            "method",
+            "src/test/LedgerTest.java",
+            9,
+            "shop",
+        );
+        let mut rust_test = row("inline_case", "rust_function", "src/ledger.rs", 40, "shop");
+        rust_test["is_test_context"] = json!(true);
+        test_row["signature"] = json!("()");
+        let references = ledger_references(vec![
+            row("bill", "method", "src/Invoicer.java", 12, "shop"),
+            test_row,
+            rust_test,
+        ]);
+
+        let compact = format_references_result("Ledger.post", &references);
+        assert!(compact.contains("## Calls (function/method invocations) (3)"));
+        assert!(compact.contains("- **`bill`** (method) at `src/Invoicer.java:12`\n"));
+        assert!(!compact.contains("postsEntry"));
+        assert!(!compact.contains("inline_case"));
+        assert!(compact.contains("- +2 in tests (`include_tests` lists them)\n"));
+        assert!(compact.contains(
+            "Found 3 reference(s) across all relationship types (repo: shop) — 2 in tests"
+        ));
+
+        let full = format_references_result_with(
+            "Ledger.post",
+            &references,
+            CallersFormat {
+                include_tests: true,
+            },
+        );
+        assert!(full.contains("postsEntry") && full.contains("inline_case"));
+        assert!(!full.contains("in tests"));
+    }
+
+    #[test]
+    fn test_callers_only_in_tests_have_no_plus_sign() {
+        let references = ledger_references(vec![row(
+            "postsEntry",
+            "method",
+            "src/test/LedgerTest.java",
+            9,
+            "shop",
+        )]);
+        let formatted = format_references_result("Ledger.post", &references);
+        assert!(formatted.contains("- 1 in tests (`include_tests` lists them)\n"));
+    }
+
+    #[test]
+    fn test_single_repository_is_named_once() {
+        let references = ledger_references(vec![
+            row("bill", "method", "src/Invoicer.java", 12, "shop"),
+            row("refund", "method", "src/Refunder.java", 8, "shop"),
+        ]);
+        let formatted = format_references_result("Ledger.post", &references);
+        let rows: Vec<&str> = formatted
+            .lines()
+            .filter(|l| l.starts_with("- **`"))
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| !r.contains("(repo: ")));
+        assert!(formatted.contains("across all relationship types (repo: shop):"));
+        // One line per row: no blank line between them.
+        assert!(formatted.contains("`src/Invoicer.java:12`\n- **`refund`**"));
+    }
+
+    #[test]
+    fn test_several_repositories_label_every_row() {
+        let references = ledger_references(vec![
+            row("bill", "method", "src/Invoicer.java", 12, "shop"),
+            row("audit", "method", "src/Audit.java", 4, "audit"),
+        ]);
+        let formatted = format_references_result("Ledger.post", &references);
+        assert!(formatted.contains("at `src/Invoicer.java:12`  (repo: shop)"));
+        assert!(formatted.contains("at `src/Audit.java:4`  (repo: audit)"));
+        assert!(formatted.contains("across all relationship types:"));
+    }
+
+    #[test]
+    fn test_import_rows_fold_into_their_file() {
+        let references = ledger_references(vec![
+            row("<module>", "function", "src/Invoicer.java", 1, "shop"),
+            row("Invoicer", "class", "src/Invoicer.java", 5, "shop"),
+            row("<module>", "function", "src/Unused.java", 1, "shop"),
+        ]);
+        let formatted = format_references_result("Ledger.post", &references);
+        assert!(!formatted.contains("`<module>`** (function) at `src/Invoicer.java:1`"));
+        assert!(formatted.contains("`<module>`** (function) at `src/Unused.java:1`"));
+        assert!(formatted.contains("- 1 import row(s) folded into the rows of their file\n"));
+    }
+
+    #[test]
+    fn test_signature_is_on_the_row_and_empty_ones_are_dropped() {
+        let mut with_sig = row("bill", "method", "src/Invoicer.java", 12, "shop");
+        with_sig["signature"] = json!("public void bill(\n    String id\n)");
+        let mut empty_sig = row("run", "method", "src/Job.java", 3, "shop");
+        empty_sig["signature"] = json!("()");
+        let formatted =
+            format_references_result("Ledger.post", &ledger_references(vec![with_sig, empty_sig]));
+        assert!(formatted.contains("at `src/Invoicer.java:12` — `public void bill(String id)`\n"));
+        assert!(formatted.contains("at `src/Job.java:3`\n"));
+        assert!(!formatted.contains("Signature: `()`"));
+    }
 
     #[test]
     fn test_format_references_result_empty() {

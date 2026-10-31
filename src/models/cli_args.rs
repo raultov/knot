@@ -80,6 +80,11 @@ pub enum Commands {
         #[arg(short = 'k', long)]
         kinds: Option<String>,
 
+        /// List the references made from test code (test files, Rust
+        /// #[cfg(test)]) in the Markdown answer instead of only counting them
+        #[arg(long)]
+        include_tests: bool,
+
         /// Output format (default: table)
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,

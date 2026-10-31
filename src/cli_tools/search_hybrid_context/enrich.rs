@@ -75,7 +75,7 @@ pub(crate) fn format_reference_samples<'a>(
 
 /// Whether a reference row lives in test code — the ranker's
 /// [`super::rank::is_test_path`] rule plus the Rust `#[cfg(test)]` flag.
-fn is_test_reference(row: &serde_json::Value) -> bool {
+pub(crate) fn is_test_reference(row: &serde_json::Value) -> bool {
     let file = row.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
     super::rank::is_test_path(file)
         || row

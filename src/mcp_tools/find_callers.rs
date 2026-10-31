@@ -34,11 +34,11 @@ use crate::mcp_tools::repo_scope_from_args;
                     The first tier that matches wins, so an exact name never returns fuzzy noise. Queries shorter than 4 characters resolve by anchored name prefix instead of substring, avoiding substring noise on short strings. Pass a qualified name (`Namespace.Type.Member`) to disambiguate homonyms. \
                     Responses state which tier matched and flag fuzzy results explicitly. \
                    \n\nBehaviour & Return: Read-only graph traversal with no side effects. Returns Markdown grouped by relationship type (Calls, Extends, Implements, References, Overridden by, Overrides, Dispatched calls) with exact file paths and line numbers. \
-                   Each caller entry and each resolved target states its repository as `(repo: name)`, so rows are attributable when multiple repositories are in scope. \
+                   When every reference and target belongs to one repository, the 'Found N reference(s)' line names it once as `(repo: name)`; otherwise each caller entry and each resolved target states its repository, so rows are attributable when multiple repositories are in scope. \
                    For JVM code (Java/Kotlin/Groovy) and C#, 'Overridden by' lists method implementations/overrides in subtypes and 'Overrides' lists the supertype methods a method implements/overrides. \
                    'Dispatched calls' lists callers bound to an override or to a supertype method of the target (dynamic dispatch), each under the method it is statically bound to, so an interface method called only through its implementation is never reported as unused. \
                    When the query resolves to more than one entity with that name (homonyms, e.g., 'find_nearest_entity_by_line' in orphans.rs vs rust.rs), results are grouped by target entity showing which specific target each caller references — even when only one of the homonyms has callers. \
-                     Each caller entry includes: name, kind, file_path:line_number, and signature. When multiple targets exist, each group shows the target's location and signature. \
+                     Each caller entry is one line: name, kind, file_path:line_number and, when it is not empty, its signature. When multiple targets exist, each group shows the target's location and signature. References made from test code (test files, Rust #[cfg(test)]) are included in every count but listed only with include_tests=true; each group then ends with '+N in tests'. A file's `<module>` row (its import) is folded into the other rows of that file. \
                      \n\nEntity-kind scope: target resolution is code-only by default — documentation, configuration, build-system and Kubernetes/Helm metadata (markdown_section, config_property, build_dependency, cargo_package, project_identity, k8s_*, helm_*, …) can never be presented as resolved targets. \
                      When the filter removed matches, the response says so ('Non-code matches hidden — N entities …'), never silently. \
                      Pass kinds='all' (or '*') to disable the filter, or a comma-separated allow-list of exact kinds/aliases ('callable', 'config', 'docs', 'rust_function', 'build_dependency', …) to scope resolution explicitly. \
@@ -82,6 +82,10 @@ pub struct FindCallersTool {
         max_length = 1024
     )]
     pub kinds: Option<String>,
+    #[json_schema(
+        description = "List the references made from test code (test files, Rust #[cfg(test)]) instead of only counting them. Default false: counts always include them."
+    )]
+    pub include_tests: Option<bool>,
 }
 
 impl FindCallersTool {
@@ -109,6 +113,12 @@ impl FindCallersTool {
             .and_then(|v| v.as_i64())
             .map(|v| v.max(1) as usize);
         let kinds = args.get("kinds").and_then(|v| v.as_str());
+        let format = cli_tools::CallersFormat {
+            include_tests: args
+                .get("include_tests")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        };
 
         // Check if in offline mode
         if handler.graph_db.is_none() {
@@ -129,7 +139,7 @@ impl FindCallersTool {
                 .await
                 .map_err(|e| CallToolError::from_message(format!("Find callers failed: {}", e)))?;
 
-        let formatted = cli_tools::format_references_result(entity_name, &json_result);
+        let formatted = cli_tools::format_references_result_with(entity_name, &json_result, format);
 
         Ok(CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent::new(

@@ -18,6 +18,42 @@ use knot::{
     utils,
 };
 
+/// `knot callers`: the references of an entity, in the requested format.
+async fn run_callers(
+    command: Commands,
+    cfg: &Config,
+    graph_db: &Arc<GraphDb>,
+) -> anyhow::Result<()> {
+    let Commands::Callers {
+        entity_name,
+        repo,
+        max_targets,
+        kinds,
+        include_tests,
+        output,
+    } = command
+    else {
+        return Ok(());
+    };
+    let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
+    let json_result = cli_tools::run_find_callers(
+        &entity_name,
+        &target_repo,
+        graph_db,
+        max_targets,
+        kinds.as_deref(),
+    )
+    .await?;
+    let formatted = utils::format_callers_output_with(
+        &entity_name,
+        json_result,
+        output,
+        cli_tools::CallersFormat { include_tests },
+    );
+    utils::print_with_pager(&formatted);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     utils::init_logging_for_cli()?;
@@ -87,25 +123,7 @@ async fn main() -> anyhow::Result<()> {
             utils::print_with_pager(&formatted);
         }
 
-        Commands::Callers {
-            entity_name,
-            repo,
-            max_targets,
-            kinds,
-            output,
-        } => {
-            let target_repo = build_repo_scope(repo.as_deref(), &cfg.repo_name);
-            let json_result = cli_tools::run_find_callers(
-                &entity_name,
-                &target_repo,
-                &graph_db,
-                max_targets,
-                kinds.as_deref(),
-            )
-            .await?;
-            let formatted = utils::format_callers_output(&entity_name, json_result, output);
-            utils::print_with_pager(&formatted);
-        }
+        command @ Commands::Callers { .. } => run_callers(command, &cfg, &graph_db).await?,
 
         Commands::Explore {
             file_path,
