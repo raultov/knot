@@ -676,6 +676,48 @@ assert_overload_callers 26 "BasketStore.total" "5<summary" \
 assert_reference_callers 27 "ProductCardComponent.snapshot" "render" \
     "A field is referenced only by its own reader, not by a cross-module local"
 
+# Tests 28-29: compact search answers (issue #50). The `path` filter pins the
+# results to the this_access/ fixture, so ranking does not matter.
+search_mcp_text() {
+    local id=$1
+    local extra=$2
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"refresh the basket store\",\"max_results\":10,\"path\":\"this_access\",\"repo_name\":\"$REPO_NAME\"$extra}}}" \
+        | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text'
+}
+
+echo ""
+echo "Test 28: full search answers name same-file callers and inline summaries..."
+FULL_MCP=$(search_mcp_text 28 "")
+if ! echo "$FULL_MCP" | grep -q '^\*\*Called by:\*\* 1 location(s): reset (same file)$' \
+    || echo "$FULL_MCP" | grep -q 'Sample callers'; then
+    echo -e "${RED}✗ MCP: expected 'Called by: 1 location(s): reset (same file)':${NC}"
+    echo "$FULL_MCP"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: refresh is 'Called by: 1 location(s): reset (same file)'${NC}"
+
+echo ""
+echo "Test 29: brief search answers render one line per result..."
+BRIEF_MCP=$(search_mcp_text 29 ",\"detail\":\"brief\"")
+BRIEF_CLI=$(cargo run --release --bin knot -- search "refresh the basket store" -m 10 -p this_access \
+    -r "$REPO_NAME" -o markdown --detail brief 2>/dev/null)
+for answer in "$BRIEF_MCP" "$BRIEF_CLI"; do
+    if ! echo "$answer" | grep -q '^- `refresh` (method) — `this_access/basket.store.ts:13` .*— called by 1' \
+        || echo "$answer" | grep -q '\*\*File:\*\*'; then
+        echo -e "${RED}✗ brief answer is not one line per result:${NC}"
+        echo "$answer"
+        exit 1
+    fi
+done
+echo -e "${GREEN}✓ CLI & MCP: brief answer lists refresh on one line${NC}"
+BAD_DETAIL=$(echo "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"search_hybrid_context\",\"arguments\":{\"query\":\"x\",\"detail\":\"verbose\",\"repo_name\":\"$REPO_NAME\"}}}" \
+    | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
+if ! echo "$BAD_DETAIL" | grep -q "Invalid 'detail' value"; then
+    echo -e "${RED}✗ MCP: an unknown detail value must be rejected, got: $BAD_DETAIL${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: unknown detail value rejected${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -702,6 +744,7 @@ echo "  ✓ Method locals are not members; this.m() reaches the inherited method
 echo "  ✓ Function locals and parameters passed as arguments do not bind cross-module fields"
 echo "  ✓ Class members report only their own decorators"
 echo "  ✓ this.x reads and writes are references; real calls and getter reads are calls"
+echo "  ✓ Compact search answers: same-file samples, one-line summaries, brief detail"
 echo ""
 
 exit 0
