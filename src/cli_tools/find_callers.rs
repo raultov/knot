@@ -49,8 +49,9 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
     output.push_str(&format_resolution_markdown(references));
 
     // Every relationship type the pipeline produces (see
-    // `find_references_rel_labels`) plus the two OVERRIDES projections and
-    // the calls that reach the target through dynamic dispatch.
+    // `find_references_rel_labels`) plus the two OVERRIDES projections, the
+    // calls that reach the target through dynamic dispatch and the HTTP
+    // client calls linked to the target endpoint or handler.
     // Empty buckets are skipped by the loop below, so repositories without
     // web/VCL/macro edges render exactly as before.
     let rel_types = [
@@ -75,6 +76,10 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         (
             "dispatched_calls",
             "Dispatched calls (bound to an override or supertype method)",
+        ),
+        (
+            "http_calls",
+            "HTTP callers (heuristic: client call → endpoint)",
         ),
     ];
 
@@ -154,11 +159,12 @@ pub fn format_references_result(entity_name: &str, references: &serde_json::Valu
         {
             output.push_str(&format!("## {} ({})\n\n", label, arr.len()));
             // Dispatched calls are bound to a method other than the queried
-            // one, so the bound method is always named.
+            // one, and HTTP calls to an endpoint, so their target is always
+            // named.
             output.push_str(&format_relationship_bucket(
                 entity_name,
                 arr,
-                multiple_targets || key == "dispatched_calls",
+                multiple_targets || matches!(key, "dispatched_calls" | "http_calls"),
                 &overloaded,
             ));
         }

@@ -6,16 +6,25 @@
 //! path joined with the method-level one — each routed to its handler by a
 //! `ROUTES_TO` edge. Paths are relative to the application: the context
 //! path (`server.servlet.context-path`, `@ApplicationPath`) is deployment
-//! configuration and is not applied.
+//! configuration and is not applied here: the indexer reads it from the
+//! repository configuration ([`AppConfig`]) when it links the calls of
+//! declarative ([`clients`]) and imperative ([`imperative`]) HTTP clients
+//! to the endpoints (issue #46).
 
 mod annotation;
+mod clients;
+mod config;
 mod constants;
 mod cross_file;
+mod imperative;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use clients::{extract_http_client_calls, resolve_http_client_calls};
+pub(crate) use config::AppConfig;
 pub(crate) use constants::extract_string_constants;
 pub(crate) use cross_file::resolve_cross_file_constants;
+pub(crate) use imperative::extract_imperative_calls;
 
 use annotation::{Annotation, StringConstants, eval_identifiers, eval_strings, parse_annotation};
 
@@ -33,9 +42,9 @@ const SPRING_MAPPINGS: &[(&str, &str)] = &[
 ];
 
 /// Type annotations marking a declarative HTTP *client* (OpenFeign,
-/// MicroProfile REST Client): its routing annotations describe the calls
-/// it makes, not endpoints it serves.
-const CLIENT_MARKERS: &[&str] = &["FeignClient", "RegisterRestClient"];
+/// MicroProfile REST Client, Spring HTTP interface): its routing
+/// annotations describe the calls it makes, not endpoints it serves.
+const CLIENT_MARKERS: &[&str] = &["FeignClient", "RegisterRestClient", "HttpExchange"];
 
 /// Verb of a `@RequestMapping` without `method`: every HTTP method.
 const ANY_METHOD: &str = "ANY";
@@ -47,41 +56,74 @@ struct Route {
     path: String,
 }
 
+/// A Java/Kotlin method carrying annotations, with those of its type.
+struct AnnotatedMethod<'a> {
+    method: &'a ParsedEntity,
+    owner: Option<&'a ParsedEntity>,
+    class_annotations: Vec<Annotation>,
+    method_annotations: Vec<Annotation>,
+}
+
+/// The annotated methods among one file's entities.
+fn annotated_methods(entities: &[ParsedEntity]) -> impl Iterator<Item = AnnotatedMethod<'_>> {
+    entities
+        .iter()
+        .filter(|e| matches!(e.kind, EntityKind::Method | EntityKind::KotlinMethod))
+        .filter(|e| !e.decorators.is_empty())
+        .map(|method| {
+            let owner = owner_type(method, entities);
+            AnnotatedMethod {
+                method,
+                owner,
+                class_annotations: owner
+                    .map(|t| annotations(&t.decorators))
+                    .unwrap_or_default(),
+                method_annotations: annotations(&method.decorators),
+            }
+        })
+}
+
+fn annotations(decorators: &[String]) -> Vec<Annotation> {
+    decorators
+        .iter()
+        .filter_map(|d| parse_annotation(d))
+        .collect()
+}
+
 /// The `HttpEndpoint` entities of one file's handler methods.
 pub(crate) fn extract_http_endpoints(
     entities: &[ParsedEntity],
     constants: &StringConstants,
 ) -> Vec<ParsedEntity> {
-    entities
-        .iter()
-        .filter(|e| matches!(e.kind, EntityKind::Method | EntityKind::KotlinMethod))
-        .filter(|e| !e.decorators.is_empty())
-        .flat_map(|handler| {
-            let owner = owner_type(handler, entities);
-            let class_annotations: Vec<Annotation> = owner
-                .map(|t| {
-                    t.decorators
-                        .iter()
-                        .filter_map(|d| parse_annotation(d))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if class_annotations
+    annotated_methods(entities)
+        .filter(|annotated| {
+            !annotated
+                .class_annotations
                 .iter()
                 .any(|a| CLIENT_MARKERS.contains(&a.name.as_str()))
-            {
-                return Vec::new();
-            }
-            let method_annotations: Vec<Annotation> = handler
-                .decorators
-                .iter()
-                .filter_map(|d| parse_annotation(d))
-                .collect();
-            routes(&class_annotations, &method_annotations, constants)
-                .into_iter()
-                .map(|route| endpoint_entity(handler, owner, &route))
-                .collect()
         })
+        .flat_map(|annotated| {
+            routes(
+                &annotated.class_annotations,
+                &annotated.method_annotations,
+                constants,
+            )
+            .into_iter()
+            .map(|route| endpoint_entity(annotated.method, annotated.owner, &route))
+            .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The JAX-RS `@ApplicationPath` values among a type's annotations: the
+/// root path every endpoint of the application is served under.
+pub(crate) fn application_paths(decorators: &[String]) -> Vec<String> {
+    annotations(decorators)
+        .iter()
+        .filter(|a| a.name == "ApplicationPath")
+        .filter_map(|a| a.arg(&["value"]))
+        .flat_map(|expr| eval_strings(expr, &StringConstants::new()))
+        .map(|path| normalize_path(&path))
         .collect()
 }
 

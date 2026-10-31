@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 mod comments;
 mod context;
 pub(crate) mod extractor;
-mod http_endpoints;
+pub(crate) mod http_endpoints;
 pub mod languages;
 mod orphans;
 mod utils;
@@ -184,6 +184,7 @@ pub fn parse_files_stream(
         .unwrap_or_default();
     languages::varnish::aggregate_varnish_builtin_subs(&mut entities, &parse_cfg.repo_name);
     http_endpoints::resolve_cross_file_constants(&mut entities, &parse_cfg.repo_root);
+    http_endpoints::resolve_http_client_calls(&mut entities, &parse_cfg.repo_root);
     disambiguate_entity_uuids(&mut entities);
 
     // Publish the entity total BEFORE the first blocking_send. This is the

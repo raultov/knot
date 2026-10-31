@@ -147,6 +147,8 @@ pub enum EntityKind {
     MarkdownSection,  // A section under a Markdown heading
     // HTTP endpoints served by JVM web frameworks (JAX-RS, Spring MVC)
     HttpEndpoint, // GET /items/{id}
+    // HTTP calls made by declarative JVM clients (OpenFeign, MicroProfile, @HttpExchange)
+    HttpClientCall, // GET /api/items/{id}
 }
 
 const KIND_LABELS: &[(EntityKind, &str)] = &[
@@ -261,6 +263,7 @@ const KIND_LABELS: &[(EntityKind, &str)] = &[
     (EntityKind::MarkdownDocument, "markdown_document"),
     (EntityKind::MarkdownSection, "markdown_section"),
     (EntityKind::HttpEndpoint, "http_endpoint"),
+    (EntityKind::HttpClientCall, "http_client_call"),
 ];
 
 impl std::fmt::Display for EntityKind {

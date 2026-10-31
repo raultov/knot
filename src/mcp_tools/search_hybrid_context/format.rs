@@ -104,6 +104,7 @@ fn format_brief_line(entity: &serde_json::Value) -> String {
     let counts: Vec<String> = [
         ("called by", count_field(entity, "caller_count")),
         ("dispatched", count_field(entity, "dispatched_caller_count")),
+        ("HTTP callers", count_field(entity, "http_caller_count")),
         ("referenced", count_field(entity, "type_usage_count")),
         ("calls", calls),
     ]
@@ -194,6 +195,7 @@ fn format_entity_with(
     // Callers reaching this entity only through dynamic dispatch, kept apart
     // from direct callers exactly like `find_callers` does.
     summary.append("dispatched_caller", "**Called via dispatch:**", &mut output);
+    summary.append("http_caller", "**HTTP callers (heuristic):**", &mut output);
 
     output.push_str(&format_inline_list(entity, "dependencies", "**Calls:**"));
 

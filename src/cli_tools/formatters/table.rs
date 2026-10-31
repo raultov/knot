@@ -150,6 +150,7 @@ pub fn format_callers_table(entity_name: &str, references: &Value) -> String {
         ("overridden_by", "Overridden by", Color::Yellow),
         ("overrides", "Overrides", Color::Cyan),
         ("dispatched_calls", "Dispatched call", Color::Blue),
+        ("http_calls", "HTTP caller", Color::Green),
     ];
 
     for (key, label, label_color) in rel_types {

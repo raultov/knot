@@ -336,6 +336,32 @@ pub fn dispatched_calls_query(repo_scoped: bool) -> String {
     )
 }
 
+/// Cipher for the `http_calls` bucket (issue #46): HTTP client calls linked
+/// by `HTTP_CALLS` to a resolved endpoint, or to the endpoint routing to a
+/// resolved handler. Rows carry the endpoint as their target.
+pub fn http_calls_query(repo_scoped: bool) -> String {
+    let repo_filter = if repo_scoped {
+        "AND target.repo_name IN $repo_names"
+    } else {
+        ""
+    };
+
+    format!(
+        "MATCH (entity:Entity)-[:HTTP_CALLS]->(target:Entity)
+         OPTIONAL MATCH (target)-[:ROUTES_TO]->(handler:Entity)
+         WITH entity, target, handler
+         WHERE (target.uuid IN $target_uuids OR handler.uuid IN $target_uuids)
+           {repo_filter}
+         RETURN DISTINCT entity.name, entity.kind, entity.file_path, entity.start_line, entity.signature,
+                entity.repo_name AS repo_name,
+                target.name AS target_name, target.fqn AS target_fqn,
+                target.file_path AS target_file_path,
+                target.start_line AS target_start_line, target.signature AS target_signature,
+                target.repo_name AS target_repo_name
+         ORDER BY target_fqn, entity.file_path, entity.start_line"
+    )
+}
+
 pub fn find_callers_query(repo_names: &[String]) -> String {
     if !repo_names.is_empty() {
         "MATCH (caller:Entity)-[:CALLS]->(callee:Entity)
@@ -1344,7 +1370,8 @@ impl QueryExt for GraphDb {
             "routes_to": [],
             "overridden_by": [],
             "overrides": [],
-            "dispatched_calls": []
+            "dispatched_calls": [],
+            "http_calls": []
         });
 
         if target_uuids.is_empty() {
@@ -1360,8 +1387,9 @@ impl QueryExt for GraphDb {
             .await?;
         partition_reference_rows(&rows, &mut results);
 
-        // Stage 3: OVERRIDES buckets, plus the calls that reach a target
-        // through dynamic dispatch (bound to an override or a supertype).
+        // Stage 3: OVERRIDES buckets, the calls that reach a target through
+        // dynamic dispatch (bound to an override or a supertype), and the
+        // HTTP client calls reaching a target endpoint or handler.
         for (result_key, query_str) in [
             ("overridden_by", overridden_by_query(!repo_names.is_empty())),
             ("overrides", overrides_query(!repo_names.is_empty())),
@@ -1369,6 +1397,7 @@ impl QueryExt for GraphDb {
                 "dispatched_calls",
                 dispatched_calls_query(!repo_names.is_empty()),
             ),
+            ("http_calls", http_calls_query(!repo_names.is_empty())),
         ] {
             let rows = self
                 .collect_reference_rows(&query_str, target_uuids, repo_names, result_key)

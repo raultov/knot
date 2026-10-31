@@ -166,9 +166,9 @@ pub(crate) fn run_post_passes<'a>(
     add_http_endpoints(tree_root, source_bytes, lang_name, entities);
 }
 
-/// Last pass: HTTP endpoints of Java/Kotlin handler methods (issue #33).
-/// They point at handlers by UUID and span a single line, so no earlier
-/// pass sees them.
+/// Last pass: HTTP endpoints of Java/Kotlin handler methods (issue #33)
+/// and the HTTP calls of declarative client methods and imperative clients
+/// (issue #46). They span a single line, so no earlier pass sees them.
 fn add_http_endpoints(
     tree_root: Node<'_>,
     source_bytes: &[u8],
@@ -180,5 +180,13 @@ fn add_http_endpoints(
     }
     let constants = http_endpoints::extract_string_constants(tree_root, source_bytes, lang_name);
     let endpoints = http_endpoints::extract_http_endpoints(entities, &constants);
+    let client_calls = http_endpoints::extract_http_client_calls(entities, &constants);
+    let imperative_calls = std::str::from_utf8(source_bytes)
+        .map(|source| {
+            http_endpoints::extract_imperative_calls(source, lang_name, entities, &constants)
+        })
+        .unwrap_or_default();
     entities.extend(endpoints);
+    entities.extend(client_calls);
+    entities.extend(imperative_calls);
 }

@@ -20,7 +20,7 @@ use crate::pipeline::{
         update_index_state,
     },
     ingest::{
-        RunMetrics, ingest_batch, link_cross_repo_dependencies, print_run_summary,
+        RunMetrics, ingest_batch, link_cross_repo_dependencies, link_http_calls, print_run_summary,
         resolve_and_save_relationships,
     },
     input::discover_files,
@@ -170,6 +170,11 @@ async fn run_pipeline_inner(
             &cfg.qdrant_collection,
         )
         .await?;
+
+    // Stage 7b: HTTP client calls → endpoints (issue #46). Every run, empty
+    // batches included: the links span every indexed repository, so a newly
+    // indexed server links the clients indexed before it.
+    link_http_calls(graph_db, cfg).await?;
 
     if !files_to_parse.is_empty() {
         let metrics =

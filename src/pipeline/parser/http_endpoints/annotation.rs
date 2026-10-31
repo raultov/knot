@@ -71,7 +71,7 @@ fn named_argument(arg: &str) -> (Option<String>, String) {
 }
 
 /// Index of the `)` closing the parenthesis `text` follows.
-fn closing_paren(text: &str) -> Option<usize> {
+pub(super) fn closing_paren(text: &str) -> Option<usize> {
     let mut depth = 0usize;
     let mut chars = text.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
@@ -86,8 +86,30 @@ fn closing_paren(text: &str) -> Option<usize> {
     None
 }
 
+/// Index of the first `target` of `chars` that no `nest` opened before
+/// it: `chars` forward finds a group's closing delimiter, reversed its
+/// opening one.
+pub(super) fn unmatched(
+    chars: impl Iterator<Item = (usize, char)>,
+    nest: char,
+    target: char,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in chars {
+        if c == nest {
+            depth += 1;
+        } else if c == target {
+            if depth == 0 {
+                return Some(i);
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
 /// Advance `chars` past the string or char literal opening at `start`.
-fn skip_literal(
+pub(super) fn skip_literal(
     text: &str,
     start: usize,
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
@@ -119,7 +141,7 @@ fn skip_literal(
 }
 
 /// Split `text` on `sep` outside literals, parentheses, brackets and braces.
-fn split_top_level(text: &str, sep: char) -> Vec<&str> {
+pub(super) fn split_top_level(text: &str, sep: char) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut depth = 0usize;
     let mut start = 0;
@@ -165,23 +187,48 @@ fn array_elements(expr: &str) -> Vec<&str> {
 /// A part that cannot be evaluated (a constant declared in another file, a
 /// method call) is kept as `<expression>`.
 pub(crate) fn eval_strings(expr: &str, constants: &StringConstants) -> Vec<String> {
+    eval_elements(expr, constants, Unresolved::Placeholder)
+}
+
+/// [`eval_strings`] for attributes that may carry configuration
+/// placeholders (`url = "${billing.url}"`): a template that names no
+/// constant is kept verbatim, to be resolved against the configuration.
+pub(crate) fn eval_property_strings(expr: &str, constants: &StringConstants) -> Vec<String> {
+    eval_elements(expr, constants, Unresolved::Verbatim)
+}
+
+/// What a literal's `$NAME` / `${NAME}` template naming no known constant
+/// becomes.
+#[derive(Clone, Copy)]
+enum Unresolved {
+    /// `<NAME>`, for cross-file resolution.
+    Placeholder,
+    /// The template text itself.
+    Verbatim,
+}
+
+fn eval_elements(expr: &str, constants: &StringConstants, unresolved: Unresolved) -> Vec<String> {
     array_elements(expr)
         .into_iter()
-        .map(|element| eval_concatenation(element, constants))
+        .map(|element| concatenate(element, constants, unresolved))
         .collect()
 }
 
 /// `"/a" + BASE + "/b"` → the concatenated value.
 pub(crate) fn eval_concatenation(expr: &str, constants: &StringConstants) -> String {
+    concatenate(expr, constants, Unresolved::Placeholder)
+}
+
+fn concatenate(expr: &str, constants: &StringConstants, unresolved: Unresolved) -> String {
     split_top_level(expr, '+')
         .into_iter()
-        .map(|term| eval_term(term.trim(), constants))
+        .map(|term| eval_term(term.trim(), constants, unresolved))
         .collect()
 }
 
-fn eval_term(term: &str, constants: &StringConstants) -> String {
+fn eval_term(term: &str, constants: &StringConstants, unresolved: Unresolved) -> String {
     if let Some(literal) = string_literal(term) {
-        return interpolate(&literal, constants);
+        return interpolate(&literal, constants, unresolved);
     }
     if is_qualified_name(term) {
         return lookup_constant(term, constants).unwrap_or_else(|| format!("<{term}>"));
@@ -190,7 +237,7 @@ fn eval_term(term: &str, constants: &StringConstants) -> String {
 }
 
 /// The content of a `"..."` / `"""..."""` literal, escapes decoded.
-fn string_literal(term: &str) -> Option<String> {
+pub(super) fn string_literal(term: &str) -> Option<String> {
     if let Some(raw) = term
         .strip_prefix("\"\"\"")
         .and_then(|t| t.strip_suffix("\"\"\""))
@@ -217,7 +264,7 @@ fn string_literal(term: &str) -> Option<String> {
 
 /// Kotlin string templates over constants: `"$BASE/items"`,
 /// `"${Api.BASE}/items"`. Java literals contain no templates in practice.
-fn interpolate(literal: &str, constants: &StringConstants) -> String {
+fn interpolate(literal: &str, constants: &StringConstants, unresolved: Unresolved) -> String {
     let mut out = String::with_capacity(literal.len());
     let mut rest = literal;
     while let Some(dollar) = rest.find('$') {
@@ -240,7 +287,11 @@ fn interpolate(literal: &str, constants: &StringConstants) -> String {
             rest = after;
             continue;
         }
-        out.push_str(&lookup_constant(name, constants).unwrap_or_else(|| format!("<{name}>")));
+        let value = lookup_constant(name, constants).unwrap_or_else(|| match unresolved {
+            Unresolved::Placeholder => format!("<{name}>"),
+            Unresolved::Verbatim => rest[dollar..dollar + 1 + consumed].to_string(),
+        });
+        out.push_str(&value);
         rest = &after[consumed..];
     }
     out.push_str(rest);
@@ -248,7 +299,7 @@ fn interpolate(literal: &str, constants: &StringConstants) -> String {
 }
 
 /// `NAME`, `Owner.NAME`, `pkg.Owner.NAME`.
-fn is_qualified_name(term: &str) -> bool {
+pub(super) fn is_qualified_name(term: &str) -> bool {
     !term.is_empty()
         && term.split('.').all(|s| {
             s.chars()
@@ -261,7 +312,7 @@ fn is_qualified_name(term: &str) -> bool {
 }
 
 /// A constant by its last two segments (`Owner.NAME`), then by name.
-fn lookup_constant(name: &str, constants: &StringConstants) -> Option<String> {
+pub(super) fn lookup_constant(name: &str, constants: &StringConstants) -> Option<String> {
     let mut segments = name.rsplit('.');
     let last = segments.next()?;
     if let Some(owner) = segments.next()

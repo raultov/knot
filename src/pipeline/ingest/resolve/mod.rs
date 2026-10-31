@@ -2,6 +2,7 @@ pub mod aliases;
 pub mod calls;
 pub mod context;
 pub mod cross_repo;
+pub mod http_calls;
 pub mod non_calls;
 pub mod overrides;
 
@@ -21,6 +22,7 @@ use crate::models::{EntityKind, ImportScope, ReferenceIntent, RelationshipType, 
 
 pub use context::{ResolutionContext, RunMetrics};
 pub use cross_repo::link_cross_repo_dependencies;
+pub use http_calls::link_http_calls;
 
 pub async fn resolve_and_save_relationships(
     entities: &mut [ResolutionEntity],

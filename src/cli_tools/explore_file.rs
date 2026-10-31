@@ -605,6 +605,10 @@ const KIND_BUCKETS: &[KindBucket] = &[
         header: "HTTP Endpoints",
         kinds: &["http_endpoint"],
     },
+    KindBucket {
+        header: "HTTP Client Calls",
+        kinds: &["http_client_call"],
+    },
 ];
 
 const OTHERS_HEADER: &str = "Other Entities";

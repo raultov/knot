@@ -33,6 +33,10 @@ fn index_statements() -> &'static [&'static str] {
         // and large repos time out at the end of indexing.
         "CREATE INDEX entity_repo_fqn IF NOT EXISTS \
          FOR (e:Entity) ON (e.repo_name, e.fqn)",
+        // The HTTP call linker reads every endpoint and client call of the
+        // graph after each run (issue #46).
+        "CREATE INDEX entity_kind IF NOT EXISTS \
+         FOR (e:Entity) ON (e.kind)",
         "CREATE CONSTRAINT repo_name_unique IF NOT EXISTS \
          FOR (r:Repository) REQUIRE r.name IS UNIQUE",
         "CREATE INDEX repo_artifact IF NOT EXISTS \

@@ -142,6 +142,7 @@ pub(crate) fn enrich_single_entity(entity: &mut serde_json::Value, references: &
     // only through dynamic dispatch: reported apart from direct callers,
     // exactly like the "Dispatched calls" group of `find_callers`.
     insert_reference_bucket(entity, "dispatched_caller", bucket("dispatched_calls"));
+    insert_reference_bucket(entity, "http_caller", bucket("http_calls"));
 }
 
 #[cfg(test)]

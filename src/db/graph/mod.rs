@@ -9,6 +9,7 @@
 
 mod connection;
 mod delete;
+mod http_links;
 mod query;
 mod query_repo;
 mod query_subgraph;
@@ -33,6 +34,9 @@ pub struct GraphDb {
 // Re-export traits so they're available with GraphDb imports
 pub use connection::ConnectExt;
 pub use delete::DeleteExt;
+pub use http_links::{
+    HttpClientCallRow, HttpEndpointRow, HttpLinkExt, HttpLinkInputs, RepoHttpFacts,
+};
 pub use query::QueryExt;
 pub use query_repo::{RepoIdentity, RepoQueryExt};
 pub use query_subgraph::SubgraphQueryExt;
