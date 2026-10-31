@@ -42,6 +42,7 @@ const VALID_RELATIONSHIPS: &[&str] = &[
     "DEPENDS_ON",
     "OVERRIDES",
     "ROUTES_TO",
+    "HTTP_CALLS",
 ];
 
 fn validate_relationship_types(relationships: &[&str]) -> Result<()> {
@@ -394,6 +395,13 @@ fn plain_edge_query(uuids_str: &str) -> neo4rs::Query {
 mod tests {
     use super::*;
     use crate::db::graph::connection::ConnectExt;
+
+    #[test]
+    fn http_calls_and_routes_to_are_valid_subgraph_relationships() {
+        assert!(validate_relationship_types(&["HTTP_CALLS", "ROUTES_TO", "CALLS"]).is_ok());
+        let error = validate_relationship_types(&["HTTP_CALL"]).unwrap_err();
+        assert!(error.to_string().contains("HTTP_CALLS"));
+    }
 
     #[ignore = "requires local Neo4j instance running on bolt://localhost:7687"]
     #[tokio::test]
