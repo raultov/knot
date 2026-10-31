@@ -5,6 +5,17 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.15.0
+
+- **Changed(callers)**: Compact `find_callers` answers (#52). The Markdown answer of the MCP tool and of `knot callers --output markdown` keeps every count but lists only what an agent needs. References made from test code (test files, Rust `#[cfg(test)]`) are counted and not listed: each group ends with `+N in tests`, and the `Found` line states how many there are. A single-repository answer names its repository once, on the `Found` line, as `(repo: name)`, while a multi-repository answer still labels every row. Rows are one line each, with the signature on that line when it is not empty, and a file's `<module>` row (its import) is folded into the file's other rows. Row shape is unchanged (`- **\`name\`** (kind) at \`path:line\``) and so is the JSON output, which lists every row.
+- **Added(callers)**: `include_tests` parameter on `find_callers` (CLI `--include-tests`) lists the references made from test code.
+- **Fixed(search)**: Reference rows now carry `is_test_context`, so the search summaries of #50 count Rust `#[cfg(test)]` callers as test code. The reference queries did not return the flag before, so those callers were reported as production callers. JSON rows gain the `is_test_context` field.
+- **Docs**: Token-efficiency benchmark re-run on today's snapshots (spring-ai `b6b5767`, puppeteer `08e7b1a`, knot `421b515`): **87.4% fewer tokens (≈7.9×)** across the nine tasks, against 76.1% with v1.14.1 and 73.5% with v1.12.4 on the same snapshots. The `callers` rows went from 29 772 to 4 372 tokens. Listing test references too brings the total to 80.4%. The raw measurements now record the knot version and the snapshot commits.
+- **Test**: Java E2E tests 70–73 (fixture `testing_files/java/compact_callers/`) cover production rows listed and test rows counted, `include_tests` through MCP and the CLI, the single repository label, one line per row and folded import rows. TypeScript E2E tests 2–8 pass `include_tests`, because their fixture `test_typescript.ts` is test code by name. Unit tests cover the compact formatter.
+- **Upgrade**: No re-index needed. Consumers that parse the Markdown answer must expect test references as a `+N in tests` line and the repository label on the `Found` line for single-repository answers.
+
+---
+
 ## v1.14.1
 
 - **Fixed(http)**: HTTP client links are relinked in one serialized transaction (#46). Every indexer run replaced all `HTTP_CALLS` edges in two separate statements after reading its inputs outside any transaction, so two runs finishing together (knot-server cluster nodes sharing Neo4j) could leave the edges missing for a moment, or keep a set computed from a stale snapshot until the next run. The relink pass (repository facts, inputs, delete, create) now runs in one transaction that first locks the singleton `:HttpCallsLock` node, unique by a new constraint created at startup. A concurrent pass waits until it commits, so the last pass sees every committed repository and readers never see the edges half replaced. A failed pass is rolled back and retried up to three times.
