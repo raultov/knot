@@ -6,6 +6,7 @@ use tree_sitter::Node;
 
 pub(crate) use super::javascript::extract_enum_usages_javascript as extract_enum_usages_typescript;
 pub(crate) use super::javascript::extract_jsx_component_invocation;
+use super::javascript::extract_member_accesses_javascript;
 pub(crate) use super::javascript::extract_single_call_intent_javascript as extract_single_call_intent_typescript;
 
 // Test-only consumer; cfg(test) keeps the lib profile free of unused-import warnings.
@@ -369,6 +370,7 @@ pub(crate) fn extract_reference_intents_typescript(
         });
     }
 
+    extract_member_accesses_javascript(node, source, intents);
     extract_enum_usages_typescript(node, source, intents);
     extract_type_references(node, source, intents);
     extract_value_references_typescript(node, source, intents);
@@ -381,9 +383,11 @@ pub(crate) fn extract_reference_intents_typescript(
 /// - Member calls: `obj.method()`, `this.service.method()`
 /// - New expressions: `new MyClass()`
 /// - JSX components: `<ChartToolbar />`, `<Sheet.Content />`
-/// - Callbacks passed as arguments: `app.use(this.handler)` -> records call to handler
+/// - Callbacks passed as arguments: `app.use(auth.handler)` -> records call to handler
 /// - Bind calls: `this.method.bind(this)` -> records call to method
-/// - Property/getter access: `this.client`, `this.field` -> records access to property/getter
+///
+/// `this.<member>` reads, writes and arguments are member accesses, not
+/// calls; they are collected by [`extract_reference_intents_typescript`].
 pub(crate) fn extract_call_intents_typescript(
     node: Node<'_>,
     source: &[u8],
@@ -531,7 +535,7 @@ mod tests {
     use super::*;
     use crate::pipeline::parser::test_utils::{
         assert_extends, assert_implements, find_call_expression, find_class_declaration,
-        find_interface_declaration, find_member_expression, find_new_expression,
+        find_interface_declaration, find_new_expression,
     };
     use crate::pipeline::parser::utils::extract_decorator_references;
 
@@ -659,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_extract_callback_arguments_member_expression() {
-        let code = "function test() { app.use(this.handler); }";
+        let code = "function test() { app.use(auth.handler); }";
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
 
@@ -691,83 +695,59 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn test_extract_call_intents_this_property_access() {
-        let code = "class Frame { navigate() { this.client.send(); } }";
+    /// `(this.<member> accesses, call names)` of the reference intents of `code`.
+    fn accesses_and_calls(code: &str) -> (Vec<String>, Vec<String>) {
         let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
             .expect("Failed to parse TypeScript code");
-
-        let code_bytes = code.as_bytes();
-        let mut intents: Vec<CallIntent> = Vec::new();
-        extract_call_intents_typescript(tree.root_node(), code_bytes, &mut intents);
-
-        // Should find both this.client (property access) and send() (method call)
-        assert!(
-            intents
-                .iter()
-                .any(|i| i.method == "client" && i.receiver == Some("this".to_string()))
-        );
-        assert!(intents.iter().any(|i| i.method == "send"));
+        let mut intents = Vec::new();
+        extract_reference_intents_typescript(tree.root_node(), code.as_bytes(), &mut intents);
+        let mut accesses = Vec::new();
+        let mut calls = Vec::new();
+        for intent in intents {
+            match intent {
+                ReferenceIntent::MemberAccess {
+                    member, receiver, ..
+                } => {
+                    assert_eq!(receiver, "this");
+                    accesses.push(member);
+                }
+                ReferenceIntent::Call { method, .. } => calls.push(method),
+                _ => {}
+            }
+        }
+        (accesses, calls)
     }
 
+    /// Issue #49: `this.x` reads and writes are member accesses, never calls.
     #[test]
-    fn test_extract_call_intents_this_private_property_access() {
-        let code = "class Frame { method() { return this.#client; } }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        let code_bytes = code.as_bytes();
-        let mut intents: Vec<CallIntent> = Vec::new();
-        extract_call_intents_typescript(tree.root_node(), code_bytes, &mut intents);
-
-        // Should find this.#client (private property access)
-        assert!(
-            intents
-                .iter()
-                .any(|i| i.method == "#client" && i.receiver == Some("this".to_string()))
+    fn test_this_field_reads_and_writes_are_member_accesses() {
+        let (accesses, calls) = accesses_and_calls(
+            "class CartStore { reset() { this.items = []; this.loading = false; return this.items.length + this.#count; } }",
         );
-    }
-
-    #[test]
-    fn test_extract_single_call_intent_this_property_access() {
-        let code = "function test() { const x = this.myProperty; }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        if let Some(member_expr) = find_member_expression(tree.root_node()) {
-            let code_bytes = code.as_bytes();
-            let intents = extract_single_call_intent_typescript(member_expr, code_bytes);
-            assert!(!intents.is_empty());
-            assert_eq!(intents[0].method, "myProperty");
-            assert_eq!(intents[0].receiver, Some("this".to_string()));
+        assert_eq!(accesses, ["items", "loading", "items", "#count"]);
+        for field in ["items", "loading", "#count"] {
+            assert!(!calls.iter().any(|c| c == field), "{field} in {calls:?}");
         }
     }
 
+    /// A `this.m()` callee stays a call. A `this.handler` argument and the
+    /// receiver of a further call (`this.client.send()`) are accesses; the
+    /// resolver turns them into calls when the member is a method or getter.
     #[test]
-    fn test_extract_call_intents_this_getter_access() {
-        let code = "class Frame { get client(): CDPSession { return this.#client; } navigate() { this.client.send('test'); } }";
-        let tree = crate::pipeline::parser::test_utils::parse_typescript_snippet(code)
-            .expect("Failed to parse TypeScript code");
-
-        let code_bytes = code.as_bytes();
-        let mut intents: Vec<CallIntent> = Vec::new();
-        extract_call_intents_typescript(tree.root_node(), code_bytes, &mut intents);
-
-        // Should find:
-        // 1. this.#client (private field access in getter)
-        // 2. this.client (getter call in navigate)
-        // 3. send() (method call on result)
-        assert!(
-            intents
-                .iter()
-                .any(|i| i.method == "#client" && i.receiver == Some("this".to_string()))
+    fn test_this_callee_is_a_call_and_arguments_are_member_accesses() {
+        let (accesses, calls) = accesses_and_calls(
+            "class Frame { navigate() { this.refresh(); app.use(this.handler); this.client.send('x'); } }",
         );
-        assert!(
-            intents
-                .iter()
-                .any(|i| i.method == "client" && i.receiver == Some("this".to_string()))
-        );
-        assert!(intents.iter().any(|i| i.method == "send"));
+        assert_eq!(accesses, ["handler", "client"]);
+        for call in ["refresh", "use", "send"] {
+            assert!(
+                calls.iter().any(|c| c == call),
+                "{call} missing in {calls:?}"
+            );
+        }
+        for access in ["handler", "client"] {
+            assert!(!calls.iter().any(|c| c == access), "{access} in {calls:?}");
+        }
     }
 
     #[test]

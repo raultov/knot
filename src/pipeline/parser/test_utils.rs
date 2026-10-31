@@ -242,12 +242,6 @@ pub(crate) fn find_interface_declaration(node: tree_sitter::Node) -> Option<tree
     find_first_node(node, &["interface_declaration"])
 }
 
-/// Find the first `member_expression`.
-#[cfg(test)]
-pub(crate) fn find_member_expression(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    find_first_node(node, &["member_expression"])
-}
-
 /// Find the first `variable_declaration` or `lexical_declaration`.
 #[cfg(test)]
 pub(crate) fn find_var_decl(node: tree_sitter::Node) -> Option<tree_sitter::Node> {

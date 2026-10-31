@@ -77,6 +77,7 @@ pub(crate) fn collect_orphaned_references(
     for intent in orphaned_intents {
         let orphan_line = match &intent {
             ReferenceIntent::Call { line, .. } => *line,
+            ReferenceIntent::MemberAccess { line, .. } => *line,
             ReferenceIntent::Extends { line, .. } => *line,
             ReferenceIntent::Implements { line, .. } => *line,
             ReferenceIntent::TypeReference { line, .. } => *line,

@@ -88,6 +88,7 @@ pub(crate) fn extract_reference_intents_javascript(
         });
     }
 
+    extract_member_accesses_javascript(node, source, intents);
     // Also extract enum/static member usages (e.g., ClassName.STATIC, Constants.VALUE)
     extract_enum_usages_javascript(node, source, intents);
 }
@@ -99,9 +100,11 @@ pub(crate) fn extract_reference_intents_javascript(
 /// - Member calls: `obj.method()`, `this.service.method()`
 /// - New expressions: `new MyClass()`
 /// - JSX components: `<ChartToolbar />`, `<Sheet.Content />`
-/// - Callbacks passed as arguments: `app.use(this.handler)` -> records call to handler
+/// - Callbacks passed as arguments: `app.use(auth.handler)` -> records call to handler
 /// - Bind calls: `this.method.bind(this)` -> records call to method
-/// - Property/getter access: `this.client`, `this.field` -> records access to property/getter
+///
+/// `this.<member>` reads, writes and arguments are member accesses, not
+/// calls (see [`extract_member_accesses_javascript`]).
 fn extract_call_intents_javascript(node: Node<'_>, source: &[u8], intents: &mut Vec<CallIntent>) {
     intents.extend(extract_single_call_intent_javascript(node, source));
 
@@ -209,21 +212,47 @@ fn call_expression_intents(node: Node<'_>, source: &[u8], intents: &mut Vec<Call
     extract_callback_arguments(node, source, intents, line);
 }
 
-fn this_property_intent(node: Node<'_>, source: &[u8]) -> Option<CallIntent> {
-    if let Some(object_node) = node.child_by_field_name("object")
-        && node_text(object_node, source) == "this"
-        && let Some(property_node) = node.child_by_field_name("property")
-    {
-        let prop_text = node_text(property_node, source);
-        let line = node.start_position().row + 1;
-        Some(CallIntent {
-            method: prop_text,
-            receiver: Some("this".to_string()),
-            line,
-            arg_count: None,
-        })
-    } else {
-        None
+fn is_this_member(node: Node<'_>, source: &[u8]) -> bool {
+    node.kind() == "member_expression"
+        && node
+            .child_by_field_name("object")
+            .is_some_and(|object| node_text(object, source) == "this")
+}
+
+/// A `this.<member>` read, write or argument that is not called (issue #49).
+/// The callee of a call (`this.m()`) is recorded by the call path instead.
+/// The resolver turns an access to a method or getter into a call, so a
+/// callback argument (`app.use(this.handler)`) still produces a CALLS edge
+/// while a field argument (`log(this.items)`) produces a reference.
+fn this_member_access(node: Node<'_>, source: &[u8]) -> Option<ReferenceIntent> {
+    if !is_this_member(node, source) {
+        return None;
+    }
+    let is_callee = node.parent().is_some_and(|p| {
+        p.kind() == "call_expression" && p.child_by_field_name("function") == Some(node)
+    });
+    if is_callee {
+        return None;
+    }
+    let property = node.child_by_field_name("property")?;
+    Some(ReferenceIntent::MemberAccess {
+        member: node_text(property, source),
+        receiver: "this".to_string(),
+        line: node.start_position().row + 1,
+    })
+}
+
+/// Every `this.<member>` read or write in the subtree of `node`.
+pub(crate) fn extract_member_accesses_javascript(
+    node: Node<'_>,
+    source: &[u8],
+    intents: &mut Vec<ReferenceIntent>,
+) {
+    intents.extend(this_member_access(node, source));
+    let mut child = node.child(0);
+    while let Some(c) = child {
+        extract_member_accesses_javascript(c, source, intents);
+        child = c.next_sibling();
     }
 }
 
@@ -250,11 +279,6 @@ pub(crate) fn extract_single_call_intent_javascript(
         }
         "jsx_self_closing_element" | "jsx_opening_element" => {
             extract_jsx_component_invocation(node, source, &mut intents);
-        }
-        "member_expression" => {
-            if let Some(intent) = this_property_intent(node, source) {
-                intents.push(intent);
-            }
         }
         _ => {}
     }
@@ -351,9 +375,11 @@ fn is_function_local(identifier: Node<'_>, name: &str, source: &[u8]) -> bool {
 /// Extract callback arguments from a call expression.
 ///
 /// Detects method references passed as arguments, e.g.:
-/// - `app.use(this.authHandler)` -> records call to authHandler
-/// - `emitter.on('event', this.handler)` -> records call to handler
-/// - `addEventListener('click', this.onClick)` -> records call to onClick
+/// - `app.use(auth.handler)` -> records call to handler
+/// - `emitter.on('event', onEvent)` -> records call to onEvent
+///
+/// `this.<member>` arguments (`app.use(this.handler)`) are member accesses
+/// instead (see [`this_member_access`]).
 pub(crate) fn extract_callback_arguments(
     call_node: Node<'_>,
     source: &[u8],
@@ -364,8 +390,9 @@ pub(crate) fn extract_callback_arguments(
     if let Some(args_node) = call_node.child_by_field_name("arguments") {
         let mut arg = args_node.child(0);
         while let Some(a) = arg {
-            // Look for member_expression arguments (e.g., this.handler, obj.method)
-            if a.kind() == "member_expression" {
+            // Look for member_expression arguments (e.g., obj.method). A
+            // `this.<member>` argument is a member access (issue #49).
+            if a.kind() == "member_expression" && !is_this_member(a, source) {
                 if let Some(property_node) = a.child_by_field_name("property") {
                     let method_name = node_text(property_node, source);
                     if let Some(object_node) = a.child_by_field_name("object") {

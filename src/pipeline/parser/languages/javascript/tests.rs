@@ -121,12 +121,28 @@ fn test_extract_single_call_intent_javascript_this_prop() {
         None
     }
 
+    // Issue #49: a `this.x` read is a member access, never a call intent.
     let member = find_this_member(tree.root_node()).expect("this member expression not found");
     let code_bytes = code.as_bytes();
-    let intents = extract_single_call_intent_javascript(member, code_bytes);
-    assert!(!intents.is_empty());
-    assert_eq!(intents[0].method, "myProperty");
-    assert_eq!(intents[0].receiver, Some("this".to_string()));
+    assert!(extract_single_call_intent_javascript(member, code_bytes).is_empty());
+
+    let mut intents = Vec::new();
+    extract_reference_intents_javascript(tree.root_node(), code_bytes, &mut intents);
+    let accesses: Vec<&str> = intents
+        .iter()
+        .filter_map(|i| match i {
+            ReferenceIntent::MemberAccess {
+                member, receiver, ..
+            } if receiver == "this" => Some(member.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(accesses, ["myProperty"]);
+    assert!(
+        !call_arities("console.log(this.myProperty);")
+            .iter()
+            .any(|(method, _, _)| method == "myProperty")
+    );
 }
 
 #[test]
@@ -272,13 +288,13 @@ fn call_arities(body: &str) -> Vec<(String, Option<String>, Option<usize>)> {
 /// arity, so they carry none.
 #[test]
 fn test_call_carries_arg_count() {
-    let arities = call_arities("foo.bar(1, 2); baz(); qux(a, /* c */ b); app.use(this.handler);");
+    let arities = call_arities("foo.bar(1, 2); baz(); qux(a, /* c */ b); app.use(auth.handler);");
     for expected in [
         ("bar", Some("foo"), Some(2)),
         ("baz", None, Some(0)),
         ("qux", None, Some(2)),
         ("use", Some("app"), Some(1)),
-        ("handler", Some("this"), None),
+        ("handler", Some("auth"), None),
     ] {
         let expected = (
             expected.0.to_string(),

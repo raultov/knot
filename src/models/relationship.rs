@@ -25,6 +25,19 @@ pub enum ReferenceIntent {
         /// Used for disambiguating overloaded methods.
         arg_count: Option<usize>,
     },
+    /// A member read or written through a receiver without being called.
+    /// Examples: `this.items.length`, `this.loading = false`
+    /// It resolves like a call on that receiver, but becomes a CALLS edge
+    /// only when the member is callable (a getter); a field access is a
+    /// REFERENCES edge (issue #49).
+    MemberAccess {
+        /// The member name being read or written.
+        member: String,
+        /// The receiver object (`this`).
+        receiver: String,
+        /// Line number where the access occurs.
+        line: usize,
+    },
     /// A class or interface is extended (inheritance).
     /// Example: `class Child extends Parent { }`
     Extends {

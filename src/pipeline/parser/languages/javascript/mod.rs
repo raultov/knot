@@ -33,7 +33,8 @@ pub(crate) use inheritance::extract_class_inheritance_js;
 pub(crate) use jsx::{extract_jsx_component_invocation, extract_jsx_html_attributes};
 pub(crate) use refs::{
     collect_all_reference_intents_javascript, extract_enum_usages_javascript,
-    extract_reference_intents_javascript, extract_single_call_intent_javascript,
+    extract_member_accesses_javascript, extract_reference_intents_javascript,
+    extract_single_call_intent_javascript,
 };
 
 // Test-only consumers (unit-test helpers); cfg(test) keeps the lib profile

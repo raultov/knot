@@ -1082,6 +1082,52 @@ mod tests {
         );
     }
 
+    /// Issue #49: a `this.x` access to a field is a reference; to a getter
+    /// (a method) it is a call.
+    #[test]
+    fn test_member_access_edge_depends_on_target_kind() {
+        let field = mock_resolution_entity_with_kind(
+            "items",
+            "CartStore.items",
+            Some("CartStore"),
+            "cart.ts",
+            EntityKind::Constant,
+        );
+        let getter = mock_resolution_entity_with_kind(
+            "total",
+            "CartStore.total",
+            Some("CartStore"),
+            "cart.ts",
+            EntityKind::Method,
+        );
+        let mut caller = mock_resolution_entity_with_kind(
+            "reset",
+            "CartStore.reset",
+            Some("CartStore"),
+            "cart.ts",
+            EntityKind::Method,
+        );
+        caller.reference_intents = ["items", "total"]
+            .into_iter()
+            .map(|member| ReferenceIntent::MemberAccess {
+                member: member.to_string(),
+                receiver: "this".to_string(),
+                line: 1,
+            })
+            .collect();
+        let (field_uuid, getter_uuid) = (field.uuid, getter.uuid);
+
+        let mut entities = vec![field, getter, caller];
+        resolve_reference_intents(&mut entities);
+        assert_eq!(
+            entities[2].relationships,
+            vec![
+                (field_uuid, RelationshipType::References),
+                (getter_uuid, RelationshipType::Calls),
+            ]
+        );
+    }
+
     #[test]
     fn test_resolve_static_call() {
         let mut caller = mock_resolution_entity("main", "App.main", None);

@@ -420,20 +420,13 @@ fn resolve_intent(
             receiver,
             arg_count,
             ..
-        } => {
-            let call_intent = crate::models::CallIntent {
-                method: method.clone(),
-                receiver: receiver.clone(),
-                line: 0,
-                arg_count: arg_count
-                    .filter(|_| overrides::call_arity_is_binding(&entity.file_path)),
-            };
-            let resolved =
-                calls::resolve_single_call_intent(&call_intent, &caller_scope(entity), ctx).map(
-                    |uuid| calls::redirect_class_call_to_constructor(uuid, &entity.file_path, ctx),
-                );
-            (resolved, RelationshipType::Calls)
-        }
+        } => (
+            resolve_call(method, receiver.as_deref(), *arg_count, entity, ctx),
+            RelationshipType::Calls,
+        ),
+        ReferenceIntent::MemberAccess {
+            member, receiver, ..
+        } => resolve_member_access(member, receiver, entity, ctx),
         ReferenceIntent::Extends { parent, .. } => (
             resolve_typed(parent, entity, ctx, metrics),
             RelationshipType::Extends,
@@ -509,6 +502,52 @@ fn resolve_intent(
         ),
         ReferenceIntent::RoutesTo { handler, .. } => (Some(*handler), RelationshipType::RoutesTo),
     }
+}
+
+fn resolve_call(
+    method: &str,
+    receiver: Option<&str>,
+    arg_count: Option<usize>,
+    entity: &ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+) -> Option<Uuid> {
+    let call_intent = crate::models::CallIntent {
+        method: method.to_string(),
+        receiver: receiver.map(str::to_string),
+        line: 0,
+        arg_count: arg_count.filter(|_| overrides::call_arity_is_binding(&entity.file_path)),
+    };
+    calls::resolve_single_call_intent(&call_intent, &caller_scope(entity), ctx)
+        .map(|uuid| calls::redirect_class_call_to_constructor(uuid, &entity.file_path, ctx))
+}
+
+/// A member access resolves like a call on its receiver (issue #49), but the
+/// edge depends on the target: reading a getter (or taking a method
+/// reference) runs code, so it is a call; reading or writing a field or
+/// constant is a reference. A target whose kind is unknown (outside the
+/// batch) is treated as a field.
+fn resolve_member_access(
+    member: &str,
+    receiver: &str,
+    entity: &ResolutionEntity,
+    ctx: &ResolutionContext<'_>,
+) -> (Option<Uuid>, RelationshipType) {
+    let access = crate::models::CallIntent {
+        method: member.to_string(),
+        receiver: Some(receiver.to_string()),
+        line: 0,
+        arg_count: None,
+    };
+    let resolved = calls::resolve_single_call_intent(&access, &caller_scope(entity), ctx);
+    let callable = resolved
+        .and_then(|uuid| ctx.uuid_to_kind.and_then(|kinds| kinds.get(&uuid)))
+        .is_some_and(|kind| matches!(kind, EntityKind::Method | EntityKind::Function));
+    let rel_type = if callable {
+        RelationshipType::Calls
+    } else {
+        RelationshipType::References
+    };
+    (resolved, rel_type)
 }
 
 /// Name-only non-call reference resolution (no kind/FQN disambiguation).
