@@ -199,10 +199,12 @@ else
     exit 1
 fi
 
+# Tests 2-8 query entities declared and used in test_typescript.ts, whose
+# test_* name makes it test code: include_tests lists its callers (#52).
 # Test 2: find_callers of AppComponent (decorator extraction)
 echo ""
 echo "Test 2: Finding callers of AppComponent (decorator extraction)..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"AppComponent\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"AppComponent\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "AppComponent" 2>/dev/null)
@@ -224,7 +226,7 @@ fi
 # Test 3: TypeScript class EXTENDS (CacheService → BaseService)
 echo ""
 echo "Test 3: Verifying TypeScript EXTENDS edge CacheService → BaseService..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"BaseService\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"BaseService\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "BaseService" 2>/dev/null)
@@ -239,7 +241,7 @@ fi
 # Test 4: TypeScript class IMPLEMENTS (CacheService → IStorage)
 echo ""
 echo "Test 4: Verifying TypeScript IMPLEMENTS edge CacheService → IStorage..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IStorage\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IStorage\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "IStorage" 2>/dev/null)
@@ -254,7 +256,7 @@ fi
 # Test 5: TypeScript interface EXTENDS (ICache → IStorage)
 echo ""
 echo "Test 5: Verifying TypeScript interface EXTENDS edge ICache → IStorage..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IStorage\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IStorage\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "IStorage" 2>/dev/null)
@@ -269,7 +271,7 @@ fi
 # Test 6: TypeScript top-level function type reference (processPayload → IPayload)
 echo ""
 echo "Test 6: Verifying TypeScript top-level function type reference processPayload → IPayload..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IPayload\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"IPayload\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "IPayload" 2>/dev/null)
@@ -284,7 +286,7 @@ fi
 # Test 7: TypeScript method signature search by parameter type (EventData)
 echo ""
 echo "Test 7: Searching for TypeScript method by parameter type EventData..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"EventData\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"EventData\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "EventData" 2>/dev/null)
@@ -299,7 +301,7 @@ fi
 # Test 8: TypeScript value reference (COMPONENT_REGISTRY → Engine)
 echo ""
 echo "Test 8: Verifying TypeScript value reference COMPONENT_REGISTRY → Engine..."
-MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"Engine\",\"repo_name\":\"$REPO_NAME\"}}}"
+MCP_REQUEST="{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"Engine\",\"repo_name\":\"$REPO_NAME\",\"include_tests\":true}}}"
 
 MCP_RESPONSE=$(echo "$MCP_REQUEST" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1)
 CLI_RESPONSE=$(cargo run --release --bin knot -- callers "Engine" 2>/dev/null)

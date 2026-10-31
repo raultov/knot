@@ -974,6 +974,99 @@ assert_overload_callers 68 "$UNTYPED_PKG.other.LineRenderer.renderLine" "4<rende
 assert_overload_callers 69 "$UNTYPED_PKG.app.ScoreCard.computeScore" "4<score" \
     "An untyped receiver still binds to the only candidate of the caller's package"
 
+# Tests 70-73: compact find_callers answers (issue #52). Fixture:
+# testing_files/java/compact_callers/ — Ledger.post is called by Invoicer.bill
+# and Refunder.refund, and by two methods of test/…/LedgerTest.java.
+CCALLERS_PKG="com.example.knot.ccallers"
+
+callers_md_mcp() {
+    local args="{\"entity_name\":\"$1\",\"repo_name\":\"$REPO_NAME\"${2:+,\"include_tests\":$2}}"
+    echo "{\"jsonrpc\":\"2.0\",\"id\":70,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":$args}}" \
+        | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 | jq -r '.result.content[0].text'
+}
+
+callers_md_cli() {
+    cargo run --release --bin knot -- callers "$1" -r "$REPO_NAME" -o markdown "${@:2}" 2>/dev/null
+}
+
+# Names of the rows listed in bucket `$2` of the Markdown answer `$1`.
+bucket_rows() {
+    echo "$1" | awk -v bucket="$2" '/^## /{ on = (index($0, "## " bucket) == 1) } on && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -
+}
+
+assert_compact_callers() {
+    local id=$1 surface=$2 answer=$3 expected_rows=$4 expect_tests_line=$5
+    local rows
+    rows=$(bucket_rows "$answer" "Calls")
+    if [ "$rows" != "$expected_rows" ]; then
+        echo -e "${RED}✗ $surface: Ledger.post rows expected [$expected_rows], got [$rows]${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    if ! echo "$answer" | grep -q '^## Calls .*(4)$'; then
+        echo -e "${RED}✗ $surface: the Calls bucket must still count all 4 callers${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    if [ "$expect_tests_line" = "yes" ] && ! echo "$answer" | grep -qE '^- \+2 in tests'; then
+        echo -e "${RED}✗ $surface: missing the '+2 in tests' line${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    if [ "$expect_tests_line" = "no" ] && echo "$answer" | grep -qE 'in tests'; then
+        echo -e "${RED}✗ $surface: include_tests must list test callers instead of counting them${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    if echo "$answer" | grep -E '^- \*\*`' | grep -q '(repo: '; then
+        echo -e "${RED}✗ $surface: a single-repository answer must not label every row${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    if ! echo "$answer" | grep -E '^Found 4 reference' | grep -qF "(repo: $REPO_NAME)"; then
+        echo -e "${RED}✗ $surface: the Found line must carry the repository label once${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    local blank_between
+    blank_between=$(echo "$answer" | awk '/^## Calls/{ on = 1; next } /^## /{ on = 0 } on { print }' \
+        | awk 'NF == 0 { gap = 1; next } /^- / { if (gap && seen) { bad = 1 } seen = 1; gap = 0 } END { print bad + 0 }')
+    if [ "$blank_between" != "0" ]; then
+        echo -e "${RED}✗ $surface: rows of a bucket must not be separated by blank lines${NC}"
+        echo "$answer"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ $surface: rows [$rows], count 4, tests ${expect_tests_line/yes/counted}, one repo label, no blank lines${NC}"
+}
+
+echo ""
+echo "Test 70: find_callers lists production callers and counts test callers (MCP)..."
+assert_compact_callers 70 "MCP" "$(callers_md_mcp "$CCALLERS_PKG.ledger.Ledger.post")" "bill,refund" yes
+
+echo ""
+echo "Test 71: include_tests lists the test callers (MCP)..."
+assert_compact_callers 71 "MCP include_tests" "$(callers_md_mcp "$CCALLERS_PKG.ledger.Ledger.post" true)" \
+    "bill,postsEntry,postsTwice,refund" no
+
+echo ""
+echo "Test 72: the CLI Markdown answer matches, and --include-tests lists the test callers..."
+assert_compact_callers 72 "CLI" "$(callers_md_cli "$CCALLERS_PKG.ledger.Ledger.post")" "bill,refund" yes
+assert_compact_callers 72 "CLI --include-tests" "$(callers_md_cli "$CCALLERS_PKG.ledger.Ledger.post" --include-tests)" \
+    "bill,postsEntry,postsTwice,refund" no
+
+echo ""
+echo "Test 73: an import row is folded into the other rows of its file..."
+LEDGER_REFS=$(callers_md_mcp "$CCALLERS_PKG.ledger.Ledger")
+MODULE_ROWS=$(echo "$LEDGER_REFS" | grep -E '^- \*\*`<module>`' | grep -cE 'Invoicer\.java|Refunder\.java' || true)
+CLASS_ROWS=$(echo "$LEDGER_REFS" | grep -E '^- \*\*`(Invoicer|Refunder)`' | wc -l)
+if [ "$MODULE_ROWS" != "0" ] || [ "$CLASS_ROWS" -lt 2 ]; then
+    echo -e "${RED}✗ MCP: Ledger references expected the Invoicer/Refunder rows without their <module> import rows (module=$MODULE_ROWS, class=$CLASS_ROWS)${NC}"
+    echo "$LEDGER_REFS"
+    exit 1
+fi
+echo -e "${GREEN}✓ MCP: Invoicer/Refunder listed once each, their import rows folded${NC}"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -1004,6 +1097,7 @@ echo "  ✓ Same-named types in different packages resolve through imports and p
 echo "  ✓ HTTP endpoint catalogue (JAX-RS, Spring MVC) routed to handlers"
 echo "  ✓ One overload addressable by its parameter list (Foo.bar(int, int))"
 echo "  ✓ Untyped (var) receivers bind by name only with package/import evidence"
+echo "  ✓ Compact find_callers answers: test callers counted, include_tests lists them, imports folded"
 echo ""
 
 exit 0
