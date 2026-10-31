@@ -1,0 +1,8 @@
+items:
+  base-url: http://items-service:8080/api
+billing:
+  url: http://localhost:9090/billing
+quarkus:
+  rest-client:
+    items:
+      url: http://items-service:8080/api
