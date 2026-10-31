@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.15.1
+
+- **Fixed(indexer)**: Incremental runs no longer leave stale duplicates of the entities of modified files (#53). The previous entities of a modified file were never deleted: the deletion compared the discovered paths (under the repository root) with the repo-relative `file_path` stored since v1.5.1, so nothing matched. Entities whose UUID did not change were overwritten, but every entity that moved to another line or was removed from the file survived next to its new copy, with its edges, in Neo4j and Qdrant. `find_callers` then resolved several targets and listed each caller twice, and `explore_file` and search showed members that no longer exist. Measured on a live knot-server index: 2 304 extra entities in knot, 1 609 in spring-ai, 584 in knot-server.
+- **Fixed(indexer)**: Edges from unchanged files into a modified file survive its re-indexing. Since its entities are now deleted and re-created, the edges from files that are not re-parsed (and from other repositories) are captured before the deletion and re-pointed at the re-indexed entity with the same file, FQN, kind and signature, the nearest by line when several match. Edges into entities that no longer exist are dropped.
+- **Test**: New suite `run_incremental_e2e.sh` (fixture `testing_files/incremental/`): a repository is indexed, then changed and re-indexed incrementally. A method moved down, a method removed and a file deleted must leave one copy of each entity in explore, callers (CLI and MCP) and search. The edge from an unchanged caller must follow the moved method, and the edge into the removed one must disappear. Unit tests cover the repo-relative deletion keys and the edge restoration grouping and query.
+- **Upgrade**: Run `knot-indexer --clean` once on repositories indexed incrementally since v1.5.1 to drop the duplicates already stored. Later incremental runs keep the index clean.
+
+---
+
 ## v1.15.0
 
 - **Changed(callers)**: Compact `find_callers` answers (#52). The Markdown answer of the MCP tool and of `knot callers --output markdown` keeps every count but lists only what an agent needs. References made from test code (test files, Rust `#[cfg(test)]`) are counted and not listed: each group ends with `+N in tests`, and the `Found` line states how many there are. A single-repository answer names its repository once, on the `Found` line, as `(repo: name)`, while a multi-repository answer still labels every row. Rows are one line each, with the signature on that line when it is not empty, and a file's `<module>` row (its import) is folded into the file's other rows. Row shape is unchanged (`- **\`name\`** (kind) at \`path:line\``) and so is the JSON output, which lists every row.
