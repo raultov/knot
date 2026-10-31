@@ -39,6 +39,7 @@ cargo test
 ./tests/run_k8s_helm_e2e.sh          # Kubernetes + Helm
 ./tests/run_cross_repo_dep_e2e.sh    # Cross-repo dependency linking
 ./tests/run_repo_scope_e2e.sh        # Repository scope selection (all / multi-repo)
+./tests/run_http_clients_e2e.sh      # HTTP client calls → endpoints (HTTP_CALLS)
 ```
 
 **Quick Commands:**
@@ -257,6 +258,8 @@ Language-specific (e.g., Rust): `Macro`, `TypeAlias`, `Union`; Groovy: `Closure`
 
 HTTP endpoints (issue #33): `HttpEndpoint` (`http_endpoint`), one per `<METHOD> <path>` served by a Java/Kotlin handler.
 
+HTTP client calls (issue #46): `HttpClientCall` (`http_client_call`), one per `<METHOD> <path>` called by a declarative Java/Kotlin client method (OpenFeign, MicroProfile REST Client, Spring `@HttpExchange`) or an imperative call site (`RestTemplate`, `WebClient`, `RestClient`; `src/pipeline/parser/http_endpoints/imperative.rs`); its signature lists the `service:` hints.
+
 v1.2.5 additions: `CargoPackage`, `CargoFeature`, `WorkspaceMember`, `ConfigProperty`, `K8sDeployment`, `K8sService`, `K8sConfigMap`, `K8sSecret`, `K8sIngress`, `K8sNamespace`, `K8sResource`, `HelmChart`, `HelmValue`, `HelmTemplateVar`, `ProjectIdentity`.
 
 Reference intents (enum `ReferenceIntent`):
@@ -275,6 +278,7 @@ Relationship types (enum `RelationshipType`):
 - `MacroCalls`, `Contains`, `GenericBound` (Rust)
 - `DependsOn` — Repository-to-repository dependency edge (v1.2.5)
 - `RoutesTo` — HTTP endpoint → its handler method (JAX-RS / Spring MVC, issue #33)
+- `HTTP_CALLS` (graph-only, no enum variant) — HTTP client call → the endpoint it hits, `heuristic: true`; recomputed for the whole graph after every indexer run (`src/pipeline/ingest/resolve/http_calls.rs`, issue #46)
 
 ---
 

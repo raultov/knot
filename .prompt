@@ -41,7 +41,7 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 ### 1.2 🌐 `list_endpoints` — HTTP Endpoint Catalogue
 **Use this for:** the HTTP endpoints a Java/Kotlin service exposes (JAX-RS, Spring MVC) — `<METHOD> <path>` with the handler each one routes to; "which handler serves `GET /api/owners/42`?".
 
-**Filters:** `method` (case-insensitive; `ANY` endpoints match every method) and `path` (segment-wise prefix; an endpoint's `{variable}` segment matches any value, so a concrete URL finds its endpoint). Paths are relative to the application (no context path). Then run `find_callers` on the handler: its **HTTP routes** section lists the endpoints routing to it.
+**Filters:** `method` (case-insensitive; `ANY` endpoints match every method) and `path` (segment-wise prefix; an endpoint's `{variable}` segment matches any value, so a concrete URL finds its endpoint). Paths are relative to the application (no context path). Then run `find_callers` on the handler: its **HTTP routes** section lists the endpoints routing to it, and its **HTTP callers (heuristic)** section the HTTP client calls (OpenFeign, MicroProfile REST Client, Spring `@HttpExchange`, `RestTemplate`, `WebClient`, `RestClient`; test code excluded) of any indexed repository that hit it — matched by verb, path, service name and context path, never linked when ambiguous. `explore_file` lists a client's calls under **HTTP Client Calls**.
 
 **Do NOT use `grep` for these tasks.**
 
@@ -55,6 +55,8 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 - "Find all references to `DatabaseService`"
 
 **Matching Precedence:** Exact FQN (`Namespace.Type.member` or `crate::mod::Type::member`) → FQN Suffix (`Type.member`) → Exact Name → Signature Prefix (`accept(List`) → Fuzzy Substring (case-insensitive).
+
+**Overloads:** a trailing parameter list of types addresses one overload — `com.x.Foo.bar(int, int)` resolves `com.x.Foo.bar` with the tiers above and keeps only the overloads whose declared parameter types match (simple type names; generic arguments compared only when written; `name: Type` accepted). When none matches, the response lists the declared overloads. The bare FQN still returns every overload, each labelled `Foo.bar(int, int)` / `Foo.bar(int)`.
 
 **Entity-kind scope:** target resolution is code-only by default — docs/config/build/infra metadata can never be presented as resolved targets. When matches are hidden the response says so (`Non-code matches hidden…`); pass `kinds: "all"` to disable the scope, or a comma-separated allow-list of kinds/aliases.
 
