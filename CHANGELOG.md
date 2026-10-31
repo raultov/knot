@@ -7,11 +7,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ## v1.14.1
 
-- **Fixed(http)**: HTTP client links are relinked in one serialized transaction (#46). Every indexer run replaced all `HTTP_CALLS` edges in two separate statements after reading its inputs outside any transaction. Two runs finishing together, such as knot-server cluster nodes sharing Neo4j, could leave the edges missing for a moment, or keep a set computed from a stale snapshot until the next run. The relink pass now runs in one transaction:
-  - It records the repository facts, reads the endpoints and client calls, deletes the old edges and creates the new ones.
-  - It starts by locking the singleton `:HttpCallsLock` node, made unique by a new constraint created at startup, so a concurrent pass waits until the first commits.
-  - The last pass therefore sees every committed repository, and readers never see the edges half replaced.
-  - A failed pass is rolled back and retried up to three times.
+- **Fixed(http)**: HTTP client links are relinked in one serialized transaction (#46). Every indexer run replaced all `HTTP_CALLS` edges in two separate statements after reading its inputs outside any transaction, so two runs finishing together (knot-server cluster nodes sharing Neo4j) could leave the edges missing for a moment, or keep a set computed from a stale snapshot until the next run. The relink pass (repository facts, inputs, delete, create) now runs in one transaction that first locks the singleton `:HttpCallsLock` node, unique by a new constraint created at startup. A concurrent pass waits until it commits, so the last pass sees every committed repository and readers never see the edges half replaced. A failed pass is rolled back and retried up to three times.
 - **Added(graph)**: The subgraph query accepts `HTTP_CALLS`, so knot-server's graph API can draw client call → endpoint edges.
 - **Test**: The HTTP client E2E suite re-indexes its three repositories concurrently with `--clean`, twice, and checks that the links converge. Unit test for the subgraph relationship allow-list.
 - **Upgrade**: No re-index needed.
