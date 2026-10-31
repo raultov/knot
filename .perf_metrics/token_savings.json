@@ -1,10 +1,17 @@
 {
   "tokenizer": "cl100k_base",
+  "measured_at": "2026-10-31",
+  "knot_version": "1.15.0",
+  "snapshots": {
+    "spring-ai": "b6b5767eb62b61ceaaac78ad103a0ad96e8f8272",
+    "puppeteer": "08e7b1aebe60462b6f7834e9dfe0f6c70464247c",
+    "knot": "421b5158ea14c27cd9a5b4e9f131efcea9a9ed07"
+  },
   "totals": {
-    "knot_tokens": 25698,
-    "baseline_tokens": 140763,
-    "reduction_pct": 81.74,
-    "ratio": 5.48
+    "knot_tokens": 28373,
+    "baseline_tokens": 224950,
+    "reduction_pct": 87.39,
+    "ratio": 7.93
   },
   "results": [
     {
@@ -13,12 +20,12 @@
       "task_type": "discovery",
       "question": "How does the chat client execute a request through the advisor chain?",
       "knot_command": "search advisor chain executes chat client request --repo spring-ai --max-results 5 --output markdown",
-      "knot_tokens": 1092,
+      "knot_tokens": 771,
       "baseline_description": "`rg -l AdvisorChain` + full read of 3 file(s)",
-      "baseline_tokens": 10168,
+      "baseline_tokens": 12262,
       "baseline_files_read": 3,
-      "reduction_pct": 89.26,
-      "ratio": 9.31
+      "reduction_pct": 93.71,
+      "ratio": 15.9
     },
     {
       "repo": "spring-ai",
@@ -26,12 +33,12 @@
       "task_type": "callers",
       "question": "Who uses ToolCallingManager? (impact analysis)",
       "knot_command": "callers ToolCallingManager --repo spring-ai --output markdown",
-      "knot_tokens": 8808,
+      "knot_tokens": 3352,
       "baseline_description": "`rg -n '\\bToolCallingManager\\b'` + full read of 5 hit file(s)",
-      "baseline_tokens": 15554,
+      "baseline_tokens": 43707,
       "baseline_files_read": 5,
-      "reduction_pct": 43.37,
-      "ratio": 1.77
+      "reduction_pct": 92.33,
+      "ratio": 13.04
     },
     {
       "repo": "spring-ai",
@@ -39,12 +46,12 @@
       "task_type": "explore",
       "question": "What is the structure of DefaultChatClient.java?",
       "knot_command": "explore spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/DefaultChatClient.java --repo spring-ai --output markdown",
-      "knot_tokens": 4865,
+      "knot_tokens": 4033,
       "baseline_description": "full read of `spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/DefaultChatClient.java`",
-      "baseline_tokens": 7838,
+      "baseline_tokens": 9675,
       "baseline_files_read": 1,
-      "reduction_pct": 37.93,
-      "ratio": 1.61
+      "reduction_pct": 58.32,
+      "ratio": 2.4
     },
     {
       "repo": "puppeteer",
@@ -52,12 +59,12 @@
       "task_type": "discovery",
       "question": "How is a CDP session created and attached to a target?",
       "knot_command": "search create CDP session attached to a target --repo puppeteer --max-results 5 --output markdown",
-      "knot_tokens": 609,
+      "knot_tokens": 335,
       "baseline_description": "`rg -l CDPSession` + full read of 2 file(s)",
-      "baseline_tokens": 4149,
+      "baseline_tokens": 4706,
       "baseline_files_read": 2,
-      "reduction_pct": 85.32,
-      "ratio": 6.81
+      "reduction_pct": 92.88,
+      "ratio": 14.05
     },
     {
       "repo": "puppeteer",
@@ -65,12 +72,12 @@
       "task_type": "callers",
       "question": "Who calls createCDPSession? (impact analysis)",
       "knot_command": "callers createCDPSession --repo puppeteer --output markdown",
-      "knot_tokens": 1004,
+      "knot_tokens": 690,
       "baseline_description": "`rg -n '\\bcreateCDPSession\\b'` + full read of 5 hit file(s)",
-      "baseline_tokens": 39878,
+      "baseline_tokens": 42857,
       "baseline_files_read": 5,
-      "reduction_pct": 97.48,
-      "ratio": 39.72
+      "reduction_pct": 98.39,
+      "ratio": 62.11
     },
     {
       "repo": "puppeteer",
@@ -78,12 +85,12 @@
       "task_type": "explore",
       "question": "What is the structure of the Page API class?",
       "knot_command": "explore packages/puppeteer-core/src/api/Page.ts --repo puppeteer --output markdown",
-      "knot_tokens": 7287,
+      "knot_tokens": 5865,
       "baseline_description": "full read of `packages/puppeteer-core/src/api/Page.ts`",
-      "baseline_tokens": 25300,
+      "baseline_tokens": 27522,
       "baseline_files_read": 1,
-      "reduction_pct": 71.2,
-      "ratio": 3.47
+      "reduction_pct": 78.69,
+      "ratio": 4.69
     },
     {
       "repo": "knot",
@@ -91,12 +98,12 @@
       "task_type": "discovery",
       "question": "How are call reference intents resolved to target entities?",
       "knot_command": "search resolve call reference intents to target entities --repo knot --max-results 5 --output markdown",
-      "knot_tokens": 594,
+      "knot_tokens": 766,
       "baseline_description": "`rg -l ReferenceIntent` + full read of 2 file(s)",
-      "baseline_tokens": 14824,
+      "baseline_tokens": 37110,
       "baseline_files_read": 2,
-      "reduction_pct": 95.99,
-      "ratio": 24.96
+      "reduction_pct": 97.94,
+      "ratio": 48.45
     },
     {
       "repo": "knot",
@@ -104,12 +111,12 @@
       "task_type": "callers",
       "question": "Who calls format_references_result? (impact analysis)",
       "knot_command": "callers format_references_result --repo knot --output markdown",
-      "knot_tokens": 461,
-      "baseline_description": "`rg -n '\\bformat_references_result\\b'` + full read of 4 hit file(s)",
-      "baseline_tokens": 10949,
-      "baseline_files_read": 4,
-      "reduction_pct": 95.79,
-      "ratio": 23.75
+      "knot_tokens": 330,
+      "baseline_description": "`rg -n '\\bformat_references_result\\b'` + full read of 2 hit file(s)",
+      "baseline_tokens": 18830,
+      "baseline_files_read": 2,
+      "reduction_pct": 98.25,
+      "ratio": 57.06
     },
     {
       "repo": "knot",
@@ -117,12 +124,12 @@
       "task_type": "explore",
       "question": "What is the structure of the graph query module?",
       "knot_command": "explore src/db/graph/query.rs --repo knot --output markdown",
-      "knot_tokens": 978,
+      "knot_tokens": 12231,
       "baseline_description": "full read of `src/db/graph/query.rs`",
-      "baseline_tokens": 12103,
+      "baseline_tokens": 28281,
       "baseline_files_read": 1,
-      "reduction_pct": 91.92,
-      "ratio": 12.38
+      "reduction_pct": 56.75,
+      "ratio": 2.31
     }
   ]
 }

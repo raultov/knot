@@ -40,6 +40,22 @@ Find all places where a specific entity is used, referenced, extended, or implem
 - **`--max-targets <n>`** (optional; MCP `max_targets`): raises the target cap
   when the response reports truncation (max 500)
 
+- **`--include-tests`** (optional; MCP `include_tests: true`): lists the
+  references made from test code (test files, Rust `#[cfg(test)]`). By default
+  they are included in every count but not listed: each group ends with
+  `+N in tests`, and the `Found` line states how many there are.
+
+## Answer format (Markdown)
+
+- One line per reference: `- **\`name\`** (kind) at \`path:line\``, plus the
+  signature on the same line when it is not empty.
+- A single-repository answer names the repository once, on the `Found` line;
+  a multi-repository answer labels every row with `(repo: name)`.
+- A file's `<module>` row (its import) is folded into the file's other rows;
+  the group's closing line reports how many were folded.
+- The JSON output (`--output json`) lists every row, test code included, with
+  an `is_test_context` field.
+
 ## Relationship buckets
 
 Every edge type the pipeline produces is consulted:

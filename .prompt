@@ -60,7 +60,9 @@ You MUST prioritize these tools over traditional shell utilities (like `grep`, `
 
 **Entity-kind scope:** target resolution is code-only by default — docs/config/build/infra metadata can never be presented as resolved targets. When matches are hidden the response says so (`Non-code matches hidden…`); pass `kinds: "all"` to disable the scope, or a comma-separated allow-list of kinds/aliases.
 
-**Repo attribution:** Every caller entry and resolved target states its repository as `(repo: name)` — use it to attribute calls across multi-repository dependencies.
+**Repo attribution:** Every resolved target states its repository as `(repo: name)`; a single-repository answer names it once on the `Found` line, a multi-repository answer on every caller entry — use it to attribute calls across multi-repository dependencies.
+
+**Compact answers:** one line per caller. Callers in test code (test files, Rust `#[cfg(test)]`) are counted but listed only with `include_tests: true` (each group ends with `+N in tests`); a file's `<module>` import row is folded into its other rows. Counts always cover every reference.
 
 **Do NOT use `grep` to find references.**
 

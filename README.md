@@ -51,19 +51,20 @@ repositories** across nine realistic exploration tasks:
 
 | Repo | Lang | Task | knot tokens | Read-the-code tokens | Reduction |
 |------|------|------|------------:|---------------------:|----------:|
-| spring-ai | Java | discovery — *how does the chat client run the advisor chain?* | 1 092 | 10 168 | **89.3%** |
-| spring-ai | Java | callers — *who uses `ToolCallingManager`?* | 8 808 | 15 554 | **43.4%** |
-| spring-ai | Java | explore — *structure of `DefaultChatClient.java`* | 4 865 | 7 838 | **37.9%** |
-| puppeteer | TypeScript | discovery — *how is a CDP session created?* | 609 | 4 149 | **85.3%** |
-| puppeteer | TypeScript | callers — *who calls `createCDPSession`?* | 1 004 | 39 878 | **97.5%** |
-| puppeteer | TypeScript | explore — *structure of the `Page` API* | 7 287 | 25 300 | **71.2%** |
-| knot | Rust | discovery — *how are call intents resolved?* | 594 | 14 824 | **96.0%** |
-| knot | Rust | callers — *who calls `format_references_result`?* | 461 | 10 949 | **95.8%** |
-| knot | Rust | explore — *structure of the graph query module* | 978 | 12 103 | **91.9%** |
-| **TOTAL** | — | **9 tasks** | **25 698** | **140 763** | **81.7%** |
+| spring-ai | Java | discovery — *how does the chat client run the advisor chain?* | 771 | 12 262 | **93.7%** |
+| spring-ai | Java | callers — *who uses `ToolCallingManager`?* | 3 352 | 43 707 | **92.3%** |
+| spring-ai | Java | explore — *structure of `DefaultChatClient.java`* | 4 033 | 9 675 | **58.3%** |
+| puppeteer | TypeScript | discovery — *how is a CDP session created?* | 335 | 4 706 | **92.9%** |
+| puppeteer | TypeScript | callers — *who calls `createCDPSession`?* | 690 | 42 857 | **98.4%** |
+| puppeteer | TypeScript | explore — *structure of the `Page` API* | 5 865 | 27 522 | **78.7%** |
+| knot | Rust | discovery — *how are call intents resolved?* | 766 | 37 110 | **97.9%** |
+| knot | Rust | callers — *who calls `format_references_result`?* | 330 | 18 830 | **98.2%** |
+| knot | Rust | explore — *structure of the graph query module* | 12 231 | 28 281 | **56.8%** |
+| **TOTAL** | — | **9 tasks** | **28 373** | **224 950** | **87.4%** |
 
-**≈ 5.5× fewer tokens** for the same nine questions — 115 000 tokens saved,
+**≈ 7.9× fewer tokens** for the same nine questions — 196 000 tokens saved,
 enough to keep a long refactoring session inside a single context window.
+Measured with knot 1.15.0 on 2026-10-31.
 
 <details>
 <summary><b>Methodology (and how to reproduce it)</b></summary>
@@ -88,15 +89,23 @@ bound:
   need every file with a textual hit.
 
 Honest caveats: knot's cost scales with the **number of results**, not with repo
-size. The weakest row (`spring-ai` / `ToolCallingManager`, 43%) is a symbol with
-156 references — knot enumerates all of them with exact call sites, while the
-capped baseline reads only 5 files and still cannot tell a call from a comment.
-The `explore` rows for large classes are also the least favourable, because
-signatures plus docstrings are a large fraction of a well-documented file.
+size. `callers` answers list the references made from production code and
+**count** those made from test code (`+N in tests`, issue #52). Listing them too
+(`include_tests`, CLI `--include-tests`) costs 16 422 / 773 / 2 926 tokens for
+the three `callers` rows and brings the total saving to **80.4%**:
+`ToolCallingManager` has 394 references, 320 of them in tests, and
+`format_references_result` is called mostly by unit tests. The `explore` rows
+for large files are the least favourable, because signatures plus docstrings
+are a large fraction of a well-documented file.
 
-Repositories measured (as indexed): `spring-ai` 2 406 files / 25 733 entities,
-`puppeteer` 1 832 files / 19 310 entities, `knot` 222 files / 4 000 entities.
-Raw measurements are stored in
+How the answers shrank on the same snapshots (knot tokens, 9 tasks): 59 579 with
+knot 1.12.4, 53 806 with 1.14.1 (compact search and explore answers, #50) and
+28 373 with 1.15.0 (compact callers answers, #52). The `callers` rows alone went
+from 29 772 to 4 372 tokens.
+
+Repositories measured (as indexed): `spring-ai` 2 490 files / 27 740 entities
+(commit `b6b5767`), `puppeteer` 1 286 files / 11 733 entities (`08e7b1a`),
+`knot` 390 files / 8 166 entities (`421b515`). Raw measurements are stored in
 [`.perf_metrics/token_savings.json`](.perf_metrics/token_savings.json).
 
 ```bash
@@ -382,7 +391,7 @@ Target resolution is **code-only by default**: documentation, configuration, bui
 
 The buckets cover every edge type the pipeline produces: Calls, Extends, Implements, References, **Macro calls** (Rust `MACRO_CALLS`), **DOM references** (JS → HTML element id), **CSS class usage** (JS → CSS class), script/stylesheet imports, the VCL edges (uses backend/probe/acl, includes, VMOD imports, declared-unused), **HTTP routes** (`ROUTES_TO`: the endpoint serving a handler), **HTTP callers** (`HTTP_CALLS`: the HTTP client calls hitting a handler's endpoint, heuristic) plus Overridden by / Overrides / Dispatched calls — so `init_vec`'s macro call sites and `app-container`'s JS manipulators now show up instead of a false "may be unused".
 
-Every caller entry is **self-labeling**: the owning repository is printed next to each row as `(repo: <name>)` — in the CLI table, the Markdown answer, and the resolution block — so rows stay attributable when the scope spans multiple repositories:
+Every answer is **self-labeling**: the resolution block names each target's repository as `(repo: <name>)`. When every reference belongs to one repository, the `Found` line names it once; when the scope spans several, every row carries its own `(repo: <name>)`. The Markdown answer is **compact** (#52): one line per row, with the signature on that line when it is not empty, and a file's `<module>` row (its import) folded into the file's other rows. References made from test code (test files, Rust `#[cfg(test)]`) are included in every count but listed only with `include_tests: true` (CLI `--include-tests`); each group then ends with `+N in tests`. The JSON output is unchanged and lists every row, now with an `is_test_context` field.
 
 ```markdown
 # References to `LoginService`
@@ -390,11 +399,13 @@ Every caller entry is **self-labeling**: the owning repository is printed next t
 Resolved to 1 target by exact name match:
 - `auth::service::LoginService` (class) at `src/service.rs:12`  (repo: auth-service)
 
-Found 1 reference(s) across all relationship types:
+Found 3 reference(s) across all relationship types (repo: auth-service) — 1 in tests, counted but not listed (`include_tests` lists them):
 
-## Calls (1)
+## Calls (function/method invocations) (3)
 
-- **`signup`** (function) at `src/handlers.rs:88`  (repo: auth-service)
+- **`signup`** (function) at `src/handlers.rs:88` — `(form: SignupForm)`
+- **`login`** (function) at `src/handlers.rs:120` — `(form: LoginForm)`
+- +1 in tests (`include_tests` lists them)
 ```
 
 In the CLI table the Target column is labeled only for genuine cross-repo references (a caller in repo A referencing a target in repo B); the Caller column is always labeled when a repository is known.
