@@ -601,7 +601,7 @@ echo -e "${GREEN}✓ CLI & MCP: CdpPage.ts lists deleteCookie and no local const
 # Tests 20-21: locals and parameters passed as arguments are values, not
 # receiverless callbacks. They must never bind to same-named fields in an
 # unrelated module (issue #48). Fixture: callback_arguments/.
-assert_overload_callers 20 "ProductCardComponent.snapshot" "2<render" \
+assert_overload_callers 20 "ProductCardComponent.snapshot" "" \
     "A local argument does not become a cross-module field call"
 assert_overload_callers 21 "PromoBanner.coupon" "" \
     "A parameter argument does not become a cross-module field call"
@@ -631,6 +631,51 @@ if [ "$(echo "$DECORATORS_MCP" | grep -c '@computed')" -ne 1 ] || [ "$(echo "$DE
 fi
 echo -e "${GREEN}✓ MCP: exactly one @computed and one @action${NC}"
 
+# Tests 23-26: a `this.x` read or write is a reference, not a call; only a
+# real call (`this.refresh()`) or a getter read (`this.total`) is a CALLS
+# edge (issue #49). Fixture: this_access/basket.store.ts.
+assert_reference_callers() {
+    local id=$1
+    local fqn=$2
+    local expected=$3
+    local description=$4
+
+    echo ""
+    echo "Test $id: $description ($fqn references exactly [$expected])..."
+    local cli_actual
+    cli_actual=$(cargo run --release --bin knot -- callers "$fqn" -r "$REPO_NAME" -o json 2>/dev/null \
+        | jq -r '(.references // [])[] | .name' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$cli_actual" != "$expected" ]; then
+        echo -e "${RED}✗ CLI: $fqn references expected [$expected], got [$cli_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ CLI: $fqn references [$cli_actual]${NC}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"find_callers\",\"arguments\":{\"entity_name\":\"$fqn\",\"repo_name\":\"$REPO_NAME\"}}}"
+    local mcp_actual
+    mcp_actual=$(echo "$request" | cargo run --release --bin knot-mcp 2>/dev/null | tail -n 1 \
+        | jq -r '.result.content[0].text' \
+        | awk '/^## /{ on = ($0 ~ /^## References/) } on && /^- \*\*`/' \
+        | sed -E 's/^- \*\*`([^`]*)`.*/\1/' | LC_ALL=C sort -u | paste -sd, -)
+    if [ "$mcp_actual" != "$expected" ]; then
+        echo -e "${RED}✗ MCP: $fqn references expected [$expected], got [$mcp_actual]${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ MCP: $fqn references [$mcp_actual]${NC}"
+}
+
+assert_overload_callers 23 "BasketStore.items" "" \
+    "Field reads and writes are not calls"
+assert_reference_callers 24 "BasketStore.items" "reset,total" \
+    "Field reads and writes are references"
+assert_overload_callers 25 "BasketStore.refresh" "13<reset" \
+    "A real this.m() call stays a call"
+assert_overload_callers 26 "BasketStore.total" "5<summary" \
+    "A getter read is a call"
+# Issue #48 fixture: the field's only user is its own class's reader.
+assert_reference_callers 27 "ProductCardComponent.snapshot" "render" \
+    "A field is referenced only by its own reader, not by a cross-module local"
+
 # Step 5: Summarize
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -656,6 +701,7 @@ echo "  ✓ Overload signatures bind by arity; JavaScript arity is never binding
 echo "  ✓ Method locals are not members; this.m() reaches the inherited method"
 echo "  ✓ Function locals and parameters passed as arguments do not bind cross-module fields"
 echo "  ✓ Class members report only their own decorators"
+echo "  ✓ this.x reads and writes are references; real calls and getter reads are calls"
 echo ""
 
 exit 0
