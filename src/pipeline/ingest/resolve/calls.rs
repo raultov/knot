@@ -414,7 +414,9 @@ fn lookup_fqn_by_fqn(
 ///
 /// 1. a same-file candidate;
 /// 2. receiver-chain disambiguation (only when a receiver is available);
-/// 3. a callee name declared exactly once.
+/// 3. a callee name declared exactly once — for a receiver call from Java or
+///    Kotlin, only when the target is visible from the caller's file (see
+///    [`visible_from_jvm_caller`], issue #42).
 ///
 /// Steps 2 and 3 are skipped for a receiver of an external type (see
 /// [`is_external_type_receiver`]): `String.valueOf(..)` or a field typed as
@@ -468,9 +470,54 @@ fn resolve_homonym_fallback(
         return Some(u);
     }
     if declared_once {
-        return candidates.first().copied();
+        return candidates.first().copied().filter(|uuid| {
+            receiver.is_none() || visible_from_jvm_caller(uuid, caller_file_path, ctx)
+        });
     }
     None
+}
+
+/// Java/Kotlin: whether a method found only by its unique name is visible
+/// from the caller's file (issue #42). Its declaring type must be in the
+/// caller's package, imported by the file (single-type or on demand) or
+/// nested in an imported type; a Kotlin top-level function must be imported
+/// or declared in the caller's package. A receiver whose type the parser
+/// could not see (`var x = factory()`) otherwise binds to any same-named
+/// method of the repository. Other languages carry no import scope and keep
+/// the name-only fallback, as does a target outside the batch, whose FQN is
+/// unknown.
+fn visible_from_jvm_caller(uuid: &Uuid, caller_file_path: &str, ctx: &ResolutionContext) -> bool {
+    let is_jvm = std::path::Path::new(caller_file_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext, "java" | "kt" | "kts"));
+    let (Some(scope), Some(fqn)) = (
+        ctx.import_scopes.get(caller_file_path).filter(|_| is_jvm),
+        ctx.uuid_to_fqn.and_then(|fqns| fqns.get(uuid)),
+    ) else {
+        return true;
+    };
+    let Some((owner, _)) = fqn.rsplit_once('.') else {
+        return true;
+    };
+    // `owner` is `package` itself (a top-level function) or a type of it;
+    // a capitalized next segment rules out subpackages.
+    let in_package = |package: &str| {
+        owner == package
+            || owner
+                .strip_prefix(package)
+                .and_then(|rest| rest.strip_prefix('.'))
+                .is_some_and(|rest| rest.starts_with(char::is_uppercase))
+    };
+    scope.package.as_deref().is_some_and(in_package)
+        || scope.wildcards.iter().any(|package| in_package(package))
+        || scope.imports.iter().any(|(_, imported)| {
+            imported == fqn
+                || owner == imported
+                || owner
+                    .strip_prefix(imported.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
 }
 
 fn resolve_super_call(
@@ -1953,6 +2000,106 @@ mod tests {
                     .clone()
             })
             .collect()
+    }
+
+    /// Targets of `mapper.convertPayload(e)` (an untyped receiver) issued
+    /// from `caller_file` in `package` with `scope`, when the repository
+    /// declares `convertPayload` once, as `target_fqn`.
+    fn untyped_receiver_targets(
+        caller_file: &str,
+        scope: Option<ImportScope>,
+        receiver: Option<&str>,
+        target_fqn: &str,
+    ) -> Vec<String> {
+        let owner = target_fqn.rsplit_once('.').unwrap().0;
+        let target = jvm_entity(target_fqn, owner, EntityKind::Method);
+        let mut caller = mock_resolution_entity_with_kind(
+            "read",
+            "com.x.app.Resource.read",
+            Some("Resource"),
+            caller_file,
+            EntityKind::Method,
+        );
+        caller.import_scope = scope.map(std::sync::Arc::new);
+        caller.reference_intents = vec![ReferenceIntent::Call {
+            method: "convertPayload".to_string(),
+            receiver: receiver.map(str::to_string),
+            line: 1,
+            arg_count: Some(1),
+        }];
+        let mut entities = vec![target, caller];
+        resolve_reference_intents(&mut entities);
+        entities[1]
+            .relationships
+            .iter()
+            .map(|_| entities[0].fqn.clone())
+            .collect()
+    }
+
+    /// Issue #42: from Java/Kotlin, an untyped receiver binds to the only
+    /// same-named method only when its type is visible from the caller's
+    /// file; bare calls and other languages keep the name-only fallback.
+    #[test]
+    fn test_untyped_receiver_needs_visible_target_in_jvm_files() {
+        let converter = "com.x.other.EventConverter.convertPayload";
+        let java = "src/com/x/app/Resource.java";
+        let mapper = Some("mapper");
+        let scope = |imports: &[(&str, &str)], wildcards: &[&str]| {
+            Some(import_scope("com.x.app", imports, wildcards))
+        };
+        assert!(untyped_receiver_targets(java, scope(&[], &[]), mapper, converter).is_empty());
+        for visible in [
+            scope(&[("EventConverter", "com.x.other.EventConverter")], &[]),
+            scope(&[], &["com.x.other"]),
+            Some(import_scope("com.x.other", &[], &[])),
+        ] {
+            assert_eq!(
+                untyped_receiver_targets(java, visible, mapper, converter),
+                vec![converter]
+            );
+        }
+        // A subpackage is not the caller's package.
+        assert!(
+            untyped_receiver_targets(
+                java,
+                Some(import_scope("com.x", &[], &[])),
+                mapper,
+                converter
+            )
+            .is_empty()
+        );
+        // A method of a type nested in an imported type.
+        let nested = "com.x.other.Outer.Inner.convertPayload";
+        assert_eq!(
+            untyped_receiver_targets(
+                java,
+                scope(&[("Outer", "com.x.other.Outer")], &[]),
+                mapper,
+                nested
+            ),
+            vec![nested]
+        );
+        // A Kotlin top-level function imported by name.
+        let top_level = "com.x.util.convertPayload";
+        assert_eq!(
+            untyped_receiver_targets(
+                "src/com/x/app/Resource.kt",
+                scope(&[("convertPayload", top_level)], &[]),
+                mapper,
+                top_level
+            ),
+            vec![top_level]
+        );
+        // Bare calls (static imports are not in the scope) and languages
+        // without an import scope keep the name-only fallback.
+        assert_eq!(
+            untyped_receiver_targets(java, scope(&[], &[]), None, converter),
+            vec![converter]
+        );
+        assert_eq!(
+            untyped_receiver_targets("src/app/resource.py", None, mapper, converter),
+            vec![converter]
+        );
     }
 
     fn import_scope(package: &str, imports: &[(&str, &str)], wildcards: &[&str]) -> ImportScope {

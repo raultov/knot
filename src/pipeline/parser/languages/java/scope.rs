@@ -152,7 +152,22 @@ fn binding_in_declaration(decl: Node<'_>, name: &str, source: &[u8]) -> Binding 
     if declarator.child_by_field_name("dimensions").is_some() {
         return Some(None);
     }
-    Some(typed_binding(decl.child_by_field_name("type"), source))
+    let type_node = decl.child_by_field_name("type");
+    if type_node.is_some_and(|t| node_text(t, source) == "var") {
+        return Some(var_initializer_type(declarator, source));
+    }
+    Some(typed_binding(type_node, source))
+}
+
+/// `var x = new Foo<>(…)`: the only `var` initializer whose type is obvious
+/// without inference (issue #42). Any other initializer (`Foo.create()`,
+/// `a.b()`) leaves the type unknown.
+fn var_initializer_type(declarator: Node<'_>, source: &[u8]) -> Option<String> {
+    let value = declarator.child_by_field_name("value")?;
+    if value.kind() != "object_creation_expression" {
+        return None;
+    }
+    typed_binding(value.child_by_field_name("type"), source)
 }
 
 /// Locals declared by the statements of a block before `pos`.

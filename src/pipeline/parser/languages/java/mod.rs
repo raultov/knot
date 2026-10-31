@@ -884,12 +884,14 @@ mod tests {
         assert_eq!(call.receiver, Some("Bar".to_string()));
     }
 
+    /// `var x = Factory.create()` leaves the type unknown: the receiver is
+    /// kept as written (issue #42 types only `var x = new Bar()`).
     #[test]
     fn test_var_local_does_not_substitute() {
         let code = r#"
             class ReportService {
                 void build() {
-                    var x = new Bar();
+                    var x = Factory.create();
                     x.run();
                 }
             }
@@ -1029,6 +1031,18 @@ mod tests {
             .receiver
     }
 
+    /// Issue #42: `var x = new Foo<>(…)` types the receiver; any other
+    /// initializer leaves it unknown, still shadowing a same-named field.
+    #[test]
+    fn test_var_receiver_typed_only_by_new() {
+        let code = "class A { private Bar r; void m() { var r = new java.util.TreeMap<String, Integer>(); r.put(1); } }";
+        assert_eq!(receiver_of(code, "put"), Some("TreeMap".to_string()));
+        let code = "class A { private Bar r; void m() { var r = Factory.create(); r.put(1); } }";
+        assert_eq!(receiver_of(code, "put"), Some("r".to_string()));
+        let code = "class A { void m() { var r = new Foo() { }; r.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("Foo".to_string()));
+    }
+
     #[test]
     fn test_untyped_lambda_param_shadows_field() {
         let code = "class A { private Foo x; void m() { l.f(x -> x.run()); } }";
@@ -1061,8 +1075,11 @@ mod tests {
 
     #[test]
     fn test_var_local_shadows_field() {
-        let code = "class A { private Foo x; void m() { var x = new Bar(); x.run(); } }";
+        let code = "class A { private Foo x; void m() { var x = Factory.create(); x.run(); } }";
         assert_eq!(receiver_of(code, "run"), Some("x".to_string()));
+        // A `new` initializer types the local; the field type never applies.
+        let code = "class A { private Foo x; void m() { var x = new Bar(); x.run(); } }";
+        assert_eq!(receiver_of(code, "run"), Some("Bar".to_string()));
     }
 
     #[test]
