@@ -1,17 +1,18 @@
 {
   "tokenizer": "cl100k_base",
-  "measured_at": "2026-10-31",
-  "knot_version": "1.15.0",
+  "measured_at": "2026-11-01",
+  "knot_version": "1.15.1",
+  "index": "clean (--clean re-index)",
   "snapshots": {
     "spring-ai": "b6b5767eb62b61ceaaac78ad103a0ad96e8f8272",
     "puppeteer": "08e7b1aebe60462b6f7834e9dfe0f6c70464247c",
     "knot": "421b5158ea14c27cd9a5b4e9f131efcea9a9ed07"
   },
   "totals": {
-    "knot_tokens": 28373,
-    "baseline_tokens": 224950,
-    "reduction_pct": 87.39,
-    "ratio": 7.93
+    "knot_tokens": 20266,
+    "baseline_tokens": 225049,
+    "reduction_pct": 90.99,
+    "ratio": 11.1
   },
   "results": [
     {
@@ -20,12 +21,12 @@
       "task_type": "discovery",
       "question": "How does the chat client execute a request through the advisor chain?",
       "knot_command": "search advisor chain executes chat client request --repo spring-ai --max-results 5 --output markdown",
-      "knot_tokens": 771,
+      "knot_tokens": 677,
       "baseline_description": "`rg -l AdvisorChain` + full read of 3 file(s)",
       "baseline_tokens": 12262,
       "baseline_files_read": 3,
-      "reduction_pct": 93.71,
-      "ratio": 15.9
+      "reduction_pct": 94.48,
+      "ratio": 18.11
     },
     {
       "repo": "spring-ai",
@@ -59,12 +60,12 @@
       "task_type": "discovery",
       "question": "How is a CDP session created and attached to a target?",
       "knot_command": "search create CDP session attached to a target --repo puppeteer --max-results 5 --output markdown",
-      "knot_tokens": 335,
+      "knot_tokens": 389,
       "baseline_description": "`rg -l CDPSession` + full read of 2 file(s)",
       "baseline_tokens": 4706,
       "baseline_files_read": 2,
-      "reduction_pct": 92.88,
-      "ratio": 14.05
+      "reduction_pct": 91.73,
+      "ratio": 12.1
     },
     {
       "repo": "puppeteer",
@@ -85,12 +86,12 @@
       "task_type": "explore",
       "question": "What is the structure of the Page API class?",
       "knot_command": "explore packages/puppeteer-core/src/api/Page.ts --repo puppeteer --output markdown",
-      "knot_tokens": 5865,
+      "knot_tokens": 5447,
       "baseline_description": "full read of `packages/puppeteer-core/src/api/Page.ts`",
       "baseline_tokens": 27522,
       "baseline_files_read": 1,
-      "reduction_pct": 78.69,
-      "ratio": 4.69
+      "reduction_pct": 80.21,
+      "ratio": 5.05
     },
     {
       "repo": "knot",
@@ -98,12 +99,12 @@
       "task_type": "discovery",
       "question": "How are call reference intents resolved to target entities?",
       "knot_command": "search resolve call reference intents to target entities --repo knot --max-results 5 --output markdown",
-      "knot_tokens": 766,
+      "knot_tokens": 765,
       "baseline_description": "`rg -l ReferenceIntent` + full read of 2 file(s)",
       "baseline_tokens": 37110,
       "baseline_files_read": 2,
       "reduction_pct": 97.94,
-      "ratio": 48.45
+      "ratio": 48.51
     },
     {
       "repo": "knot",
@@ -111,12 +112,12 @@
       "task_type": "callers",
       "question": "Who calls format_references_result? (impact analysis)",
       "knot_command": "callers format_references_result --repo knot --output markdown",
-      "knot_tokens": 330,
+      "knot_tokens": 152,
       "baseline_description": "`rg -n '\\bformat_references_result\\b'` + full read of 2 hit file(s)",
-      "baseline_tokens": 18830,
+      "baseline_tokens": 18929,
       "baseline_files_read": 2,
-      "reduction_pct": 98.25,
-      "ratio": 57.06
+      "reduction_pct": 99.2,
+      "ratio": 124.53
     },
     {
       "repo": "knot",
@@ -124,12 +125,12 @@
       "task_type": "explore",
       "question": "What is the structure of the graph query module?",
       "knot_command": "explore src/db/graph/query.rs --repo knot --output markdown",
-      "knot_tokens": 12231,
+      "knot_tokens": 4761,
       "baseline_description": "full read of `src/db/graph/query.rs`",
       "baseline_tokens": 28281,
       "baseline_files_read": 1,
-      "reduction_pct": 56.75,
-      "ratio": 2.31
+      "reduction_pct": 83.17,
+      "ratio": 5.94
     }
   ]
 }
