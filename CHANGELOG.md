@@ -5,6 +5,16 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.16.0
+
+- **Added(build)**: `ort-load-dynamic` cargo feature (#54). The default build links the prebuilt static ONNX Runtime that `ort` downloads, which needs glibc 2.38+ / libstdc++ 13+ to link and a CPU with AVX to run (`Illegal instruction` otherwise). With `--features ort-load-dynamic`, nothing is downloaded or linked, and the binaries load Microsoft's official shared library at run time from `ORT_DYLIB_PATH`. It must be ONNX Runtime 1.27 or newer; 1.28.0 is the version `ort` targets. The binaries built this way need glibc 2.34 and no libstdc++. Library consumers (knot-lite, knot-server) forward it with `ort-load-dynamic = ["knot/ort-load-dynamic"]`. The default build is unchanged.
+- **Added(embed)**: With that feature, `Embedder::init` loads ONNX Runtime before any model download. A missing or too old library becomes an error naming `ORT_DYLIB_PATH` and the minimum version, instead of a panic in the first embedding call. `pipeline::embed::runtime::ensure_loaded()` is public so consumers can check earlier, and it is a no-op in the default build. The first outcome is cached for the process, because `ort` 2.0.0-rc.13 cannot safely retry a failed load.
+- **Changed(build)**: `make build` / `make install` and the CI binaries for E2E build with default features instead of `--all-features`, which would now turn on `ort-load-dynamic` and require the shared library at run time. Clippy and unit tests keep `--all-features`.
+- **Test**: Unit tests (feature `ort-load-dynamic`, so they run under `--all-features`) cover the library path resolution, the error message, the cached failure, and `Embedder` init failing before any download.
+- **Upgrade**: No re-index needed. Default builds are unchanged.
+
+---
+
 ## v1.15.1
 
 - **Fixed(indexer)**: Incremental runs no longer leave stale duplicates of the entities of modified files (#53). The previous entities of a modified file were never deleted: the deletion compared the discovered paths (under the repository root) with the repo-relative `file_path` stored since v1.5.1, so nothing matched. Entities whose UUID did not change were overwritten, but every entity that moved to another line or was removed from the file survived next to its new copy, with its edges, in Neo4j and Qdrant. `find_callers` then resolved several targets and listed each caller twice, and `explore_file` and search showed members that no longer exist. Measured on a live knot-server index of 15 repositories, by comparing duplicates before and after one `--clean` re-index: about 6 100 stale entities in 10 of them (2 584 in browser-control-mcp, 2 212 in knot, 569 in knot-server).
