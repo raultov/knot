@@ -8,7 +8,7 @@
 //! - **Code Structure Navigation**: Quickly understand the structure without reading line-by-line
 //! - **Method/Function Discovery**: Find all callable entities in a file with signatures
 //! - **Documentation Preview**: See docstrings and inline comments for each entity
-//! - **Multi-language Support**: Works with Java and TypeScript codebases
+//! - **Multi-language Support**: Works with every language knot indexes
 //! - **Architecture Overview**: Get a bird's-eye view of a module's structure
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
@@ -31,7 +31,7 @@ use crate::mcp_tools::repo_scope_from_args;
                    \n\nBehaviour & Return: Read-only operation. Returns a Markdown-formatted outline of the file's entities, grouped by type (Classes, Methods, Interfaces, Constants, etc.), including line numbers for direct editor navigation. Attribute-usage markup references (html_class, html_id) are summarized in a separate section by default to avoid inflating code lists; set include_markup to true to list them in full. No side effects. \
                    \n\nPath handling: file_path should be a repo-relative path (e.g. 'src/services/user.ts'). Absolute paths under your local checkout are also accepted; the tool strips the known local root automatically. The returned file_path is normalized to the same repo-relative form regardless of how it was queried. If the query is ambiguous across multiple repositories, the answer includes an 'ambiguous_path_candidates' list — retry with a longer path or pass repo_name. \
                    \n\nParameter guidance: 'file_path' must be a relative or absolute path to a valid source file. Include 'repo_name' if the file path might be ambiguous across multiple indexed repositories. Set 'include_markup' to true to expand attribute-usage markup tokens. \
-                   \n\nSupports Java, Kotlin, C#, and TypeScript codebases.",
+                   \n\nSupports Java, Kotlin, C#, Rust, TypeScript/JavaScript, Python, C/C++ and Groovy codebases.",
     read_only_hint = true,
     destructive_hint = false,
     idempotent_hint = true,
@@ -101,44 +101,23 @@ impl ExploreFileTool {
 
         let formatted = cli_tools::format_file_entities(&fp, &json_result, include_markup);
 
-        // Surface `ambiguous_path_candidates` and markup metadata as structured content
-        let mut structured_map = serde_json::Map::new();
+        Ok(text_result(formatted))
+    }
+}
 
-        if let Some(arr) = json_result
-            .as_object()
-            .and_then(|obj| obj.get("ambiguous_path_candidates"))
-            .and_then(|v| v.as_array())
-            .filter(|arr| !arr.is_empty())
-        {
-            structured_map.insert(
-                "ambiguous_path_candidates".to_string(),
-                serde_json::Value::Array(arr.clone()),
-            );
-        }
-
-        if let Some(obj) = json_result.as_object() {
-            if let Some(count) = obj.get("markup_count") {
-                structured_map.insert("markup_count".to_string(), count.clone());
-            }
-            if let Some(refs) = obj.get("markup_references") {
-                structured_map.insert("markup_references".to_string(), refs.clone());
-            }
-        }
-
-        let structured_content = if structured_map.is_empty() {
-            None
-        } else {
-            Some(structured_map)
-        };
-
-        Ok(CallToolResult {
-            content: vec![ContentBlock::TextContent(TextContent::new(
-                formatted, None, None,
-            ))],
-            is_error: None,
-            meta: None,
-            structured_content,
-        })
+/// Wrap the Markdown outline as the tool's only result.
+///
+/// No `structuredContent`: clients that prefer it over the text would get a
+/// partial result (knot-server#12). The outline already carries the markup
+/// summary and `ambiguous_path_candidates`.
+fn text_result(formatted: String) -> CallToolResult {
+    CallToolResult {
+        content: vec![ContentBlock::TextContent(TextContent::new(
+            formatted, None, None,
+        ))],
+        is_error: None,
+        meta: None,
+        structured_content: None,
     }
 }
 
@@ -158,6 +137,17 @@ mod tests {
         let props = schema.properties.unwrap();
         assert!(props.contains_key("file_path"));
         assert!(props.contains_key("repo_name"));
+    }
+
+    #[test]
+    fn test_explore_file_result_has_text_and_no_structured_content() {
+        let result = text_result("# Entities in `src/lib.rs`\n".to_string());
+        assert!(result.structured_content.is_none());
+        assert_eq!(result.content.len(), 1);
+        match &result.content[0] {
+            ContentBlock::TextContent(t) => assert!(t.text.contains("src/lib.rs")),
+            other => panic!("expected text content, got {other:?}"),
+        }
     }
 
     #[test]

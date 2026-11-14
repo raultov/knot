@@ -5,6 +5,14 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## Unreleased
+
+- **Fixed(mcp)**: `explore_file` no longer returns a partial `structuredContent` (knot-server#12). It held only `markup_count` and `markup_references` (plus `ambiguous_path_candidates` when present), while the outline was only in the text. MCP clients that read `structuredContent` when it is present lost the whole file outline. The tool now returns text only, like the other six tools; the text already carries the markup summary and the ambiguous path candidates.
+- **Changed(mcp)**: The `serverInfo` description and the `explore_file`, `find_callers` and `search_hybrid_context` descriptions list every indexed language family instead of only Java/TypeScript (or Java, Kotlin, C# and TypeScript).
+- **Upgrade**: No re-index needed.
+
+---
+
 ## v1.16.0
 
 - **Added(build)**: `ort-load-dynamic` cargo feature (#54). The default build links the prebuilt static ONNX Runtime that `ort` downloads, which needs glibc 2.38+ / libstdc++ 13+ to link and a CPU with AVX to run (`Illegal instruction` otherwise). With `--features ort-load-dynamic`, nothing is downloaded or linked, and the binaries load Microsoft's official shared library at run time from `ORT_DYLIB_PATH`. It must be ONNX Runtime 1.27 or newer; 1.28.0 is the version `ort` targets. The binaries built this way need glibc 2.34 and no libstdc++. Library consumers (knot-lite, knot-server) forward it with `ort-load-dynamic = ["knot/ort-load-dynamic"]`. The default build is unchanged.

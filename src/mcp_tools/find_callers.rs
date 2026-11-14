@@ -11,7 +11,7 @@
 //! - **Inheritance Chain**: Discover all subclasses (EXTENDS) and implementers (IMPLEMENTS)
 //! - **Type Usage**: Track all type annotations and usages (REFERENCES)
 //! - **Call Graph Traversal**: Explore the full dependency chain of a method
-//! - **Multi-language Support**: Works with Java and TypeScript codebases
+//! - **Multi-language Support**: Works with every language knot indexes
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::*;
@@ -49,7 +49,7 @@ use crate::mcp_tools::repo_scope_from_args;
                     'Counts below are partial — they cover only the M of N targets shown', so bucket counts are never mistaken for the complete impact set. \
                     Raise 'max_targets' (up to 500) to retrieve more targets when the notice reports truncation. \
                     \n\nParameter guidance: 'entity_name' supports exact names or signature fragments (e.g., 'handleRequest' or 'handle(Request'). Include 'repo_name' to filter results to the specific codebase being analyzed. \
-                   \n\nSupports Java, Kotlin, C#, Rust, and TypeScript codebases.",
+                   \n\nSupports Java, Kotlin, C#, Rust, TypeScript/JavaScript, Python, C/C++ and Groovy codebases.",
     read_only_hint = true,
     destructive_hint = false,
     idempotent_hint = true,

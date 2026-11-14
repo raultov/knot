@@ -456,12 +456,20 @@ if echo "$RESP_D1" | grep -q "ambiguous_path_candidates"; then
 else
     fail "D1. explore_file 'src/index.ts' without scope (expected ambiguous_path_candidates)"
 fi
-# Count occurrences of repo_name field inside the candidates array (each entry has one)
-CAND_COUNT=$(echo "$RESP_D1" | grep -oE '"repo_name"' | wc -l)
+# Count the repo_name keys of the candidates listed in the text result (each
+# entry has one; inside the JSON-RPC string its quotes are escaped)
+CAND_COUNT=$(echo "$RESP_D1" | grep -oE 'repo_name\\?"' | wc -l)
 if [ "$CAND_COUNT" -ge 2 ]; then
     pass "D1. ambiguous_path_candidates contains >= 2 entries"
 else
     fail "D1. ambiguous_path_candidates contains only $CAND_COUNT entries (expected >= 2)"
+fi
+# A partial structuredContent hid the outline from clients that prefer it
+# (knot-server#12): the result must be text only.
+if echo "$RESP_D1" | grep -q "structuredContent"; then
+    fail "D1. explore_file must not return structuredContent"
+else
+    pass "D1. explore_file returns text only (no structuredContent)"
 fi
 
 # D2: explore_file "src/index.ts" with repo_name "scope_beta" → resolves without ambiguity

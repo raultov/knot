@@ -11,7 +11,7 @@
 //! - **Method/Function Lookup**: Locate methods and functions by name or behavior
 //! - **Architectural Pattern Search**: Discover design patterns and architectural structures
 //! - **Dependency Context**: Get full dependency chains and architectural relationships
-//! - **Multi-language Support**: Works with Java and TypeScript codebases
+//! - **Multi-language Support**: Works with every language knot indexes
 
 pub mod format;
 
@@ -44,7 +44,7 @@ use crate::mcp_tools::repo_scope_from_args;
                    \n\nRecall contract: entity embeds carry identifier tokens and the tokenized call names of the entity's body, so a paraphrase of what a definition does (even one with no doc comment) still surfaces it. Entities whose identifier shares a word with the query enter the candidate pool by token match alone. \
                    \n\nResult bound: 'max_results' is 1-100 (default 5) and is enforced — a larger request is clamped to 100 and the reply says so. There is no pagination: when the bound is not enough, narrow the scope with 'kinds' / 'path' / 'repo_name' or refine the query rather than raising the limit. \
                    \n\nParameter guidance: 'query' should be 2-5 words describing functionality. Increase 'max_results' to 10-20 for broad discovery, keep at 5 for focused search. Include 'repo_name' in your first query to avoid cross-repository pollution. \
-                   \n\nSupports Java, Kotlin, C#, and TypeScript codebases.",
+                   \n\nSupports Java, Kotlin, C#, Rust, TypeScript/JavaScript, Python, C/C++ and Groovy codebases.",
     read_only_hint = true,
     destructive_hint = false,
     idempotent_hint = true,

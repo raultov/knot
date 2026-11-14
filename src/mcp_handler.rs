@@ -158,7 +158,7 @@ pub fn build_server_details() -> InitializeResult {
             version: env!("CARGO_PKG_VERSION").into(),
             title: Some("knot Codebase Index".into()),
             description: Some(
-                "Semantic search and structural exploration of indexed Java/TypeScript codebases"
+                "Semantic search and structural exploration of indexed codebases (Java, Kotlin, C#, Rust, TypeScript/JavaScript, Python, C/C++, Groovy and more)"
                     .into(),
             ),
             icons: vec![],
@@ -215,7 +215,7 @@ mod tests {
         assert!(details.server_info.description.is_some());
         let desc = details.server_info.description.as_ref().unwrap();
         assert!(desc.contains("Semantic search"));
-        assert!(desc.contains("Java/TypeScript"));
+        assert!(desc.contains("Rust"));
     }
 
     #[test]
