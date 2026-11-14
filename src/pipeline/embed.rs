@@ -21,6 +21,7 @@ use anyhow::Context;
 use fastembed::{InitOptions, TextEmbedding};
 
 pub mod model;
+pub mod runtime;
 
 pub use model::{DEFAULT_EMBED_MODEL, EmbedModelChoice};
 
@@ -74,6 +75,10 @@ impl Embedder {
             choice.dim,
             cache_dir.display()
         );
+
+        // Before any model download: a dynamic build without a usable ONNX
+        // Runtime fails here with a message naming ORT_DYLIB_PATH (#54).
+        runtime::ensure_loaded()?;
 
         std::fs::create_dir_all(&cache_dir).context("Failed to create fastembed cache dir")?;
 

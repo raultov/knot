@@ -34,6 +34,14 @@ allow_attributes_without_reason = "warn"
 [features]
 default = ["indexer"]
 indexer = ["dep:fastembed", "dep:ort"]
+# Load ONNX Runtime at run time from a shared library (`ORT_DYLIB_PATH`)
+# instead of linking the prebuilt static one that `download-binaries`
+# fetches (issue #54). That prebuilt library needs AVX and glibc 2.38; the
+# official shared library does not. With this feature on, `ort-sys` skips the
+# download and the link, so the default-on `download-binaries` is inert.
+# Ship ONNX Runtime >= 1.27 (the `api-27` level of `ort`); 1.28 is the
+# version `ort-sys` 2.0.0-rc.13 targets.
+ort-load-dynamic = ["indexer", "fastembed/ort-load-dynamic", "ort/load-dynamic"]
 
 [[bin]]
 name = "knot-indexer"
