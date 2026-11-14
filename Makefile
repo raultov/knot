@@ -32,9 +32,10 @@ dupes-cleanup:
 # Run all local quality gates sequentially (fmt, clippy, unit tests, dupes)
 check: fmt-check clippy test dupes
 
-# Build release binaries
+# Build release binaries (default features: `--all-features` would turn on
+# `ort-load-dynamic`, and the binaries would then need ORT_DYLIB_PATH)
 build:
-	cargo build --release --all-features
+	cargo build --release
 
 # Detect OS binary extension
 ifeq ($(OS),Windows_NT)

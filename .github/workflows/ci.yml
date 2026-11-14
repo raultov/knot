@@ -50,7 +50,9 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       - name: Build release binaries
-        run: cargo build --release --all-features
+        # Default features: `--all-features` would turn on `ort-load-dynamic`,
+        # and the E2E binaries would then need an ONNX Runtime shared library.
+        run: cargo build --release
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
         with:
