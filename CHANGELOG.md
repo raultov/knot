@@ -5,7 +5,7 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
-## Unreleased
+## v1.16.1
 
 - **Fixed(mcp)**: `explore_file` no longer returns a partial `structuredContent` (knot-server#12). It held only `markup_count` and `markup_references` (plus `ambiguous_path_candidates` when present), while the outline was only in the text. MCP clients that read `structuredContent` when it is present lost the whole file outline. The tool now returns text only, like the other six tools; the text already carries the markup summary and the ambiguous path candidates.
 - **Changed(mcp)**: The `serverInfo` description and the `explore_file`, `find_callers` and `search_hybrid_context` descriptions list every indexed language family instead of only Java/TypeScript (or Java, Kotlin, C# and TypeScript).
