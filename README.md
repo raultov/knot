@@ -216,9 +216,11 @@ Paste this into your LLM agent (Claude Code, OpenCode, Cursor, etc.):
 The first command installs the `knot` binary to your PATH. The second (optional) allows your AI assistant to automatically download the agent skill index (`.knot-agent.md`) and run the installer to extract comprehensive guides for using knot CLI with AI agents and code analysis tools.
 
 **System Requirements:**
-- **Linux**: glibc 2.38+ (Ubuntu 24.04+, Debian 13+, Fedora 39+, Arch)
+- **Linux**: glibc 2.38+ (Ubuntu 24.04+, Debian 13+, Fedora 39+, Arch) and an x86-64 CPU with AVX
 - **macOS**: Modern versions supported
 - **Windows**: Use Docker (Option B)
+
+Older glibc (Debian 12, Ubuntu 22.04) or a CPU without AVX: build with the `ort-load-dynamic` feature ([Option E](#option-e-build-against-a-shared-onnx-runtime-older-glibc-cpus-without-avx)).
 
 ### Option B: Docker (Universal Compatibility)
 
@@ -309,6 +311,26 @@ $EDITOR ~/.config/knot/.env  # Set KNOT_REPO_PATH and Neo4j credentials
 ```bash
 ./target/release/knot-mcp
 ```
+
+### Option E: Build Against a Shared ONNX Runtime (Older glibc, CPUs Without AVX)
+
+By default, the build downloads a prebuilt ONNX Runtime and links it statically into every binary. That library needs glibc 2.38+ and libstdc++ 13+ to link (`undefined symbol: __isoc23_strtol` on Debian 12), and an x86-64 CPU with AVX to run (`Illegal instruction` on, for example, a Celeron J3455). Rebuilding from source does not help, because the same prebuilt library is linked again.
+
+The `ort-load-dynamic` feature downloads and links nothing. The binaries load Microsoft's official shared library at run time instead, and that library picks its CPU kernels at run time:
+
+```bash
+cargo build --release --features ort-load-dynamic
+
+# ONNX Runtime 1.27 or newer; 1.28.0 is the version the bundled `ort` targets.
+curl -LO https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz
+sudo tar xzf onnxruntime-linux-x64-1.28.0.tgz -C /opt
+export ORT_DYLIB_PATH=/opt/onnxruntime-linux-x64-1.28.0/lib/libonnxruntime.so
+```
+
+- `ORT_DYLIB_PATH` names the library file. Without it, `libonnxruntime.so` (`libonnxruntime.dylib` on macOS, `onnxruntime.dll` on Windows) is looked up next to the executable, then by the system loader.
+- All three binaries load the embedding model at startup, so all three need the library. A missing or too old one stops them there, before any model download, with an error that names `ORT_DYLIB_PATH` and the minimum version.
+- Library consumers forward the feature: `ort-load-dynamic = ["knot/ort-load-dynamic"]`.
+- `--all-features` turns this feature on. Build release binaries without it unless a shared library is available where they run.
 
 ---
 
