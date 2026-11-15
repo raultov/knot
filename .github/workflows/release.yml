@@ -26,6 +26,11 @@
 # setting; if you do, the next `dist init` will overwrite this gate and
 # you will have to re-add the `test-unit` job and the `needs:` entry on
 # `plan` by hand.
+#
+# HAND-WRITTEN ADDITION (v1.16.2): the `build-local-artifacts` job pins the
+# compiler with `dtolnay/rust-toolchain@1.100.0` before `dist build`, so the
+# binaries of a release do not silently follow the runner's stable. Keep it
+# in sync with `rust-toolchain.toml` and the Dockerfile build stage.
 # ---------------------------------------------------------------------------
 
 name: Release
@@ -74,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
 
@@ -209,6 +214,13 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      # HAND-WRITTEN ADDITION (v1.16.2): `dist build` compiles with the rustup
+      # default toolchain, which on GitHub runners is whatever stable the image
+      # happens to carry. Pinning it here keeps the published artifacts on the
+      # compiler the project is tested with. Keep in sync with
+      # rust-toolchain.toml and the Dockerfile build stage.
+      - name: Install Rust 1.100.0
+        uses: dtolnay/rust-toolchain@1.100.0
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

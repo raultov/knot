@@ -1,0 +1,8 @@
+# Pins the compiler for this repository.
+#
+# `cargo` resolves this file before the rustup default, so local builds, the
+# GitHub workflows and the `dist build` step of the release pipeline all use
+# the same toolchain. Keep it in sync with the Dockerfile build stage.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
