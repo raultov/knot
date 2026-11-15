@@ -194,7 +194,13 @@ RUST_LOG=debug cargo test --lib parser::languages::rust -- --nocapture
 ## Repo-Specific Constraints & Quirks
 
 ### Rust Edition: 2024
-This project requires Rust 1.90+ with unstable 2024 edition features. Standard 2021 features will not work.
+This project requires Rust 1.90+ for the unstable 2024 edition features. Standard 2021 features will not work.
+
+`rust-toolchain.toml` pins the compiler to **1.100.0** (`rustfmt` and `clippy`
+included). Cargo resolves that file before the rustup default, so local builds,
+the GitHub workflows and `dist build` all use the same compiler. Keep it in sync
+with the Dockerfile build stage (`rust:1.100-slim-trixie`) and with the
+`dtolnay/rust-toolchain@1.100.0` pins in `.github/workflows/`.
 
 ```toml
 # Cargo.toml

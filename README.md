@@ -290,6 +290,10 @@ cd knot
 cargo build --release
 ```
 
+The repository pins Rust **1.100.0** in `rust-toolchain.toml`, so a `rustup`-managed
+installation selects that compiler automatically (it is downloaded on the first
+build). The Docker build stage uses the matching `rust:1.100-slim-trixie` image.
+
 **3. Configure:**
 ```bash
 mkdir -p ~/.config/knot

@@ -14,7 +14,7 @@ Contributions are welcome! Please ensure:
 
 To run `knot` locally, you need Docker to spin up the required databases and the Rust toolchain to build the project.
 
-1. **Prerequisites**: Ensure you have Docker (20.10+) and Rust 1.90+ installed. For code duplication quality checks, install [`cargo-dupes`](https://crates.io/crates/cargo-dupes): `cargo install cargo-dupes --version 0.2.1 --locked`.
+1. **Prerequisites**: Ensure you have Docker (20.10+) and Rust 1.100.0 installed (pinned in `rust-toolchain.toml`, so `rustup` selects it automatically). For code duplication quality checks, install [`cargo-dupes`](https://crates.io/crates/cargo-dupes): `cargo install cargo-dupes --version 0.2.1 --locked`.
 2. **Clone the repository**:
    ```bash
    git clone https://github.com/raultov/knot
