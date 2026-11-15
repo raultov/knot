@@ -449,3 +449,44 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  # ---------------------------------------------------------------------------
+  # HAND-WRITTEN ADDITION (v1.16.2): tell knot-site that this release exists, so
+  # https://www.knot.kz refreshes its release feed (src/data/updates.json,
+  # public/llms.txt, the JSON-LD versions, public/sitemap.xml) and commits it.
+  #
+  # The dispatch is received by raultov/knot-site/.github/workflows/update-release-feed.yml.
+  # The secret is a fine-grained PAT scoped to raultov/knot-site only, with
+  # `Contents: Read and write` (what /dispatches requires). Fine-grained PATs
+  # expire: knot-site's daily cron covers the gap until the secret is renewed,
+  # and a failing dispatch here shows up as a red run, not a silent gap.
+  #
+  # Prereleases and pull_request runs are skipped: the site only publishes x.y.z.
+  #
+  # `allow-dirty = ["ci"]` in dist-workspace.toml keeps `dist init` from
+  # overwriting this job. Do not remove it.
+  # ---------------------------------------------------------------------------
+  notify-site:
+    name: Notify knot-site
+    needs:
+      - announce
+    if: ${{ always() && needs.announce.result == 'success' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Dispatch upstream-release to raultov/knot-site
+        env:
+          GH_TOKEN: ${{ secrets.KNOT_SITE_DISPATCH_TOKEN }}
+          UPSTREAM_REPO: ${{ github.event.repository.name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::KNOT_SITE_DISPATCH_TOKEN is not set; knot-site will only pick this release up on its daily cron"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          gh api repos/raultov/knot-site/dispatches \
+            -f event_type=upstream-release \
+            -f "client_payload[repo]=$UPSTREAM_REPO" \
+            -f "client_payload[version]=$VERSION"
+          echo "Dispatched upstream-release for $UPSTREAM_REPO v$VERSION to raultov/knot-site"

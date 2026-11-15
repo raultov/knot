@@ -14,6 +14,14 @@
 
 For recent release notes see [CHANGELOG.md](CHANGELOG.md).
 
+Releases are cut by `cargo-dist` from `.github/workflows/release.yml` on every `vX.Y.Z` tag.
+After `announce` publishes the GitHub Release, the hand-written `notify-site` job sends a
+`repository_dispatch` (`upstream-release`) to `raultov/knot-site`, which then refreshes the
+release feed of <https://www.knot.kz> on its own. It needs the `KNOT_SITE_DISPATCH_TOKEN`
+secret: a fine-grained PAT scoped to `raultov/knot-site` with `Contents: Read and write`.
+Prereleases are skipped. `allow-dirty = ["ci"]` in `dist-workspace.toml` keeps `dist init`
+from overwriting that job.
+
 The indexer automatically builds:
 - **Vector Search Database** (Qdrant) — semantic understanding via embeddings
 - **Graph Database** (Neo4j) — architectural relationships via call graphs
