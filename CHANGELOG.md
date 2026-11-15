@@ -5,6 +5,15 @@ For the upcoming roadmap see [README.md → Upcoming](README.md#-roadmap).
 
 ---
 
+## v1.16.2
+
+- **Changed(build)**: The project builds with Rust 1.100.0. The Docker build stage moves from `rust:1.99-slim-trixie` to `rust:1.100-slim-trixie`, and a new `rust-toolchain.toml` pins `channel = "1.100.0"` with the `rustfmt` and `clippy` components. Cargo resolves that file before the rustup default, so a local build, the workflows and the release pipeline all compile with the same compiler instead of following whatever stable the machine carries.
+- **Changed(ci)**: Every GitHub workflow installs Rust 1.100.0 explicitly (`dtolnay/rust-toolchain@1.100.0`) instead of the moving `stable` ref. The `build-local-artifacts` job of the release workflow now pins the toolchain before `dist build`, so the binaries published in a GitHub Release are compiled with 1.100.0 rather than the stable the runner happened to ship. The pin is a hand-written addition, kept out of `dist init`'s reach by the existing `allow-dirty = ["ci"]` in `dist-workspace.toml`.
+- **Test**: Nothing else changed. The full gate is green on 1.100.0 without touching a single source file: `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, 1 824 unit tests, the duplication gate (0.9% exact, 1.6% near) and all 23 E2E suites.
+- **Upgrade**: No re-index needed. `Cargo.lock` only records the new package version.
+
+---
+
 ## v1.16.1
 
 - **Fixed(mcp)**: `explore_file` no longer returns a partial `structuredContent` (knot-server#12). It held only `markup_count` and `markup_references` (plus `ambiguous_path_candidates` when present), while the outline was only in the text. MCP clients that read `structuredContent` when it is present lost the whole file outline. The tool now returns text only, like the other six tools; the text already carries the markup summary and the ambiguous path candidates.
